@@ -1,0 +1,15 @@
+version = 1
+name = "wortlaut · Kubernetes data"
+
+[setup]
+script = "make setup"
+
+[[actions]]
+name = "Tilt · data"
+icon = "run"
+command = "make dev"
+
+[[actions]]
+name = "Tests"
+icon = "test"
+command = "make test"

@@ -1,0 +1,16 @@
+.git
+.codex
+.dev
+.env
+.env.*
+.venv
+**/.venv
+**/dist-worker
+worker/public/vendor
+**/__pycache__
+**/node_modules
+**/dist
+**/.pytest_cache
+**/.ruff_cache
+**/test-results
+**/playwright-report

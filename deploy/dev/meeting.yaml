@@ -1,0 +1,110 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: wortlaut-config
+data:
+  WORTLAUT_SDK_PAGE_URL: https://wortlaut-dev.data.mayflower.zone/sdk/
+  WORTLAUT_S3_CREATE_BUCKET: 'true'
+  WORTLAUT_ENABLE_CONTROLLER: 'true'
+  WORTLAUT_NAMESPACE: wortlaut-dev
+  WORTLAUT_API_URL: https://wortlaut-dev.data.mayflower.zone/
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: wortlaut-meeting
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wortlaut-meeting
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: wortlaut-meeting
+  template:
+    metadata:
+      labels:
+        app: wortlaut-meeting
+    spec:
+      serviceAccountName: wortlaut-meeting
+      automountServiceAccountToken: true
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+      containers:
+        - name: meeting
+          image: wortlaut-meeting:dev
+          ports:
+            - containerPort: 8000
+          env:
+            - name: WORTLAUT_WORKER_IMAGE
+              value: wortlaut-worker:dev
+          envFrom:
+            - configMapRef:
+                name: wortlaut-config
+            - secretRef:
+                name: wortlaut-runtime
+            - secretRef:
+                name: wortlaut-storage
+            - secretRef:
+                name: wortlaut-asr
+            - secretRef:
+                name: wortlaut-webex
+                optional: true
+            - secretRef:
+                name: wortlaut-mail
+                optional: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {cpu: '2', memory: 1Gi}
+          startupProbe:
+            httpGet: {path: /health/ready, port: 8000}
+            failureThreshold: 30
+            periodSeconds: 5
+          readinessProbe:
+            httpGet: {path: /health/ready, port: 8000}
+          livenessProbe:
+            httpGet: {path: /health/live, port: 8000}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wortlaut-meeting
+spec:
+  selector:
+    app: wortlaut-meeting
+  ports:
+    - port: 8000
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: wortlaut-meeting
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-intern-dns
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts: [wortlaut-dev.data.mayflower.zone]
+      secretName: wortlaut-tls
+  rules:
+    - host: wortlaut-dev.data.mayflower.zone
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: wortlaut-meeting
+                port:
+                  number: 8000

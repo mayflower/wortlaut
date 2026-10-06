@@ -1,0 +1,81 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: wortlaut-model-cache
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 8Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wortlaut-asr
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: wortlaut-asr
+  template:
+    metadata:
+      labels:
+        app: wortlaut-asr
+    spec:
+      runtimeClassName: nvidia
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 180
+      securityContext:
+        # This cluster's existing MPS server uses UID 0. CUDA clients with a
+        # different UID wait while other clients keep that server active.
+        runAsNonRoot: false
+        runAsUser: 0
+        runAsGroup: 0
+        fsGroup: 10001
+      containers:
+        - name: asr
+          image: wortlaut-asr:dev
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - secretRef:
+                name: wortlaut-asr
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests: {cpu: '1', memory: 4Gi, nvidia.com/gpu: '1'}
+            limits: {cpu: '4', memory: 8Gi, nvidia.com/gpu: '1'}
+          volumeMounts:
+            - name: model-cache
+              mountPath: /model-cache
+            - name: shm
+              mountPath: /dev/shm
+          startupProbe:
+            httpGet: {path: /health/ready, port: 8000}
+            periodSeconds: 10
+            failureThreshold: 120
+          readinessProbe:
+            httpGet: {path: /health/ready, port: 8000}
+      volumes:
+        - name: model-cache
+          persistentVolumeClaim:
+            claimName: wortlaut-model-cache
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wortlaut-asr
+spec:
+  selector:
+    app: wortlaut-asr
+  ports:
+    - port: 8000

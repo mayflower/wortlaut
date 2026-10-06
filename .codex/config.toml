@@ -1,0 +1,9 @@
+# Project overrides; inherited account, permission and MCP settings stay intact.
+model = "gpt-6-astra"
+model_reasoning_effort = "high"
+web_search = "live"
+
+[shell_environment_policy.set]
+WORTLAUT_KUBE_CONTEXT = "data"
+TILT_HOST = "127.0.0.1"
+TILT_PORT = "34604"

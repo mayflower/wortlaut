@@ -1,0 +1,17 @@
+.dev/
+.env
+.env.*
+!.env.example
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+node_modules/
+worker/public/vendor/
+dist-worker/
+dist/
+test-results/
+playwright-report/
+*.wav
+!worker/test/fixtures/*.wav
