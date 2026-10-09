@@ -2,6 +2,7 @@ import hashlib
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -107,6 +108,7 @@ def test_bootstrap_requires_owner_and_claim_retry_preserves_capture(client):
         "source_state": "live",
         "ssrc": [{"source": 123, "timestamp": 12.0, "rtp_timestamp": 1600}],
         "csrc": [],
+        "encoded_transform": None,
     }
     participants = {
         "available": True,
@@ -132,6 +134,31 @@ def test_bootstrap_requires_owner_and_claim_retry_preserves_capture(client):
     assert observed["diagnostics"]["capability"] == "unverified"
     assert observed["diagnostics"]["receiver_sources"] == [evidence]
     assert observed["diagnostics"]["participant_sources"] == participants
+    encoded = {
+        "state": "observing",
+        "frame_count": 20,
+        "last_frame": {
+            "timestamp": 1600,
+            "rtp_timestamp": 1600,
+            "synchronization_source": 123,
+            "contributing_sources": [456],
+            "payload_type": 111,
+            "receive_time": 42.5,
+            "capture_time": None,
+            "mime_type": "audio/opus",
+        },
+    }
+    response = client.post(
+        f"/v1/attempts/{attempt}/status",
+        headers=owner,
+        json={"participation": "capturing", "receiver_sources": [
+            {**evidence, "encoded_transform": encoded}
+        ]},
+    )
+    assert response.status_code == 200
+    diagnostic = client.get(f"/v1/recordings/{recording}", headers=API).json()["attempts"][0]
+    assert diagnostic["diagnostics"]["receiver_sources"][0]["encoded_transform"] == encoded
+    assert diagnostic["diagnostics"]["capability"] == "unverified"
     assert (
         client.post(
             f"/v1/attempts/{attempt}/claim", headers=headers, json={"worker_id": "owner"}
@@ -243,7 +270,10 @@ def test_untrusted_url_or_ambiguous_timezone_is_rejected(client):
     )
 
 
-def test_final_status_replay_is_idempotent_but_cannot_reopen_or_rewrite_attempt(client):
+@pytest.mark.parametrize("legacy", [False, True])
+def test_final_status_replay_is_idempotent_but_cannot_reopen_or_rewrite_attempt(
+    client, database, legacy
+):
     recording = create(client)
     attempt, headers = prepare(client, recording)
     client.post(f"/v1/attempts/{attempt}/claim", headers=headers, json={"worker_id": "owner"})
@@ -253,16 +283,125 @@ def test_final_status_replay_is_idempotent_but_cannot_reopen_or_rewrite_attempt(
         "reason": "deadline",
         "capability": "capability_unsupported",
         "audio_samples": 100,
+        **({} if legacy else {"drained": False}),
     }
-    for _ in range(2):
-        assert (
-            client.post(f"/v1/attempts/{attempt}/status", headers=owner, json=final).status_code
-            == 200
-        )
-    for changed in [{**final, "reason": "normal"}, {**final, "participation": "capturing"}]:
+    assert (
+        client.post(f"/v1/attempts/{attempt}/status", headers=owner, json=final).status_code == 200
+    )
+    if legacy:
+        with Session(database) as db:
+            stored = db.scalar(select(Attempt))
+            stored.diagnostics = {
+                key: value
+                for key, value in stored.diagnostics.items()
+                if key not in ("drained", "audio_clock")
+            }
+            db.commit()
+    assert (
+        client.post(f"/v1/attempts/{attempt}/status", headers=owner, json=final).status_code == 200
+    )
+    observed = client.get(f"/v1/recordings/{recording}", headers=API).json()
+    assert observed["attempts"][0]["diagnostics"].get("drained") is (None if legacy else False)
+    for changed in [
+        {**final, "reason": "normal"},
+        {**final, "participation": "capturing"},
+        {**final, "drained": True},
+    ]:
         assert (
             client.post(f"/v1/attempts/{attempt}/status", headers=owner, json=changed).status_code
             == 409
         )
     assert client.get(f"/v1/attempts/{attempt}/bootstrap", headers=owner).status_code == 401
     assert client.post(f"/v1/recordings/{recording}/attempts", headers=API).status_code == 409
+
+
+def test_audio_clock_interruption_is_persisted_and_visible_without_inventing_sample_gaps(
+    client, database, storage
+):
+    from test_ingest import authenticate, begin, source
+    from test_processing import send_pcm
+
+    from wortlaut.asr import finalize_processing
+    from wortlaut.processing import segmentation_pass
+
+    attempt, credential, identity = source(client)
+    with client.websocket_connect(f"/v1/attempts/{attempt}/audio") as socket:
+        authenticate(socket, credential)
+        socket.send_json(begin(identity))
+        assert socket.receive_json()["type"] == "ack"
+        send_pcm(socket, identity, b"\0\0" * 100, 0, 0)
+        socket.send_json(
+            {
+                "type": "end",
+                "id": begin(identity)["id"] + "/end",
+                "stream_id": identity["stream_id"],
+                "epoch": identity["epoch"],
+                "final_sample": 100,
+                "last_sequence": 0,
+            }
+        )
+        assert socket.receive_json()["type"] == "ack"
+    owner = {"Authorization": "Bearer " + credential, "X-Worker-ID": "fixture-worker"}
+    clock = {
+        "state": "closed",
+        "total_interruptions": 1,
+        "interruptions": [
+            {
+                "reason": "suspended",
+                "observed_start_utc": "2026-10-06T09:00:00.500Z",
+                "observed_end_utc": "2026-10-06T09:00:01Z",
+            }
+        ],
+    }
+    final = {"participation": "ended", "reason": "fixture_done", "audio_clock": clock}
+    bad_clock = {
+        **clock,
+        "interruptions": [
+            {
+                **clock["interruptions"][0],
+                "observed_end_utc": "2026-10-06T09:00:00Z",
+            }
+        ],
+    }
+    assert (
+        client.post(
+            f"/v1/attempts/{attempt}/status",
+            headers=owner,
+            json={**final, "audio_clock": bad_clock},
+        ).status_code
+        == 422
+    )
+    for _ in range(2):
+        assert (
+            client.post(f"/v1/attempts/{attempt}/status", headers=owner, json=final).status_code
+            == 200
+        )
+    segmentation_pass(database)
+    finalize_processing(database)
+    recording = identity["meeting_id"]
+    detail = client.get(f"/v1/recordings/{recording}", headers=API).json()
+    stored_clock = detail["attempts"][0]["diagnostics"]["audio_clock"]
+    assert stored_clock["state"] == "closed"
+    assert stored_clock["total_interruptions"] == 1
+    assert stored_clock["interruptions"][0]["reason"] == "suspended"
+    for field in ("observed_start_utc", "observed_end_utc"):
+        assert datetime.fromisoformat(
+            stored_clock["interruptions"][0][field]
+        ) == datetime.fromisoformat(clock["interruptions"][0][field])
+    assert detail["audio"][0]["known_gaps"] == []
+    listed = client.get("/v1/recordings", headers=API).json()["items"][0]
+    assert listed["quality"]["status"] == "incomplete"
+    assert listed["quality"]["audio_clock_interrupted"] is True
+    assert listed["quality"]["durable_sample_count"] == 100
+    exported = client.get(f"/v1/recordings/{recording}/exports/json", headers=API)
+    assert exported.status_code == 200
+    data = exported.json()
+    assert data["attempts"][0]["audio_clock"] == stored_clock
+    assert data["quality"]["audio_clock_interrupted"] is True
+    assert data["quality"]["has_audio_gaps"] is False
+    assert data["quality"]["source_coverage"] == "unknown"
+    for format in ("txt", "vtt"):
+        assert (
+            "Audio-Uhr unterbrochen: True"
+            in client.get(f"/v1/recordings/{recording}/exports/{format}", headers=API).text
+        )

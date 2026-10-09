@@ -47,6 +47,14 @@ export class Chunker {
     this.flush();
     this.binding = {...binding};
   }
+  gap(startSample: number, sampleCount: number) {
+    if (startSample !== this.finalSample || !Number.isSafeInteger(sampleCount) ||
+        sampleCount < 1 || sampleCount > 16000 * 5) throw new Error('Invalid capture gap');
+    this.flush();
+    const range = {sequence: this.sequence++, start_sample: this.sample, sample_count: sampleCount};
+    this.sample += sampleCount;
+    return range;
+  }
   flush() {
     if (!this.length) return;
     const metadata: Chunk = {...this.identity, ...this.binding, sequence: this.sequence++,

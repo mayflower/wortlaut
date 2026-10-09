@@ -4,16 +4,19 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "node scripts/assets.mjs && vite build && tsc -p tsconfig.worker.json",
+    "build": "node scripts/assets.mjs && vite build && vite build --config vite.meet.config.ts && tsc -p tsconfig.worker.json",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.worker.json --noEmit",
-    "test": "node --import tsx --test test/*.test.ts",
-    "start": "node dist-worker/main.js",
+    "test": "node --import tsx --test --test-concurrency=1 test/*.test.ts",
+    "start": "node dist-worker/runtime/main.js",
     "test:audio": "node --import tsx test/browser-audio.ts",
+    "test:meet": "node --import tsx test/browser-meet.ts",
     "test:receiver": "uv run --directory ../services/meeting python ../../worker/test/receiver.py"
   },
   "dependencies": {
     "@alexanderolsen/libsamplerate-js": "2.1.2",
     "playwright": "1.63.0",
+    "playwright-extra": "4.3.6",
+    "puppeteer-extra-plugin-stealth": "2.11.2",
     "webex": "3.12.0"
   },
   "devDependencies": {

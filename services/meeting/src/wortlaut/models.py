@@ -4,12 +4,17 @@ from datetime import UTC, datetime
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
     DateTime,
+    Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     UniqueConstraint,
     Uuid,
+    func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -21,12 +26,17 @@ class Base(DeclarativeBase):
 
 class Recording(Base):
     __tablename__ = "recordings"
-    __table_args__ = (UniqueConstraint("calendar_entry_id", "recurrence_key"),)
+    __table_args__ = (
+        UniqueConstraint("calendar_entry_id", "recurrence_key"),
+        CheckConstraint("provider IN ('webex', 'google_meet')", name="recordings_provider"),
+        Index("ix_recordings_start_id", "starts_at", "id"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     idempotency_key: Mapped[str] = mapped_column(String(200), unique=True)
     request_digest: Mapped[str] = mapped_column(String(64))
     meeting_url: Mapped[str] = mapped_column(String(2048))
+    provider: Mapped[str] = mapped_column(String(32), default="webex", server_default="webex")
     starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     participation: Mapped[str] = mapped_column(String(32), default="scheduled")
@@ -39,6 +49,8 @@ class Recording(Base):
     processing_error: Mapped[str | None] = mapped_column(String(64))
     audio_deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     transcript_deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    metadata_deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    export_reader_nonce: Mapped[uuid.UUID | None] = mapped_column(Uuid)
     calendar_entry_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("calendar_entries.id"))
     calendar_conflict: Mapped[bool] = mapped_column(Boolean, default=False)
     recurrence_key: Mapped[str | None] = mapped_column(String(100))
@@ -105,6 +117,11 @@ class Attempt(Base):
     credential_hash: Mapped[str] = mapped_column(String(64))
     credential_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     worker_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    audio_connection_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    audio_ingest_tokens: Mapped[float] = mapped_column(Float, default=0, server_default="0")
+    audio_ingest_refilled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     end_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
     last_heartbeat_at: Mapped[datetime | None] = mapped_column(
@@ -121,7 +138,14 @@ class Attempt(Base):
 
 class AudioStream(Base):
     __tablename__ = "audio_streams"
-    __table_args__ = (UniqueConstraint("attempt_id", "stream_id", "epoch"),)
+    __table_args__ = (
+        UniqueConstraint("attempt_id", "stream_id", "epoch"),
+        Index(
+            "ix_audio_streams_active_attempt",
+            "attempt_id",
+            postgresql_where=text("final_sample IS NULL"),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     attempt_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("attempts.id"), index=True)
@@ -133,11 +157,15 @@ class AudioStream(Base):
     scan_sample: Mapped[int] = mapped_column(BigInteger, default=0)
     scan_complete: Mapped[bool] = mapped_column(Boolean, default=False)
     last_scanned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    scan_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class AudioChunk(Base):
     __tablename__ = "audio_chunks"
-    __table_args__ = (UniqueConstraint("stream_id", "sequence"),)
+    __table_args__ = (
+        UniqueConstraint("stream_id", "sequence"),
+        Index("ix_audio_chunks_stream_start", "stream_id", "start_sample"),
+    )
 
     id: Mapped[str] = mapped_column(String(256), primary_key=True)
     stream_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("audio_streams.id"), index=True)
@@ -149,6 +177,8 @@ class AudioChunk(Base):
     object_key: Mapped[str] = mapped_column(String(512), unique=True)
     object_size: Mapped[int] = mapped_column(Integer)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    read_failures: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    processing_error: Mapped[str | None] = mapped_column(String(64))
     accepted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
@@ -156,10 +186,12 @@ class AudioChunk(Base):
 
 class AudioControl(Base):
     __tablename__ = "audio_controls"
+    __table_args__ = (Index("ix_audio_controls_stream_start", "stream_id", "start_sample"),)
 
     id: Mapped[str] = mapped_column(String(300), primary_key=True)
     stream_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("audio_streams.id"), index=True)
     kind: Mapped[str] = mapped_column(String(16))
+    sequence: Mapped[int | None] = mapped_column(Integer)
     start_sample: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     contract: Mapped[dict] = mapped_column(JSONB)
 
@@ -180,6 +212,9 @@ class AsrJob(Base):
     claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     error: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), server_default=func.now()
+    )
 
 
 class TranscriptSegment(Base):

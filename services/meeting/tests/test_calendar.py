@@ -192,15 +192,15 @@ def test_ics_link_ignores_webex_help_footer_and_body_fallback_filters_non_meetin
         )
 
 
-def test_multiple_meeting_targets_in_ics_or_fallback_remain_rejected(client, database, monkeypatch):
+def test_multiple_meeting_targets_in_ics_or_fallback_are_conflicts(client, database, monkeypatch):
     configure(monkeypatch)
     ambiguous = mail(extra="LOCATION:https://other.webex.com/meet/other\r\n")
-    assert imported(client, ambiguous)["status"] == "rejected"
+    assert imported(client, ambiguous)["reason"] == "meeting_link_ambiguous"
     message = BytesParser(policy=policy.default).parsebytes(mail(link=""))
     message.get_body(preferencelist=("plain",)).set_content(
         "https://example.webex.com/meet/one https://example.webex.com/meet/two"
     )
-    assert imported(client, message.as_bytes())["status"] == "rejected"
+    assert imported(client, message.as_bytes())["status"] == "conflict"
     with Session(database) as db:
         assert not db.scalars(select(Recording)).all()
 
@@ -220,5 +220,5 @@ def test_meeting_link_formats_and_help_or_account_urls():
         "https://help.webex.com/en-us/article/example",
         "https://example.webex.com/webappng/sites/example/dashboard",
     ):
-        with pytest.raises(ValueError, match="webex_link_missing_or_ambiguous"):
+        with pytest.raises(ValueError, match="meeting_link_missing"):
             meeting_link({}, link)

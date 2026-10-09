@@ -13,6 +13,9 @@ class Settings(BaseSettings):
     api_token: SecretStr
     webex_service_token: SecretStr | None = None
     enable_webex_refresh: bool = False
+    enable_google_meet: bool = False
+    meet_storage_state_secret: str | None = None
+    meet_locale: str = "de-DE"
     enable_imap: bool = False
     imap_host: str | None = None
     imap_port: int = 993

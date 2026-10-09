@@ -1,3 +1,4 @@
+import asyncio
 import getpass
 import hashlib
 import json
@@ -27,6 +28,61 @@ from wortlaut.asr import (
 from wortlaut.models import AsrJob, AudioStream, TranscriptSegment
 from wortlaut.processing import segmentation_pass
 from wortlaut.settings import get_settings
+
+
+def test_backlog_consumer_immediately_claims_next_work_and_yields_to_stop(monkeypatch):
+    from wortlaut import app as app_module
+
+    calls = []
+
+    async def run():
+        stop = asyncio.Event()
+        loop = asyncio.get_running_loop()
+
+        def work(engine):
+            calls.append(engine)
+            if len(calls) == 2:
+                loop.call_soon_threadsafe(stop.set)
+            return True
+
+        monkeypatch.setattr(app_module, "get_engine", lambda: "fixture-engine")
+        await asyncio.wait_for(app_module.processing_loop(stop, work, interval=30), timeout=1)
+
+    asyncio.run(run())
+    assert calls == ["fixture-engine", "fixture-engine"]
+
+
+def test_asr_claim_prioritizes_age_over_hash_and_skips_recent_claim(client, database):
+    attempt, _, identity = source(client)
+    with Session(database) as db:
+        stream = AudioStream(
+            attempt_id=uuid.UUID(attempt),
+            stream_id=uuid.UUID(identity["stream_id"]),
+            epoch=uuid.UUID(identity["epoch"]),
+            contract=identity,
+        )
+        db.add(stream)
+        db.flush()
+        now = datetime.now(UTC)
+        for index, (identifier, created) in enumerate(
+            [("0" * 64, now), ("f" * 64, now - timedelta(minutes=1))]
+        ):
+            db.add(
+                AsrJob(
+                    id=identifier,
+                    stream_id=stream.id,
+                    start_sample=index * 16000,
+                    end_sample=(index + 1) * 16000,
+                    core_start=index * 16000,
+                    core_end=(index + 1) * 16000,
+                    binding={},
+                    created_at=created,
+                )
+            )
+        db.commit()
+        assert claim_job(db).id == "f" * 64
+        assert claim_job(db).id == "0" * 64
+        assert claim_job(db) is None
 
 
 @pytest.mark.skipif(
@@ -210,12 +266,18 @@ def test_native_gpu_from_two_durable_sources_to_exports(client, database, storag
 
 def test_gpu_timeout_reclaim_and_duplicate_result_commit(client, database, storage, monkeypatch):
     attempt, credential, identity = source(client)
-    pcm = audio("german-a.wav")
+    # Speech starts inside a five-second block well after the source origin.
+    # ASR must keep that overlapping block when reading a later job range.
+    pcm = b"\0\0" * (19 * 16000) + audio("german-a.wav")
     with client.websocket_connect(f"/v1/attempts/{attempt}/audio") as socket:
         authenticate(socket, credential)
         socket.send_json(begin(identity))
         socket.receive_json()
-        send_pcm(socket, identity, pcm, 0, 0)
+        last_sequence = -1
+        for last_sequence, offset in enumerate(range(0, len(pcm), 16000 * 5 * 2)):
+            send_pcm(
+                socket, identity, pcm[offset : offset + 16000 * 5 * 2], last_sequence, offset // 2
+            )
         socket.send_json(
             {
                 "type": "end",
@@ -223,7 +285,7 @@ def test_gpu_timeout_reclaim_and_duplicate_result_commit(client, database, stora
                 "stream_id": identity["stream_id"],
                 "epoch": identity["epoch"],
                 "final_sample": len(pcm) // 2,
-                "last_sequence": 0,
+                "last_sequence": last_sequence,
             }
         )
         socket.receive_json()
@@ -236,6 +298,10 @@ def test_gpu_timeout_reclaim_and_duplicate_result_commit(client, database, stora
 
     def handle(request):
         assert request.headers["Authorization"] == "Bearer fixture-gpu-token"
+        with Session(database) as db:
+            job = db.get(AsrJob, request.headers["X-Job-ID"])
+            assert job.start_sample > 18 * 16000
+            assert request.content == pcm[job.start_sample * 2 : job.end_sample * 2]
         if not responses:
             responses.append("timeout")
             raise httpx.ReadTimeout("simulated disconnect", request=request)
@@ -276,7 +342,7 @@ def test_gpu_timeout_reclaim_and_duplicate_result_commit(client, database, stora
             stored = db.get(TranscriptSegment, identifier).result
             assert stored["text"] == "Guten Morgen"
             assert stored["speaker_id"] == "speaker-A"
-            assert stored["start"] >= 0.2  # Stream has a 200 ms offset on the meeting axis.
+            assert stored["start"] >= 18.2  # Preserve the delayed speech and meeting offset.
             commit_result(db, identifier, {**stored, "text": "late different result"})
             assert db.get(TranscriptSegment, identifier).result == stored
             assert db.get(AsrJob, identifier).status == "completed"

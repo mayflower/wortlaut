@@ -1,7 +1,9 @@
 """One durable PostgreSQL claim at a time; the GPU owns its inference lock."""
 
 import hashlib
+import logging
 import math
+import time
 from datetime import UTC, datetime, timedelta
 
 import httpx
@@ -9,7 +11,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from wortlaut.models import AsrJob, Attempt, AudioChunk, AudioStream, Recording, TranscriptSegment
-from wortlaut.processing import RATE, read_pcm
+from wortlaut.processing import MAX_CHUNK, RATE, AudioReadError, read_pcm
 from wortlaut.settings import get_settings
 
 
@@ -74,7 +76,7 @@ def claim_job(db: Session):
                 & (AsrJob.claimed_at < now - timedelta(seconds=settings.asr_lease_seconds)),
             )
         )
-        .order_by(AsrJob.retry_at.asc().nullsfirst(), AsrJob.id)
+        .order_by(AsrJob.created_at, AsrJob.id)
         .with_for_update(skip_locked=True)
         .limit(1)
     )
@@ -86,7 +88,7 @@ def claim_job(db: Session):
 
 def commit_result(db: Session, identifier: str, result: dict):
     job = db.scalar(select(AsrJob).where(AsrJob.id == identifier).with_for_update())
-    if job.status in ("completed", "failed"):
+    if job is None or job.status in ("completed", "failed"):
         return  # A late GPU result cannot revive explicitly abandoned work.
     # A client timeout cannot cancel GPU work. A late valid result is identified
     # by the immutable job, and a committed segment is never duplicated/rewritten.
@@ -99,7 +101,7 @@ def commit_result(db: Session, identifier: str, result: dict):
 def retry_job(engine, identifier: str, reason: str, permanent: bool):
     with Session(engine) as db:
         job = db.scalar(select(AsrJob).where(AsrJob.id == identifier).with_for_update())
-        if job.status == "completed" or job.error == "audio_retention_expired":
+        if job is None or job.status in ("completed", "failed"):
             return
         if permanent:
             job.attempts += 1
@@ -114,27 +116,31 @@ def retry_job(engine, identifier: str, reason: str, permanent: bool):
 def inference_pass(engine):
     settings = get_settings()
     if not settings.asr_token:
-        return  # Visible pending work, never a fabricated successful transcript.
+        return False  # Visible pending work, never a fabricated successful transcript.
     with Session(engine) as db:
         job = claim_job(db)
         if job is None:
-            return
+            return False
         identifier = job.id
         stream = db.get(AudioStream, job.stream_id)
         chunks = db.scalars(
             select(AudioChunk)
             .where(
                 AudioChunk.stream_id == stream.id,
+                AudioChunk.start_sample >= max(0, job.start_sample - MAX_CHUNK),
                 AudioChunk.start_sample < job.end_sample,
                 AudioChunk.start_sample + AudioChunk.sample_count > job.start_sample,
             )
             .order_by(AudioChunk.start_sample)
         ).all()
+        inference_start, request_seconds, outcome = None, None, "storage_read"
+        created_at = job.created_at
         try:
             pcm = read_pcm(chunks, job.start_sample, job.end_sample)
             with httpx.Client(
                 timeout=settings.asr_timeout_seconds, follow_redirects=False
             ) as client:
+                inference_start = time.perf_counter()
                 response = client.post(
                     settings.asr_url + "/v1/transcribe",
                     content=pcm,
@@ -144,14 +150,16 @@ def inference_pass(engine):
                         "X-Job-ID": identifier,
                     },
                 )
+                request_seconds = time.perf_counter() - inference_start
             if response.status_code != 200:
+                outcome = f"gpu_http_{response.status_code}"
                 retry_job(
                     engine,
                     identifier,
                     f"gpu_http_{response.status_code}",
                     response.status_code in (400, 413, 422),
                 )
-                return
+                return True
             payload = response.json()
             if (
                 payload.get("job_id") != identifier
@@ -160,10 +168,33 @@ def inference_pass(engine):
                 raise InvalidResult("gpu_result_identity_mismatch")
             result = segment_result(job, stream, payload)
             commit_result(db, identifier, result)
+            outcome = "completed"
         except httpx.HTTPError:
+            outcome = "gpu_unavailable"
             retry_job(engine, identifier, "gpu_unavailable", False)
+        except AudioReadError as error:
+            outcome = error.reason
+            retry_job(engine, identifier, error.reason, error.permanent)
         except (InvalidResult, ValueError, TypeError, KeyError, AttributeError):
+            outcome = "invalid_audio_or_model_result"
             retry_job(engine, identifier, "invalid_audio_or_model_result", True)
+        finally:
+            logging.getLogger("wortlaut").info(
+                "asr_attempt_finished job=%s outcome=%s "
+                "gpu_request_seconds=%s job_age_seconds=%.3f",
+                identifier,
+                outcome,
+                round(
+                    request_seconds
+                    if request_seconds is not None
+                    else time.perf_counter() - inference_start,
+                    3,
+                )
+                if inference_start
+                else None,
+                max(0, (datetime.now(UTC) - created_at).total_seconds()),
+            )
+        return True
 
 
 def finalize_processing(engine):
@@ -187,9 +218,21 @@ def finalize_processing(engine):
             ).all()
             if any(job.status in ("pending", "processing") for job in jobs):
                 continue
-            recording.processing = (
-                "failed" if any(job.status == "failed" for job in jobs) else "completed"
+            unreadable = db.scalar(
+                select(AudioChunk.processing_error)
+                .where(
+                    AudioChunk.stream_id.in_([s.id for s in streams]),
+                    AudioChunk.processing_error.is_not(None),
+                )
+                .limit(1)
             )
+            recording.processing = (
+                "failed"
+                if unreadable or any(job.status == "failed" for job in jobs)
+                else "completed"
+            )
+            if unreadable:
+                recording.processing_error = unreadable
             recording.processing_finished_at = datetime.now(UTC)
             recording.audio_closed_at = datetime.now(UTC)
         db.commit()

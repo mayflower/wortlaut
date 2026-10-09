@@ -1,16 +1,20 @@
 """One configured SMTP relay; durable acceptance, bounded explicit retries."""
 
-import json
+import io
+import shlex
 import smtplib
 import ssl
+import uuid
+import zipfile
 from datetime import UTC, datetime, timedelta
 from email.message import EmailMessage
 from email.utils import parseaddr
+from urllib.parse import urlsplit
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from wortlaut.exports import export_data, render_export
+from wortlaut.exports import export_data, export_reader_token, render_export
 from wortlaut.models import Attempt, AudioChunk, AudioStream, CalendarEntry, Delivery, Recording
 from wortlaut.settings import get_settings
 
@@ -39,19 +43,38 @@ def build_message(db, recording, delivery):
     message["Message-ID"] = delivery.message_id
     message["Subject"] = f"wortlaut: Aufnahme {recording.id}"
     period = data["scheduled_period"]
+    quality = data["quality"]
+    attribution = "unklar" if quality["attribution_unknown"] else "keine ungebundenen Samples"
+    drain = "unvollständig" if quality["incomplete_drain"] else "kein bekannter Drain-Fehler"
+    clock = (
+        "Unterbrechung beobachtet"
+        if quality["audio_clock_interrupted"]
+        else "keine bekannte Unterbrechung"
+    )
+    failure = data["processing_error"] or (
+        "ASR-Ausfälle" if quality["failed_asr_ranges"] else "keiner"
+    )
     body = (
-        f"wortlaut\nTermin: {period['start']} bis {period['end']}\n"
+        f"wortlaut – {recording.provider}\nTermin: {period['start']} bis {period['end']}\n"
         f"Letztes bekanntes Audio: {data['last_known_audio_utc'] or 'unbekannt'}\n"
         f"Teilnahme: {data['participation']}; "
         f"Grund: {data['participation_reason'] or 'unbekannt'}\n"
-        f"Versuche: {json.dumps(data['attempts'], ensure_ascii=False)}\n"
         f"Verarbeitung: {data['processing']}\n"
-        f"Aufnahmequalität: {json.dumps(data['quality'], ensure_ascii=False)}\n"
+        f"Audiolücken: {'vorhanden' if quality['has_audio_gaps'] else 'keine bekannten'}\n"
+        f"Audio-Uhr: {clock}\n"
+        f"Aufnahmeende: {'unbekannt' if quality['capture_end_unknown'] else 'bekannt'}\n"
+        f"Sprecherzuordnung: {attribution}\n"
+        f"Quellenabdeckung: {quality['source_coverage']}\n"
+        f"Audioabschluss: {drain}\n"
+        f"Verarbeitungsfehler: {failure}\n"
+        "Die vollständigen Qualitäts- und Zeitangaben stehen im JSON-Export.\n"
     )
     message.set_content(body)
+    exports = {}
     for format in ("txt", "vtt", "json"):
         content, media_type = render_export(data, format)
         major, minor = media_type.split(";", 1)[0].split("/", 1)
+        exports[f"wortlaut-{recording.id}.{format}"] = content.encode()
         message.add_attachment(
             content.encode(),
             maintype=major,
@@ -60,13 +83,47 @@ def build_message(db, recording, delivery):
         )
     if len(message.as_bytes()) > settings.mail_attachment_limit_bytes:
         message.clear_content()
-        links = "\n".join(
-            settings.api_url.rstrip("/") + f"/v1/recordings/{recording.id}/exports/{format}"
-            for format in ("txt", "vtt", "json")
+        message.set_content(body + "\nDie drei vollständigen Exporte liegen im ZIP-Anhang.\n")
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as zipped:
+            for filename, content in exports.items():
+                entry = zipfile.ZipInfo(filename)
+                entry.compress_type = zipfile.ZIP_DEFLATED
+                zipped.writestr(entry, content)
+        message.add_attachment(
+            archive.getvalue(),
+            maintype="application",
+            subtype="zip",
+            filename=f"wortlaut-{recording.id}.zip",
         )
-        message.set_content(
-            body + "\nErgebnisse per HTTPS mit Ihrem API-Bearer-Token abrufen:\n" + links
-        )
+        if len(message.as_bytes()) > settings.mail_attachment_limit_bytes:
+            target = urlsplit(settings.api_url)
+            if (
+                target.scheme != "https"
+                or not target.hostname
+                or target.username
+                or target.password
+                or target.query
+                or target.fragment
+            ):
+                raise ValueError("Large-export download requires an HTTPS API origin")
+            recording.export_reader_nonce = recording.export_reader_nonce or uuid.uuid4()
+            credential = export_reader_token(recording)
+            message.clear_content()
+            base_url = settings.api_url.rstrip("/") + f"/v1/recordings/{recording.id}/exports"
+            downloads = "\n".join(
+                f"curl --fail --header {shlex.quote('Authorization: Bearer ' + credential)} "
+                f"{shlex.quote(base_url + '/' + format)} "
+                f"--output 'wortlaut-{recording.id}.{format}'"
+                for format in ("txt", "vtt", "json")
+            )
+            message.set_content(
+                body
+                + "\nDie vollständigen Exporte überschreiten auch komprimiert das Anhangslimit.\n"
+                "Lesezugang nur für die drei Exporte dieser Aufnahme, bis zum Ablauf der "
+                "Transkriptaufbewahrung. Dieser Zugang erlaubt keine Steuerung.\n"
+                "Download im Terminal (Zugang vertraulich behandeln):\n" + downloads + "\n"
+            )
     return message
 
 

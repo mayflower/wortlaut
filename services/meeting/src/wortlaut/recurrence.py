@@ -13,9 +13,12 @@ from wortlaut.calendar import MAIL_LOCK, meeting_link, utc
 from wortlaut.controller import request_cancellation
 from wortlaut.models import CalendarEntry, Recording
 from wortlaut.settings import get_settings
+from wortlaut.validation import normalize_meeting_url
 
 
 def expand_series(db, entry, now):
+    if not entry.original:
+        return  # Retained calendar identity, with expired invitation contents.
     settings = get_settings()
     if entry.reason == "series_anchor_change_unsupported":
         return
@@ -57,7 +60,7 @@ def expand_series(db, entry, now):
         for recording in recordings:
             request_cancellation(recording, now)
         return
-    if entry.status == "conflict" and entry.reason == "same_version_conflict":
+    if entry.status == "conflict":
         return
     cancelled, conflicted = set(), set()
     for override in overrides:
@@ -109,7 +112,7 @@ def expand_series(db, entry, now):
     entry.status, entry.reason = "expanded", None
     for key, event in desired.items():
         starts, ends = utc(event.decoded("DTSTART")), utc(event.decoded("DTEND"))
-        link = meeting_link(event, "")
+        provider, link = normalize_meeting_url(meeting_link(event, ""))
         recording = existing.get(key)
         if key in conflicted:
             if recording:
@@ -125,6 +128,7 @@ def expand_series(db, entry, now):
                     idempotency_key="occurrence-" + identifier,
                     request_digest=identifier,
                     meeting_url=link,
+                    provider=provider,
                     starts_at=starts,
                     ends_at=ends,
                 )
@@ -136,6 +140,7 @@ def expand_series(db, entry, now):
                 recording.starts_at != starts
                 or recording.ends_at != ends
                 or recording.meeting_url != link
+                or recording.provider != provider
             ):
                 recording.calendar_conflict = True
                 entry.reason = "active_occurrence_conflict"
@@ -145,6 +150,7 @@ def expand_series(db, entry, now):
             # No historical worker attempt exists: an explicitly restored
             # future occurrence can reuse its original row safely.
             recording.starts_at, recording.ends_at, recording.meeting_url = starts, ends, link
+            recording.provider = provider
             recording.calendar_conflict = False
             if recording.cancelled_at and ends > now:
                 recording.cancelled_at = recording.audio_closed_at = None

@@ -1,0 +1,72 @@
+name: Checks
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: PostgreSQL, S3 and browser fixtures
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17.9-bookworm@sha256:47f917f7409eacd22fc5dfb1dee634e1b55cf0c01d1a7eb701be2227a03e0641
+        env:
+          POSTGRES_USER: wortlaut_test
+          POSTGRES_PASSWORD: fixture-postgres-password
+          POSTGRES_DB: wortlaut_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U wortlaut_test -d wortlaut_test"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      # Disposable fixture services only. Provider, native GPU and live-cluster
+      # tests remain opt-in; no production credentials enter PR workflows.
+      WORTLAUT_TEST_DATABASE_URL: postgresql+psycopg://wortlaut_test:fixture-postgres-password@127.0.0.1:5432/wortlaut_test
+      WORTLAUT_TEST_S3_ENDPOINT: http://127.0.0.1:34609
+      WORTLAUT_S3_ACCESS_KEY: fixture-minio-user
+      WORTLAUT_S3_SECRET_KEY: fixture-minio-password
+      PYTEST_ADDOPTS: --tb=line -ra
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          version: 0.12.23
+          python-version: '3.12'
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22'
+      - name: Install locked dependencies
+        run: |
+          uv sync --directory services/meeting --locked
+          npm --prefix worker ci --no-audit --no-fund
+      - name: Start disposable S3 fixture
+        run: |
+          docker run --detach --name wortlaut-test-s3 \
+            --publish 127.0.0.1:34609:9000 \
+            --env MINIO_ROOT_USER=fixture-minio-user \
+            --env MINIO_ROOT_PASSWORD=fixture-minio-password \
+            minio/minio:RELEASE.2025-09-07T16-13-09Z server /data
+          curl --fail --retry 30 --retry-delay 1 --retry-connrefused \
+            http://127.0.0.1:34609/minio/health/ready
+      - name: Lint and behavior tests with PostgreSQL/S3
+        run: |
+          make lint
+          make test
+      - name: Build both browser capture bundles
+        run: npm --prefix worker run build
+      - name: Install pinned Chromium
+        working-directory: worker
+        run: npx playwright install --with-deps chromium
+      - name: Native browser fixtures (no real provider identity proof)
+        working-directory: worker
+        run: |
+          npm run test:audio
+          npm run test:meet

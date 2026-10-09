@@ -2,6 +2,9 @@ import json
 import struct
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime, timedelta
+from threading import Event
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import select
@@ -14,8 +17,8 @@ from wortlaut.settings import get_settings
 from wortlaut.storage import ObjectConflict, canonical
 
 
-def source(client):
-    meeting = create(client)
+def source(client, key="one"):
+    meeting = create(client, key=key)
     attempt, headers = prepare(client, meeting)
     response = client.post(
         f"/v1/attempts/{attempt}/claim", headers=headers, json={"worker_id": "fixture-worker"}
@@ -57,6 +60,75 @@ def frame(metadata, pcm):
 def authenticate(socket, credential):
     socket.send_json({"type": "auth", "credential": credential, "worker_id": "fixture-worker"})
     assert socket.receive_json() == {"type": "ready"}
+
+
+def test_binding_boundaries_preserve_long_blocks_and_choose_current_participant(
+    client, database, storage
+):
+    attempt, credential, identity = source(client)
+    bound = {**identity, "speaker_id": "speaker-B", "provider_source_id": "fixture:second"}
+    future = {**identity, "speaker_id": "speaker-C", "provider_source_id": "fixture:third"}
+
+    def binding(at, source_identity):
+        return {
+            "type": "bind",
+            "id": begin(identity)["id"] + f"/bind/{at}",
+            "stream_id": identity["stream_id"],
+            "epoch": identity["epoch"],
+            "start_sample": at,
+            **{
+                key: source_identity[key]
+                for key in (
+                    "provider_source_id", "speaker_id", "source_kind", "attribution_unknown"
+                )
+            },
+        }
+
+    with client.websocket_connect(f"/v1/attempts/{attempt}/audio") as socket:
+        authenticate(socket, credential)
+        socket.send_json(begin(identity))
+        assert socket.receive_json()["type"] == "ack"
+        first = {**identity, "sequence": 0, "start_sample": 0, "sample_count": 80000}
+        socket.send_bytes(frame(first, b"\0\0" * 80000))
+        assert socket.receive_json()["type"] == "ack"
+        # The last sample of a maximum-size block cannot be renamed.
+        socket.send_json(binding(79999, bound))
+        assert socket.receive_json()["type"] == "error"
+    with client.websocket_connect(f"/v1/attempts/{attempt}/audio") as socket:
+        authenticate(socket, credential)
+        for control in (binding(80000, bound), binding(90000, future)):
+            socket.send_json(control)
+            assert socket.receive_json()["type"] == "ack"
+        second = {**bound, "sequence": 1, "start_sample": 80000, "sample_count": 10001}
+        socket.send_bytes(frame(second, b"\0\0" * 10001))
+        assert socket.receive_json()["type"] == "error"  # Crosses the future binding.
+    with client.websocket_connect(f"/v1/attempts/{attempt}/audio") as socket:
+        authenticate(socket, credential)
+        second["sample_count"] = 10000
+        socket.send_bytes(frame(second, b"\0\0" * 10000))
+        assert socket.receive_json()["type"] == "ack"
+        third = {**future, "sequence": 2, "start_sample": 90000, "sample_count": 100}
+        socket.send_bytes(frame(third, b"\0\0" * 100))
+        assert socket.receive_json()["type"] == "ack"
+        socket.send_json(
+            {
+                "type": "end",
+                "id": begin(identity)["id"] + "/end",
+                "stream_id": identity["stream_id"],
+                "epoch": identity["epoch"],
+                "final_sample": 90100,
+                "last_sequence": 2,
+            }
+        )
+        assert socket.receive_json()["type"] == "ack"
+    with Session(database) as db:
+        chunks = db.scalars(select(AudioChunk).order_by(AudioChunk.sequence)).all()
+        assert [chunk.contract["speaker_id"] for chunk in chunks] == [
+            "speaker-A", "speaker-B", "speaker-C",
+        ]
+        assert [storage.read(chunk.object_key) for chunk in chunks] == [
+            b"\0\0" * 80000, b"\0\0" * 10000, b"\0\0" * 100,
+        ]
 
 
 def test_s3_conditional_create_does_not_overwrite_concurrent_audio_or_binding(storage):
@@ -148,6 +220,64 @@ def test_conflicting_orphan_object_is_not_registered(client, database, storage):
     assert storage.read(key) == b"\x00\x00" * 100
 
 
+def test_reconnect_waits_for_inflight_commit_before_final_gap_decision(
+    client, database, storage, monkeypatch
+):
+    attempt, credential, identity = source(client)
+    metadata = {**identity, "sequence": 0, "start_sample": 0, "sample_count": 100}
+    identifier = f"{attempt}/{identity['stream_id']}/{identity['epoch']}/0"
+    written, release = Event(), Event()
+    put = storage.put
+
+    def hold_after_real_write(*args):
+        result = put(*args)
+        written.set()
+        if not release.wait(10):
+            raise TimeoutError("Test did not release the in-flight object write")
+        return result
+
+    monkeypatch.setattr(storage, "put", hold_after_real_write)
+    try:
+        with client.websocket_connect(f"/v1/attempts/{attempt}/audio") as old:
+            authenticate(old, credential)
+            old.send_json(begin(identity))
+            assert old.receive_json()["type"] == "ack"
+            old.send_bytes(frame(metadata, b"\x01\x02" * 100))
+            assert written.wait(10)
+            with client.websocket_connect(f"/v1/attempts/{attempt}/audio") as current:
+                with ThreadPoolExecutor(1) as pool:
+                    ready = pool.submit(authenticate, current, credential)
+                    try:
+                        with pytest.raises(TimeoutError):
+                            ready.result(timeout=0.2)
+                    finally:
+                        release.set()
+                    assert old.receive_json() == {"type": "ack", "id": identifier}
+                    ready.result(timeout=10)
+                gap = {
+                    "type": "gap",
+                    "id": identifier + "/gap",
+                    "stream_id": identity["stream_id"],
+                    "epoch": identity["epoch"],
+                    "sequence": 0,
+                    "start_sample": 0,
+                    "sample_count": 100,
+                    "reason": "worker_buffer_limit",
+                    "final": True,
+                }
+                current.send_json(gap)
+                assert current.receive_json() == {"type": "ack", "id": gap["id"]}
+        from test_recordings import API
+
+        status = client.get(f"/v1/recordings/{identity['meeting_id']}", headers=API).json()
+        assert status["audio"][0]["known_gaps"] == []
+        assert status["ingest"]["durable_sample_count"] == 100
+        with Session(database) as db:
+            assert db.get(AudioChunk, identifier) is not None
+    finally:
+        release.set()
+
+
 @pytest.mark.parametrize("limit", ["samples", "storage"])
 def test_capacity_preserves_committed_audio_replays_and_rejects_new_work(
     client, database, storage, monkeypatch, limit
@@ -230,3 +360,157 @@ def test_gap_boundaries_cannot_overlap_audio_or_be_excluded_by_end(client, datab
         stream = db.scalar(select(AudioStream))
         assert stream.final_sample is None
         assert timeline(db, stream)[2]["known_gaps"] == []  # Still wait for a possible lost ACK.
+
+
+def test_metadata_density_keeps_replays_end_and_later_audio_windows(
+    client, database, storage, monkeypatch
+):
+    from test_recordings import API
+
+    from wortlaut import ingest
+
+    monkeypatch.setattr(ingest, "MAX_WINDOW_RECORDS", 3)
+    attempt, credential, identity = source(client)
+    first = {**identity, "sequence": 0, "start_sample": 0, "sample_count": 100}
+    binding = {
+        "type": "bind",
+        "id": begin(identity)["id"] + "/bind",
+        "stream_id": identity["stream_id"],
+        "epoch": identity["epoch"],
+        "start_sample": 100,
+        "provider_source_id": "fixture:two",
+        "speaker_id": "speaker-B",
+        "source_kind": "speaker",
+        "attribution_unknown": False,
+    }
+    gap = {
+        "type": "gap",
+        "id": begin(identity)["id"] + "/gap",
+        "stream_id": identity["stream_id"],
+        "epoch": identity["epoch"],
+        "sequence": 1,
+        "start_sample": 100,
+        "sample_count": 100,
+        "reason": "worker_buffer_limit",
+        "final": True,
+    }
+    rebound = {**identity, "provider_source_id": "fixture:two", "speaker_id": "speaker-B"}
+    rejected = {**rebound, "sequence": 2, "start_sample": 200, "sample_count": 100}
+    with client.websocket_connect(f"/v1/attempts/{attempt}/audio") as socket:
+        authenticate(socket, credential)
+        socket.send_json(begin(identity))
+        assert socket.receive_json()["type"] == "ack"
+        socket.send_bytes(frame(first, b"\x01\x02" * 100))
+        assert socket.receive_json()["type"] == "ack"
+        for control in (binding, gap, binding, gap):
+            socket.send_json(control)
+            assert socket.receive_json() == {"type": "ack", "id": control["id"]}
+        socket.send_bytes(frame(first, b"\x01\x02" * 100))
+        assert socket.receive_json()["type"] == "ack"
+        socket.send_bytes(frame(rejected, b"\x03\x04" * 100))
+        assert socket.receive_json() == {"type": "error", "reason": "audio_metadata_capacity_limit"}
+    with client.websocket_connect(f"/v1/attempts/{attempt}/audio") as socket:
+        authenticate(socket, credential)
+        socket.send_json({**binding, "id": binding["id"] + "-later", "start_sample": 200})
+        assert socket.receive_json() == {"type": "error", "reason": "audio_metadata_capacity_limit"}
+    # A different sample window remains usable in this same epoch. The missing
+    # sequences are intentionally not synthesized or silently labeled as audio.
+    later = {
+        **rebound,
+        "sequence": 12,
+        "start_sample": ingest.AUDIO_WINDOW_SAMPLES,
+        "sample_count": 100,
+    }
+    closing = {
+        "type": "end",
+        "id": begin(identity)["id"] + "/end",
+        "stream_id": identity["stream_id"],
+        "epoch": identity["epoch"],
+        "last_sequence": 12,
+        "final_sample": later["start_sample"] + 100,
+    }
+    with client.websocket_connect(f"/v1/attempts/{attempt}/audio") as socket:
+        authenticate(socket, credential)
+        socket.send_bytes(frame(later, b"\x05\x06" * 100))
+        assert socket.receive_json()["type"] == "ack"
+        for _ in range(2):
+            socket.send_json(closing)
+            assert socket.receive_json() == {"type": "ack", "id": closing["id"]}
+    data = client.get(f"/v1/recordings/{identity['meeting_id']}", headers=API).json()
+    assert data["audio"][0]["accepted_samples"] == 200
+    assert data["audio"][0]["known_gaps"] == [{"start_sample": 100, "end_sample": 200}]
+    assert data["audio"][0]["end_received"]
+    assert data["audio"][0]["pending_input"]
+    with Session(database) as db:
+        chunks = db.scalars(select(AudioChunk).order_by(AudioChunk.sequence)).all()
+        assert [c.sequence for c in chunks] == [0, 12]
+        assert storage.read(chunks[0].object_key) == b"\x01\x02" * 100
+        assert storage.read(chunks[1].object_key) == b"\x05\x06" * 100
+
+
+def test_ingest_rate_survives_reconnect_and_preserves_replay_and_end(
+    client, database, storage, monkeypatch
+):
+    from wortlaut import ingest
+
+    clock = datetime.now(UTC)
+    monkeypatch.setattr(ingest, "datetime", SimpleNamespace(now=lambda _: clock))
+    monkeypatch.setattr(ingest, "INGEST_BURST", 3)
+    monkeypatch.setattr(ingest, "INGEST_FRAMES_PER_SECOND", 1)
+    attempt, credential, identity = source(client)
+    opening = begin(identity)
+    frames = [
+        {**identity, "sequence": n, "start_sample": n * 100, "sample_count": 100} for n in range(2)
+    ]
+    closing = {
+        "type": "end",
+        "id": opening["id"] + "/end",
+        "stream_id": identity["stream_id"],
+        "epoch": identity["epoch"],
+        "last_sequence": 1,
+        "final_sample": 200,
+    }
+    next_identity = {**identity, "stream_id": str(uuid.uuid4()), "epoch": str(uuid.uuid4())}
+    with client.websocket_connect(f"/v1/attempts/{attempt}/audio") as socket:
+        authenticate(socket, credential)
+        socket.send_json(opening)
+        assert socket.receive_json()["type"] == "ack"
+        for metadata in frames:
+            socket.send_bytes(frame(metadata, b"\x01\x02" * 100))
+            assert socket.receive_json()["type"] == "ack"
+        socket.send_json(opening)
+        assert socket.receive_json()["type"] == "ack"
+        for metadata in frames:
+            socket.send_bytes(frame(metadata, b"\x01\x02" * 100))
+            assert socket.receive_json()["type"] == "ack"
+        socket.send_json(closing)
+        assert socket.receive_json() == {"type": "ack", "id": closing["id"]}
+        socket.send_json(begin(next_identity))
+        assert socket.receive_json() == {"type": "error", "reason": "audio_ingest_rate_limit"}
+    database.dispose()  # The allowance is durable, not attached to a process or socket.
+    with client.websocket_connect(f"/v1/attempts/{attempt}/audio") as socket:
+        authenticate(socket, credential)
+        socket.send_json(begin(next_identity))
+        assert socket.receive_json() == {"type": "error", "reason": "audio_ingest_rate_limit"}
+    healthy_attempt, healthy_credential, healthy_identity = source(client, key="healthy")
+    with client.websocket_connect(f"/v1/attempts/{healthy_attempt}/audio") as socket:
+        authenticate(socket, healthy_credential)
+        socket.send_json(begin(healthy_identity))
+        assert socket.receive_json()["type"] == "ack"
+        healthy = {**healthy_identity, "sequence": 0, "start_sample": 0, "sample_count": 100}
+        socket.send_bytes(frame(healthy, b"\x05\x06" * 100))
+        assert socket.receive_json()["type"] == "ack"
+    clock += timedelta(seconds=2)
+    with client.websocket_connect(f"/v1/attempts/{attempt}/audio") as socket:
+        authenticate(socket, credential)
+        socket.send_json(begin(next_identity))
+        assert socket.receive_json()["type"] == "ack"
+        metadata = {**next_identity, "sequence": 0, "start_sample": 0, "sample_count": 100}
+        socket.send_bytes(frame(metadata, b"\x03\x04" * 100))
+        assert socket.receive_json()["type"] == "ack"
+        socket.send_bytes(frame({**metadata, "sequence": 1, "start_sample": 100}, b"\0\0" * 100))
+        assert socket.receive_json() == {"type": "error", "reason": "audio_ingest_rate_limit"}
+    with Session(database) as db:
+        chunks = db.scalars(select(AudioChunk)).all()
+        assert len(chunks) == 4
+        assert sorted(len(storage.read(c.object_key)) for c in chunks) == [200, 200, 200, 200]

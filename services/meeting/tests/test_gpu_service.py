@@ -57,3 +57,38 @@ def test_busy_inference_is_rejected_without_running_a_second_model_call(monkeypa
             ).status_code
             == 401
         )
+
+
+def test_accelerator_failure_rejects_jobs_and_marks_gpu_process_unhealthy(monkeypatch):
+    path = Path(__file__).resolve().parents[2] / "asr/app.py"
+    spec = importlib.util.spec_from_file_location("gpu_failure_fixture", path)
+    gpu = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gpu)
+
+    class AcceleratorFailure(Exception):
+        pass
+
+    calls = []
+
+    def fail(*args, **kwargs):
+        calls.append(True)
+        raise AcceleratorFailure("fixture CUDA client failure")
+
+    monkeypatch.setitem(
+        sys.modules,
+        "torch",
+        SimpleNamespace(AcceleratorError=AcceleratorFailure, inference_mode=nullcontext),
+    )
+    monkeypatch.setenv("WORTLAUT_ASR_TOKEN", "fixture-gpu-token")
+    gpu.model = SimpleNamespace(transcribe=fail)
+    client = TestClient(gpu.app)
+    assert client.get("/health/ready").status_code == 200
+    assert client.get("/health/live").status_code == 200
+    headers = {"Authorization": "Bearer fixture-gpu-token", "X-Job-ID": "a" * 64}
+    for _ in range(2):
+        response = client.post("/v1/transcribe", content=b"\0\0", headers=headers)
+        assert response.status_code == 503
+        assert response.json() == {"detail": "GPU unavailable"}
+    assert calls == [True]
+    assert client.get("/health/ready").status_code == 503
+    assert client.get("/health/live").status_code == 503

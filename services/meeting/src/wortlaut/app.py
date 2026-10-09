@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import hashlib
 import json
 import logging
@@ -15,14 +16,15 @@ from fastapi import (
     FastAPI,
     Header,
     HTTPException,
+    Query,
     Request,
     Response,
     WebSocket,
     WebSocketDisconnect,
 )
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field, ValidationError, model_validator
-from sqlalchemy import func, select, text
+from pydantic import AwareDatetime, BaseModel, Field, ValidationError, model_validator
+from sqlalchemy import func, select, text, tuple_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
@@ -31,31 +33,36 @@ from wortlaut.asr import finalize_processing, inference_pass
 from wortlaut.calendar import entry_json, imap_pass, import_mail
 from wortlaut.controller import controller_pass, new_attempt, request_cancellation
 from wortlaut.database import get_engine, session
-from wortlaut.exports import export_data, render_export
+from wortlaut.exports import export_data, export_reader_token, render_export
 from wortlaut.ingest import accept_chunk, accept_control, capacity_reached, verify_owner
 from wortlaut.mail import delivery_json, smtp_pass
 from wortlaut.models import (
     AsrJob,
     Attempt,
     AudioChunk,
+    AudioControl,
     AudioStream,
     CalendarEntry,
     Delivery,
     Recording,
 )
-from wortlaut.processing import segmentation_pass, timeline
+from wortlaut.processing import RATE, segmentation_pass, stream_quality
 from wortlaut.recurrence import recurrence_pass
 from wortlaut.retention import retention_pass
 from wortlaut.settings import get_settings
 from wortlaut.storage import get_storage
-from wortlaut.validation import validate_webex_url
+from wortlaut.validation import Provider, normalize_meeting_url
 from wortlaut.webex import WebexUnavailable, guest_token
 
 
 async def processing_loop(stop: asyncio.Event, operation, interval=2):
     while not stop.is_set():
         try:
-            await run_in_threadpool(operation, get_engine())
+            worked = await run_in_threadpool(operation, get_engine())
+            if worked is True:
+                # Yield to shutdown/status tasks, then claim the next ready job without idle delay.
+                await asyncio.sleep(0)
+                continue
         except Exception as error:
             # Third-party exception messages may include URLs or credentials.
             logging.getLogger("wortlaut").error(
@@ -111,18 +118,24 @@ def bearer_value(authorization: str | None) -> str:
 
 def api_auth(authorization: Annotated[str | None, Header()] = None):
     token = bearer_value(authorization)
-    if not secrets.compare_digest(token, get_settings().api_token.get_secret_value()):
+    if not secrets.compare_digest(
+        token.encode(), get_settings().api_token.get_secret_value().encode()
+    ):
         raise HTTPException(401, "Invalid API credential")
 
 
 class RecordingRequest(BaseModel):
     meeting_url: str = Field(max_length=2048)
+    provider: Provider | None = None
     starts_at: datetime
     ends_at: datetime
 
     @model_validator(mode="after")
     def valid(self):
-        validate_webex_url(self.meeting_url)
+        provider, normalized = normalize_meeting_url(self.meeting_url)
+        if self.provider is not None and self.provider != provider:
+            raise ValueError("Provider does not match meeting URL")
+        self.provider, self.meeting_url = provider, normalized
         if self.starts_at.tzinfo is None or self.ends_at.tzinfo is None:
             raise ValueError("Explicit timezone required")
         if self.ends_at <= self.starts_at:
@@ -142,6 +155,29 @@ class RtpSourceEvidence(BaseModel):
     rtp_timestamp: int = Field(ge=0, le=2**32 - 1)
 
 
+class EncodedFrameEvidence(BaseModel):
+    # Native frame/receive/capture clocks are evidence, not meeting sample time.
+    timestamp: float = Field(allow_inf_nan=False)
+    rtp_timestamp: int | None = Field(default=None, ge=0, le=2**32 - 1)
+    synchronization_source: int | None = Field(default=None, ge=0, le=2**32 - 1)
+    contributing_sources: list[Annotated[int, Field(ge=0, le=2**32 - 1)]] = Field(
+        default_factory=list, max_length=64
+    )
+    payload_type: int | None = Field(default=None, ge=0, le=127)
+    receive_time: float | None = Field(default=None, allow_inf_nan=False)
+    capture_time: float | None = Field(default=None, allow_inf_nan=False)
+    mime_type: str | None = Field(default=None, max_length=128)
+
+
+class EncodedTransformEvidence(BaseModel):
+    state: Literal[
+        "unsupported", "failed", "waiting_frames", "observing", "metadata_unavailable",
+        "provider_transform", "provider_reserved", "replaced", "stopped",
+    ]
+    frame_count: int = Field(ge=0)
+    last_frame: EncodedFrameEvidence | None = None
+
+
 class ReceiverEvidence(BaseModel):
     provider_source_id: str = Field(max_length=256)
     source_kind: Literal["speaker", "share_audio"]
@@ -152,6 +188,7 @@ class ReceiverEvidence(BaseModel):
     source_state: str | None = Field(default=None, max_length=64)
     ssrc: list[RtpSourceEvidence] = Field(default_factory=list, max_length=64)
     csrc: list[RtpSourceEvidence] = Field(default_factory=list, max_length=64)
+    encoded_transform: EncodedTransformEvidence | None = None
 
 
 class ParticipantSourceEvidence(BaseModel):
@@ -167,6 +204,30 @@ class ParticipantEvidence(BaseModel):
     sources: list[ParticipantSourceEvidence] = Field(default_factory=list, max_length=256)
 
 
+class ClockInterruption(BaseModel):
+    reason: Literal["suspended", "interrupted"]
+    observed_start_utc: AwareDatetime
+    observed_end_utc: AwareDatetime | None = None
+
+    @model_validator(mode="after")
+    def ordered(self):
+        if self.observed_end_utc and self.observed_end_utc < self.observed_start_utc:
+            raise ValueError("Interruption end precedes start")
+        return self
+
+
+class AudioClockEvidence(BaseModel):
+    state: Literal["unknown", "running", "suspended", "interrupted", "closed"] = "unknown"
+    total_interruptions: int = Field(default=0, ge=0)
+    interruptions: list[ClockInterruption] = Field(default_factory=list, max_length=64)
+
+    @model_validator(mode="after")
+    def consistent(self):
+        if len(self.interruptions) > self.total_interruptions:
+            raise ValueError("Interruption count contradicts intervals")
+        return self
+
+
 class WorkerStatus(BaseModel):
     participation: Literal["joining", "waiting_admission", "capturing", "ended"]
     capability: Literal["unverified", "capability_unsupported", "verified"] = "unverified"
@@ -175,13 +236,16 @@ class WorkerStatus(BaseModel):
     configured_speaker_slots: int | None = Field(default=None, ge=0, le=64)
     configured_share_slots: int | None = Field(default=None, ge=0, le=64)
     audio_samples: int = Field(default=0, ge=0)
+    drained: bool | None = None
     receiver_sources: list[ReceiverEvidence] = Field(default_factory=list, max_length=64)
     participant_sources: ParticipantEvidence = Field(default_factory=ParticipantEvidence)
+    audio_clock: AudioClockEvidence = Field(default_factory=AudioClockEvidence)
 
 
 def recording_json(recording: Recording) -> dict:
     return {
         "id": str(recording.id),
+        "provider": recording.provider,
         "starts_at": recording.starts_at,
         "ends_at": recording.ends_at,
         "participation": recording.participation,
@@ -191,6 +255,7 @@ def recording_json(recording: Recording) -> dict:
         "cancelled_at": recording.cancelled_at,
         "audio_deleted_at": recording.audio_deleted_at,
         "transcript_deleted_at": recording.transcript_deleted_at,
+        "metadata_deleted_at": recording.metadata_deleted_at,
         "active_attempt_id": str(recording.active_attempt_id)
         if recording.active_attempt_id
         else None,
@@ -223,9 +288,12 @@ def create_recording(
     db: Db,
     idempotency_key: Annotated[str, Header(min_length=1, max_length=200)],
 ):
-    digest = hashlib.sha256(
-        json.dumps(body.model_dump(mode="json"), sort_keys=True).encode()
-    ).hexdigest()
+    payload = body.model_dump(mode="json")
+    # Webex requests retain their pre-provider digest, including old clients'
+    # idempotency keys. Explicit and inferred providers have the same identity.
+    if body.provider == "webex":
+        payload.pop("provider")
+    digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
     existing = db.scalar(select(Recording).where(Recording.idempotency_key == idempotency_key))
     if existing:
         if existing.request_digest != digest:
@@ -276,6 +344,157 @@ def calendar_status(db: Db):
     return {"events": result}
 
 
+@app.get("/v1/recordings", dependencies=[Depends(api_auth)])
+def list_recordings(
+    db: Db,
+    limit: Annotated[int, Query(ge=1, le=100)] = 25,
+    cursor: Annotated[str | None, Query(max_length=200)] = None,
+    provider: Provider | None = None,
+    starts_from: datetime | None = None,
+    starts_before: datetime | None = None,
+):
+    for value in (starts_from, starts_before):
+        if value is not None and value.tzinfo is None:
+            raise HTTPException(422, "Explicit timezone required")
+    if starts_from and starts_before and starts_from >= starts_before:
+        raise HTTPException(422, "Invalid start-time interval")
+    query = select(Recording, Delivery).outerjoin(Delivery)
+    if provider:
+        query = query.where(Recording.provider == provider)
+    if starts_from:
+        query = query.where(Recording.starts_at >= starts_from)
+    if starts_before:
+        query = query.where(Recording.starts_at < starts_before)
+    if cursor:
+        try:
+            anchor = json.loads(base64.b64decode(cursor, altchars=b"-_", validate=True))
+            moment, identifier = datetime.fromisoformat(anchor["start"]), uuid.UUID(anchor["id"])
+            if moment.tzinfo is None:
+                raise ValueError("Timezone missing")
+        except (ValueError, TypeError, KeyError, UnicodeError):
+            raise HTTPException(400, "Invalid recording cursor") from None
+        query = query.where(tuple_(Recording.starts_at, Recording.id) > tuple_(moment, identifier))
+    rows = db.execute(query.order_by(Recording.starts_at, Recording.id).limit(limit + 1)).all()
+    page, identifiers = rows[:limit], [r.id for r, _ in rows[:limit]]
+    # Read page-wide aggregates rather than full chunk/participant histories.
+    audio = {
+        row[0]: row[1:]
+        for row in db.execute(
+            select(
+                Attempt.recording_id,
+                func.coalesce(func.sum(AudioChunk.sample_count), 0),
+                func.bool_or(AudioChunk.contract["attribution_unknown"].as_boolean()),
+                func.bool_or(AudioChunk.processing_error.is_not(None)),
+            )
+            .join(AudioStream, AudioStream.attempt_id == Attempt.id)
+            .join(AudioChunk, AudioChunk.stream_id == AudioStream.id)
+            .where(Attempt.recording_id.in_(identifiers))
+            .group_by(Attempt.recording_id)
+        )
+    }
+    sources = dict(
+        db.execute(
+            select(Attempt.recording_id, func.bool_or(AudioStream.final_sample.is_(None)))
+            .join(AudioStream, AudioStream.attempt_id == Attempt.id)
+            .where(Attempt.recording_id.in_(identifiers))
+            .group_by(Attempt.recording_id)
+        ).all()
+    )
+    drains = dict(
+        db.execute(
+            select(
+                Attempt.recording_id,
+                func.bool_or(Attempt.diagnostics["drained"].as_boolean().is_(False)),
+            )
+            .where(Attempt.recording_id.in_(identifiers))
+            .group_by(Attempt.recording_id)
+        ).all()
+    )
+    clocks = dict(
+        db.execute(
+            select(
+                Attempt.recording_id,
+                func.bool_or(
+                    Attempt.diagnostics["audio_clock"]["total_interruptions"].as_integer() > 0
+                ),
+            )
+            .where(Attempt.recording_id.in_(identifiers))
+            .group_by(Attempt.recording_id)
+        ).all()
+    )
+    failures = dict(
+        db.execute(
+            select(Attempt.recording_id, func.count())
+            .join(AudioStream, AudioStream.attempt_id == Attempt.id)
+            .join(AsrJob, AsrJob.stream_id == AudioStream.id)
+            .where(Attempt.recording_id.in_(identifiers), AsrJob.status == "failed")
+            .group_by(Attempt.recording_id)
+        ).all()
+    )
+    gaps = dict(
+        db.execute(
+            select(Attempt.recording_id, func.count())
+            .join(AudioStream, AudioStream.attempt_id == Attempt.id)
+            .join(AudioControl, AudioControl.stream_id == AudioStream.id)
+            .outerjoin(
+                AudioChunk,
+                (AudioChunk.stream_id == AudioStream.id)
+                & (AudioChunk.sequence == AudioControl.sequence),
+            )
+            .where(
+                Attempt.recording_id.in_(identifiers),
+                AudioControl.kind == "gap",
+                AudioControl.contract["final"].as_boolean().is_(True),
+                AudioChunk.id.is_(None),
+            )
+            .group_by(Attempt.recording_id)
+        ).all()
+    )
+    items = []
+    for recording, delivery in page:
+        samples, unknown, unreadable = audio.get(recording.id, (0, False, False))
+        incomplete_drain = drains.get(recording.id, False)
+        failed = bool(failures.get(recording.id) or unreadable or recording.processing == "failed")
+        status = (
+            "pending"
+            if recording.processing not in ("completed", "failed")
+            else "no_audio_received"
+            if not samples
+            else "incomplete"
+            if unknown
+            or failed
+            or incomplete_drain
+            or gaps.get(recording.id)
+            or clocks.get(recording.id)
+            else "unverified"
+        )
+        items.append(
+            {
+                **recording_json(recording),
+                "delivery": delivery_json(delivery),
+                "quality": {
+                    "status": status,
+                    "no_audio_received": not samples,
+                    "durable_sample_count": samples,
+                    "attribution_unknown": bool(unknown),
+                    "capture_end_unknown": sources.get(recording.id, True),
+                    "incomplete_drain": bool(incomplete_drain),
+                    "audio_clock_interrupted": bool(clocks.get(recording.id)),
+                    "processing_failed": failed,
+                    "finalized_gap_count": gaps.get(recording.id, 0),
+                    "source_coverage": "unknown",
+                },
+            }
+        )
+    next_cursor = None
+    if len(rows) > limit:
+        last = page[-1][0]
+        next_cursor = base64.urlsafe_b64encode(
+            json.dumps({"start": last.starts_at.isoformat(), "id": str(last.id)}).encode()
+        ).decode()
+    return {"items": items, "next_cursor": next_cursor}
+
+
 @app.get("/v1/recordings/{recording_id}", dependencies=[Depends(api_auth)])
 def get_recording(recording_id: uuid.UUID, db: Db):
     recording = db.get(Recording, recording_id)
@@ -307,33 +526,70 @@ def get_recording(recording_id: uuid.UUID, db: Db):
             "epoch": str(s.epoch),
             "segmented_until_sample": s.scan_sample,
             "segmentation_complete": s.scan_complete,
-            **timeline(db, s)[2],
+            **stream_quality(db, s),
         }
         for s in streams
     ]
-    jobs = db.scalars(select(AsrJob).where(AsrJob.stream_id.in_([s.id for s in streams]))).all()
-    samples, chunks, last_audio = db.execute(
+    jobs = db.execute(
+        select(
+            AsrJob.status,
+            func.count(),
+            func.min(AsrJob.created_at),
+            func.sum(AsrJob.end_sample - AsrJob.start_sample),
+        )
+        .where(AsrJob.stream_id.in_([s.id for s in streams]))
+        .group_by(AsrJob.status)
+    ).all()
+    samples, chunks, last_audio, unsegmented = db.execute(
         select(
             func.coalesce(func.sum(AudioChunk.sample_count), 0),
             func.count(AudioChunk.id),
             func.max(AudioChunk.accepted_at),
-        ).where(AudioChunk.stream_id.in_([s.id for s in streams]))
+            func.coalesce(
+                func.sum(
+                    func.greatest(
+                        0,
+                        AudioChunk.start_sample
+                        + AudioChunk.sample_count
+                        - func.greatest(AudioChunk.start_sample, AudioStream.scan_sample),
+                    )
+                ).filter(AudioStream.scan_complete.is_(False)),
+                0,
+            ),
+        )
+        .join(AudioStream)
+        .where(AudioChunk.stream_id.in_([s.id for s in streams]))
     ).one()
     result["ingest"] = {
         "durable_sample_count": samples,
         "durable_chunk_count": chunks,
         "last_audio_activity": last_audio,
     }
+    counts = {status: count for status, count, _, _ in jobs}
+    ages = [created for status, _, created, _ in jobs if status in ("pending", "processing")]
     result["asr"] = {
-        "pending": sum(j.status in ("pending", "processing") for j in jobs),
-        "failed": sum(j.status == "failed" for j in jobs),
-        "completed": sum(j.status == "completed" for j in jobs),
+        "pending": counts.get("pending", 0) + counts.get("processing", 0),
+        "failed": counts.get("failed", 0),
+        "completed": counts.get("completed", 0),
+        "pending_source_seconds": (
+            unsegmented
+            + sum(
+                duration for status, _, _, duration in jobs if status in ("pending", "processing")
+            )
+        )
+        / RATE,
+        "oldest_pending_seconds": max(0, (datetime.now(UTC) - min(ages)).total_seconds())
+        if ages
+        else None,
     }
     return result
 
 
 @app.post("/v1/recordings/{recording_id}/delivery/retry", dependencies=[Depends(api_auth)])
 def retry_delivery(recording_id: uuid.UUID, db: Db):
+    recording = db.scalar(select(Recording).where(Recording.id == recording_id).with_for_update())
+    if recording is not None and recording.transcript_deleted_at is not None:
+        raise HTTPException(410, "Transcript retention expired")
     delivery = db.scalar(
         select(Delivery).where(Delivery.recording_id == recording_id).with_for_update()
     )
@@ -377,9 +633,20 @@ def cancel_recording(recording_id: uuid.UUID, db: Db):
     return recording_json(recording)
 
 
-@app.get("/v1/recordings/{recording_id}/exports/{format}", dependencies=[Depends(api_auth)])
-def get_export(recording_id: uuid.UUID, format: Literal["txt", "vtt", "json"], db: Db):
+@app.get("/v1/recordings/{recording_id}/exports/{format}")
+def get_export(
+    recording_id: uuid.UUID,
+    format: Literal["txt", "vtt", "json"],
+    db: Db,
+    authorization: Annotated[str | None, Header()] = None,
+):
+    token = bearer_value(authorization)
     recording = db.get(Recording, recording_id)
+    reader = export_reader_token(recording) if recording else None
+    if not secrets.compare_digest(
+        token.encode(), get_settings().api_token.get_secret_value().encode()
+    ) and (reader is None or not secrets.compare_digest(token.encode(), reader.encode())):
+        raise HTTPException(401, "Invalid export credential")
     if recording is None:
         raise HTTPException(404, "Recording not found")
     if recording.processing not in ("completed", "failed"):
@@ -459,8 +726,28 @@ def bootstrap(
         or recording.cancelled_at is not None
         or attempt.worker_id != x_worker_id
     ):
-        raise HTTPException(409, "Claim this occurrence before guest issuance")
+        raise HTTPException(409, "Claim this occurrence before bootstrap")
     settings = get_settings()
+    response.headers["Cache-Control"] = "no-store"
+    common = {
+        "provider": recording.provider,
+        "meeting_id": str(recording.id),
+        "attempt_id": str(attempt.id),
+        "meeting_url": recording.meeting_url,
+        "deadline": min(recording.ends_at, attempt.credential_expires_at - timedelta(seconds=30)),
+        "lobby_timeout_seconds": settings.lobby_timeout_seconds,
+    }
+    if recording.provider == "google_meet":
+        if not settings.enable_google_meet:
+            raise HTTPException(503, "google_meet_not_configured")
+        return {
+            **common,
+            "meet": {
+                "display_name": settings.assistant_name,
+                "locale": settings.meet_locale,
+                "auth_mode": "account" if settings.meet_storage_state_secret else "guest",
+            },
+        }
     issued_request_started = datetime.now(UTC)
     try:
         guest = guest_token(
@@ -476,18 +763,10 @@ def bootstrap(
     except (WebexUnavailable, httpx.HTTPError) as error:
         detail = str(error) if isinstance(error, WebexUnavailable) else "Webex request unavailable"
         raise HTTPException(503, detail) from None
-    response.headers["Cache-Control"] = "no-store"
     return {
-        "meeting_id": str(recording.id),
-        "attempt_id": str(attempt.id),
-        "meeting_url": recording.meeting_url,
+        **common,
         "sdk_page_url": settings.sdk_page_url,
-        "deadline": min(
-            recording.ends_at,
-            attempt.credential_expires_at - timedelta(seconds=30),
-        ),
         "guest_expires_at": issued_request_started + timedelta(seconds=guest["expires_in"]),
-        "lobby_timeout_seconds": settings.lobby_timeout_seconds,
         "guest": guest,
     }
 
@@ -512,13 +791,20 @@ def worker_status(
             body.participation == "ended"
             and attempt.ended_at is not None
             and attempt.end_reason == (body.reason or "normal")
-            and attempt.diagnostics == body.model_dump(exclude={"participation"})
+            # Workers already running across an upgrade can replay a final report
+            # stored before the drain/clock fields existed.
+            and {
+                "drained": None,
+                "audio_clock": AudioClockEvidence().model_dump(),
+                **attempt.diagnostics,
+            }
+            == body.model_dump(mode="json", exclude={"participation"})
         ):
             return {"accepted": True}
         raise HTTPException(409, "Attempt has already ended")
     attempt.last_heartbeat_at = datetime.now(UTC)
     # Status is evidence about the current worker, not a provider acceptance test.
-    attempt.diagnostics = body.model_dump(exclude={"participation"})
+    attempt.diagnostics = body.model_dump(mode="json", exclude={"participation"})
     recording.participation = body.participation
     if body.participation == "ended":
         attempt.ended_at = datetime.now(UTC)
@@ -532,9 +818,9 @@ def worker_status(
     }
 
 
-def ingest_message(attempt_id, credential, worker_id, frame):
+def ingest_message(attempt_id, credential, worker_id, connection_id, frame):
     with Session(get_engine()) as db:
-        attempt, recording = verify_owner(db, attempt_id, credential, worker_id)
+        attempt, recording = verify_owner(db, attempt_id, credential, worker_id, connection_id)
         if isinstance(frame, bytes):
             if not 4 <= len(frame) <= 168_196:
                 raise HTTPException(400, "Invalid audio frame size")
@@ -569,9 +855,13 @@ async def audio_socket(socket: WebSocket, attempt_id: uuid.UUID):
             await socket.close(1008)
             return
 
+        connection_id = uuid.uuid4()
+
         def check_owner():
             with Session(get_engine()) as db:
-                verify_owner(db, attempt_id, credential, worker_id)
+                attempt, _ = verify_owner(db, attempt_id, credential, worker_id)
+                attempt.audio_connection_id = connection_id
+                db.commit()
 
         await run_in_threadpool(check_owner)
         await socket.send_json({"type": "ready"})
@@ -581,15 +871,17 @@ async def audio_socket(socket: WebSocket, attempt_id: uuid.UUID):
                 return
             frame = message.get("bytes") if message.get("bytes") is not None else message["text"]
             identifier = await run_in_threadpool(
-                ingest_message, attempt_id, credential, worker_id, frame
+                ingest_message, attempt_id, credential, worker_id, connection_id, frame
             )
             await socket.send_json({"type": "ack", "id": identifier})
     except WebSocketDisconnect:
         return
     except (TimeoutError, HTTPException, ValidationError, ValueError, KeyError, TypeError) as error:
         reason = (
-            "audio_capacity_limit"
-            if isinstance(error, HTTPException) and error.detail == "audio_capacity_limit"
+            error.detail
+            if isinstance(error, HTTPException)
+            and error.detail
+            in {"audio_capacity_limit", "audio_ingest_rate_limit", "audio_metadata_capacity_limit"}
             else "ingest_rejected"
         )
         await socket.send_json({"type": "error", "reason": reason})

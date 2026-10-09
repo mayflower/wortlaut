@@ -9,7 +9,7 @@ from functools import lru_cache
 
 from kubernetes import client, config
 from kubernetes.client.exceptions import ApiException
-from sqlalchemy import func, select, text
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from wortlaut.ingest import capacity_reached
@@ -18,6 +18,8 @@ from wortlaut.settings import get_settings
 
 TIMEOUT = (5, 10)
 LABEL = "wortlaut/attempt-id"
+POD_FINALIZER = "wortlaut/termination-observed"
+SCHEDULER_LOCK = 749836124
 
 
 @lru_cache
@@ -66,6 +68,20 @@ def job_body(recording, attempt):
             raise ValueError("Localhost seccomp requires a profile already present on worker nodes")
         seccomp["localhostProfile"] = settings.worker_seccomp_profile
     labels = {"app": "wortlaut-worker", LABEL: str(attempt.id)}
+    mounts = [{"name": "shm", "mountPath": "/dev/shm"}]
+    volumes = [{"name": "shm", "emptyDir": {"medium": "Memory", "sizeLimit": "256Mi"}}]
+    if recording.provider == "google_meet" and settings.meet_storage_state_secret:
+        mounts.append({"name": "meet-browser", "mountPath": "/run/meet", "readOnly": True})
+        volumes.append(
+            {
+                "name": "meet-browser",
+                "secret": {
+                    "secretName": settings.meet_storage_state_secret,
+                    "defaultMode": 0o440,
+                    "items": [{"key": "storage-state.json", "path": "storage-state.json"}],
+                },
+            }
+        )
     return {
         "apiVersion": "batch/v1",
         "kind": "Job",
@@ -81,7 +97,7 @@ def job_body(recording, attempt):
             # only after observed termination, independently of this TTL.
             "ttlSecondsAfterFinished": 86400,
             "template": {
-                "metadata": {"labels": labels},
+                "metadata": {"labels": labels, "finalizers": [POD_FINALIZER]},
                 "spec": {
                     "restartPolicy": "Never",
                     "automountServiceAccountToken": False,
@@ -124,12 +140,10 @@ def job_body(recording, attempt):
                                 "allowPrivilegeEscalation": False,
                                 "capabilities": {"drop": ["ALL"]},
                             },
-                            "volumeMounts": [{"name": "shm", "mountPath": "/dev/shm"}],
+                            "volumeMounts": mounts,
                         }
                     ],
-                    "volumes": [
-                        {"name": "shm", "emptyDir": {"medium": "Memory", "sizeLimit": "256Mi"}}
-                    ],
+                    "volumes": volumes,
                 },
             },
         },
@@ -163,9 +177,47 @@ def forget_secret(core, attempt, namespace):
             raise
 
 
+def release_pod_evidence(core, attempt, namespace):
+    pods = core.list_namespaced_pod(
+        namespace, label_selector=f"{LABEL}={attempt.id}", _request_timeout=TIMEOUT
+    ).items
+    for pod in pods:
+        if not any(
+            ref.kind == "Job" and ref.uid == attempt.job_uid
+            for ref in (pod.metadata.owner_references or [])
+        ):
+            continue
+        finalizers = pod.metadata.finalizers or []
+        if POD_FINALIZER not in finalizers:
+            continue
+        try:
+            core.patch_namespaced_pod(
+                pod.metadata.name,
+                namespace,
+                [
+                    {"op": "test", "path": "/metadata/uid", "value": pod.metadata.uid},
+                    {
+                        "op": "test",
+                        "path": "/metadata/resourceVersion",
+                        "value": pod.metadata.resource_version,
+                    },
+                    {
+                        "op": "replace",
+                        "path": "/metadata/finalizers",
+                        "value": [f for f in finalizers if f != POD_FINALIZER],
+                    },
+                ],
+                _request_timeout=TIMEOUT,
+            )
+        except ApiException as error:
+            if error.status != 404:
+                raise
+
+
 def reconcile_attempt(db, recording, attempt, batch, core, now):
     namespace = get_settings().namespace
     if attempt.process_ended_at is not None:
+        release_pod_evidence(core, attempt, namespace)
         forget_secret(core, attempt, namespace)
         attempt.secret_deleted_at = now
         return
@@ -180,9 +232,7 @@ def reconcile_attempt(db, recording, attempt, batch, core, now):
             )
             return
         attempt.job_uid = job.metadata.uid
-    elif (
-        attempt.job_uid or attempt.worker_id or attempt.pod_uids or attempt.job_create_requested_at
-    ):
+    elif attempt.job_uid or attempt.worker_id or attempt.pod_uids:
         # A deleted/force-deleted object is not evidence that its process ended.
         recording.participation, recording.participation_reason = "unknown", "job_missing"
         return
@@ -204,9 +254,52 @@ def reconcile_attempt(db, recording, attempt, batch, core, now):
             recording.participation, recording.participation_reason = "unknown", "job_missing"
         return
     else:
+        # An intent without observed identity or claim is retryable with the
+        # same Job/attempt/credential. A Pod from a lost Create still fences it.
+        if attempt.job_create_requested_at:
+            pods = core.list_namespaced_pod(
+                namespace, label_selector=f"{LABEL}={attempt.id}", _request_timeout=TIMEOUT
+            ).items
+            if pods:
+                recording.participation, recording.participation_reason = "unknown", "job_missing"
+                return
+        # A persisted attempt precedes Secret creation. Recover a lost Secret
+        # response, but never launch a Job with a missing bootstrap credential.
+        try:
+            secret = core.read_namespaced_secret(
+                attempt.job_name, namespace, _request_timeout=TIMEOUT
+            )
+        except ApiException as error:
+            if error.status != 404:
+                raise
+            pods = core.list_namespaced_pod(
+                namespace, label_selector=f"{LABEL}={attempt.id}", _request_timeout=TIMEOUT
+            ).items
+            if not attempt.job_create_requested_at and not pods:
+                attempt.ended_at = attempt.process_ended_at = now
+                attempt.end_reason = "bootstrap_secret_missing"
+                recording.participation, recording.participation_reason = (
+                    "ended",
+                    attempt.end_reason,
+                )
+                db.commit()
+                forget_secret(core, attempt, namespace)
+                attempt.secret_deleted_at = now
+            else:
+                recording.participation, recording.participation_reason = (
+                    "unknown",
+                    "bootstrap_secret_missing",
+                )
+            return
+        if (secret.metadata.labels or {}).get(LABEL) != str(attempt.id):
+            recording.participation, recording.participation_reason = (
+                "unknown",
+                "bootstrap_secret_identity_changed",
+            )
+            return
         # Record intent before the network call. If its result is lost and the
         # Job later disappears, even a restart cannot mistake that for no start.
-        attempt.job_create_requested_at = now
+        attempt.job_create_requested_at = attempt.job_create_requested_at or now
         db.commit()
         recording = db.scalar(
             select(Recording).where(Recording.id == attempt.recording_id).with_for_update()
@@ -229,6 +322,17 @@ def reconcile_attempt(db, recording, attempt, batch, core, now):
                 namespace, job_body(recording, attempt), _request_timeout=TIMEOUT
             )
         except ApiException as error:
+            if error.status in (400, 401, 403, 422):
+                # An authoritative rejection did not create a process. Preserve
+                # the attempt tombstone, prohibit claims and release its Secret.
+                attempt.ended_at = attempt.process_ended_at = now
+                attempt.end_reason = "job_create_rejected"
+                recording.participation = "ended"
+                recording.participation_reason = attempt.end_reason
+                db.commit()
+                forget_secret(core, attempt, namespace)
+                attempt.secret_deleted_at = now
+                return
             if error.status != 409:
                 raise
             job = read_job(batch, attempt.job_name, namespace)
@@ -239,6 +343,8 @@ def reconcile_attempt(db, recording, attempt, batch, core, now):
             )
             return
         attempt.job_uid = job.metadata.uid
+        if attempt.worker_id is None:
+            recording.participation, recording.participation_reason = "preparing", None
     pods = core.list_namespaced_pod(
         namespace, label_selector=f"{LABEL}={attempt.id}", _request_timeout=TIMEOUT
     ).items
@@ -274,12 +380,13 @@ def reconcile_attempt(db, recording, attempt, batch, core, now):
         recording.participation = "ended"
         recording.participation_reason = attempt.end_reason
         db.commit()  # Persist termination before removing credentials.
+        release_pod_evidence(core, attempt, namespace)
         forget_secret(core, attempt, namespace)
         attempt.secret_deleted_at = now
         return
     if recording.cancelled_at or recording.audio_closed_at or recording.ends_at <= now:
-        # Reduce the existing Job deadline. Kubernetes sends SIGTERM and retains
-        # Pod exit status; deleting Pods would discard the evidence we need.
+        # The deadline sends SIGTERM and deletes Pods. Our finalizer retains
+        # their exit status until termination is durably recorded above.
         elapsed = int((now - job.status.start_time).total_seconds()) if job.status.start_time else 0
         deadline = max(1, elapsed)
         if not job.spec.active_deadline_seconds or job.spec.active_deadline_seconds > deadline:
@@ -349,26 +456,58 @@ def controller_pass(engine, apis=None):
                     "job_reconcile_failed attempt=%s type=%s", identifier, type(error).__name__
                 )
     with Session(engine) as db:
-        if not db.scalar(text("SELECT pg_try_advisory_xact_lock(749836124)")):
+        if not db.scalar(select(func.pg_try_advisory_xact_lock(SCHEDULER_LOCK))):
             return
-        active = db.scalar(
-            select(func.count())
-            .select_from(Recording)
-            .where(Recording.active_attempt_id.is_not(None), Recording.participation != "ended")
+        due = (
+            Recording.participation == "scheduled",
+            Recording.active_attempt_id.is_(None),
+            Recording.calendar_conflict.is_(False),
+            Recording.starts_at <= now + timedelta(seconds=settings.join_lead_seconds),
         )
+        expired = (
+            Recording.cancelled_at.is_not(None)
+            | (Recording.ends_at <= now)
+            | (Recording.starts_at < now - timedelta(seconds=settings.late_start_tolerance_seconds))
+        )
+        enabled = []
+        for provider, configured in (
+            ("webex", bool(settings.webex_service_token)),
+            ("google_meet", settings.enable_google_meet),
+        ):
+            if configured:
+                enabled.append(provider)
+            else:
+                reason = f"{provider}_not_configured"
+                db.execute(
+                    update(Recording)
+                    .where(
+                        *due,
+                        Recording.provider == provider,
+                        ~expired,
+                        Recording.participation_reason.is_distinct_from(reason),
+                    )
+                    .values(participation_reason=reason)
+                )
         candidates = db.scalars(
-            select(Recording)
-            .where(
-                Recording.participation == "scheduled",
-                Recording.active_attempt_id.is_(None),
-                Recording.calendar_conflict.is_(False),
-                Recording.starts_at <= now + timedelta(seconds=settings.join_lead_seconds),
-            )
+            select(Recording.id)
+            # Unconfigured providers must not consume the bounded start page.
+            # Their expired/cancelled meetings still receive a terminal state.
+            .where(*due, Recording.provider.in_(enabled) | expired)
             .order_by(Recording.starts_at)
-            .with_for_update(skip_locked=True)
             .limit(16)
         ).all()
-        for recording in candidates:
+        db.commit()
+    for identifier in candidates:
+        with Session(engine) as db:
+            if not db.scalar(select(func.pg_try_advisory_xact_lock(SCHEDULER_LOCK))):
+                return
+            recording = db.scalar(
+                select(Recording)
+                .where(Recording.id == identifier, *due)
+                .with_for_update(skip_locked=True)
+            )
+            if recording is None:
+                continue
             if (
                 recording.cancelled_at
                 or recording.ends_at <= now
@@ -378,31 +517,61 @@ def controller_pass(engine, apis=None):
                 recording.participation = "ended"
                 recording.participation_reason = "cancelled" if recording.cancelled_at else "missed"
                 recording.audio_closed_at = now
+                db.commit()
                 continue
+            active = db.scalar(
+                select(func.count())
+                .select_from(Recording)
+                .where(Recording.active_attempt_id.is_not(None), Recording.participation != "ended")
+            )
             if active >= settings.max_active_meetings:
                 recording.participation_reason = "worker_capacity_limit"
+                db.commit()
                 continue
             if capacity_reached(db):
                 recording.participation_reason = "audio_capacity_limit"
+                db.commit()
                 continue
-            if not settings.webex_service_token:
+            if recording.provider == "webex" and not settings.webex_service_token:
                 recording.participation_reason = "webex_not_configured"
+                db.commit()
+                continue
+            if recording.provider == "google_meet" and not settings.enable_google_meet:
+                recording.participation_reason = "google_meet_not_configured"
+                db.commit()
                 continue
             attempt, token = new_attempt(db, recording, now)
             attempt.job_name = "wortlaut-worker-" + attempt.id.hex
-            core.create_namespaced_secret(
-                settings.namespace,
-                {
-                    "apiVersion": "v1",
-                    "kind": "Secret",
-                    "type": "Opaque",
-                    "metadata": {
-                        "name": attempt.job_name,
-                        "labels": {"app": "wortlaut-worker", LABEL: str(attempt.id)},
-                    },
-                    "stringData": {"credential": token},
-                },
-                _request_timeout=TIMEOUT,
+            # Commit ownership before the network operation; otherwise a lost
+            # response/crash leaves an orphan Secret and rolls back other starts.
+            db.commit()
+            recording = db.scalar(
+                select(Recording).where(Recording.id == identifier).with_for_update()
             )
-            active += 1
-        db.commit()
+            db.refresh(attempt)
+            if attempt.ended_at or recording.cancelled_at or recording.audio_closed_at:
+                continue
+            try:
+                core.create_namespaced_secret(
+                    settings.namespace,
+                    {
+                        "apiVersion": "v1",
+                        "kind": "Secret",
+                        "type": "Opaque",
+                        "metadata": {
+                            "name": attempt.job_name,
+                            "labels": {"app": "wortlaut-worker", LABEL: str(attempt.id)},
+                        },
+                        "stringData": {"credential": token},
+                    },
+                    _request_timeout=TIMEOUT,
+                )
+            except Exception as error:
+                recording.participation_reason = "bootstrap_secret_create_failed"
+                logging.getLogger("wortlaut").error(
+                    "bootstrap_secret_create_failed attempt=%s type=%s status=%s",
+                    attempt.id,
+                    type(error).__name__,
+                    error.status if isinstance(error, ApiException) else "unavailable",
+                )
+            db.commit()

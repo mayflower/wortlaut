@@ -15,6 +15,7 @@ MODEL_REVISION = "541d1f99c6b0c3cd0b11a95167540bb8edefd82b"
 MAX_BYTES = 16000 * 2 * 32
 lock = threading.Lock()
 model = None
+accelerator_failed = threading.Event()
 
 
 def load_model():
@@ -47,17 +48,30 @@ app = FastAPI(title="wortlaut Parakeet", lifespan=lifespan)
 
 @app.get("/health/ready")
 def ready():
+    if accelerator_failed.is_set():
+        raise HTTPException(503, "GPU unavailable; process restart required")
     if model is None:
         raise HTTPException(503, "Model loading")
     return {"status": "ready", "model_revision": MODEL_REVISION}
 
 
+@app.get("/health/live")
+def live():
+    if accelerator_failed.is_set():
+        raise HTTPException(503, "GPU unavailable; process restart required")
+    return {"status": "alive"}
+
+
 def infer(pcm, identifier):
     import torch
 
+    if accelerator_failed.is_set():
+        raise HTTPException(503, "GPU unavailable")
     if not lock.acquire(blocking=False):
         raise HTTPException(429, "Inference busy", headers={"Retry-After": "5"})
     try:
+        if accelerator_failed.is_set():
+            raise HTTPException(503, "GPU unavailable")
         # The lock belongs to the synchronous inference thread. Disconnecting
         # the HTTP client never releases it while CUDA is still working.
         with tempfile.TemporaryDirectory(prefix="wortlaut-asr-") as directory:
@@ -81,6 +95,11 @@ def infer(pcm, identifier):
                     for w in words
                 ],
             }
+    except torch.AcceleratorError:
+        # An unusable CUDA/MPS client must stop receiving more jobs. The
+        # liveness probe replaces only this process, not shared GPU services.
+        accelerator_failed.set()
+        raise HTTPException(503, "GPU unavailable") from None
     finally:
         lock.release()
 

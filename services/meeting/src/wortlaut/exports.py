@@ -1,3 +1,4 @@
+import hmac
 import json
 from datetime import UTC, datetime, timedelta
 from html import escape
@@ -6,7 +7,27 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from wortlaut.models import AsrJob, Attempt, AudioStream, Recording, TranscriptSegment
-from wortlaut.processing import RATE, timeline
+from wortlaut.processing import RATE, stream_quality
+from wortlaut.settings import get_settings
+
+
+def export_reader_token(recording: Recording) -> str | None:
+    if (
+        recording.export_reader_nonce is None
+        or recording.transcript_deleted_at is not None
+        or recording.processing_finished_at is None
+        or datetime.now(UTC)
+        >= recording.processing_finished_at
+        + timedelta(days=get_settings().transcript_retention_days)
+    ):
+        return None
+    # Domain separation and a per-recording nonce keep this credential limited
+    # to export reads. Neither the API key nor a reader secret is stored in mail state.
+    domain = f"wortlaut.export.reader.v1:{recording.id}:{recording.export_reader_nonce}"
+    signature = hmac.digest(
+        get_settings().api_token.get_secret_value().encode(), domain.encode(), "sha256"
+    ).hex()
+    return "wortlaut-read-" + signature
 
 
 def timestamp(seconds: float):
@@ -55,7 +76,7 @@ def export_data(db: Session, recording: Recording):
             "stream_id": str(s.stream_id),
             "epoch": str(s.epoch),
             "provider_source_id": s.contract["provider_source_id"],
-            **timeline(db, s)[2],
+            **stream_quality(db, s),
         }
         for s in streams
     ]
@@ -70,6 +91,7 @@ def export_data(db: Session, recording: Recording):
     ]
     return {
         "recording_id": str(recording.id),
+        "provider": recording.provider,
         "processing": recording.processing,
         "processing_error": recording.processing_error,
         "participation": recording.participation,
@@ -89,6 +111,11 @@ def export_data(db: Session, recording: Recording):
                 "configured_speaker_slots": a.diagnostics.get("configured_speaker_slots"),
                 "configured_share_slots": a.diagnostics.get("configured_share_slots"),
                 "last_observed_streams": a.diagnostics.get("streams"),
+                "drained": a.diagnostics.get("drained"),
+                "audio_clock": a.diagnostics.get(
+                    "audio_clock",
+                    {"state": "unknown", "total_interruptions": 0, "interruptions": []},
+                ),
             }
             for a in attempts
         ],
@@ -98,7 +125,12 @@ def export_data(db: Session, recording: Recording):
             "source_coverage": "unknown",
             "has_audio_gaps": any(q["known_gaps"] for q in qualities),
             "capture_end_unknown": not streams or any(q["capture_end_unknown"] for q in qualities),
-            "no_audio_received": not streams,
+            "no_audio_received": not any(q["accepted_samples"] for q in qualities),
+            "incomplete_drain": any(a.diagnostics.get("drained") is False for a in attempts),
+            "audio_clock_interrupted": any(
+                a.diagnostics.get("audio_clock", {}).get("total_interruptions", 0) > 0
+                for a in attempts
+            ),
             "attribution_unknown": any(q["attribution_unknown"] for q in qualities),
             "unprocessed_audio": any(q["unprocessed_ranges"] for q in qualities),
             "failed_asr_ranges": [
@@ -132,12 +164,15 @@ def render_export(data, format):
     quality = data["quality"]
     unprocessed = quality["unprocessed_audio"] or bool(quality["failed_asr_ranges"])
     status = (
+        f"Provider: {data['provider']}; "
         f"Termin: {data['scheduled_period']['start']} bis {data['scheduled_period']['end']}; "
         f"Letztes bekanntes Audio: {data['last_known_audio_utc'] or 'unbekannt'}; "
         f"Verarbeitung: {data['processing']}; Ende: {reasons}; "
         f"Audiolücken: {quality['has_audio_gaps']}; "
+        f"Audio-Uhr unterbrochen: {quality['audio_clock_interrupted']}; "
         f"Aufnahmeende unbekannt: {quality['capture_end_unknown']}; "
-        f"Zuordnung unklar: {quality['attribution_unknown']}; Quellenabdeckung: unbekannt"
+        f"Zuordnung unklar: {quality['attribution_unknown']}; Quellenabdeckung: unbekannt; "
+        f"Audioabschluss unvollstaendig: {quality['incomplete_drain']}"
         f"; Verarbeitungsfehler: {data['processing_error'] or 'keiner'}"
         f"; Unverarbeitete Bereiche: {unprocessed}"
     )

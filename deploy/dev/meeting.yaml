@@ -60,6 +60,9 @@ spec:
             - secretRef:
                 name: wortlaut-mail
                 optional: true
+            - secretRef:
+                name: wortlaut-meet
+                optional: true
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:

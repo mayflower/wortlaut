@@ -16,9 +16,13 @@ from sqlalchemy.orm import Session
 from wortlaut.controller import request_cancellation
 from wortlaut.models import CalendarEntry, MailCursor, MailImport, Recording
 from wortlaut.settings import get_settings
-from wortlaut.validation import validate_webex_url
+from wortlaut.validation import normalize_meeting_url
 
 MAIL_LOCK = 749836125
+
+
+class AmbiguousMeetingLink(ValueError):
+    pass
 
 
 def utc(value):
@@ -41,33 +45,44 @@ def sender(message):
 
 
 def meeting_link(event, mail_text):
-    fields = [str(event.get(key, "")) for key in ("URL", "LOCATION", "DESCRIPTION")]
+    fields = [
+        str(event.get(key, ""))
+        for key in ("URL", "LOCATION", "DESCRIPTION", "X-GOOGLE-CONFERENCE")
+    ]
     # ICS is authoritative; the mail body is a fallback, not another event.
     for content in ("\n".join(fields), mail_text):
         candidates = set()
         for candidate in re.findall(r'https://[^\s<>"\']+', content):
             candidate = candidate.rstrip(".,;)")
             try:
-                target = validate_webex_url(candidate)
+                provider, target = normalize_meeting_url(candidate)
             except ValueError:
                 continue
             path = urlsplit(target).path.lower()
             # Webex meeting URLs: personal rooms, modern MTID links and the
             # legacy meeting-center endpoint. Help/account links are not joins.
             if (
-                path.startswith(("/meet/", "/m/", "/join/", "/wbxmjs/"))
+                provider == "google_meet"
+                or path.startswith(("/meet/", "/m/", "/join/", "/wbxmjs/"))
                 or re.match(r"^/webappng/sites/[^/]+/meeting/", path)
                 or path.endswith("/j.php")
             ):
                 candidates.add(target)
         if len(candidates) > 1:
-            raise ValueError("webex_link_missing_or_ambiguous")
+            raise AmbiguousMeetingLink("meeting_link_ambiguous")
         if candidates:
             return candidates.pop()
-    raise ValueError("webex_link_missing_or_ambiguous")
+    raise ValueError("meeting_link_missing")
 
 
 def entry_json(entry, recording=None):
+    provider = recording.provider if recording else None
+    if provider is None and entry.original:
+        try:
+            event = Calendar.from_ical(entry.original).walk("VEVENT")[0]
+            provider, _ = normalize_meeting_url(meeting_link(event, ""))
+        except (ValueError, KeyError, IndexError, TypeError):
+            pass  # A cancellation or an ambiguous invitation need not have a target.
     return {
         "id": str(entry.id),
         "uid": entry.uid,
@@ -78,6 +93,7 @@ def entry_json(entry, recording=None):
         "status": entry.status,
         "reason": entry.reason,
         "recording_id": str(recording.id) if recording else None,
+        "provider": provider,
     }
 
 
@@ -99,13 +115,17 @@ def import_event(db, calendar, event, authenticated, mail_text):
     method = str(calendar.get("METHOD", "")).upper()
     if method not in ("REQUEST", "CANCEL"):
         raise ValueError("method_unsupported")
+    link_conflict = False
     if method == "REQUEST":
         starts, ends = utc(event.decoded("DTSTART")), utc(event.decoded("DTEND"))
         if ends <= starts:
             raise ValueError("calendar_end_invalid")
         # Include a validated body fallback in version equality too: otherwise
         # identical ICS with a changed body URL could silently replay old data.
-        event["URL"] = meeting_link(event, mail_text)
+        try:
+            event["URL"] = meeting_link(event, mail_text)
+        except AmbiguousMeetingLink:
+            link_conflict = True
     recurrence = event.get("RECURRENCE-ID")
     recurrence_key = utc(recurrence.dt).isoformat() if recurrence else ""
     is_series = any(key in event for key in ("RRULE", "RDATE", "EXDATE"))
@@ -196,6 +216,13 @@ def import_event(db, calendar, event, authenticated, mail_text):
             request_cancellation(item, datetime.now(UTC))
         db.flush()
         return entry_json(entry, recording)
+    if link_conflict:
+        entry.status, entry.reason = "conflict", "meeting_link_ambiguous"
+        for item in recordings:
+            if item.participation != "ended":
+                item.calendar_conflict = True
+        db.flush()
+        return entry_json(entry, recording)
     if (
         not recurrence_key
         and entry.recurrence_anchor is not None
@@ -221,6 +248,7 @@ def import_event(db, calendar, event, authenticated, mail_text):
     if ends <= starts:
         raise ValueError("calendar_end_invalid")
     link = meeting_link(event, mail_text)
+    provider, link = normalize_meeting_url(link)
     entry.status = "accepted"
     db.flush()
     if recording:
@@ -229,12 +257,14 @@ def import_event(db, calendar, event, authenticated, mail_text):
         elif recording.active_attempt_id and (
             recording.starts_at != starts
             or recording.meeting_url != link
+            or recording.provider != provider
             or recording.ends_at != ends
         ):
             entry.status, entry.reason = "conflict", "active_change_conflict"
             recording.calendar_conflict = True
         else:
             recording.starts_at, recording.ends_at, recording.meeting_url = starts, ends, link
+            recording.provider = provider
             recording.calendar_conflict = False
     else:
         recording = Recording(
@@ -243,6 +273,7 @@ def import_event(db, calendar, event, authenticated, mail_text):
             idempotency_key="calendar-" + entry.id.hex,
             request_digest=digest,
             meeting_url=link,
+            provider=provider,
             starts_at=starts,
             ends_at=ends,
         )

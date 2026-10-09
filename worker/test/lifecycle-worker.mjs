@@ -1,6 +1,6 @@
 // Explicit Kubernetes lifecycle fixture: never joins a provider or claims audio proof.
 import {randomUUID} from 'node:crypto';
-import {serviceRequest} from '../dist-worker/http.js';
+import {serviceRequest} from '../dist-worker/runtime/http.js';
 
 const workerId = randomUUID();
 const api = process.env.WORTLAUT_API_URL;
@@ -21,5 +21,9 @@ while (!stopping) {
   if (reply.stop_requested) { stopping = true; break; }
   await new Promise((resolve) => setTimeout(resolve, 1000));
 }
+// Keep a drain in flight so the Job deadline exercises Pod deletion and
+// termination evidence retention instead of only a fast voluntary exit.
+console.log('lifecycle fixture draining');
+await new Promise((resolve) => setTimeout(resolve, 20000));
 await post('status', {participation: 'ended', reason: 'cancelled'});
 console.log('lifecycle fixture stopped');

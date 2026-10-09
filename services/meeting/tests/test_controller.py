@@ -9,17 +9,22 @@ from unittest.mock import Mock
 
 import pytest
 from kubernetes.client.exceptions import ApiException
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from test_recordings import API, create, request_body
 
-from wortlaut.controller import controller_pass
+from wortlaut import controller as controller_module
+from wortlaut.controller import POD_FINALIZER, controller_pass, job_body
 from wortlaut.models import Attempt, Recording
 from wortlaut.settings import get_settings
 
 
 @pytest.fixture
 def cluster(monkeypatch):
+    # Test schemas share the development DB. PostgreSQL advisory locks are
+    # database-wide, so isolate this fixture from its live scheduler while
+    # retaining one shared real lock for concurrent controllers in the test.
+    monkeypatch.setattr(controller_module, "SCHEDULER_LOCK", uuid.uuid4().int >> 65)
     monkeypatch.setenv("WORTLAUT_WEBEX_SERVICE_TOKEN", "controlled-provider-not-real-webex")
     get_settings.cache_clear()
     jobs, pods, secrets = {}, [], {}
@@ -62,6 +67,18 @@ def cluster(monkeypatch):
     core.read_namespaced_secret.side_effect = lambda name, *a, **k: read(secrets, name)
     core.delete_namespaced_secret.side_effect = lambda name, *a, **k: secrets.pop(name)
     core.list_namespaced_pod.side_effect = lambda *a, **k: NS(items=pods.copy())
+
+    def patch_pod(name, _namespace, body, **_kwargs):
+        target = next(p for p in pods if p.metadata.name == name)
+        assert body[0] == {"op": "test", "path": "/metadata/uid", "value": target.metadata.uid}
+        assert body[1] == {
+            "op": "test",
+            "path": "/metadata/resourceVersion",
+            "value": target.metadata.resource_version,
+        }
+        target.metadata.finalizers = body[2]["value"]
+
+    core.patch_namespaced_pod.side_effect = patch_pod
     yield NS(apis=(batch, core), jobs=jobs, pods=pods, secrets=secrets)
     get_settings.cache_clear()
 
@@ -80,7 +97,13 @@ def prepared(database, cluster):
 
 def pod(job, phase="Running"):
     return NS(
-        metadata=NS(uid=str(uuid.uuid4()), owner_references=[NS(kind="Job", uid=job.metadata.uid)]),
+        metadata=NS(
+            uid=str(uuid.uuid4()),
+            name=job.metadata.name + "-pod",
+            resource_version="1",
+            finalizers=[POD_FINALIZER],
+            owner_references=[NS(kind="Job", uid=job.metadata.uid)],
+        ),
         status=NS(
             phase=phase,
             container_statuses=[
@@ -93,6 +116,112 @@ def pod(job, phase="Running"):
             ],
         ),
     )
+
+
+def test_meet_and_webex_start_parallel_with_their_own_configuration(
+    client, database, cluster, monkeypatch
+):
+    monkeypatch.setenv("WORTLAUT_MAX_ACTIVE_MEETINGS", "2")
+    monkeypatch.setenv("WORTLAUT_ENABLE_GOOGLE_MEET", "true")
+    monkeypatch.setenv("WORTLAUT_MEET_STORAGE_STATE_SECRET", "wortlaut-meet-browser")
+    get_settings.cache_clear()
+    webex = create(client, "webex")
+    meet = create(
+        client, "meet", {**request_body(), "meeting_url": "https://meet.google.com/abc-defg-hij"}
+    )
+    controller_pass(database, cluster.apis)
+    controller_pass(database, cluster.apis)
+    assert len(cluster.jobs) == 2
+    with Session(database) as db:
+        for identifier, provider in [(webex, "webex"), (meet, "google_meet")]:
+            recording = db.get(Recording, uuid.UUID(identifier))
+            assert recording.provider == provider
+            assert recording.active_attempt_id is not None
+            attempt = db.get(Attempt, recording.active_attempt_id)
+            body = job_body(recording, attempt)
+            worker = body["spec"]["template"]["spec"]["containers"][0]
+            assert worker["env"][-1]["valueFrom"]["secretKeyRef"]["name"] == attempt.job_name
+            volumes = body["spec"]["template"]["spec"]["volumes"]
+            secrets = [v["secret"]["secretName"] for v in volumes if "secret" in v]
+            assert secrets == (["wortlaut-meet-browser"] if provider == "google_meet" else [])
+            assert worker.get("envFrom", []) == []
+    waiting = create(
+        client,
+        "another-meet",
+        {**request_body(), "meeting_url": "https://meet.google.com/xyz-abcd-efg"},
+    )
+    controller_pass(database, cluster.apis)
+    assert len(cluster.jobs) == 2
+    with Session(database) as db:
+        queued = db.get(Recording, uuid.UUID(waiting))
+        assert queued.active_attempt_id is None
+        assert queued.participation_reason == "worker_capacity_limit"
+
+
+def test_scheduler_lock_defers_start_until_the_other_controller_releases_it(
+    client, database, cluster
+):
+    recording = create(client)
+    with Session(database) as competing:
+        competing.execute(select(func.pg_advisory_xact_lock(controller_module.SCHEDULER_LOCK)))
+        controller_pass(database, cluster.apis)
+        assert client.get(f"/v1/recordings/{recording}", headers=API).json()[
+            "active_attempt_id"
+        ] is None
+        assert cluster.jobs == cluster.secrets == {}
+    controller_pass(database, cluster.apis)
+    controller_pass(database, cluster.apis)
+    assert len(cluster.jobs) == len(cluster.secrets) == 1
+    assert client.get(f"/v1/recordings/{recording}", headers=API).json()["active_attempt_id"]
+
+
+def test_missing_webex_access_does_not_block_meet(client, database, cluster, monkeypatch):
+    monkeypatch.delenv("WORTLAUT_WEBEX_SERVICE_TOKEN")
+    monkeypatch.setenv("WORTLAUT_ENABLE_GOOGLE_MEET", "true")
+    get_settings.cache_clear()
+    webex = create(client, "webex")
+    # More unavailable Webex meetings than the controller's bounded start page.
+    # All precede the eligible Meet recording in the persisted scheduler queue.
+    with Session(database) as db:
+        template = db.get(Recording, uuid.UUID(webex))
+        template.starts_at -= timedelta(seconds=10)
+        db.add_all(
+            Recording(
+                idempotency_key=f"unconfigured-webex-{number}",
+                request_digest=template.request_digest,
+                meeting_url=template.meeting_url,
+                starts_at=template.starts_at,
+                ends_at=template.ends_at,
+            )
+            for number in range(16)
+        )
+        expired = Recording(
+            idempotency_key="expired-webex",
+            request_digest=template.request_digest,
+            meeting_url=template.meeting_url,
+            starts_at=template.starts_at - timedelta(hours=1),
+            ends_at=template.starts_at - timedelta(minutes=1),
+        )
+        db.add(expired)
+        db.flush()
+        expired_id = expired.id
+        db.commit()
+    meet = create(
+        client, "meet", {**request_body(), "meeting_url": "https://meet.google.com/abc-defg-hij"}
+    )
+    controller_pass(database, cluster.apis)
+    controller_pass(database, cluster.apis)
+    assert len(cluster.jobs) == 1
+    with Session(database) as db:
+        blocked = db.scalars(
+            select(Recording).where(Recording.provider == "webex", Recording.id != expired_id)
+        ).all()
+        assert len(blocked) == 17
+        assert all(r.participation_reason == "webex_not_configured" for r in blocked)
+        assert all(r.active_attempt_id is None for r in blocked)
+        assert db.get(Recording, expired_id).participation == "ended"
+        assert db.get(Recording, expired_id).participation_reason == "missed"
+        assert db.get(Recording, uuid.UUID(meet)).active_attempt_id is not None
 
 
 def test_restart_adopts_existing_job_and_two_workers_cannot_join(client, database, cluster):
@@ -178,6 +307,52 @@ def test_cancel_after_claim_keeps_audio_drain_and_waits_for_process_exit(client,
     assert status["attempts"][0]["end_reason"] == "cancelled"
     assert status["attempts"][0]["process_ended_at"] is not None
     assert name not in cluster.secrets
+
+
+def test_terminal_pod_cleanup_retries_after_persisting_exit_and_preserves_foreign_finalizers(
+    client, database, cluster
+):
+    recording = create(client)
+    identifier, name, _headers = prepared(database, cluster)
+    terminal = pod(cluster.jobs[name], "Failed")
+    terminal.metadata.finalizers.append("other.example/retain")
+    foreign = pod(cluster.jobs[name], "Failed")
+    foreign.metadata.name += "-foreign"
+    foreign.metadata.owner_references[0].uid = str(uuid.uuid4())
+    cluster.pods.extend([terminal, foreign])
+    original = cluster.apis[1].patch_namespaced_pod.side_effect
+
+    def lost_cleanup_response(*args, **kwargs):
+        with Session(database) as db:
+            attempt = db.get(Attempt, identifier)
+            assert attempt.process_ended_at is not None
+            assert attempt.secret_deleted_at is None
+        original(*args, **kwargs)
+        raise TimeoutError("Controlled lost Pod cleanup response")
+
+    cluster.apis[1].patch_namespaced_pod.side_effect = lost_cleanup_response
+    controller_pass(database, cluster.apis)
+    assert terminal.metadata.finalizers == ["other.example/retain"]
+    assert foreign.metadata.finalizers == [POD_FINALIZER]
+    assert name in cluster.secrets
+    assert client.get(f"/v1/recordings/{recording}", headers=API).json()["participation"] == "ended"
+    cluster.apis[1].patch_namespaced_pod.side_effect = original
+    controller_pass(database, cluster.apis)
+    assert name not in cluster.secrets
+    with Session(database) as db:
+        assert db.get(Attempt, identifier).secret_deleted_at is not None
+
+
+def test_running_pod_keeps_termination_finalizer(client, database, cluster):
+    recording = create(client)
+    _identifier, name, _headers = prepared(database, cluster)
+    running = pod(cluster.jobs[name])
+    cluster.pods.append(running)
+    client.post(f"/v1/recordings/{recording}/cancel", headers=API)
+    controller_pass(database, cluster.apis)
+    assert running.metadata.finalizers == [POD_FINALIZER]
+    cluster.apis[1].patch_namespaced_pod.assert_not_called()
+    assert name in cluster.secrets
 
 
 def test_cancel_before_create_is_atomic_and_never_starts_a_job(client, database, cluster):
@@ -281,14 +456,177 @@ def test_ambiguous_create_and_disappeared_job_cannot_create_a_replacement(
     assert cluster.secrets  # No process proof: keep its ownership and credential.
 
 
-def test_missing_job_after_creation_intent_stays_unknown(client, database, cluster):
+def test_missing_job_after_creation_intent_retries_same_unclaimed_identity(
+    client, database, cluster
+):
+    recording = create(client)
+    controller_pass(database, cluster.apis)
+    with Session(database) as db:
+        attempt = db.scalar(select(Attempt))
+        attempt.job_create_requested_at = datetime.now(UTC)
+        identifier, name = str(attempt.id), attempt.job_name
+        db.commit()  # Crash after intent; result of the network operation is unavailable.
+    controller_pass(database, cluster.apis)
+    assert list(cluster.jobs) == [name]
+    status = client.get(f"/v1/recordings/{recording}", headers=API).json()
+    assert status["participation"] == "preparing"
+    assert status["attempts"][0]["id"] == identifier
+    assert status["attempts"][0]["job_uid"] == cluster.jobs[name].metadata.uid
+    assert status["attempts"][0]["ended_at"] is None
+
+
+def test_create_outage_retries_same_identity_but_authoritative_rejection_ends_attempt(
+    client, database, cluster
+):
+    recording = create(client)
+    controller_pass(database, cluster.apis)
+    original = cluster.apis[0].create_namespaced_job.side_effect
+    cluster.apis[0].create_namespaced_job.side_effect = ApiException(status=503)
+    controller_pass(database, cluster.apis)
+    before = client.get(f"/v1/recordings/{recording}", headers=API).json()
+    assert before["participation"] == "unknown"
+    assert not cluster.jobs
+    cluster.apis[0].create_namespaced_job.side_effect = original
+    controller_pass(database, cluster.apis)
+    after = client.get(f"/v1/recordings/{recording}", headers=API).json()
+    assert after["attempts"][0]["id"] == before["attempts"][0]["id"]
+    assert after["attempts"][0]["job_uid"] is not None
+    assert len(cluster.secrets) == 1
+    second = create(client, "rejected-job")
+    controller_pass(database, cluster.apis)
+    cluster.apis[0].create_namespaced_job.side_effect = ApiException(status=422)
+    controller_pass(database, cluster.apis)
+    rejected = client.get(f"/v1/recordings/{second}", headers=API).json()
+    assert rejected["participation"] == "ended"
+    assert rejected["participation_reason"] == "job_create_rejected"
+    assert rejected["attempts"][0]["process_ended_at"] is not None
+    assert len(cluster.secrets) == 1  # Only the first running attempt retains its credential.
+
+
+def test_unobserved_job_with_pod_evidence_does_not_retry_create(client, database, cluster):
     recording = create(client)
     controller_pass(database, cluster.apis)
     with Session(database) as db:
         db.scalar(select(Attempt)).job_create_requested_at = datetime.now(UTC)
-        db.commit()  # Crash after intent; result of the network operation is unavailable.
+        db.commit()
+    cluster.pods.append(NS(metadata=NS(uid=str(uuid.uuid4()))))
     controller_pass(database, cluster.apis)
     assert not cluster.jobs
+    assert cluster.apis[0].create_namespaced_job.call_count == 0
     status = client.get(f"/v1/recordings/{recording}", headers=API).json()
-    assert status["participation"] == "unknown"
-    assert status["attempts"][0]["ended_at"] is None
+    assert status["participation_reason"] == "job_missing"
+
+
+def test_secret_creation_failure_does_not_roll_back_other_provider_starts(
+    client, database, cluster, monkeypatch
+):
+    monkeypatch.setenv("WORTLAUT_ENABLE_GOOGLE_MEET", "true")
+    get_settings.cache_clear()
+    webex = create(client, "failed-secret")
+    meet = create(
+        client,
+        "healthy-secret",
+        {**request_body(), "meeting_url": "https://meet.google.com/abc-defg-hij"},
+    )
+    with Session(database) as db:
+        db.get(Recording, uuid.UUID(webex)).starts_at -= timedelta(seconds=10)
+        db.commit()
+    original = cluster.apis[1].create_namespaced_secret.side_effect
+    calls = 0
+
+    def reject_first(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise ApiException(status=403)
+        return original(*args, **kwargs)
+
+    cluster.apis[1].create_namespaced_secret.side_effect = reject_first
+    controller_pass(database, cluster.apis)
+    failed = client.get(f"/v1/recordings/{webex}", headers=API).json()
+    healthy = client.get(f"/v1/recordings/{meet}", headers=API).json()
+    assert failed["active_attempt_id"] is not None
+    assert healthy["active_attempt_id"] is not None
+    controller_pass(database, cluster.apis)
+    failed = client.get(f"/v1/recordings/{webex}", headers=API).json()
+    assert failed["participation"] == "ended"
+    assert failed["participation_reason"] == "bootstrap_secret_missing"
+    assert failed["attempts"][0]["process_ended_at"] is not None
+    assert len(cluster.jobs) == len(cluster.secrets) == 1
+    assert healthy["active_attempt_id"] == str(
+        next(iter(cluster.jobs.values())).metadata.labels["wortlaut/attempt-id"]
+    )
+
+
+def test_lost_secret_create_response_keeps_attempt_and_adopts_its_credential(
+    client, database, cluster
+):
+    recording = create(client)
+    original = cluster.apis[1].create_namespaced_secret.side_effect
+
+    def lost_response(*args, **kwargs):
+        original(*args, **kwargs)
+        raise TimeoutError("Controlled lost Secret response")
+
+    cluster.apis[1].create_namespaced_secret.side_effect = lost_response
+    controller_pass(database, cluster.apis)
+    before = client.get(f"/v1/recordings/{recording}", headers=API).json()
+    assert before["active_attempt_id"] is not None
+    assert len(cluster.secrets) == 1
+    controller_pass(database, cluster.apis)
+    after = client.get(f"/v1/recordings/{recording}", headers=API).json()
+    assert after["active_attempt_id"] == before["active_attempt_id"]
+    assert len(cluster.jobs) == len(cluster.secrets) == 1
+    name = next(iter(cluster.jobs))
+    response = client.post(
+        f"/v1/attempts/{after['active_attempt_id']}/claim",
+        headers={"Authorization": f"Bearer {cluster.secrets[name].credential}"},
+        json={"worker_id": "secret-recovery-fixture"},
+    )
+    assert response.status_code == 200
+
+
+def test_concurrent_secret_creation_reserves_shared_capacity_before_network_call(
+    client, database, cluster, monkeypatch
+):
+    monkeypatch.setenv("WORTLAUT_MAX_ACTIVE_MEETINGS", "2")
+    monkeypatch.setenv("WORTLAUT_ENABLE_GOOGLE_MEET", "true")
+    get_settings.cache_clear()
+    first = create(client, "pending-secret")
+    second = create(
+        client,
+        "second-provider",
+        {**request_body(), "meeting_url": "https://meet.google.com/abc-defg-hij"},
+    )
+    third = create(client, "capacity-waiting")
+    with Session(database) as db:
+        db.get(Recording, uuid.UUID(first)).starts_at -= timedelta(seconds=10)
+        db.get(Recording, uuid.UUID(third)).starts_at += timedelta(seconds=10)
+        db.commit()
+    original = cluster.apis[1].create_namespaced_secret.side_effect
+    entered, release = Event(), Event()
+
+    def delayed_first(*args, **kwargs):
+        if not entered.is_set():
+            entered.set()
+            assert release.wait(15), "Concurrent scheduler never released Secret creation"
+        return original(*args, **kwargs)
+
+    cluster.apis[1].create_namespaced_secret.side_effect = delayed_first
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        starting = pool.submit(controller_pass, database, cluster.apis)
+        assert entered.wait(15)
+        try:
+            other = pool.submit(controller_pass, database, cluster.apis)
+            other.result(timeout=15)
+            with Session(database) as db:
+                assert db.get(Recording, uuid.UUID(first)).active_attempt_id is not None
+                assert db.get(Recording, uuid.UUID(second)).active_attempt_id is not None
+                waiting = db.get(Recording, uuid.UUID(third))
+                assert waiting.active_attempt_id is None
+        finally:
+            release.set()
+        starting.result(timeout=15)
+    controller_pass(database, cluster.apis)
+    assert len(cluster.jobs) == len(cluster.secrets) == 2
+    assert client.get(f"/v1/recordings/{third}", headers=API).json()["active_attempt_id"] is None

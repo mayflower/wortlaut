@@ -1,4 +1,5 @@
 import {AudioCapture, type CaptureSink} from './capture';
+import samplerateUrl from '@alexanderolsen/libsamplerate-js/dist/libsamplerate.worklet.js?url';
 import {AudioTransport} from './transport';
 import {audioReceiver, receiverEvidence, participantEvidence, receiveOptions, replaceGuestToken,
   type Meeting, type MediaGroup, type RemoteMedia, type WebexClient} from './webex';
@@ -7,6 +8,7 @@ type Bootstrap = {meeting_id: string; attempt_id: string; meeting_url: string;
   deadline: string; guest: {access_token: string; expires_in: number}};
 type Configuration = {bootstrap: Bootstrap; credential: string; worker_id: string};
 const options = receiveOptions();
+const worklets = {resampler: samplerateUrl, pcm: `${import.meta.env.BASE_URL}pcm-worklet.js`};
 const state = {participation: 'preparing', capability: 'unverified', reason: '',
   configured_speaker_slots: options.mediaOptions.remoteMediaManagerConfig.audio.numOfActiveSpeakerStreams,
   configured_share_slots: options.mediaOptions.remoteMediaManagerConfig.audio.numOfScreenShareStreams,
@@ -62,6 +64,7 @@ async function inspectReceivers() {
         receiverEvidence(meeting!, media, source.kind));
     }
   })().finally(() => { inspecting = undefined; }));
+  if (capture) Object.assign(state, {audio_clock: capture.inspectClock()});
   return state;
 }
 
@@ -74,6 +77,7 @@ async function stop(reason = 'normal') {
     }
     try { await inspecting; } catch { /* capture initialization already reported */ }
     await capture?.stop();
+    if (capture) Object.assign(state, {audio_clock: capture.inspectClock()});
     state.drained = await transport?.drain() ?? true;
     if (!providerEnded) {
       try { await meeting?.leave(); } catch { state.reason = 'leave_unconfirmed'; }
@@ -90,11 +94,12 @@ async function start(config: Configuration) {
   transport = new AudioTransport(ingest.href, config.credential, config.worker_id,
     (reason) => { void stop(reason); });
   transport.connect();
-  capture = new AudioCapture(); await capture.initialize();
+  capture = new AudioCapture(worklets); await capture.initialize();
   if (stopping) return;
   sink = {
     begin: (metadata) => transport!.control(metadata as Record<string, unknown> & {id: string}),
     end: (metadata) => transport!.control(metadata as Record<string, unknown> & {id: string}),
+    gap: (metadata) => transport!.control(metadata as Record<string, unknown> & {id: string}),
     chunk: (metadata, pcm) => { state.audio_samples += metadata.sample_count; transport!.chunk(metadata, pcm); },
     error: (reason) => { void stop(reason); },
   };
@@ -186,10 +191,12 @@ window.wortlaut = {start, stop, renewGuest, inspectReceivers, state};
 // Explicit synthetic fixture entry point, never selected by the worker/provider path.
 type AudioFixture = {frequency: number; samples: number; duplicates: number;
   begins: number; ends: number;
+  gaps: Record<string, unknown>[]; final_sample: number;
+  audio_clock?: import('./capture').AudioClock;
   parts: {metadata: import('./chunks').Chunk; pcm: number[]}[]};
 window.wortlautAudioTest = async (seconds = 0.5, restart = false) => {
   const producer = new AudioContext({sampleRate: 48000});
-  const receiver = new AudioCapture(); await receiver.initialize();
+  const receiver = new AudioCapture(worklets); await receiver.initialize();
   const meetingId = crypto.randomUUID(), attemptId = crypto.randomUUID();
   const oscillators: OscillatorNode[] = [], tracks: MediaStreamTrack[] = [];
   const results: AudioFixture[] = []; let errors = 0;
@@ -198,8 +205,11 @@ window.wortlautAudioTest = async (seconds = 0.5, restart = false) => {
     const oscillator = producer.createOscillator(); oscillator.frequency.value = frequency;
     const destination = producer.createMediaStreamDestination(); oscillator.connect(destination);
     const track = destination.stream.getAudioTracks()[0];
-    const result: AudioFixture = {frequency, samples: 0, duplicates: 0, begins: 0, ends: 0, parts: []};
-    const sink: CaptureSink = {begin: () => { result.begins++; }, end: () => { result.ends++; },
+    const result: AudioFixture = {frequency, samples: 0, duplicates: 0, begins: 0, ends: 0,
+      gaps: [], final_sample: 0, parts: []};
+    const sink: CaptureSink = {begin: () => { result.begins++; }, end: (metadata) => {
+      result.ends++; result.final_sample = metadata.final_sample as number; },
+      gap: (metadata) => { result.gaps.push(metadata); },
       error: () => { errors++; },
       chunk: (metadata, pcm) => { result.samples += metadata.sample_count;
         result.parts.push({metadata, pcm: Array.from(pcm)}); }};
@@ -224,6 +234,7 @@ window.wortlautAudioTest = async (seconds = 0.5, restart = false) => {
   for (const oscillator of oscillators) oscillator.stop();
   for (const track of tracks) track.stop();
   await producer.close();
+  for (const result of results) result.audio_clock = receiver.inspectClock();
   if (errors) throw new Error('Synthetic capture failed');
   return results;
 };

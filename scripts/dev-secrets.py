@@ -57,7 +57,8 @@ if not existing_storage.stdout.strip():
                     f"--from-env-file={storage_file}"], check=True)
 
 for supplied_file, secret_name in (
-    (webex_file, "wortlaut-webex"), (Path(".dev/mail.env"), "wortlaut-mail")
+    (webex_file, "wortlaut-webex"), (Path(".dev/mail.env"), "wortlaut-mail"),
+    (Path(".dev/meet.env"), "wortlaut-meet")
 ):
     if not supplied_file.exists():
         continue
@@ -84,3 +85,12 @@ for supplied_file, secret_name in (
             "wortlaut/refresh-state": None,
         }
     subprocess.run([*base, "apply", "-f", "-"], input=json.dumps(body).encode(), check=True)
+
+browser_state = Path(".dev/meet-storage-state.json")
+if browser_state.exists():
+    generated = subprocess.run(
+        [*base, "create", "secret", "generic", "wortlaut-meet-browser",
+         f"--from-file=storage-state.json={browser_state}", "--dry-run=client", "-o", "json"],
+        check=True, capture_output=True,
+    )
+    subprocess.run([*base, "apply", "-f", "-"], input=generated.stdout, check=True)

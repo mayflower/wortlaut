@@ -1,74 +1,81 @@
 # wortlaut
 
-Webex-Aufnahmen mit getrennten Audioquellen, lokaler Parakeet-ASR und TXT/VTT/JSON-Export. Der vollständige Implementierungsauftrag steht in [prompts.md](prompts.md).
+Meeting-Aufnahmen mit getrennten Audioquellen, lokaler Parakeet-ASR und TXT/VTT/JSON-Export. Meet und Webex sind für gleichzeitigen Betrieb in derselben Instanz vorgesehen; Teams folgt als weiterer Provider. Jede Aufnahme hat ihren eigenen Provider und Worker. Zugänge bleiben getrennt, ASR, Datenbank, Storage, Scheduler und Kapazitätsgrenzen gemeinsam. Der vollständige Auftrag steht in [prompts.md](prompts.md).
 
-## Entwicklungsumgebung
+**Noch keine Providerabnahme:** Meet-Beitritt und Browser-Capture sind implementiert, echte Teilnahme und samplebezogene Teilnehmerbindung sind noch offen. Auch Webex gibt derzeit ungebundene Sprecherquellen aus. `speaker_id: null`, `attribution_unknown: true` und `source_coverage: unknown` kennzeichnen diese Grenze. Fixtureaudio und erfolgreich verarbeiteter Text erfüllen die Sprecheranforderung nicht. Teams ist noch nicht implementiert.
 
-Voraussetzungen: `uv`, Node.js/npm, `kubectl`, Tilt und Docker Buildx. Tilt läuft lokal; Kubernetes-Workloads und BuildKit laufen im Context `data`, im Namespace `wortlaut-$(id -un)`. Die Images werden für `linux/amd64` unter `registry.data.mayflower.zone/<namespace>` gebaut. Der globale Kubernetes-Context bleibt unverändert.
+## Entwicklungsstart
+
+Benötigt werden `uv`, Node.js/npm, `kubectl`, Tilt, Docker Buildx und Zugang zum vorhandenen Kubernetes-Context `data` einschließlich Registry und GPU. Keine Cluster-Treiber oder gemeinsame Infrastruktur installieren.
 
 ```sh
 make setup
 make dev
 ```
 
-`make setup` übernimmt `~/.kube/data-lan-mayflower` in eine ignorierte projektlokale Kubeconfig und installiert gesperrte Abhängigkeiten. Bei einem anderen Quellpfad `WORTLAUT_SOURCE_KUBECONFIG` setzen. `.dev/` enthält lokale Konfiguration und darf nicht eingecheckt werden.
+`make setup` installiert gesperrte Abhängigkeiten und übernimmt `~/.kube/data-lan-mayflower` in die ignorierte `.dev/kubeconfig`; ein anderer Quellpfad ist über `WORTLAUT_SOURCE_KUBECONFIG` möglich. Der globale Context bleibt unverändert. Der Entwicklungsnamespace heißt `wortlaut-$(id -un)`, Images werden für `linux/amd64` mit Kubernetes-BuildKit gebaut. Private Dateien unter `.dev/` dürfen nicht eingecheckt werden.
 
-Tilt: http://127.0.0.1:34604 · API: http://127.0.0.1:34601 · ASR: http://127.0.0.1:34602 · PostgreSQL: 127.0.0.1:34632 · S3: http://127.0.0.1:34609. Die SDK-Seite und API sind unter `https://wortlaut-<benutzer>.data.mayflower.zone` erreichbar. `make test` prüft Verhalten, `make lint` Python und TypeScript, `make render` rendert die Kubernetes-Manifeste.
+Tilt: http://127.0.0.1:34604 · Meeting-API: http://127.0.0.1:34601 · ASR: http://127.0.0.1:34602 · PostgreSQL: 127.0.0.1:34632 · S3: http://127.0.0.1:34609. Worker erreichen API und Webex-SDK-Seite über `https://wortlaut-<benutzer>.data.mayflower.zone`.
 
-Die projektlokale Codex-Konfiguration wählt Astra und aktuelle Websuche; Kontozugang, Berechtigungen und MCP-Konfiguration werden geerbt. Projektkonfiguration wird nur in einem vertrauenswürdigen Projekt geladen ([offizielle Konfiguration](https://learn.chatgpt.com/docs/config-file/config-basic)). Die lokale Codex-Umgebung bietet Setup-, Tilt- und Test-Aktionen ([lokale Umgebungen](https://learn.chatgpt.com/docs/environments/local-environment)).
+Vor Steuerung einer Tilt-Instanz deren Tiltfile-Pfad prüfen. Kubernetes-Aufrufe verwenden immer `.dev/kubeconfig`, `--context data` und den eigenen Namespace. Die Umgebung nach der Arbeit weiterlaufen lassen; kein automatisches `tilt down`, Prune oder Löschen persistierter Daten.
 
-## Implementierungsstand
+## Provider konfigurieren
 
-Die Umgebung läuft im eigenen Namespace mit PostgreSQL, S3, TLS und Meeting-Dienst. Prompt 1 enthält API-Auftrag, exklusiven Versuch-/Workeranspruch, Gast-Bootstrap, eigene SDK-Seite, Browser-Worker und AudioWorklet mit vorhandener 16-kHz-Konvertierung. Der Join fordert mit `joinOptions.enableMultistream: true` ausdrücklich Multistream an; die Empfangskonfiguration verlangt drei Audio-Empfangsslots und einen Freigabe-Audioslot. Das ist eine Konfiguration, kein gemessener Nachweis für vier isolierte Webex-Quellen. Der Worker bevorzugt den nativen Audiotrack des zugehörigen `RTCRtpReceiver`. Der versionsgebundene Pfad verbindet `RemoteMedia.getUnderlyingReceiveSlot().wcmeReceiveSlot` mit dem Empfangstransceiver unter `meeting.mediaProperties.webrtcMediaConnection.multistreamConnection`; der Receiver wird gegen dessen native `RTCPeerConnection` geprüft. SDK-Stream und Receiver werden nicht parallel erfasst. Trackersatz und beobachtete Änderungen der signalisierten Quelle oder RTP-Quellkennungen schließen den alten Captureabschnitt; auch bei unverändertem Track entsteht eine neue Stream-/Capture-Epoche und damit ein eigener VAD-Kontext. Wiederholte identische Quellsignale starten Capture nicht neu. Entfernte Medien räumen Listener und Capture auf. Diese Trennung ist keine nachgewiesene Teilnehmergrenze: beide Abschnitte bleiben ungebunden, die unbekannte Übergangsspanne wird keiner Person zugeschrieben. Source-Update-Ereignisse enthalten keine Sample-/Medienzeit; das allein belegt keine fehlende Providerfähigkeit. Die Aufnahme bleibt `unverified` und kennzeichnet ungebundene Quellen als `attribution_unknown`. Die Workerdiagnose enthält getrennte CSI-, SSRC-/CSRC- und signalisierte Teilnehmermetadaten; deren RTP-Zeitstempel sind noch keine Bindungsgrenze in Capture-Samples. Zusätzlich enthält sie die Teilnehmerliste mit Audio-CSIs und Freigabe-Audio-CSIs aus den signalisierten Gerätesitzungen; fehlende oder begrenzte Diagnoseausgaben sind explizit gekennzeichnet. Diese Liste weist weder eine Gleichheit mit RTP-Kennungen noch die Zuordnung aufgenommener Samples nach.
+Dateien enthalten einfache `NAME=WERT`-Zeilen und erhalten Dateimodus `600`. Interne API-, Storage- und GPU-Credentials erzeugt der Entwicklungsstart privat; der Betreiber-API-Token steht in `.dev/runtime.env`.
 
-Prompt 2 enthält binäres WebSocket-Ingest, unveränderliche Chunks und Kontrollmeldungen, bedingtes S3-Anlegen, ACK nach DB-Commit, Quellenbindung, dauerhafte VAD-Fortschritte und ASR-Aufträge, begrenztes GPU-Serving sowie TXT/VTT/JSON-Abruf. Offene Sprache wird aus gespeichertem PCM rekonstruiert. VAD: 30-ms-Frames, Aggressivität 2, 300 ms Vorlauf, 150 ms Nachlauf, 600 ms Stilleabschluss, maximal 30 s Sprache mit 200 ms Kontextüberlappung. Wortmittelpunkte gehören zum halboffenen Kernintervall des jeweiligen Auftrags. Gespeichertes Audio gewinnt bei einem verlorenen ACK gegenüber einer möglichen Pufferlücke; bei fehlendem EOS wird nach bestätigtem Workerende und 20 s Drainfrist nur der bekannte Bestand abgeschlossen.
+Für einen autorisierten Meet-Test in `.dev/meet.env`:
 
-Parakeet ist auf der Cluster-GPU geladen. Die deutsche Sprachfixture wurde tatsächlich in 1,98 Sekunden mit korrektem Satz und Wortzeitstempeln transkribiert; dies ist eine einzelne Beobachtung, kein Durchsatzversprechen. Die Annahme unbearbeiteten Audios ist auf zwei Quellenstunden je Versuch und vier Quellenstunden insgesamt begrenzt; Replay bereits angenommener Chunks bleibt möglich. Insgesamt gelten 2 GiB Audioobjekte und 2048 offene ASR-Aufträge. Audio bleibt nach Abschluss 24 Stunden erhalten. Nach 72 Stunden über Terminende wird offene Verarbeitung sichtbar aufgegeben, vorhandener Text samt Verlustangaben erhalten und Audio weitere 24 Stunden aufbewahrt. Das bestätigt kein Ende eines unbekannten Workerprozesses. Transkripte haben separat 30 Tage Aufbewahrung; danach liefert der Export 410. Alle Grenzen sind über entsprechende `WORTLAUT_`-Settings konfigurierbar.
-
-Prompt 3 enthält den Scheduler und Kubernetes-Controller mit deterministischen Jobs, dauerhafter Startabsicht, Job-/Pod-UIDs und Abbruch. Verlorene Create-Antworten führen zum Übernehmen desselben Jobs; verschwundene Objekte und fehlende Heartbeats bleiben ungeklärt und erlauben keinen Ersatzbeitritt. Secrets werden erst nach bestätigter Containerbeendigung entfernt. Der Scheduler startet konfigurierte Meetings mit 60 Sekunden Vorlauf, höchstens zwei gleichzeitig; fehlender Webex-Zugang bleibt als `webex_not_configured` sichtbar. Ein echter Kubernetes-Test mit ausdrücklich providerfreiem Testworker hat Anspruch, Neustart des Meeting-Dienstes bei fortlaufendem identischem Job, Abbruch, bestätigtes Prozessende, Secretbereinigung und verweigerten Neustart geprüft. Der Worker verwendet denselben begrenzten HTTP-Reconnectpfad wie der Produktionsworker. Kalenderimport, Serienplanung und Ergebnisversand sind implementiert; die vollständige Webex-Abnahme aus Prompt 7 steht aus. Webex-Ende und Gastentfernung werden über `meeting:removed` auf der Meetings-Instanz verarbeitet; nur die eigene Meeting-ID beendet den Worker. Capture/EOS und Transport werden vor dem Abschluss geleert; nach providerseitiger Entfernung wird kein erneutes Leave verlangt. Multistream-Verbindungsaufbau setzt den Medienstatus auch ohne das Legacy-Ereignis `media:ready`, die Lobby bleibt bis zur Zulassung als Wartezustand sichtbar. Keine vollständige v1 oder getestete Webex-Integration.
-
-Prompt 4 verarbeitet authentifizierte MIME/ICS-Einladungen mit Organizerberechtigung, UID/SEQUENCE/DTSTAMP, Konflikten, Updates und Absagen. IMAP übernimmt Nachrichten und Fortschritt gemeinsam in PostgreSQL; UIDVALIDITY-Wechsel behalten die Kalender-Deduplizierung. Prompt 5 materialisiert unterstützte Serien im 14-Tage-Horizont. Sommerzeit, RRULE/RDATE/EXDATE, verschobene Einzeltermine mit ursprünglicher RECURRENCE-ID und Absagen sind mit echten Datenbankvorkommen geprüft. `RANGE=THISANDFUTURE`, Änderungen am Start/Zeitbezug des Serienmasters beziehungsweise Umwandlung einer bestehenden Serie in einen Einzeltermin und hochfrequente Regeln sind ausdrücklich nicht unterstützt und sperren zukünftige Starts. Änderungen an Link oder Zeit eines aktiven Vorkommens erzeugen einen Konflikt; historische Aufnahmen werden erhalten.
-
-Prompt 6 versendet TXT/VTT/JSON über einen konfigurierten SMTP-Server, oberhalb des Limits mit authentifizierten Abruflinks. Empfänger stammen aus einer separaten Betreiberkonfiguration. Versand und Verarbeitung haben eigene Zustände: eine bestätigte Ablehnung darf begrenzt mit derselben Message-ID wiederholt werden; ein Verbindungsabbruch mit unbekannter DATA-Annahme bleibt `delivery_unknown` bis zur ausdrücklichen Wiederholung über `POST /v1/recordings/{id}/delivery/retry`. Ohne aufgenommenes Audio wird keine Ergebnismail erzeugt. Die SMTP-Fälle wurden über einen tatsächlichen lokalen SMTP-Testserver geprüft; ein reales Botpostfach und Mailgateway sind noch nicht konfiguriert.
-
-`GET /v1/recordings/{id}` zeigt angenommene Chunks/Samples und den letzten dauerhaften Ingest-Zeitpunkt, Audiolücken, Quellenbindungen, ASR-Rückstau, Job-/Pod-UIDs und Versandstatus. Ältere Audioobjekte erhalten keinen erfundenen Annahmezeitpunkt. Die native GPU-Pipeline hat beide bekannten deutschen Sätze aus separaten Fixturequellen über WebSocket, PostgreSQL, S3 und VAD bis zu allen drei Exporten verarbeitet. Gemessen: zwei ASR-Aufträge, 6,091 Quellen-Sekunden nach Segmentierung und 7,80 Sekunden von dauerhaftem EOS bis fertigem Export. Die Meetingzeiten überlappen. Gegen die bekannten Fixturetexte: 0 Wortfehler bei 14 Referenzwörtern, Satzzeichen ignoriert. Das ist ein kleiner synthetischer Integrationslauf; keine Webex-Messung oder Kapazitätsabnahme. Ein zusätzlicher nativer Neustarttest hat den eigenen GPU-Pod regulär ersetzt, während weitere Fixture-Audios angenommen wurden. Nach 89.08 Sekunden beobachteter Unterbrechung wurde der offene Auftrag mit Parakeet abgearbeitet; das erste bereits gespeicherte Ergebnis blieb unverändert, beide Sätze erschienen genau einmal im Export. Auch dieser Nachweis verwendet Fixturequellen und kein Webex.
-
-Audioobjekte enthalten einen `WORTLAUT1`-Header, die Länge und unveränderliche JSON-Metadaten, danach PCM16. Der Storage-Client prüft und entfernt diesen Rahmen beim Lesen. Auf dem Entwicklungscluster teilen sich acht NVIDIA-MPS-Slots eine physische RTX PRO 6000 Blackwell mit 96 GB; die Slots sind keine acht eigenständigen GPUs.
-
-Geprüfte lokale Grenzen: PostgreSQL-/S3-Tests für konkurrierenden Anspruch, Replay, Object-Write ohne DB-Commit und unveränderliche Bindung; deutsche Sprachfixtures für getrennte Quellen, samplebezogenen Quellenwechsel und Neustart-Rekonstruktion; ASR-Timeout/Reclaim und Ergebnis-Commit mit kontrolliertem HTTP-Gegenüber; GPU-HTTP-Sperre mit kontrolliertem Modell. Speicher-/ASR-Grenzen erhalten bereits angenommenes Audio, Retention entfernt abgelaufene Audioobjekte samt Orphans und sperrt verspätete ASR-Ergebnisse aufgegebener Arbeit. Die kontrollierten Gegenstellen beweisen keine Parakeet- oder Webex-Integration; der separate native GPU-Test belegt Parakeet mit Fixtureaudio. Der Headless-Browser hat zwei gleichzeitige Töne getrennt über den binären Testempfänger als Mono-PCM16/16-kHz-WAV ausgegeben. Der Browsercheck prüft außerdem Capture-Abschluss und erneutes Anschließen sowie Gast-Credentialwechsel am tatsächlichen SDK-Bundle. Der Receiver-Zugriff wird gegen echte Empfangsslots, Transceiver und RTCPeerConnection des installierten Media-Core geprüft; der äußere Meeting-/RemoteMedia-Kontext dieses Tests ist kontrolliert und keine echte Webex-Verbindung.
-
-Das Worker-Image ist gebaut und in die Entwicklungsregistry übertragen. Ein temporärer Kubernetes-Testjob hat unsere HTTPS-SDK-Seite als UID 1000 mit `chromiumSandbox: true`, ohne Linux-Capabilities und ohne Kubernetes-Token geladen und zwei getrennte Töne erfasst. Mit dem vorhandenen `RuntimeDefault`-Seccomp-Profil scheitert die Chromium-Sandbox. Die Worker-Jobs verwenden deshalb `Unconfined` zum Anlegen von User-Namespaces; Chromiums eigene Sandbox bleibt aktiv. Alternativ kann `WORTLAUT_WORKER_SECCOMP_TYPE=Localhost` mit `WORTLAUT_WORKER_SECCOMP_PROFILE` ein bereits vorhandenes Nodeprofil wählen. Für eine gezielte äußere Syscall-Begrenzung wäre ein auf den Nodes vorhandenes Profil nötig, das `clone`, `setns` und `unshare` erlaubt ([Playwright](https://playwright.dev/docs/docker)). Keine Nodeprofile oder globale Kernelparameter verändert.
-
-```sh
-npm --prefix worker run build
-npm --prefix worker run test:audio
-# Separater Loopback-Testempfänger für manuelle PCM-Frames:
-npm --prefix worker run test:receiver
-# Opt-in: echter Job gegen den laufenden Entwicklungsnamespace, ohne Webex
-WORTLAUT_TEST_CLUSTER=true uv run --directory services/meeting pytest tests/test_cluster_lifecycle.py -q
-# Zusätzlich: eigenen Meeting-Dienst während des laufenden Testjobs neu starten
-WORTLAUT_TEST_CLUSTER=true WORTLAUT_TEST_RESTART_CONTROLLER=true uv run --directory services/meeting pytest tests/test_cluster_lifecycle.py -q
-# Zwei getrennte Fixturequellen durch die echte lokale GPU-Pipeline
-WORTLAUT_TEST_NATIVE_ASR=true uv run --directory services/meeting pytest tests/test_asr.py::test_native_gpu_from_two_durable_sources_to_exports -q
-# Zusätzlich: eigenen GPU-Pod während weiterer Fixture-Aufnahme neu starten
-WORTLAUT_TEST_NATIVE_ASR=true WORTLAUT_TEST_RESTART_GPU=true uv run --directory services/meeting pytest tests/test_asr.py::test_native_gpu_from_two_durable_sources_to_exports -q
+```dotenv
+WORTLAUT_ENABLE_GOOGLE_MEET=true
+WORTLAUT_MEET_LOCALE=de-DE
+# Nur bei Verwendung eines autorisierten Browseraccounts:
+WORTLAUT_MEET_STORAGE_STATE_SECRET=wortlaut-meet-browser
 ```
 
-WAV-Dateien liegen unter `.dev/audio/receiver`. Die deutschen Fixtures wurden lokal mit macOS `say`, Stimme Anna, erzeugt: „Guten Morgen. Wir prüfen die getrennten Audioquellen.“ und „Der zweite Teilnehmer spricht zur gleichen Zeit.“.
+Der Playwright-Browserzustand liegt dann in `.dev/meet-storage-state.json`. Der Entwicklungsstart übernimmt ihn in ein Kubernetes-Secret; ausschließlich Meet-Worker erhalten ihn schreibgeschützt und verwenden ein frisches Browserprofil. Ohne Zustand braucht das Zielmeeting zulässige Gastteilnahme und gegebenenfalls Zulassung durch den Gastgeber. Meet verwendet ausschließlich den Webclient mit Playwright/Chromium, keine Google-Media-, Meet-REST- oder Calendar-API. Die Aktivierung startet fällige Meet-Aufträge; nur autorisierte Testmeetings planen. Der derzeitige Capturepfad erfüllt die Teilnehmerbindung noch nicht.
 
-Versionen: Python 3.12, gesperrte Python-Pakete in `services/meeting/uv.lock`, Webex Browser SDK 3.12.0 mit internal-media-core 2.23.1 und web-client-media-engine 3.39.1, Playwright 1.63.0, libsamplerate-js 2.1.2, WebRTC VAD Wheels 2.0.14.post1. GPU-Basis ist der überprüfte amd64-Manifestdigest des offiziellen NeMo-Images 25.11; Parakeet-TDT-0.6B-v3 ist auf Modellrevision `541d1f99c6b0c3cd0b11a95167540bb8edefd82b` festgelegt. NeMo-ASR 2.6.0 und Transformers 4.53.3 werden explizit installiert und beim Imagebau importiert; Modellstart und deutsche Inferenz wurden auf der vorhandenen GPU geprüft. Der bestehende NVIDIA-MPS-Daemon verwendet UID 0 und ließ Clients anderer UIDs warten. Deshalb läuft ausschließlich der GPU-Pod mit UID 0, weiterhin ohne zusätzliche Linux-Capabilities oder Kubernetes-Token; der Browser-Worker läuft als UID 1000. Der GPU-Dienst benötigt eine vorhandene NVIDIA-Runtime/GPU; Ressourcen sind Anfangswerte. Keine Cluster-Treiberinstallation.
+Webex benötigt unabhängig davon `WORTLAUT_WEBEX_SERVICE_TOKEN` in `.dev/webex.env`. Für Service-App-Refresh zusätzlich `WORTLAUT_ENABLE_WEBEX_REFRESH=true`, `WORTLAUT_WEBEX_CLIENT_ID`, `WORTLAUT_WEBEX_CLIENT_SECRET` und `WORTLAUT_WEBEX_REFRESH_TOKEN` setzen. Unveränderte lokale Dateien überschreiben das im Namespace-Secret rotierte Tokenpaar nicht. Bei gesperrtem Refresh aktuelle Credentials in der privaten Datei neu bereitstellen. Echte Webex-Teilnahme und Tokenerneuerung sind noch ungeprüft; fehlender Webex-Zugang blockiert Meet nicht. Worker brauchen DNS, HTTPS und den Webex-Medienpfad.
 
-Webex-Service-App-Zugang in `.dev/webex.env` als `WORTLAUT_WEBEX_SERVICE_TOKEN` bereitstellen. API-, Storage- und interne GPU-Credentials entstehen privat unter `.dev` und als Namespace-Secrets. Gasttokens entstehen nur im Backend, mit stabilem Subject je Aufnahme; fehlende Service-App-Konfiguration liefert 503. Gasttokens werden vor ihrem Ablauf mit demselben Subject erneuert und im bestehenden SDK-Client ersetzt, einschließlich Entfernung gecachter Autorisierungstokens. Dabei entsteht kein zweiter Beitritt und Capture/Samplezähler bleiben erhalten. Aufnahme-Deadline und Gasttoken-Ablauf sind getrennt; die bisherige Vier-Stunden-Grenze entfällt. Das Versuch-Credential gilt standardmäßig bis zwei Minuten nach Terminende; eine explizite kürzere Betreibergrenze bleibt möglich. Bei fehlgeschlagener Gasttoken-Erneuerung beendet sich der Worker geordnet und weist die Aufnahmebegrenzung aus. Ein Gasttoken mit höchstens 30 Sekunden Restlaufzeit wird abgelehnt. Sechs-Stunden-Deadline und SDK-Credentialwechsel sind lokal geprüft, die Erneuerung während eines echten Webex-Meetings noch nicht. Der SDK-Code bleibt auf unserer eigenen HTTPS-Seite; Mikrofon/Kamera werden nicht gesendet.
+Bei bereits laufender Umgebung geänderte Provider-/Mail-Secrets übernehmen und nur den eigenen Meeting-Dienst neu starten:
 
-Für Service-App-Refresh zusätzlich `WORTLAUT_ENABLE_WEBEX_REFRESH=true`, `WORTLAUT_WEBEX_CLIENT_ID`, `WORTLAUT_WEBEX_CLIENT_SECRET` und `WORTLAUT_WEBEX_REFRESH_TOKEN` privat in `.dev/webex.env` setzen. Bei einer 401-Antwort liest der Meeting-Dienst das aktuelle Namespace-Secret `wortlaut-webex`, tauscht den Refresh-Token am offiziellen OAuth-Endpunkt und persistiert die zurückgegebenen Credentials dort. Unveränderte lokale Credentialdateien überschreiben diesen rotierten Stand nicht beim nächsten Entwicklungsstart. Bei verlorenem Refresh-Ergebnis oder fehlgeschlagener Speicherung bleibt der Vorgang sichtbar gesperrt; aktuelle Credentials über die lokale Datei neu bereitstellen. Diese Fehlerpfade sind gegen eine kontrollierte HTTP-Gegenstelle geprüft, nicht gegen eine echte Service App. Ein isolierter Versuch mit einem echten Kubernetes-Secret im Entwicklungsnamespace hat außerdem die dauerhafte Speicherung des rotierten Tokenpaars, die Wiederverwendung des aktuellen Secretstands und die Sperre nach einem tatsächlichen resourceVersion-Konflikt bestätigt; das Test-Secret wurde anschließend mit UID-Vorbedingung entfernt.
+```sh
+KUBECONFIG="$PWD/.dev/kubeconfig" WORTLAUT_NAMESPACE="wortlaut-$(id -un)" python3 scripts/dev-secrets.py
+kubectl --kubeconfig .dev/kubeconfig --context data -n "wortlaut-$(id -un)" rollout restart deployment/wortlaut-meeting
+```
 
-Schnittstellen geprüft anhand der [Gastverwaltung](https://developer.webex.com/create/docs/sa-guest-management), des [offiziellen SDK-Codes](https://github.com/webex/webex-js-sdk) sowie des tatsächlich veröffentlichten 3.12.0-Pakets; ASR anhand der [Modellkarte](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) und [NeMo-Zeitstempel-Dokumentation](https://docs.nvidia.com/nemo-framework/user-guide/latest/nemotoolkit/asr/intro.html). Vexas Capture-/Join-Code wurde am im Pack genannten Commit geprüft. Sein Mix-/MediaRecorder-Pfad wurde nicht übernommen; der kleine Track-Deduplizierungspfad ist unabhängig implementiert.
+Laufende Worker bleiben eigenständige Jobs. Ihre Prozesse müssen nachweislich beendet sein, bevor ein Ersatzbeitritt zulässig ist.
 
-`npm audit` meldet auch kritische transitive Webex-Node-Abhängigkeiten (`request`/`form-data`). Das Worker-Laufzeitimage enthält nur Playwright; das Meeting-Image liefert das vorgebaute Browser-SDK. Die Audit-Meldungen sind damit noch nicht als vollständig behoben oder irrelevant bewertet; kein blindes SDK-Downgrade.
+Meet-Worker verwenden vollständiges Chromium im Headless-Modus mit `playwright-extra` und `puppeteer-extra-plugin-stealth`. Die Anpassungen reduzieren erkennbare Automatisierungsmerkmale; Betriebssystem und konfigurierte Sprache bleiben erhalten. Sie garantieren weder Browser-Ununterscheidbarkeit noch Meet-Zulassung. Die Webex-Browserkonfiguration bleibt separat.
 
-## Mailkonfiguration
+## Aufnahme, Status und Export
 
-IMAP und SMTP sind zunächst deaktiviert. Betreiberwerte und Zugangsdaten kommen in `.dev/mail.env` mit Dateimodus `600`, als einfache `NAME=WERT`-Zeilen. Beispielwerte ersetzen:
+Den Betreiber-Token privat als `WORTLAUT_API_TOKEN` bereitstellen; keine Tokenwerte in URLs oder Logs. Im Beispiel Meetinglink, Termin und Idempotenzschlüssel ersetzen. Zeitzonen sind erforderlich. Derselbe Schlüssel mit identischem Auftrag liefert dieselbe Aufnahme; eine andere Nutzlast führt zu HTTP 409.
+
+```sh
+curl --fail-with-body http://127.0.0.1:34601/v1/recordings \
+  -H "Authorization: Bearer $WORTLAUT_API_TOKEN" \
+  -H 'Content-Type: application/json' -H 'Idempotency-Key: meet-test-001' \
+  --data '{"provider":"google_meet","meeting_url":"https://meet.google.com/abc-defg-hij","starts_at":"2026-10-08T09:00:00+02:00","ends_at":"2026-10-08T09:30:00+02:00"}'
+
+curl --fail-with-body 'http://127.0.0.1:34601/v1/recordings?limit=25' \
+  -H "Authorization: Bearer $WORTLAUT_API_TOKEN"
+
+# RECORDING_ID durch die zurückgegebene Aufnahme-ID ersetzen.
+curl --fail-with-body "http://127.0.0.1:34601/v1/recordings/$RECORDING_ID" \
+  -H "Authorization: Bearer $WORTLAUT_API_TOKEN"
+curl --fail-with-body "http://127.0.0.1:34601/v1/recordings/$RECORDING_ID/exports/json" \
+  -H "Authorization: Bearer $WORTLAUT_API_TOKEN" -o aufnahme.json
+```
+
+Für Webex `provider=webex` und einen gültigen Webex-Link verwenden. Der Scheduler startet konfigurierte Aufträge standardmäßig 60 Sekunden vor Beginn, höchstens zwei gleichzeitig über alle Provider. Keine globale Providerumschaltung.
+
+Die Liste ist nach Startzeit aufsteigend sortiert. `limit` ist höchstens 100; `next_cursor` als `cursor` mit denselben Filtern übernehmen. Optional: `provider`, `starts_from` inklusive und `starts_before` exklusiv. Der Detailstatus zeigt Teilnahme, Verarbeitung, Quellenbindungen, angenommenes Audio, Lücken, Rückstau, Workerzustand und Versand. Abgeschlossene Verarbeitung bestätigt keine vollständige Quellenabdeckung oder richtige Sprecherzuordnung.
+
+Exporte heißen `txt`, `vtt` und `json`. Vor Abschluss der Verarbeitung liefern sie 409, nach Transkriptaufbewahrung 410. Bekannte Lücken, fehlendes EOS, ungebundene Quellen und unvollständiger Drain bleiben sichtbar. Mehrdeutige Meetinglinks werden abgelehnt.
+
+## Einladungen und Ergebnisversand
+
+IMAP und SMTP sind zunächst deaktiviert. Beispielwerte in der privaten `.dev/mail.env` ersetzen:
 
 ```dotenv
 WORTLAUT_ENABLE_IMAP=true
@@ -85,19 +92,46 @@ WORTLAUT_SMTP_FROM=bot@example.org
 WORTLAUT_RESULT_RECIPIENTS={"organizer@example.org":["recipient@example.org"],"default":["operator@example.org"]}
 ```
 
-Das vertrauenswürdige Gateway muss **alle eingehenden Kopien dieses Headers entfernen** und ihn erst nach eigener Absenderprüfung setzen. Sein Inhalt ist die bestätigte Adresse und muss mit dem einzelnen MIME-From übereinstimmen. Ein vom Absender mitgelieferter `Authentication-Results`-Header genügt nicht. Ohne diesen konkreten Gatewayvertrag darf IMAP nicht aktiviert werden. Die Organizerberechtigung und Versandempfänger sind unabhängig; Einladungs-CCs werden nicht als Empfänger übernommen. Standard: IMAP über geprüftes TLS auf 993; SMTP über geprüftes STARTTLS auf 587.
+Das vertrauenswürdige Mailgateway entfernt alle eingehenden Kopien von `X-Wortlaut-Authenticated-Sender` und setzt ihn erst nach eigener Absenderprüfung. Die bestätigte Adresse muss mit dem einzelnen MIME-From übereinstimmen; mitgelieferte `Authentication-Results` genügen nicht. Ohne diesen Gatewayvertrag IMAP nicht aktivieren. Standard: IMAP über geprüftes TLS auf 993, SMTP über geprüftes STARTTLS auf 587. Ein echtes Botpostfach und Gateway sind noch nicht konfiguriert.
 
-Bei laufendem Tilt lokale Secrets übernehmen und ausschließlich den eigenen Meeting-Dienst neu starten:
+Eine Google-Calendar-Einladung mit eindeutigem Meet-Link läuft durch denselben MIME-/ICS-Pfad wie Webex. Ein bereinigtes, vom vertrauenswürdigen Gateway bestätigtes `.eml` lässt sich auch ohne IMAP importieren:
 
 ```sh
-KUBECONFIG="$PWD/.dev/kubeconfig" WORTLAUT_NAMESPACE="wortlaut-$(id -un)" python3 scripts/dev-secrets.py
-kubectl --kubeconfig .dev/kubeconfig --context data -n "wortlaut-$(id -un)" rollout restart deployment/wortlaut-meeting
+curl --fail-with-body http://127.0.0.1:34601/v1/calendar/messages \
+  -H "Authorization: Bearer $WORTLAUT_API_TOKEN" \
+  -H 'Content-Type: message/rfc822' --data-binary @einladung.eml
 ```
 
-Die Anwendung führt vorhandene Alembic-Migrationen beim Start aus; laufende Workerjobs bleiben unabhängig bestehen. Wiederholter Import ist auch per authentifiziertem `POST /v1/calendar/messages` mit roher MIME-Nachricht möglich, benötigt aber dieselbe Gateway-/Absenderberechtigung.
+Organizerberechtigung und Versandempfänger werden getrennt konfiguriert; Einladungs-CCs bestimmen keine Empfänger. Updates, Einzelabsagen, Sommerzeit und unterstützte RRULE/RDATE/EXDATE-Serien verwenden dauerhafte Kalenderidentitäten. `RANGE=THISANDFUTURE`, Änderungen am Zeitbezug eines bestehenden Serienmasters und hochfrequente Regeln sind nicht unterstützt; betroffene zukünftige Starts bleiben gesperrt. Link-/Zeitänderungen eines aktiven Vorkommens erzeugen einen Konflikt.
 
-Für echte Webex-Meetings müssen Worker zusätzlich zu DNS und HTTPS die aktuellen [Webex-Medien-Netzwerkanforderungen](https://help.webex.com/en-us/article/WBX264/Network-Requirements) erreichen. Ein erreichbares HTTPS-API beweist keinen funktionierenden Medienpfad. Die Cluster-Netzwerkkonfiguration wurde nicht global verändert.
+Ergebnisse gehen als TXT/VTT/JSON-Anhänge an konfigurierte Empfänger. Über dem Anhangslimit wird zuerst ZIP verwendet, danach konkrete HTTPS-Downloadbefehle mit einem Bearer-Lesezugang ausschließlich für diese Aufnahme. Der globale API-Key wird nicht verteilt. Unbekannte SMTP-DATA-Annahme bleibt `delivery_unknown`; eine bewusste Wiederholung erfolgt über `POST /v1/recordings/{id}/delivery/retry` und kann die Mail nochmals zustellen. Ohne aufgenommenes Audio entsteht keine Ergebnismail.
 
-Offen: Webex-Service-App-Zugang, ein Testmeeting mit mindestens drei bekannten Teilnehmern sowie das echte Botpostfach und Mailgateway. Die samplebezogene Webex-Teilnehmerbindung ist noch nicht implementiert: der Worker erfasst verfügbare Quellen und Diagnosemetadaten, gibt für Sprecherquellen aber derzeit immer `speaker_id: null` und `attribution_unknown: true` aus. Mit dem echten Meeting zunächst Quellenisolation und die Verbindung zwischen Audiotrack, Signalisierung und Teilnehmer prüfen; erst anhand dieses Nachweises die Bindung implementieren und mit gleichzeitigen Sätzen, Quellenwechsel und Reconnect testen. Danach die in `prompts.md` beschriebenen zwei Meetings und den Einladungs-/Zustellungspfad prüfen. Anonyme Quellenlabels allein genügen nicht; die v1 ist nicht abgeschlossen. Zugangsdaten ausschließlich über lokale Secretdateien oder Kubernetes-Secrets bereitstellen.
+## Grenzen und Fehlerbehebung
 
-Korrekturen aus dem Implementierungsreview: Neuere Serienmaster verdrängen ältere Ausnahmen anhand von `SEQUENCE` und `DTSTAMP`, auch bei einer vorherigen Einzelabsage. Für Kalenderlinks sind eindeutige ICS-Meetingziele maßgeblich; der Mailtext dient als Fallback. Webex-Hilfe-/Kontolinks werden nicht als Meetingziele gewertet, mehrere unterschiedliche Meetingziele innerhalb der ICS-Felder oder des benötigten Fallbacks bleiben abgelehnt. Exporte und Ergebnismail weisen die Quellenabdeckung ausdrücklich als `unknown` aus: Lückenfreiheit empfangener Tracks beweist keine Erfassung aller Teilnehmerquellen. Die Teilnehmeridentität ist als `required` festgelegt. Exporte zeigen konfigurierte Slotzahlen und die zuletzt beobachtete Trackzahl je Versuch; dies ist kein Nachweis isolierter Quellen.
+- `google_meet_not_configured` / `webex_not_configured`: Providerkonfiguration prüfen. Nicht startfähige Provider belegen keine Startplätze anderer Provider.
+- `audio_capacity_limit`: Rückstau, Storage und offene ASR-Aufträge prüfen. Defaults: zwei unbearbeitete Quellenstunden je Versuch, vier insgesamt, 2 GiB Audio und 2048 offene ASR-Aufträge. Die entsprechenden Settings sind in `services/meeting/src/wortlaut/settings.py` definiert.
+- `audio_metadata_capacity_limit` / `audio_ingest_rate_limit`: zu viele neue Datensätze. Je Quelle gelten 512 Chunks/Bindungen/Lücken pro 60-Sekunden-Samplefenster; je Versuch ein Burst von 1024 mit Nachfüllung von 64 Datensätzen/s. Identische Replays und EOS bleiben möglich; Reconnect setzt das Kontingent nicht zurück.
+- Der Worker puffert höchstens 120 Quellensekunden PCM über alle Epochen. Verworfenes Audio erscheint als endgültige Lücke. Dauerhaft gespeichertes Audio gewinnt gegen verlorene ACKs; akzeptierte Bindungen werden nicht nachträglich geändert.
+- Fehlender Worklet-Eingang erzeugt nur bei bekanntem Samplebereich eine Lücke. Nullsamples bleiben Audio. Unterbrechungen der Audio-Uhr erscheinen in `audio_clock`; unbekannte Dauer wird nicht als erfundene Samplezahl aufgefüllt.
+- Meet zeigt unter `receiver_sources[].encoded_transform` den Beobachterzustand, die Frameanzahl und höchstens die Metadaten des letzten Encoded-Frames. Vorhandene, reservierte und später ersetzende Provider-Transforms bleiben unangetastet. Fehlende API oder fehlgeschlagener Aufbau bleiben sichtbar; ein laufender Beobachter mit defekter Pipeline oder ausbleibender Antwort beendet den betroffenen Worker mit `encoded_transform_failed`. RTP-/Frame-/Empfangszeit ist keine PCM-Samplegrenze oder Teilnehmeridentität; die tatsächliche Bindung bleibt offen.
+- Einzelne defekte Audioobjekte werden nach begrenzter Behandlung ausgewiesen, temporäre Storagefehler bleiben wiederholbar. GPU-Ausfälle lassen ASR-Aufträge warten; CUDA-/MPS-Inferenzfehler setzen den eigenen ASR-Pod unbereit und lassen ihn durch Kubernetes ersetzen.
+- Audio bleibt nach Abschluss standardmäßig 24 Stunden erhalten, Text 30 Tage. Nach 72 Stunden über Terminende wird offene Verarbeitung sichtbar aufgegeben. Metadatenbereinigung wartet auf nachgewiesenes Workerende und offenen Versand; kleine Deduplizierungsdaten verhindern erneute Starts abgelaufener Aufnahmen.
+- Worker verwenden Chromiums Sandbox als UID 1000. Der aktuelle Job nutzt äußeres `Unconfined`-Seccomp für User-Namespaces; ein bereits vorhandenes passendes Nodeprofil lässt sich über `WORTLAUT_WORKER_SECCOMP_TYPE=Localhost` und `WORTLAUT_WORKER_SECCOMP_PROFILE` wählen. Keine Nodeprofile oder Kernelparameter automatisch verändern.
+
+## Prüfungen und offene Abnahme
+
+```sh
+make test
+make lint
+npm --prefix worker run build
+npm --prefix worker run test:audio
+npm --prefix worker run test:meet
+# Opt-in: 90 Sekunden Ausfall mit Quellenwechseln und verlorener EOS-Antwort
+WORTLAUT_TEST_LONG_TRANSPORT=true npm --prefix worker test
+# Opt-in: echte GPU mit zwei getrennten Fixturequellen, keine Providerabnahme
+WORTLAUT_TEST_NATIVE_ASR=true uv run --directory services/meeting pytest tests/test_asr.py::test_native_gpu_from_two_durable_sources_to_exports -q
+```
+
+PostgreSQL-/S3-Tests verwenden echte isolierte Datenbank-/Storagegrenzen. Der Ingest-Lifecycle-Test prüft 70 Bindungswechsel eines Slots, Reconnect und unveränderliche Replays mit genauen PCM-Bytes und synthetischen Teilnehmer-IDs gegen PostgreSQL/S3; er ist keine Echtzeitlastmessung oder Providerabnahme. Chromium-Fixtures prüfen Empfang, Capture, Transport und Abschluss mit synthetischen Quellen, einschließlich Encoded-Frame-Metadaten, unverändertem Tonempfang, Schutz vorhandener Provider-Transforms und Beobachterausfall. Der 90-Sekunden-Langtest verwendet den echten WebSocket-Transport mit einem Loopback-Testempfänger; er prüft Puffergrenzen, genaue Bytes/Lücken und EOS-Replay, keine DB-/S3-Haltbarkeit oder Providerzuordnung. Der vorhandene GitHub-Workflow ist für portable Prüfungen mit temporärer PostgreSQL-/S3-Instanz vorgesehen; ein lokaler Lauf beweist keinen erfolgreichen GitHub-Lauf.
+
+Für die Abnahme fehlen ein autorisiertes Meet-Testmeeting mit getrennten Sprecherreferenzen, die tatsächliche Medien-/Teilnehmersitzungsbindung, Quellenabdeckung und der durchgängige Einladungs-/Mailpfad. Webex benötigt separat Service-App-Zugang und echte Teilnehmernachweise. Die im Pack verlangten längeren Sitzungen, mehr als 64 Quellenwechsel und Kapazitätsmessungen mit zwei Meetings bleiben eigenständige Nachweise. Konfigurierte Slots und Fixture-Sprecher-IDs beweisen keine Providerfähigkeit. Transitive Webex-Abhängigkeiten haben außerdem noch nicht abschließend bewertete Audit-Befunde.

@@ -46,3 +46,18 @@ test('non-contiguous or odd PCM is rejected; binary frame retains immutable meta
   assert.deepEqual(metadata, emitted);
   assert.deepEqual([...new Uint8Array(frame, 4 + length)], [1, 2]);
 });
+
+test('capture gaps flush real PCM and preserve the following sample time and sequence', () => {
+  const output: {metadata: Chunk; pcm: Uint8Array}[] = [];
+  const chunker = new Chunker(identity, binding, (metadata, pcm) => output.push({metadata, pcm}));
+  chunker.append(new Uint8Array([1, 2, 3, 4]), 0);
+  assert.throws(() => chunker.gap(1, 16000));
+  assert.throws(() => chunker.gap(2, 80001));
+  assert.deepEqual(chunker.gap(2, 16000), {sequence: 1, start_sample: 2, sample_count: 16000});
+  chunker.append(new Uint8Array([5, 6, 7, 8]), 16002);
+  chunker.flush();
+  assert.deepEqual(output.map(({metadata, pcm}) => [metadata.sequence, metadata.start_sample, [...pcm]]),
+    [[0, 0, [1, 2, 3, 4]], [2, 16002, [5, 6, 7, 8]]]);
+  assert.equal(chunker.finalSample, 16004);
+  assert.equal(chunker.lastSequence, 2);
+});

@@ -15,7 +15,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session
 
-from wortlaut.controller import LABEL, job_body
+from wortlaut.controller import LABEL, POD_FINALIZER, job_body
 from wortlaut.models import Attempt, Recording
 from wortlaut.settings import get_settings
 
@@ -181,6 +181,11 @@ def test_real_job_claim_cancel_exit_and_secret_cleanup(monkeypatch):
             assert status["participation"] == "ended"
             assert status["attempts"][0]["end_reason"] == "cancelled"
             assert status["attempts"][0]["job_uid"] == job.metadata.uid
+            cancelled_job = batch.read_namespaced_job(name, namespace)
+            assert any(
+                condition.reason == "DeadlineExceeded" and condition.status == "True"
+                for condition in (cancelled_job.status.conditions or [])
+            ), "The fixture exited without exercising Kubernetes deadline termination"
             assert api.post(f"v1/recordings/{recording_id}/attempts").status_code == 409
             # A lost cleanup ACK can require one more controller pass.
             for _ in range(10):
@@ -192,6 +197,12 @@ def test_real_job_claim_cancel_exit_and_secret_cleanup(monkeypatch):
                 time.sleep(1)
             else:
                 raise AssertionError("Ended worker Secret was not removed")
+            assert all(
+                POD_FINALIZER not in (pod.metadata.finalizers or [])
+                for pod in core.list_namespaced_pod(
+                    namespace, label_selector=f"{LABEL}={identifier}"
+                ).items
+            ), "Reconciled Pods still retain wortlaut's termination finalizer"
     finally:
         if recording_id:
             with httpx.Client(base_url=origin, headers=headers, timeout=15) as api:

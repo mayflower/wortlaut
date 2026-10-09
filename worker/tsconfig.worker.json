@@ -3,9 +3,9 @@
   "compilerOptions": {
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
-    "types": ["node"],
+    "types": ["node", "vite/client"],
     "outDir": "dist-worker",
-    "rootDir": "runtime"
+    "rootDir": "."
   },
   "include": ["runtime/**/*.ts"]
 }

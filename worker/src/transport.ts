@@ -1,4 +1,4 @@
-import {audioFrame, chunkId, type Chunk} from './chunks';
+import {audioFrame, chunkId, type Chunk} from './chunks.js';
 
 type Pending = {id: string; frame: ArrayBuffer | string; chunk?: Chunk};
 export class AudioTransport {
@@ -9,27 +9,36 @@ export class AudioTransport {
   private stopped = false;
   private sent = new Set<string>();
   private controls = 0;
+  private samples = 0;
+  private chunks = 0;
   constructor(private readonly url: string, private readonly credential: string,
               private readonly workerId: string, private readonly error: (reason: string) => void) {}
 
   connect() {
     if (this.stopped) return;
+    this.ready = false; clearTimeout(this.timer);
+    this.socket?.close();
     const socket = this.socket = new WebSocket(this.url);
-    socket.onopen = () => socket.send(JSON.stringify({type: 'auth', credential: this.credential,
-      worker_id: this.workerId}));
+    socket.onopen = () => {
+      if (this.socket !== socket || this.stopped) { socket.close(); return; }
+      socket.send(JSON.stringify({type: 'auth', credential: this.credential, worker_id: this.workerId}));
+    };
     socket.onmessage = ({data}) => {
+      if (this.socket !== socket || this.stopped) return;
       try {
         const message = JSON.parse(data);
         if (message.type === 'ready') { this.ready = true; this.sent.clear(); this.send(); }
         if (message.type === 'ack') {
           const item = this.pending.get(message.id);
           if (item && !item.chunk) this.controls--;
+          if (item?.chunk) { this.samples -= item.chunk.sample_count; this.chunks--; }
           this.pending.delete(message.id); this.sent.delete(message.id); this.send();
         }
         if (message.type === 'error') this.error(message.reason ?? 'ingest_rejected');
       } catch { this.error('invalid_server_message'); }
     };
     socket.onclose = (event) => {
+      if (this.socket !== socket) return;
       this.ready = false;
       if (event.code === 1008) { this.error('ingest_authentication_rejected'); return; }
       if (!this.stopped) this.timer = setTimeout(() => this.connect(), 1000);
@@ -37,29 +46,35 @@ export class AudioTransport {
   }
 
   control(message: Record<string, unknown> & {id: string}) {
+    if (this.stopped) return;
     if (this.pending.has(message.id)) return;
-    if (++this.controls > 256) { this.error('control_buffer_limit'); return; }
-    this.pending.set(message.id, {id: message.id, frame: JSON.stringify(message)});
+    const frame = JSON.stringify(message);
+    if (this.controls >= 256 || frame.length > 8192) { this.error('control_buffer_limit'); return; }
+    this.controls++;
+    this.pending.set(message.id, {id: message.id, frame});
     this.send();
   }
 
   chunk(chunk: Chunk, pcm: Uint8Array) {
+    if (this.stopped) return;
     const id = chunkId(chunk);
     if (this.pending.has(id)) return;
     this.pending.set(id, {id, frame: audioFrame(chunk, pcm), chunk: {...chunk}});
-    // At most 120s of unacknowledged PCM per stream. Lost ACKs are reconciled
-    // against durable chunks by the server before turning these into actual gaps.
-    const streamItems = [...this.pending.values()].filter((item) => item.chunk &&
-      item.chunk.stream_id === chunk.stream_id && item.chunk.epoch === chunk.epoch);
-    let samples = streamItems.reduce((sum, item) => sum + item.chunk!.sample_count, 0);
-    for (const item of streamItems) {
-      if (samples <= 16000 * 120) break;
+    this.samples += chunk.sample_count;
+    this.chunks++;
+    // At most 120 source-seconds (3.84 MB PCM) across the entire worker.
+    // Each discarded range is final: socket order plus the server's reconnect
+    // fence settle earlier frames, and durable PCM wins over its lost ACK.
+    for (const item of this.pending.values()) {
+      if (this.samples <= 16000 * 120 && this.chunks <= 256) break;
+      if (!item.chunk) continue;
       const dropped = item.chunk!;
       this.pending.delete(item.id); this.sent.delete(item.id);
-      samples -= dropped.sample_count;
+      this.samples -= dropped.sample_count;
+      this.chunks--;
       this.control({type: 'gap', id: `${item.id}/gap`, stream_id: dropped.stream_id,
         epoch: dropped.epoch, sequence: dropped.sequence, start_sample: dropped.start_sample,
-        sample_count: dropped.sample_count, reason: 'worker_buffer_limit'});
+        sample_count: dropped.sample_count, reason: 'worker_buffer_limit', final: true});
     }
     this.send();
   }

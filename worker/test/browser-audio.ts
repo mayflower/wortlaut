@@ -260,10 +260,99 @@ try {
     assert.equal(after.start_sample, 0);
     assert.ok(after.monotonic_origin_ms > before.monotonic_origin_ms);
   }
+  const missing = await page.evaluate(async () => {
+    const Native = window.AudioContext;
+    let context!: AudioContext;
+    const links: {source: MediaStreamAudioSourceNode; node: AudioNode}[] = [];
+    window.AudioContext = new Proxy(Native, {construct(target, args, newTarget) {
+      const created = Reflect.construct(target, args, newTarget) as AudioContext;
+      if (!args.length) {
+        context = created;
+        const create = created.createMediaStreamSource.bind(created);
+        created.createMediaStreamSource = (stream) => {
+          const source = create(stream), connect = source.connect.bind(source);
+          source.connect = ((node: AudioNode) => { links.push({source, node}); return connect(node); }) as typeof source.connect;
+          return source;
+        };
+      }
+      return created;
+    }});
+    try {
+      const capturing = window.wortlautAudioTest(1.2);
+      while (links.length < 2) await new Promise((resolve) => setTimeout(resolve, 5));
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      const start = context.currentTime;
+      for (const {source} of links) source.disconnect();
+      await new Promise((resolve) => setTimeout(resolve, 320));
+      const end = context.currentTime;
+      for (const {source, node} of links) {
+        (AudioNode.prototype.connect as (node: AudioNode) => AudioNode).call(source, node);
+      }
+      return {sources: await capturing, missing_samples: (end - start) * 16000};
+    } finally { window.AudioContext = Native; }
+  });
+  for (const source of missing.sources) {
+    assert.equal(source.gaps.length, 1);
+    const gap = source.gaps[0] as {start_sample: number; sample_count: number; sequence: number; final: boolean};
+    assert.equal(gap.final, true);
+    assert.ok(Math.abs(gap.sample_count - missing.missing_samples) < 256,
+      `gap=${gap.sample_count}, render_clock=${missing.missing_samples}`);
+    assert.equal(source.parts.length, 2);
+    const [before, after] = source.parts.map((part) => part.metadata);
+    assert.equal(before.start_sample + before.sample_count, gap.start_sample);
+    assert.equal(after.start_sample, gap.start_sample + gap.sample_count);
+    assert.equal(after.sequence, gap.sequence + 1);
+    assert.equal(source.final_sample, source.samples + gap.sample_count);
+    assert.equal(source.audio_clock!.total_interruptions, 0);
+  }
+  const interrupted = await page.evaluate(async () => {
+    const Native = window.AudioContext;
+    let context!: AudioContext;
+    let delayResume = false;
+    window.AudioContext = new Proxy(Native, {construct(target, args, newTarget) {
+      const created = Reflect.construct(target, args, newTarget) as AudioContext;
+      if (!args.length) {
+        context = created;
+        const resume = created.resume.bind(created);
+        created.resume = async () => {
+          if (delayResume) {
+            delayResume = false;
+            await new Promise((resolve) => setTimeout(resolve, 500));
+          }
+          return resume();
+        };
+      }
+      return created;
+    }});
+    try {
+      const capturing = window.wortlautAudioTest(1.5);
+      while (!context) await new Promise((resolve) => setTimeout(resolve, 5));
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      delayResume = true;
+      await context.suspend();
+      return await capturing;
+    } finally { window.AudioContext = Native; }
+  });
+  for (const source of interrupted) {
+    assert.equal(source.begins, 2);
+    assert.equal(source.ends, 2);
+    assert.equal(source.parts.length, 2);
+    const [before, after] = source.parts.map((part) => part.metadata);
+    assert.notEqual(before.epoch, after.epoch);
+    assert.equal(after.start_sample, 0);
+    assert.ok(after.monotonic_origin_ms - (before.monotonic_origin_ms + before.sample_count / 16) > 450);
+    assert.equal(after.session_monotonic_origin_ms, before.session_monotonic_origin_ms);
+    assert.equal(after.session_utc_origin, before.session_utc_origin);
+    assert.equal(source.audio_clock!.total_interruptions, 1);
+    const interval = source.audio_clock!.interruptions[0];
+    assert.equal(interval.reason, 'suspended');
+    assert.ok(Date.parse(interval.observed_end_utc!) - Date.parse(interval.observed_start_utc) >= 450);
+  }
   assert.deepEqual(pageErrors, []);
   console.log(JSON.stringify({sources: measurements, sdk_guest_replacement: true,
     sdk_native_receivers: receiverCheck, capture_reattach: true,
-    provider_end_and_source_change: true, kind: 'synthetic_browser_audio'}));
+    provider_end_and_source_change: true, empty_worklet_input: true,
+    suspended_audio_clock: true, kind: 'synthetic_browser_audio'}));
 } finally {
   socket?.close();
   await browser.close(); await server.close();
