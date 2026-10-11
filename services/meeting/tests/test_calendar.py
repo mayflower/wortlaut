@@ -222,3 +222,107 @@ def test_meeting_link_formats_and_help_or_account_urls():
     ):
         with pytest.raises(ValueError, match="meeting_link_missing"):
             meeting_link({}, link)
+
+
+def test_dkim_invitation_authentication(client, database, signed_invite):
+    valid = signed_invite()
+    rejected = [
+        mail(sender="owner@mayflower.de", organizer="owner@mayflower.de"),
+        signed_invite(domain=b"attacker.example"),
+        signed_invite(length=True),
+        signed_invite(headers=[b"from"]),
+        valid.replace(b"example.webex.com", b"attacker.webex.com"),
+        valid.replace(b"From: owner@mayflower.de", b"From: other@mayflower.de"),
+        b"From: other@mayflower.de\r\n" + valid,
+        b"Content-Type: text/calendar\r\n" + valid,
+        signed_invite(raw=mail(sender="owner@mayflower.de.attacker.org")),
+        signed_invite(raw=mail(sender="owner@mayflower.de", organizer="other@mayflower.de")),
+        b"DKIM-Signature: broken\r\n" + mail(sender="owner@mayflower.de"),
+    ]
+    for raw in rejected:
+        assert imported(client, raw)["status"] == "rejected"
+    with Session(database) as db:
+        assert db.scalar(select(Recording)) is None
+    result = imported(client, valid)
+    assert result["status"] == "accepted"
+    assert imported(client, valid)["recording_id"] == result["recording_id"]
+    # A bogus Authentication-Results header neither grants nor removes authority.
+    assert imported(client, b"Authentication-Results: forged; dkim=pass\r\n" + valid)[
+        "recording_id"
+    ] == result["recording_id"]
+
+
+def test_dkim_dns_outage_does_not_consume_invitation(database, monkeypatch, signed_invite):
+    import dns.exception
+
+    from wortlaut import calendar as intake
+
+    raw = signed_invite()
+
+    def unavailable(*args, **kwargs):
+        raise dns.exception.Timeout
+
+    monkeypatch.setattr(intake, "dkim_dns", unavailable)
+    with Session(database) as db:
+        with pytest.raises(dns.exception.Timeout):
+            consume_imap_message(db, 1, 1, raw)
+        db.rollback()
+    with Session(database) as db:
+        assert db.scalar(select(MailImport)) is None
+        assert db.scalar(select(MailCursor)) is None
+
+
+def test_instant_invitations_plain_html_identity_and_replay(client, database, signed_invite):
+    from datetime import timedelta
+    from email.utils import format_datetime
+
+    def notice(text=None, html=False, age=0, from_address="meetings-noreply@google.com",
+               domain=b"google.com", headers=None):
+        message = EmailMessage()
+        message["From"] = from_address
+        message["Date"] = format_datetime(datetime.now(UTC) - timedelta(hours=age))
+        message["Message-ID"] = f"<{uuid.uuid4()}@notifications.google.com>"
+        message.set_content(text or (
+            "owner@mayflower.de lädt Sie zu einem gerade stattfindenden Videoanruf ein\n"
+            "meet.google.com/abc-defg-hij"
+        ), subtype="html" if html else "plain")
+        return signed_invite(raw=message.as_bytes(), domain=domain, headers=headers or [
+            b"from", b"content-type", b"mime-version", b"content-transfer-encoding",
+            b"date", b"message-id",
+        ])
+
+    for raw in (
+        notice(domain=b"attacker.org"),
+        notice(age=3),
+        notice(age=-1),
+        notice(headers=[b"from", b"content-type", b"mime-version", b"content-transfer-encoding"]),
+        notice("outsider@example.org lädt Sie zu einem gerade stattfindenden Videoanruf ein "
+               "meet.google.com/abc-defg-hij"),
+        notice("owner@mayflower.de lädt Sie zu einem gerade stattfindenden Videoanruf ein "
+               "meet.google.com/abc-defg-hij meet.google.com/xyz-abcd-efg"),
+        notice("meet.google.com/abc-defg-hij"),
+        notice().replace(b"abc-defg-hij", b"xyz-abcd-efg"),
+    ):
+        assert imported(client, raw)["status"] == "rejected"
+    with Session(database) as db:
+        assert db.scalar(select(Recording)) is None
+    raw = notice(age=0.25)
+    received = datetime.now(UTC)
+    result = imported(client, raw)
+    assert result["status"] == "accepted"
+    assert imported(client, raw)["recording_id"] == result["recording_id"]
+    with Session(database) as db:
+        recording = db.get(Recording, uuid.UUID(result["recording_id"]))
+        assert recording.provider == "google_meet"
+        assert recording.meeting_url == "https://meet.google.com/abc-defg-hij"
+        assert recording.starts_at >= received
+        assert timedelta(minutes=104) < recording.ends_at - recording.starts_at < timedelta(hours=2)
+        assert db.get(CalendarEntry, recording.calendar_entry_id).organizer == "owner@mayflower.de"
+    assert imported(client, notice(
+        '<p>owner@mayflower.de is inviting you to an ongoing video call</p>'
+        '<a href="https://meet.google.com/abc-defg-hij?hs=151">Join</a>', html=True,
+    ))["status"] == "accepted"
+    assert imported(client, notice(
+        "Join https://meet.google.com/abc-defg-hij",
+        from_address="owner@mayflower.de", domain=b"mayflower.de",
+    ))["status"] == "accepted"

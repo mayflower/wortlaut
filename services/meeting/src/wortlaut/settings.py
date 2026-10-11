@@ -24,6 +24,10 @@ class Settings(BaseSettings):
     imap_folder: str = "INBOX"
     mailbox_context: str = "wortlaut"
     trusted_sender_header: str | None = None
+    mail_sender_auth: Literal["gateway", "dkim"] = "gateway"
+    mail_allowed_sender_domains: list[str] = []
+    mail_reply_to_sender: bool = False
+    instant_invite_minutes: int = Field(default=120, ge=1, le=1440)
     organizer_permissions: dict[str, list[str]] = {}
     max_mail_bytes: int = Field(default=1024 * 1024, ge=1)
     calendar_horizon_days: int = Field(default=14, ge=1, le=90)
@@ -48,7 +52,7 @@ class Settings(BaseSettings):
     worker_image: str = "wortlaut-worker:dev"
     max_active_meetings: int = Field(default=2, ge=1)
     join_lead_seconds: int = Field(default=60, ge=0)
-    lobby_timeout_seconds: int = Field(default=300, ge=1)
+    lobby_timeout_seconds: int = Field(default=600, ge=1)
     late_start_tolerance_seconds: int = Field(default=300, ge=0)
     heartbeat_timeout_seconds: int = Field(default=45, ge=10)
     worker_cpu_request: str = "250m"

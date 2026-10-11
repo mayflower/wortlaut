@@ -82,3 +82,42 @@ def storage(client, monkeypatch):
         instance.client.delete_bucket(Bucket=instance.bucket)
         get_storage.cache_clear()
         get_settings.cache_clear()
+
+
+@pytest.fixture
+def signed_invite(monkeypatch, tmp_path):
+    import base64
+    import subprocess
+
+    import dkim
+    from test_calendar import mail
+
+    from wortlaut import calendar as intake
+    from wortlaut.settings import get_settings
+
+    key = tmp_path / "signing.pem"
+    subprocess.run(
+        ["openssl", "genrsa", "-traditional", "-out", str(key), "2048"],
+        check=True, capture_output=True,
+    )
+    public = subprocess.run(
+        ["openssl", "rsa", "-in", str(key), "-pubout", "-outform", "DER"],
+        check=True, capture_output=True,
+    ).stdout
+    record = b"v=DKIM1; k=rsa; p=" + base64.b64encode(public)
+    monkeypatch.setattr(intake, "dkim_dns", lambda name, timeout=5: record)
+    monkeypatch.setenv("WORTLAUT_MAIL_SENDER_AUTH", "dkim")
+    monkeypatch.setenv("WORTLAUT_MAIL_ALLOWED_SENDER_DOMAINS", '["mayflower.de"]')
+    monkeypatch.setenv("WORTLAUT_MAIL_REPLY_TO_SENDER", "true")
+    get_settings.cache_clear()
+
+    def sign(raw=None, domain=b"mayflower.de", length=False, headers=None, **kwargs):
+        raw = raw or mail(sender="owner@mayflower.de", organizer="owner@mayflower.de", **kwargs)
+        signature = dkim.sign(
+            raw, b"test", domain, key.read_bytes(), length=length,
+            include_headers=headers or [b"from", b"content-type", b"mime-version"],
+        )
+        return signature + raw
+
+    yield sign
+    get_settings.cache_clear()

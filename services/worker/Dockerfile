@@ -7,6 +7,7 @@ RUN npm run build
 RUN npm prune --omit=dev --no-audit --no-fund
 
 FROM mcr.microsoft.com/playwright:v1.63.0-noble
+RUN apt-get update && apt-get install -y --no-install-recommends xdotool && rm -rf /var/lib/apt/lists/*
 WORKDIR /app/worker
 COPY --from=build /app/worker/node_modules ./node_modules
 COPY --from=build /app/worker/dist-worker ./dist-worker

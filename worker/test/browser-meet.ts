@@ -3,7 +3,7 @@ import {randomUUID} from 'node:crypto';
 import {createServer} from 'node:http';
 import {createRequire} from 'node:module';
 import {once} from 'node:events';
-import {launchBrowser} from '../runtime/browser';
+import {launchBrowser, nativeMeetInput} from '../runtime/browser';
 import {MeetBrowser, MeetError, type MeetBootstrap} from '../runtime/meet';
 
 // Existing installed ws dependency; this fixture is never shipped in a worker.
@@ -109,7 +109,7 @@ window.admit = async () => {
 type CaptureLinks = {links: {source: MediaStreamAudioSourceNode; node: AudioNode}[]};
 async function preparePage(auth: 'guest' | 'account' = 'guest', german = false, missingInput = false,
   encoded: 'native' | 'provider' | 'reserved' | 'unsupported' | 'failed' = 'native') {
-  const context = await browser.newContext({locale: german ? 'de-DE' : 'en-US', permissions: []});
+  const context = await browser.newContext({viewport: null, locale: german ? 'de-DE' : 'en-US', permissions: []});
   await context.addInitScript((mode) => {
     (window as any).encodedFixtureMode = mode;
     (window as any).fixtureWorkers = [];
@@ -149,7 +149,7 @@ async function preparePage(auth: 'guest' | 'account' = 'guest', german = false, 
     const url = new URL(route.request().url());
     if (url.pathname === '/fixture.js') return route.fulfill({contentType: 'application/javascript', body: fixtureScript});
     if (url.pathname !== '/abc-defg-hij') return route.abort();
-    return route.fulfill({headers: {'Content-Security-Policy': "default-src 'none'; script-src 'self' blob:; worker-src 'self' blob:; connect-src 'self'"},
+    return route.fulfill({headers: {'Content-Security-Policy': "default-src 'none'; script-src 'self' blob:; worker-src 'self' blob:; frame-src 'self'; connect-src 'self'"},
       contentType: 'text/html', body: `<input type="text" aria-label="Your name"><button id="join">${german ? 'Jetzt teilnehmen' : 'Ask to join'}</button>
         <button aria-label="${german ? 'Mikrofon einschalten' : 'Turn on microphone'}"></button>
         <button aria-label="${german ? 'Kamera einschalten' : 'Turn on camera'}"></button>
@@ -157,7 +157,8 @@ async function preparePage(auth: 'guest' | 'account' = 'guest', german = false, 
         <div id="waiting"></div><script src="/fixture.js"></script>`});
   });
   const boot = {...bootstrap, attempt_id: randomUUID(), meet: {...bootstrap.meet, auth_mode: auth}};
-  const meet = new MeetBrowser(page, boot, `http://127.0.0.1:${address.port}`, 'fixture-node-secret', randomUUID(), assets);
+  const meet = new MeetBrowser(page, boot, `http://127.0.0.1:${address.port}`, 'fixture-node-secret', randomUUID(), assets,
+    process.platform === 'linux' ? nativeMeetInput(page) : undefined);
   await meet.prepare();
   await page.goto(boot.meeting_url, {waitUntil: 'load'});
   return {page, meet, context, errors};
@@ -324,25 +325,153 @@ try {
   }
   await missing.page.evaluate('window.finishProducer()'); await missing.context.close();
 
-  const rejected = await preparePage('guest', true);
-  await rejected.meet.join();
-  await rejected.page.locator('#waiting').evaluate((element) => { element.textContent = 'Deine Anfrage wurde abgelehnt'; });
-  assert.equal((await rejected.meet.inspect()).reason, 'admission_denied');
-  await rejected.meet.stop('admission_denied'); await rejected.context.close();
+  // Exercise the documented accessible names through the real join/stop flow,
+  // including switching enabled devices off before the join click.
+  for (const labels of [
+    {join: 'Teilnahme erbitten', micOff: 'Mikrofon deaktivieren (Strg + d)',
+      micOn: 'Mikrofon aktivieren (Strg + d)', cameraOff: 'Kamera deaktivieren (Strg + e)',
+      cameraOn: 'Kamera aktivieren (Strg + e)', leave: 'Anruf verlassen'},
+    {join: 'Jetzt teilnehmen', micOff: 'Mikrofon ausschalten', micOn: 'Mikrofon einschalten',
+      cameraOff: 'Kamera ausschalten', cameraOn: 'Kamera einschalten', leave: 'Anruf verlassen'},
+    {join: 'Ask to join', micOff: 'Turn off microphone (Ctrl + d)',
+      micOn: 'Turn on microphone (Ctrl + d)', cameraOff: 'Turn off camera (Ctrl + e)',
+      cameraOn: 'Turn on camera (Ctrl + e)', leave: 'Leave call'},
+    {join: 'Join now', micOff: 'Turn off microphone', micOn: 'Turn on microphone',
+      cameraOff: 'Turn off camera', cameraOn: 'Turn on camera', leave: 'Leave call'},
+  ]) {
+    const localized = await preparePage();
+    await localized.context.clearPermissions();
+    await localized.page.evaluate((labels) => {
+      const buttons = [...document.querySelectorAll('button')];
+      const [join, mic, camera, leave] = buttons;
+      const events: string[] = [];
+      (window as any).labelEvents = events;
+      join.textContent = labels.join;
+      if (labels.join === 'Teilnahme erbitten') join.setAttribute('aria-label', 'Ohne Mikrofon und Kamera um Teilnahme bitten');
+      mic.setAttribute('aria-label', labels.micOff);
+      camera.setAttribute('aria-label', labels.cameraOff);
+      leave.setAttribute('aria-label', labels.leave);
+      mic.onclick = () => { mic.setAttribute('aria-label', labels.micOn); events.push('mic-off'); };
+      camera.onclick = () => { camera.setAttribute('aria-label', labels.cameraOn); events.push('camera-off'); };
+      join.addEventListener('click', () => { events.push('join'); });
+      leave.onclick = () => { events.push('leave'); };
+      // Similar text on unrelated actions must not be selected.
+      const other = document.createElement('button');
+      other.textContent = labels.join + ' – weitere Möglichkeiten';
+      other.onclick = () => { events.push('wrong-button'); };
+      document.body.append(other);
+    }, labels);
+    await localized.meet.join();
+    assert.equal((await localized.meet.inspect()).participation, 'waiting_admission');
+    await localized.meet.stop('cancelled');
+    assert.deepEqual(await localized.page.evaluate(() => (window as any).labelEvents),
+      ['mic-off', 'camera-off', 'join', 'leave']);
+    assert.deepEqual(localized.errors, []);
+    await localized.context.close();
+  }
+
+  const noDevices = await preparePage();
+  await noDevices.page.evaluate(() => {
+    navigator.mediaDevices.enumerateDevices = async () => [];
+    (window as any).deviceClicks = 0;
+    const buttons = [...document.querySelectorAll('button')];
+    buttons[1].setAttribute('aria-label', 'Turn off microphone');
+    buttons[2].setAttribute('aria-label', 'Turn off camera');
+    for (const button of buttons.slice(1, 3)) {
+      button.onclick = () => { (window as any).deviceClicks++; };
+    }
+  });
+  await noDevices.meet.join();
+  assert.equal((await noDevices.meet.inspect()).participation, 'waiting_admission');
+  assert.equal(await noDevices.page.evaluate(() => (window as any).deviceClicks), 0);
+  await noDevices.meet.stop('cancelled'); await noDevices.context.close();
+
+  for (const challenge of ['bframe', 'anchor']) {
+    const captcha = await preparePage();
+    await captcha.page.route('**/recaptcha/api2/*', route => route.fulfill({
+      contentType: 'text/html', body: challenge === 'anchor' ? '<input type="checkbox" aria-label="I am not a robot">' : '<p>Select the matching images</p>',
+    }));
+    await captcha.page.evaluate(() => {
+      const badge = document.createElement('iframe'); badge.src = '/recaptcha/api2/badge';
+      const hidden = document.createElement('iframe'); hidden.id = 'challenge';
+      hidden.src = '/recaptcha/api2/bframe'; hidden.style.display = 'none';
+      document.body.append(badge, hidden);
+    });
+    assert.equal((await captcha.meet.inspect()).stopped, false);
+    await captcha.meet.join();
+    assert.equal((await captcha.meet.inspect()).participation, 'waiting_admission');
+    await captcha.page.locator('#challenge').evaluate((element, kind) => {
+      (element as HTMLIFrameElement).src = '/recaptcha/api2/' + kind;
+      (element as HTMLElement).style.display = 'block';
+      (element as HTMLElement).style.opacity = '0';
+    }, challenge);
+    assert.equal((await captcha.meet.inspect()).stopped, false);
+    if (challenge === 'anchor') await captcha.page.locator('#challenge').contentFrame().getByRole('checkbox').waitFor();
+    await captcha.page.locator('#challenge').evaluate(element => { (element as HTMLElement).style.opacity = '1'; });
+    assert.equal((await captcha.meet.inspect()).reason, 'human_verification_required');
+    assert.equal((await captcha.meet.inspect()).stopped, true);
+    await captcha.meet.stop('human_verification_required'); await captcha.context.close();
+  }
+
+  for (const title of ['Mit Ihrem Google-Konto anmelden', 'Sign in with your Google Account']) {
+    const tip = await preparePage();
+    await tip.page.evaluate(title => {
+      const dialog = document.createElement('dialog');
+      const heading = document.createElement('h2'); heading.textContent = title;
+      const dismiss = document.createElement('button'); dismiss.textContent = 'OK';
+      dismiss.onclick = () => dialog.remove();
+      dialog.append(heading, dismiss); document.body.append(dialog); dialog.showModal();
+    }, title);
+    await tip.meet.join();
+    assert.equal((await tip.meet.inspect()).participation, 'waiting_admission');
+    assert.equal(await tip.page.locator('dialog').count(), 0);
+    await tip.meet.stop('cancelled'); await tip.context.close();
+  }
+
+  const pending = await preparePage();
+  if (process.platform === 'linux') {
+    const screenX = await pending.page.evaluate(() => window.screenX);
+    await pending.page.evaluate(value => {
+      Object.defineProperty(window, 'screenX', {configurable: true, get: () => value + 200});
+    }, screenX);
+    await assert.rejects(nativeMeetInput(pending.page).click(pending.page.locator('#join')),
+      /Native pointer missed target/);
+    assert.equal(await pending.page.locator('#join').count(), 1);
+    assert.equal(await pending.page.locator('#waiting').innerText(), '');
+    await pending.page.evaluate(value => {
+      Object.defineProperty(window, 'screenX', {configurable: true, get: () => value});
+    }, screenX);
+  }
+  await pending.page.locator('#join').evaluate(element => { (element as HTMLElement).onclick = () => {}; });
+  await pending.meet.join();
+  assert.equal((await pending.meet.inspect()).participation, 'joining');
+  await pending.page.locator('#waiting').evaluate(element => {
+    element.textContent = 'Please wait until a meeting host brings you into the call';
+  });
+  assert.equal((await pending.meet.inspect()).participation, 'waiting_admission');
+  await pending.meet.stop('cancelled'); await pending.context.close();
+
+  for (const rejection of ['Deine Anfrage wurde abgelehnt', "You can't join this video call"]) {
+    const rejected = await preparePage('guest', true);
+    await rejected.meet.join();
+    await rejected.page.locator('#waiting').evaluate((element, text) => { element.textContent = text; }, rejection);
+    assert.equal((await rejected.meet.inspect()).reason, 'admission_denied');
+    await rejected.meet.stop('admission_denied'); await rejected.context.close();
+  }
 
   const blockedGuest = await preparePage('guest', true);
   await blockedGuest.page.locator('#join').evaluate((element) => { element.remove(); });
   await blockedGuest.page.locator('#waiting').evaluate((element) => {
     element.textContent = 'Sie können nicht an diesem Videoanruf teilnehmen.';
   });
-  assert.equal((await blockedGuest.meet.inspect()).reason, 'admission_denied');
-  await blockedGuest.meet.stop('admission_denied'); await blockedGuest.context.close();
+  assert.equal((await blockedGuest.meet.inspect()).reason, 'prejoin_denied');
+  await blockedGuest.meet.stop('prejoin_denied'); await blockedGuest.context.close();
 
   const account = await preparePage('account');
   await assert.rejects(account.meet.join(), (error: unknown) => error instanceof MeetError && error.reason === 'auth_session_missing');
   assert.equal(await account.page.locator('#join').count(), 1);
   await account.meet.stop('auth_session_missing'); await account.context.close();
-  assert.equal(authenticated, 11);
+  assert.equal(authenticated, 22);
   console.log(JSON.stringify({fixture: 'controlled Meet-origin DOM and native WebRTC; no provider identity proof',
     frequencies, samples: state.audio_samples, drained: state.drained, native_input_gaps: gaps.length,
     encoded_frames: encodedFrames, provider_transform_guards: true}));

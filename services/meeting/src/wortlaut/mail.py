@@ -201,6 +201,11 @@ def smtp_pass(engine):
                 recipients = settings.result_recipients.get(
                     entry.organizer if entry else "default", []
                 )
+                if (entry and settings.mail_reply_to_sender
+                        and settings.mail_sender_auth == "dkim"
+                        and entry.organizer.rsplit("@", 1)[-1]
+                        in settings.mail_allowed_sender_domains):
+                    recipients = [entry.organizer]
                 has_audio = db.scalar(
                     select(AudioChunk.id)
                     .join(AudioStream)

@@ -4,12 +4,16 @@ import hashlib
 import imaplib
 import re
 import ssl
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from email import policy
 from email.parser import BytesParser
+from email.utils import parsedate_to_datetime
+from html.parser import HTMLParser
 from urllib.parse import urlsplit
 
-from icalendar import Calendar
+import dkim
+import dns.resolver
+from icalendar import Calendar, Event
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
@@ -31,12 +35,61 @@ def utc(value):
     return value.astimezone(UTC)
 
 
-def sender(message):
-    name = get_settings().trusted_sender_header
+def dkim_dns(name, timeout=5):
+    # Temporary DNS failures must escape ingestion so IMAP retries this message.
+    try:
+        answers = dns.resolver.resolve(name.decode("ascii"), "TXT", lifetime=timeout)
+    except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer):
+        return None
+    return b"".join(answers[0].strings)
+
+
+def sender(message, raw=None, *, instant=False):
+    settings = get_settings()
+    addresses = getattr(message.get("From"), "addresses", ())
+    if len(message.get_all("From", [])) != 1 or len(addresses) != 1:
+        raise ValueError("sender_ambiguous")
+    if settings.mail_sender_auth == "dkim":
+        authenticated = addresses[0].addr_spec.lower()
+        domain = addresses[0].domain.lower()
+        google_notice = instant and authenticated == "meetings-noreply@google.com"
+        if (domain not in settings.mail_allowed_sender_domains and not google_notice) or not raw:
+            raise ValueError("sender_not_allowed")
+        try:
+            verifier = dkim.DKIM(raw, timeout=5)
+        except dkim.DKIMException as exc:
+            raise ValueError("dkim_message_invalid") from exc
+        signatures = [
+            value for name, value in verifier.headers if name.lower() == b"dkim-signature"
+        ]
+        for index, signature in enumerate(signatures[:8]):
+            try:
+                tags = dkim.util.parse_tag_value(signature)
+                signed = {h.strip().lower() for h in tags.get(b"h", b"").split(b":")}
+                # Bind MIME interpretation as well as the entire calendar body.
+                required = {b"from", b"content-type"}
+                if instant:
+                    required.update({b"date", b"message-id"})
+                for header in ("MIME-Version", "Content-Transfer-Encoding"):
+                    if message.get(header) is not None:
+                        required.add(header.lower().encode("ascii"))
+                if any(len(message.get_all(h, [])) > 1 for h in (
+                    "Content-Type", "MIME-Version", "Content-Transfer-Encoding"
+                )):
+                    raise ValueError("mime_ambiguous")
+                if (tags.get(b"d", b"").lower() != domain.encode("ascii")
+                        or b"l" in tags or not required <= signed
+                        or tags.get(b"a") != b"rsa-sha256"):
+                    continue
+                if verifier.verify(idx=index, dnsfunc=dkim_dns):
+                    return authenticated
+            except (dkim.DKIMException, dkim.util.InvalidTagValueList):
+                continue
+        raise ValueError("dkim_sender_unverified")
+    name = settings.trusted_sender_header
     if not name or len(message.get_all(name, [])) != 1:
         raise ValueError("authenticated_sender_missing")
     authenticated = str(message[name]).strip().lower()
-    addresses = getattr(message.get("From"), "addresses", ())
     if len(addresses) != 1 or addresses[0].addr_spec.lower() != authenticated:
         raise ValueError("authenticated_sender_mismatch")
     if authenticated not in get_settings().organizer_permissions:
@@ -97,14 +150,19 @@ def entry_json(entry, recording=None):
     }
 
 
-def import_event(db, calendar, event, authenticated, mail_text):
+def import_event(db, calendar, event, authenticated, mail_text, *, instant=False):
     settings = get_settings()
     uid = str(event.get("UID", ""))
     organizer = str(event.get("ORGANIZER", ""))
     if not organizer.lower().startswith("mailto:"):
         raise ValueError("organizer_invalid")
     organizer = organizer[7:].lower()
-    if organizer not in settings.organizer_permissions[authenticated]:
+    allowed = (
+        organizer == authenticated
+        if settings.mail_sender_auth == "dkim"
+        else organizer in settings.organizer_permissions.get(authenticated, [])
+    )
+    if not allowed:
         raise ValueError("organizer_not_allowed")
     if not uid or len(uid) > 512 or len(organizer) > 320:
         raise ValueError("calendar_identity_invalid")
@@ -245,6 +303,8 @@ def import_event(db, calendar, event, authenticated, mail_text):
         return entry_json(entry, recording)
     starts = utc(event.decoded("DTSTART"))
     ends = utc(event.decoded("DTEND"))
+    if instant:
+        starts = recording.starts_at if recording else datetime.now(UTC)
     if ends <= starts:
         raise ValueError("calendar_end_invalid")
     link = meeting_link(event, mail_text)
@@ -287,6 +347,80 @@ def recurrence_anchor(event):
     return start.to_ical().decode("ascii") + "|" + str(start.params.get("TZID", ""))
 
 
+class InvitationHTML(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.text = []
+        self.links = []
+
+    def handle_data(self, data):
+        self.text.append(data)
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "a":
+            self.links.extend(value for key, value in attrs if key == "href" and value)
+
+
+def instant_calendar(message, authenticated):
+    settings = get_settings()
+    if settings.mail_sender_auth != "dkim":
+        raise ValueError("instant_requires_dkim")
+    if any(len(message.get_all(h, [])) != 1 for h in ("Date", "Message-ID")):
+        raise ValueError("instant_identity_missing")
+    stamp = utc(parsedate_to_datetime(str(message["Date"])))
+    now = datetime.now(UTC)
+    ends = stamp + timedelta(minutes=settings.instant_invite_minutes)
+    if stamp > now + timedelta(minutes=5) or ends <= now:
+        raise ValueError("instant_invitation_expired")
+    texts, links = [], []
+    for part in message.walk():
+        if part.get_content_disposition() == "attachment":
+            continue
+        if part.get_content_type() == "text/plain":
+            texts.append(str(part.get_content()))
+        elif part.get_content_type() == "text/html":
+            parser = InvitationHTML()
+            parser.feed(str(part.get_content()))
+            texts.append(" ".join(parser.text))
+            links.extend(parser.links)
+    body = " ".join(" ".join(texts).split())
+    if authenticated == "meetings-noreply@google.com":
+        inviters = set(re.findall(
+            r"([a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9.-]+) "
+            r"(?:lädt Sie zu einem gerade stattfindenden Videoanruf ein|"
+            r"is inviting you to (?:an ongoing|a) video call)", body
+        ))
+        if len(inviters) != 1:
+            raise ValueError("instant_inviter_ambiguous")
+        authenticated = inviters.pop().lower()
+    if authenticated.rsplit("@", 1)[-1] not in settings.mail_allowed_sender_domains:
+        raise ValueError("instant_inviter_not_allowed")
+    candidates = re.findall(
+        r"(?<![\w.@/-])(?:https://)?meet\.google\.com/[a-z]{3}-[a-z]{4}-[a-z]{3}"
+        r"(?![\w/-])", body + " " + " ".join(links)
+    )
+    urls = {normalize_meeting_url(
+        url if url.startswith("https://") else "https://" + url
+    )[1] for url in candidates}
+    if len(urls) != 1:
+        raise ValueError("instant_meeting_ambiguous")
+    event = Event()
+    event.add("UID", "instant-" + hashlib.sha256(
+        str(message["Message-ID"]).strip().encode()
+    ).hexdigest())
+    event.add("DTSTAMP", stamp)
+    event.add("DTSTART", stamp)
+    event.add("DTEND", ends)
+    event.add("ORGANIZER", "mailto:" + authenticated)
+    event.add("URL", urls.pop())
+    calendar = Calendar()
+    calendar.add("VERSION", "2.0")
+    calendar.add("PRODID", "-//wortlaut instant invitations//EN")
+    calendar.add("METHOD", "REQUEST")
+    calendar.add_component(event)
+    return calendar, authenticated
+
+
 def import_mail(db, raw):
     if len(raw) > get_settings().max_mail_bytes:
         return [{"status": "rejected", "reason": "mail_too_large"}]
@@ -294,7 +428,6 @@ def import_mail(db, raw):
         message = BytesParser(policy=policy.default).parsebytes(raw)
         if message.defects:
             raise ValueError("mime_invalid")
-        authenticated = sender(message)
         parts = list(message.walk())
         mail_text = "\n".join(
             str(part.get_content())
@@ -306,7 +439,12 @@ def import_mail(db, raw):
             for part in parts
             if part.get_content_type() == "text/calendar"
         ]
-        if not calendars or not any(c.walk("VEVENT") for c in calendars):
+        instant = not calendars
+        authenticated = sender(message, raw, instant=instant)
+        if instant:
+            calendar, authenticated = instant_calendar(message, authenticated)
+            calendars = [calendar]
+        if not any(c.walk("VEVENT") for c in calendars):
             raise ValueError("calendar_missing")
         if sum(len(c.walk("VEVENT")) for c in calendars) > 128:
             raise ValueError("too_many_calendar_events")
@@ -318,7 +456,9 @@ def import_mail(db, raw):
         for event in calendar.walk("VEVENT"):
             try:
                 with db.begin_nested():
-                    result = import_event(db, calendar, event, authenticated, mail_text)
+                    result = import_event(
+                        db, calendar, event, authenticated, mail_text, instant=instant
+                    )
                 results.append(result)
             except (ValueError, KeyError, TypeError, UnicodeError):
                 results.append({"status": "rejected", "reason": "invalid_or_unauthorized_event"})
@@ -354,7 +494,11 @@ def imap_pass(engine):
     settings = get_settings()
     if not settings.imap_host or not settings.imap_username or not settings.imap_password:
         raise ValueError("IMAP credentials missing")
-    if not settings.trusted_sender_header or not settings.organizer_permissions:
+    if settings.mail_sender_auth == "dkim" and not settings.mail_allowed_sender_domains:
+        raise ValueError("Allowed sender domains missing")
+    if settings.mail_sender_auth == "gateway" and (
+        not settings.trusted_sender_header or not settings.organizer_permissions
+    ):
         raise ValueError("Trusted gateway configuration missing")
     with imaplib.IMAP4_SSL(
         settings.imap_host,

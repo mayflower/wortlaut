@@ -45,7 +45,7 @@ kubectl --kubeconfig .dev/kubeconfig --context data -n "wortlaut-$(id -un)" roll
 
 Laufende Worker bleiben eigenständige Jobs. Ihre Prozesse müssen nachweislich beendet sein, bevor ein Ersatzbeitritt zulässig ist.
 
-Meet-Worker verwenden vollständiges Chromium im Headless-Modus mit `playwright-extra` und `puppeteer-extra-plugin-stealth`. Die Anpassungen reduzieren erkennbare Automatisierungsmerkmale; Betriebssystem und konfigurierte Sprache bleiben erhalten. Sie garantieren weder Browser-Ununterscheidbarkeit noch Meet-Zulassung. Die Webex-Browserkonfiguration bleibt separat.
+Meet-Worker starten vollständiges Chromium als normalen, sandboxed Browserprozess mit einem frischen anonymen Profil. Unter Linux stellt Xvfb eine virtuelle Anzeige bereit; Playwright verbindet sich anschließend über einen lokalen CDP-Port. Namen und Meeting-Schaltflächen werden unter Linux über `xdotool`/XTEST bedient; fehlt die X11-Anzeige, startet der Meet-Worker nicht. Playwright dient dabei der Seitenerkennung und Audioanbindung. Die bisherigen Stealth-Erweiterungen entfallen. `prejoin_denied` bezeichnet eine Ablehnung vor dem Absenden einer Beitrittsanfrage, `admission_denied` eine Ablehnung danach. `waiting_admission` wird erst nach sichtbarer Warteanzeige gemeldet; ein Klick allein beweist keine beim Gastgeber eingegangene Anfrage. Die Webex-Browserkonfiguration bleibt separat.
 
 ## Aufnahme, Status und Export
 
@@ -92,7 +92,41 @@ WORTLAUT_SMTP_FROM=bot@example.org
 WORTLAUT_RESULT_RECIPIENTS={"organizer@example.org":["recipient@example.org"],"default":["operator@example.org"]}
 ```
 
-Das vertrauenswürdige Mailgateway entfernt alle eingehenden Kopien von `X-Wortlaut-Authenticated-Sender` und setzt ihn erst nach eigener Absenderprüfung. Die bestätigte Adresse muss mit dem einzelnen MIME-From übereinstimmen; mitgelieferte `Authentication-Results` genügen nicht. Ohne diesen Gatewayvertrag IMAP nicht aktivieren. Standard: IMAP über geprüftes TLS auf 993, SMTP über geprüftes STARTTLS auf 587. Ein echtes Botpostfach und Gateway sind noch nicht konfiguriert.
+Das vertrauenswürdige Mailgateway entfernt alle eingehenden Kopien von `X-Wortlaut-Authenticated-Sender` und setzt ihn erst nach eigener Absenderprüfung. Die bestätigte Adresse muss mit dem einzelnen MIME-From übereinstimmen; mitgelieferte `Authentication-Results` genügen nicht. Im Gateway-Modus IMAP nur mit diesem Gatewayvertrag aktivieren. Standard: IMAP über geprüftes TLS auf 993, SMTP über geprüftes STARTTLS auf 587. Zugangsdaten und Absenderregeln werden pro Installation konfiguriert.
+
+Für ein normales IMAP-Postfach ohne eigenes Gateway stattdessen diese Einstellungen verwenden:
+
+```dotenv
+WORTLAUT_MAIL_SENDER_AUTH=dkim
+WORTLAUT_MAIL_ALLOWED_SENDER_DOMAINS=["mayflower.de"]
+WORTLAUT_MAIL_REPLY_TO_SENDER=true
+```
+
+Dieser Modus prüft die DKIM-Signatur selbst gegen den öffentlichen DNS-Schlüssel.
+Er akzeptiert nur exakt freigegebene From-Domains mit passender Signaturdomain,
+RSA-SHA256, signierten MIME-Headern und vollständig signiertem Inhalt (kein `l=`).
+Gefälschte Prüfheader gewähren keinen Zugriff. Der ICS-Organisator muss mit dem
+Absender übereinstimmen; Stellvertreter und weitergeleitete fremde Termine werden
+abgewiesen. Bei temporären DNS-Fehlern bleibt die Nachricht zur Wiederholung offen.
+Mit `MAIL_REPLY_TO_SENDER` gehen Ergebnisse ausschließlich an diesen Organisator,
+nicht an CCs oder Reply-To-Adressen. Ohne passende DKIM-Signatur wird die Einladung
+abgewiesen, auch wenn die sichtbare Absenderadresse zur freigegebenen Domain gehört.
+Für IONOS: `imap.ionos.de:993` (TLS), `smtp.ionos.de:587` (STARTTLS).
+Passwörter gehören ausschließlich in die ignorierte `.dev/mail.env` und das
+Kubernetes-Secret. Nach einer Secret-Änderung den Meeting-Dienst neu starten,
+damit er die neuen Umgebungsvariablen übernimmt.
+
+Zusätzlich zu iCalendar verarbeitet der DKIM-Modus Soforteinladungen mit einem
+eindeutigen Meet-Link im Text oder HTML. Direkt versendete Mails müssen von einer
+freigegebenen Domain stammen. Google-Meet-Benachrichtigungen werden ausschließlich
+von `meetings-noreply@google.com` mit passender Google-DKIM-Signatur akzeptiert;
+der Einladende wird aus dem deutschen oder englischen Einladungstext gelesen und
+gegen dieselbe Domainfreigabe geprüft. Die Empfängerregel gilt für diesen Einladenden.
+Mehrdeutige Einladende/Links, fehlende signierte Date-/Message-ID-Header und
+abgelaufene Nachrichten werden abgewiesen. Die Message-ID verhindert doppelte
+Aufträge beim erneuten Import. Ohne Kalender-Endzeit gilt
+`WORTLAUT_INSTANT_INVITE_MINUTES=120` ab der signierten Versandzeit. Ältere
+Soforteinladungen starten keinen nachträglichen Beitritt.
 
 Eine Google-Calendar-Einladung mit eindeutigem Meet-Link läuft durch denselben MIME-/ICS-Pfad wie Webex. Ein bereinigtes, vom vertrauenswürdigen Gateway bestätigtes `.eml` lässt sich auch ohne IMAP importieren:
 

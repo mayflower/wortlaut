@@ -2,7 +2,7 @@ import {randomUUID} from 'node:crypto';
 import type {Browser} from 'playwright';
 import {serviceRequest} from './http.js';
 import {MeetBrowser, MeetError} from './meet.js';
-import {launchBrowser} from './browser.js';
+import {launchBrowser, nativeMeetInput} from './browser.js';
 
 const api = process.env.WORTLAUT_API_URL;
 const attemptId = process.env.WORTLAUT_ATTEMPT_ID;
@@ -38,11 +38,11 @@ async function run(api: string, credential: string) {
   const browser = await launchBrowser(bootstrap.provider, isMeet ? bootstrap.meet.locale : undefined);
   startupBrowser = browser;
   const context = await browser.newContext({permissions: [],
-    ...(isMeet ? {locale: bootstrap.meet.locale,
+    ...(isMeet ? {viewport: null, locale: bootstrap.meet.locale,
       ...(bootstrap.meet.auth_mode === 'account' ? {storageState: '/run/meet/storage-state.json'} : {})} : {}),
   });
   const page = await context.newPage();
-  const meet = isMeet ? new MeetBrowser(page, bootstrap, api, credential, workerId) : undefined;
+  const meet = isMeet ? new MeetBrowser(page, bootstrap, api, credential, workerId, undefined, nativeMeetInput(page)) : undefined;
   let stopping: Promise<void> | undefined;
   let endReason = 'normal';
   let diagnostics: Record<string, unknown> = {capability: 'unverified', streams: 0, audio_samples: 0, drained: null,

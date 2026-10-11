@@ -3,6 +3,7 @@ import type {Locator, Page} from 'playwright';
 import type {CaptureSink} from '../src/capture.js';
 import type {Chunk} from '../src/chunks.js';
 import type {MeetBridgeMessage, MeetCaptureConfig} from '../src/meet-page.js';
+import type {MeetInput} from './browser.js';
 import {AudioTransport} from '../src/transport.js';
 
 export type MeetBootstrap = {provider: 'google_meet'; meeting_id: string; attempt_id: string;
@@ -107,21 +108,41 @@ export async function installMeetCapture(page: Page, bootstrap: MeetBootstrap, s
 
 // Join/admission selectors were reviewed against @vexa/join's Google Meet
 // implementation at 18e7ac1d6a0201d1489ce30b12b6f7138067a598 (Apache-2.0).
+// Labels: https://support.google.com/meet/answer/9303069 and /15738543 (hl=de/en).
+// Camera aktivieren was also observed in the German Meet prejoin UI.
 // Only exact English/German actions are used; no broad structural button click.
 const actions = {
-  join: /^(Ask to join|Join now|Um Teilnahme bitten|Jetzt teilnehmen)$/i,
+  join: /^(Ask to join|Join now|Teilnahme erbitten|Um Teilnahme bitten|Jetzt teilnehmen)$/i,
   leave: /^(Leave call|Leave meeting|Anruf verlassen|Besprechung verlassen)(?: \(.*\))?$/i,
-  micOff: /^(Turn off microphone|Mikrofon ausschalten)(?: \(.*\))?$/i,
-  micOn: /^(Turn on microphone|Mikrofon einschalten)(?: \(.*\))?$/i,
-  cameraOff: /^(Turn off camera|Kamera ausschalten)(?: \(.*\))?$/i,
-  cameraOn: /^(Turn on camera|Kamera einschalten)(?: \(.*\))?$/i,
+  micOff: /^(Turn off microphone|Mikrofon ausschalten|Mikrofon deaktivieren)(?: \(.*\))?$/i,
+  micOn: /^(Turn on microphone|Mikrofon einschalten|Mikrofon aktivieren)(?: \(.*\))?$/i,
+  cameraOff: /^(Turn off camera|Kamera ausschalten|Kamera deaktivieren)(?: \(.*\))?$/i,
+  cameraOn: /^(Turn on camera|Kamera einschalten|Kamera aktivieren)(?: \(.*\))?$/i,
 };
-const waiting = /Asking to be let in|You[’']ll join the call when someone lets you|Waiting for the host|waiting room|Um Teilnahme gebeten|Warten.*(?:Zulassung|Gastgeber)|Sobald.*(?:zugelassen|teilnehmen)/i;
-const denied = /denied your request|request to join was denied|not allowed to join|weren[’']t allowed|Anfrage.*abgelehnt|Teilnahme.*(?:abgelehnt|nicht gestattet)|Sie können nicht an diesem Videoanruf teilnehmen/i;
+const waiting = /Please wait until a meeting host brings you into the call|Asking to be let in|You[’']ll join the call when someone lets you|Waiting for the host|waiting room|Um Teilnahme gebeten|Warten.*(?:Zulassung|Gastgeber)|Sobald.*(?:zugelassen|teilnehmen)/i;
+const denied = /You (?:can[’']t|cannot) join this video call|denied your request|request to join was denied|not allowed to join|weren[’']t allowed|Anfrage.*abgelehnt|Teilnahme.*(?:abgelehnt|nicht gestattet)|Sie können nicht an diesem Videoanruf teilnehmen/i;
 const removed = /removed from (?:the )?(?:call|meeting)|aus.*(?:Besprechung|Anruf).*entfernt/i;
 const ended = /^(?:This )?(?:meeting|call) (?:has )?ended\.?$|Besprechung.*beendet|Anruf.*beendet/i;
 
+// Meet can replace the accessible name with a device-state description.
+function joinButton(page: Page) {
+  return page.getByRole('button', {name: actions.join})
+    .or(page.getByRole('button').filter({hasText: actions.join}));
+}
+
 async function visible(locator: Locator) { return locator.first().isVisible(); }
+
+// Background anchors/badges do not mean that a person must solve a challenge.
+async function humanVerificationVisible(page: Page) {
+  for (const frame of await page.locator('iframe[src*="/recaptcha/"]').all()) {
+    if (!await frame.evaluate(element => element.checkVisibility({checkOpacity: true, checkVisibilityCSS: true}))) continue;
+    const path = new URL(await frame.getAttribute('src') ?? '', page.url()).pathname;
+    if (/\/recaptcha\/(?:api2|enterprise)\/bframe$/.test(path)) return true;
+    if (/\/recaptcha\/(?:api2|enterprise)\/anchor$/.test(path) &&
+        await frame.contentFrame().getByRole('checkbox').first().isVisible()) return true;
+  }
+  return false;
+}
 
 export class MeetBrowser {
   private participation = 'joining';
@@ -134,7 +155,9 @@ export class MeetBrowser {
 
   constructor(private readonly page: Page, private readonly bootstrap: MeetBootstrap,
     api: string, credential: string, workerId: string,
-    private readonly assets?: URL) {
+    private readonly assets?: URL,
+    private readonly input: MeetInput = {click: locator => locator.click({timeout: 5000}),
+      fill: (locator, text) => locator.fill(text)}) {
     const ingest = new URL(`/v1/attempts/${bootstrap.attempt_id}/audio`, api);
     if (!['https:', 'http:'].includes(ingest.protocol)) throw new MeetError('invalid_ingest_url');
     ingest.protocol = ingest.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -153,31 +176,61 @@ export class MeetBrowser {
     this.transport.connect();
   }
 
+  private async dismissSigninTip() {
+    const tip = this.page.getByText(/^(Mit Ihrem Google-Konto anmelden|Sign in with your Google Account)$/i);
+    const dismiss = this.page.getByRole('button', {name: /^(OK|Got it|Verstanden)$/i});
+    if (!await visible(tip) || await dismiss.count() !== 1 || !await visible(dismiss)) return false;
+    await this.input.click(dismiss);
+    await tip.first().waitFor({state: 'hidden', timeout: 5000});
+    return true;
+  }
+
   async join() {
     await this.initialize?.();
-    const button = this.page.getByRole('button', {name: actions.join});
-    await button.first().waitFor({state: 'visible', timeout: 30000});
+    const button = joinButton(this.page);
+    await button.first().waitFor({state: 'visible', timeout: 30000})
+      .catch(() => { throw new MeetError('join_button_missing'); });
     if (this.stopping) return;
     const name = this.page.locator('input[type="text"]:not([aria-hidden="true"])');
     if (await visible(name)) {
       if (this.bootstrap.meet.auth_mode === 'account') throw new MeetError('auth_session_missing');
       if (await name.count() !== 1) throw new MeetError('join_control_ambiguous');
-      await name.fill(this.bootstrap.meet.display_name);
+      try {
+        await this.dismissSigninTip();
+        try { await this.input.fill(name, this.bootstrap.meet.display_name); }
+        catch (error) {
+          // Meet may display this coachmark after the prejoin controls appear.
+          if (!await this.dismissSigninTip()) throw error;
+          await this.input.fill(name, this.bootstrap.meet.display_name);
+        }
+      } catch { throw new MeetError('guest_name_input_failed'); }
     } else if (this.bootstrap.meet.auth_mode === 'guest') {
       throw new MeetError('guest_name_missing');
     }
-    for (const [off, on] of [[actions.micOff, actions.micOn], [actions.cameraOff, actions.cameraOn]]) {
+    for (const [off, on, reason, permission, kind] of [
+      [actions.micOff, actions.micOn, 'microphone_state_unconfirmed', 'microphone', 'audioinput'],
+      [actions.cameraOff, actions.cameraOn, 'camera_state_unconfirmed', 'camera', 'videoinput'],
+    ] as const) {
+      // With no device, Meet can show an off action that only opens a missing-
+      // device warning. Confirm Chromium denies capture before skipping it.
+      const unavailable = await this.page.evaluate(async ({permission, kind}) => {
+        const status = await navigator.permissions.query({name: permission as PermissionName});
+        return status.state === 'denied' &&
+          !(await navigator.mediaDevices.enumerateDevices()).some(device => device.kind === kind);
+      }, {permission, kind}).catch(() => false);
+      if (unavailable) continue;
       const turnOff = this.page.getByRole('button', {name: off});
-      if (await visible(turnOff)) await turnOff.click({timeout: 5000});
+      if (await visible(turnOff)) await this.input.click(turnOff)
+        .catch(() => { throw new MeetError(reason); });
       // Refuse to join with an unconfirmed sending state. Browser permissions
       // are empty as well; no fake microphone/camera is supplied in production.
-      await this.page.getByRole('button', {name: on}).first().waitFor({state: 'visible', timeout: 10000});
+      await this.page.getByRole('button', {name: on}).first().waitFor({state: 'visible', timeout: 10000})
+        .catch(() => { throw new MeetError(reason); });
     }
     if (this.stopping) return;
     if (await button.count() !== 1) throw new MeetError('join_control_ambiguous');
-    await button.click({timeout: 5000});
+    await this.input.click(button).catch(() => { throw new MeetError('join_click_failed'); });
     this.joinSent = true;
-    this.participation = 'waiting_admission';
   }
 
   async inspect() {
@@ -189,14 +242,16 @@ export class MeetBrowser {
     else if (url.origin !== 'https://meet.google.com') this.reason = 'unexpected_browser_origin';
     if (state?.reason) this.reason = state.reason;
     if (!this.stopping) {
-      if (await visible(this.page.getByText(denied))) this.reason = 'admission_denied';
+      if (await visible(this.page.getByText(denied))) {
+        this.reason = this.joinSent ? 'admission_denied' : 'prejoin_denied';
+      }
       else if (await visible(this.page.getByText(removed))) this.reason = 'removed';
       else if (await visible(this.page.getByText(ended))) this.reason = 'meeting_ended';
-      else if (await this.page.locator('iframe[src*="recaptcha"]').count()) this.reason = 'human_verification_required';
+      else if (await humanVerificationVisible(this.page)) this.reason = 'human_verification_required';
       else if (await visible(this.page.getByRole('dialog').filter({hasText: /take notes for me|taking notes|Notizen.*(?:zustimmen|Einwilligung)/i}))) {
         this.reason = 'consent_required';
       } else if (await visible(this.page.getByText(waiting))) this.participation = 'waiting_admission';
-      else if (this.joinSent && !await visible(this.page.getByRole('button', {name: actions.join})) &&
+      else if (this.joinSent && !await visible(joinButton(this.page)) &&
           await visible(this.page.getByRole('button', {name: actions.leave})) &&
           await this.page.locator('[data-self-name], [data-participant-id]').count()) {
         this.participation = 'capturing';
@@ -216,9 +271,9 @@ export class MeetBrowser {
     return this.stopping ??= (async () => {
       const bridged = await this.page.evaluate(() => window.wortlautMeet?.stop()).catch(() => false);
       this.drained = (await this.transport.drain()) && bridged === true;
-      if (!['removed', 'meeting_ended', 'admission_denied'].includes(reason)) {
+      if (!['removed', 'meeting_ended', 'admission_denied', 'prejoin_denied'].includes(reason)) {
         const leave = this.page.getByRole('button', {name: actions.leave});
-        if (await visible(leave)) await leave.first().click({timeout: 3000}).catch(() => { this.reason = 'leave_unconfirmed'; });
+        if (await visible(leave)) await this.input.click(leave.first()).catch(() => { this.reason = 'leave_unconfirmed'; });
       }
     })();
   }

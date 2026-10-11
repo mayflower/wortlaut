@@ -266,3 +266,22 @@ def test_large_repetitive_exports_are_losslessly_zipped_before_real_smtp(
     with Session(database) as db:
         assert db.get(Delivery, recording).status == "delivered"
         assert db.get(Recording, recording).export_reader_nonce is None
+
+
+def test_dkim_calendar_result_goes_to_authenticated_sender(
+    client, database, storage, smtp, signed_invite,
+):
+    from test_calendar import imported
+
+    from wortlaut.models import CalendarEntry
+
+    invitation = imported(client, signed_invite())
+    assert invitation["status"] == "accepted"
+    recording = finished_capture(client, database)
+    with Session(database) as db:
+        entry = db.scalar(select(CalendarEntry))
+        db.get(Recording, recording).calendar_entry_id = entry.id
+        db.commit()
+    smtp_pass(database)
+    assert smtp.envelopes == [["owner@mayflower.de"]]
+    assert len(list(smtp.messages[0].iter_attachments())) == 3
