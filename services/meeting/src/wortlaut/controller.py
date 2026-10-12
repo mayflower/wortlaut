@@ -471,7 +471,7 @@ def controller_pass(engine, apis=None):
         )
         enabled = []
         for provider, configured in (
-            ("webex", bool(settings.webex_service_token)),
+            ("webex", settings.enable_webex_browser or bool(settings.webex_service_token)),
             ("google_meet", settings.enable_google_meet),
         ):
             if configured:
@@ -532,7 +532,8 @@ def controller_pass(engine, apis=None):
                 recording.participation_reason = "audio_capacity_limit"
                 db.commit()
                 continue
-            if recording.provider == "webex" and not settings.webex_service_token:
+            if (recording.provider == "webex" and not settings.enable_webex_browser
+                    and not settings.webex_service_token):
                 recording.participation_reason = "webex_not_configured"
                 db.commit()
                 continue

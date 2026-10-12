@@ -49,7 +49,7 @@ for obj in objects:
 k8s_yaml(encode_yaml_stream(objects))
 
 local_resource('runtime-secrets', cmd='python3 scripts/dev-secrets.py',
-    deps=['scripts/dev-secrets.py', '.dev/meet.env', '.dev/meet-storage-state.json', '.dev/mail.env'], env=build_env)
+    deps=['scripts/dev-secrets.py', '.dev/meet.env', '.dev/meet-storage-state.json', '.dev/mail.env', '.dev/webex.env'], env=build_env)
 k8s_resource('postgres', port_forwards='34632:5432', resource_deps=['runtime-secrets'])
 k8s_resource('minio', port_forwards='34609:9000', resource_deps=['runtime-secrets'])
 k8s_resource('wortlaut-meeting', port_forwards='34601:8000', resource_deps=['postgres', 'minio', 'runtime-secrets'])

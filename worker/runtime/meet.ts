@@ -1,5 +1,5 @@
 import {readFile} from 'node:fs/promises';
-import type {Locator, Page} from 'playwright';
+import type {Frame, Locator, Page} from 'playwright';
 import type {CaptureSink} from '../src/capture.js';
 import type {Chunk} from '../src/chunks.js';
 import type {MeetBridgeMessage, MeetCaptureConfig} from '../src/meet-page.js';
@@ -16,14 +16,16 @@ export class MeetError extends Error {
 
 const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 
-export async function installMeetCapture(page: Page, bootstrap: MeetBootstrap, sink: CaptureSink,
-  assets = new URL('../../dist/meet/', import.meta.url)) {
+export async function installMeetCapture(page: Page, bootstrap: Pick<MeetBootstrap, 'meeting_id' | 'attempt_id' | 'meeting_url'>, sink: CaptureSink,
+  assets = new URL('../../dist/meet/', import.meta.url), provider: 'google_meet' | 'webex' = 'google_meet') {
   const bundle = await readFile(new URL('capture.js', assets), 'utf8');
   const active = new Set<string>();
+  let captureFrame: Frame | undefined = provider === 'google_meet' ? page.mainFrame() : undefined;
   await page.exposeBinding('wortlautMeetBridge', (source, raw: MeetBridgeMessage) => {
     const url = new URL(source.frame.url());
-    if (source.page !== page || source.frame !== page.mainFrame() ||
-        url.origin !== 'https://meet.google.com' || url.pathname !== new URL(bootstrap.meeting_url).pathname ||
+    if (source.page !== page || source.frame !== captureFrame ||
+        (provider === 'webex' ? url.origin !== 'https://web.webex.com' || url.pathname !== '/meeting'
+          : url.origin !== 'https://meet.google.com' || url.pathname !== new URL(bootstrap.meeting_url).pathname) ||
         !raw || raw.attempt_id !== bootstrap.attempt_id || !['control', 'chunk'].includes(raw.type)) {
       throw new MeetError('browser_bridge_rejected');
     }
@@ -39,7 +41,7 @@ export async function installMeetCapture(page: Page, bootstrap: MeetBootstrap, s
       metadata.channels === 1 && metadata.encoding === 'pcm_s16le' &&
       metadata.source_kind === 'speaker' && metadata.speaker_id === null && metadata.attribution_unknown === true &&
       typeof metadata.provider_source_id === 'string' && metadata.provider_source_id.length <= 256 &&
-      metadata.provider_source_id.startsWith(`google_meet:${bootstrap.meeting_id}:receiver:`);
+      metadata.provider_source_id.startsWith(`${provider}:${bootstrap.meeting_id}:receiver:`);
     if (raw.type === 'control' && metadata.type === 'begin') {
       if (!binding() || (active.size >= 64 && !active.has(key)) ||
           metadata.id !== `${bootstrap.attempt_id}/${key}/begin`) throw new MeetError('browser_bridge_rejected');
@@ -69,11 +71,13 @@ export async function installMeetCapture(page: Page, bootstrap: MeetBootstrap, s
     } else throw new MeetError('browser_bridge_rejected');
   });
   const config: MeetCaptureConfig = {meeting_id: bootstrap.meeting_id, attempt_id: bootstrap.attempt_id,
-    meeting_url: bootstrap.meeting_url};
+    meeting_url: bootstrap.meeting_url, provider};
   // Only the small native hook belongs in every new document. The local WASM
   // bundle is loaded once in the main Meet document, before clicking join.
   await page.addInitScript((config: MeetCaptureConfig) => {
-    if (window !== window.top || location.origin !== 'https://meet.google.com' ||
+    if (config.provider === 'webex'
+      ? location.origin !== 'https://web.webex.com' || location.pathname !== '/meeting'
+      : window !== window.top || location.origin !== 'https://meet.google.com' ||
         location.pathname !== new URL(config.meeting_url).pathname) return;
     window.wortlautMeetConfig = config;
     const connections = new Set<RTCPeerConnection>(), received = new WeakSet<RTCRtpReceiver>();
@@ -97,11 +101,16 @@ export async function installMeetCapture(page: Page, bootstrap: MeetBootstrap, s
   return async () => {
     const url = new URL(page.url());
     if (url.origin === 'https://accounts.google.com') throw new MeetError('auth_session_missing');
-    if (url.href !== bootstrap.meeting_url) throw new MeetError('unexpected_browser_origin');
-    await page.evaluate(bundle);
-    await page.waitForFunction(() => window.wortlautMeet?.inspect().capture_ready ||
+    if (provider === 'webex') {
+      if (url.origin !== new URL(bootstrap.meeting_url).origin) throw new MeetError('unexpected_browser_origin');
+      captureFrame = page.frames().find(frame =>
+        /^https:\/\/web\.webex\.com\/meeting(?:[?#]|$)/.test(frame.url()));
+    } else if (url.href !== bootstrap.meeting_url) throw new MeetError('unexpected_browser_origin');
+    if (!captureFrame) throw new MeetError('webex_frame_missing');
+    await captureFrame.evaluate(bundle);
+    await captureFrame.waitForFunction(() => window.wortlautMeet?.inspect().capture_ready ||
       window.wortlautMeet?.inspect().reason, undefined, {timeout: 10000});
-    const state = await page.evaluate(() => window.wortlautMeet.inspect());
+    const state = await captureFrame.evaluate(() => window.wortlautMeet.inspect());
     if (state.reason) throw new MeetError(state.reason);
   };
 }

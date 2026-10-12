@@ -4,7 +4,7 @@ import resamplerSource from '@alexanderolsen/libsamplerate-js/dist/libsamplerate
 import pcmSource from '../public/pcm-worklet.js?raw';
 import encodedObserverSource from '../public/encoded-audio-observer.js?raw';
 
-export type MeetCaptureConfig = {meeting_id: string; attempt_id: string; meeting_url: string};
+export type MeetCaptureConfig = {meeting_id: string; attempt_id: string; meeting_url: string; provider?: 'google_meet' | 'webex'};
 export type MeetBridgeMessage = {attempt_id: string; type: 'control' | 'chunk';
   metadata: Record<string, unknown>; pcm?: string};
 
@@ -31,7 +31,9 @@ type EncodedObservation = {id: number; pc: RTCPeerConnection; transform?: RTCRtp
 // The small receiver hook runs before Meet; this bundle is loaded before join. It has no backend
 // credentials, provider login cookies, API URL or direct backend connection.
 const config = window.wortlautMeetConfig;
-if (window === window.top && location.origin === 'https://meet.google.com' &&
+if (config.provider === 'webex'
+  ? location.origin === 'https://web.webex.com' && location.pathname === '/meeting'
+  : window === window.top && location.origin === 'https://meet.google.com' &&
     location.pathname === new URL(config.meeting_url).pathname) install(config);
 
 function install(config: MeetCaptureConfig) {
@@ -207,7 +209,7 @@ function install(config: MeetCaptureConfig) {
         for (const receiver of live) {
           let source = sources.get(receiver);
           if (!source) {
-            source = {id: `google_meet:${config.meeting_id}:receiver:${++nextSource}`};
+            source = {id: `${config.provider ?? 'google_meet'}:${config.meeting_id}:receiver:${++nextSource}`};
             sources.set(receiver, source);
           }
           if (source.track === receiver.track || stopping) continue;

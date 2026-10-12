@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     database_url: SecretStr
     api_token: SecretStr
     webex_service_token: SecretStr | None = None
+    enable_webex_browser: bool = False
     enable_webex_refresh: bool = False
     enable_google_meet: bool = False
     meet_storage_state_secret: str | None = None

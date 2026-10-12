@@ -4,6 +4,7 @@ import {createServer} from 'node:http';
 import {createRequire} from 'node:module';
 import {once} from 'node:events';
 import {launchBrowser, nativeMeetInput} from '../runtime/browser';
+import {WebexBrowser} from '../runtime/webex-browser';
 import {MeetBrowser, MeetError, type MeetBootstrap} from '../runtime/meet';
 
 // Existing installed ws dependency; this fixture is never shipped in a worker.
@@ -472,6 +473,44 @@ try {
   assert.equal(await account.page.locator('#join').count(), 1);
   await account.meet.stop('auth_session_missing'); await account.context.close();
   assert.equal(authenticated, 22);
+  const webexContext = await browser.newContext();
+  const webexPage = await webexContext.newPage();
+  const webexUrl = 'https://example.webex.com/meet/fixture';
+  await webexPage.route('https://example.webex.com/**', route => route.fulfill({
+    contentType: 'text/html', body: '<iframe src="https://web.webex.com/meeting"></iframe>',
+  }));
+  await webexPage.route('https://web.webex.com/meeting', route => route.fulfill({
+    contentType: 'text/html', body: `<button onclick="this.remove()">Reject</button>
+    <button onclick="this.remove()">Continue without microphone and camera</button>
+    <label>Name<input></label>
+    <button>Microphone is currently muted - click to unmute</button>
+    <button>Sending video is currently disabled - click to enable</button>
+    <button onclick="this.remove();document.querySelector('#webex-state').attachShadow({mode:'open'}).innerHTML='<p>Waiting for the host</p>'">Join meeting Fixture</button>
+    <div id='webex-state'></div>`,
+  }));
+  const webex = new WebexBrowser(webexPage, {...bootstrap, provider: 'webex',
+    meeting_url: webexUrl, webex_browser: {display_name: 'wortlaut fixture'}},
+  `http://127.0.0.1:${address.port}`, 'fixture-node-secret', randomUUID(), assets);
+  await webex.prepare();
+  await webexPage.goto(webexUrl);
+  await webex.join();
+  const webexFrame = webexPage.frames().find(frame => frame.url() === 'https://web.webex.com/meeting')!;
+  assert.equal(await webexFrame.getByRole('textbox', {name: 'Name'}).inputValue(), 'wortlaut fixture');
+  assert.equal((await webex.inspect()).participation, 'waiting_admission');
+  assert.equal((await webex.inspect()).capability, 'unverified');
+  await webexFrame.locator('p').evaluate(element => {
+    element.textContent = '';
+    const leave = document.createElement('button');
+    leave.textContent = 'Leave meeting';
+    leave.onclick = () => { leave.remove(); };
+    document.body.append(leave);
+  });
+  assert.equal((await webex.inspect()).participation, 'capturing');
+  await webex.stop('normal');
+  assert.equal((await webex.inspect()).participation, 'ended');
+  assert.equal(await webexFrame.getByRole('button', {name: 'Leave meeting'}).count(), 0);
+  await webexContext.close();
+
   console.log(JSON.stringify({fixture: 'controlled Meet-origin DOM and native WebRTC; no provider identity proof',
     frequencies, samples: state.audio_samples, drained: state.drained, native_input_gaps: gaps.length,
     encoded_frames: encodedFrames, provider_transform_guards: true}));

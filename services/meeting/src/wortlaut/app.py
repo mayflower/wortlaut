@@ -748,6 +748,8 @@ def bootstrap(
                 "auth_mode": "account" if settings.meet_storage_state_secret else "guest",
             },
         }
+    if settings.enable_webex_browser:
+        return {**common, "webex_browser": {"display_name": settings.assistant_name}}
     issued_request_started = datetime.now(UTC)
     try:
         guest = guest_token(

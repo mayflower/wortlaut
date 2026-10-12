@@ -219,3 +219,27 @@ def test_meet_series_update_and_cancel_preserve_provider_and_identity(
     recurrence_pass(database, NOW)
     with Session(database) as db:
         assert all(r.participation == "ended" for r in db.scalars(select(Recording)))
+
+
+def test_webex_browser_bootstrap_does_not_issue_sdk_credentials(client, monkeypatch):
+    from wortlaut import app as app_module
+
+    def forbidden(*args):
+        pytest.fail("Browser guest invoked Webex guest issuance")
+
+    monkeypatch.setattr(app_module, "guest_token", forbidden)
+    monkeypatch.setenv("WORTLAUT_ENABLE_WEBEX_BROWSER", "true")
+    get_settings.cache_clear()
+    identifier = create(client)
+    attempt, credential = prepare(client, identifier)
+    client.post(f"/v1/attempts/{attempt}/claim", headers=credential, json={"worker_id": "webex"})
+    response = client.get(
+        f"/v1/attempts/{attempt}/bootstrap",
+        headers={**credential, "X-Worker-ID": "webex"},
+    )
+    assert response.status_code == 200
+    assert response.headers["Cache-Control"] == "no-store"
+    result = response.json()
+    assert result["provider"] == "webex"
+    assert result["webex_browser"] == {"display_name": "wortlaut"}
+    assert "guest" not in result and "sdk_page_url" not in result

@@ -2,6 +2,7 @@ import {randomUUID} from 'node:crypto';
 import type {Browser} from 'playwright';
 import {serviceRequest} from './http.js';
 import {MeetBrowser, MeetError} from './meet.js';
+import {WebexBrowser} from './webex-browser.js';
 import {launchBrowser, nativeMeetInput} from './browser.js';
 
 const api = process.env.WORTLAUT_API_URL;
@@ -25,7 +26,11 @@ async function run(api: string, credential: string) {
   const bootstrap = await request(`/v1/attempts/${attemptId}/bootstrap`);
   if (!['webex', 'google_meet'].includes(bootstrap.provider)) throw new Error('Unknown provider');
   const isMeet = bootstrap.provider === 'google_meet';
-  const pageUrl = new URL(isMeet ? bootstrap.meeting_url : bootstrap.sdk_page_url);
+  const isWebexBrowser = bootstrap.provider === 'webex' && Boolean(bootstrap.webex_browser);
+  const pageUrl = new URL(isMeet || isWebexBrowser ? bootstrap.meeting_url : bootstrap.sdk_page_url);
+  if (isWebexBrowser && (!pageUrl.hostname.endsWith('.webex.com') || pageUrl.port)) {
+    throw new Error('Invalid Webex URL');
+  }
   const deadline = Date.parse(bootstrap.deadline);
   sessionDeadline = deadline;
   if (pageUrl.protocol !== 'https:' || pageUrl.username || pageUrl.password || pageUrl.search ||
@@ -35,14 +40,16 @@ async function run(api: string, credential: string) {
   if (isMeet && (pageUrl.hostname !== 'meet.google.com' || pageUrl.port ||
       !/^\/[a-z]{3}-[a-z]{4}-[a-z]{3}$/.test(pageUrl.pathname))) throw new Error('Invalid Meet URL');
   // No ignoreHTTPSErrors, device capture, foreign page selectors or disabled sandbox.
-  const browser = await launchBrowser(bootstrap.provider, isMeet ? bootstrap.meet.locale : undefined);
+  const browser = await launchBrowser(bootstrap.provider, isMeet ? bootstrap.meet.locale : undefined, isWebexBrowser);
   startupBrowser = browser;
   const context = await browser.newContext({permissions: [],
+    ...(isWebexBrowser ? {viewport: null, locale: 'en-US'} : {}),
     ...(isMeet ? {viewport: null, locale: bootstrap.meet.locale,
       ...(bootstrap.meet.auth_mode === 'account' ? {storageState: '/run/meet/storage-state.json'} : {})} : {}),
   });
   const page = await context.newPage();
-  const meet = isMeet ? new MeetBrowser(page, bootstrap, api, credential, workerId, undefined, nativeMeetInput(page)) : undefined;
+  const meet = isMeet ? new MeetBrowser(page, bootstrap, api, credential, workerId, undefined, nativeMeetInput(page))
+    : isWebexBrowser ? new WebexBrowser(page, bootstrap, api, credential, workerId) : undefined;
   let stopping: Promise<void> | undefined;
   let endReason = 'normal';
   let diagnostics: Record<string, unknown> = {capability: 'unverified', streams: 0, audio_samples: 0, drained: null,
@@ -149,7 +156,10 @@ async function run(api: string, credential: string) {
       ]);
     }
   } catch (error) {
-    // SDK error messages can contain request URLs or tokens. Report only our safe reason.
+    // SDK error messages can contain request URLs or tokens. Log only local code locations.
+    const locations = error instanceof Error ? [...(error.stack ?? '').matchAll(
+      /\/app\/worker\/dist-worker\/[a-zA-Z0-9_./-]+:\d+:\d+/g)].map(match => match[0]) : [];
+    console.error(JSON.stringify({event: 'worker_failed', locations}));
     await stop(error instanceof MeetError ? error.reason : 'worker_failed');
     process.exitCode = 1;
   } finally {
