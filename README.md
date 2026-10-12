@@ -1,171 +1,172 @@
 # wortlaut
 
-Meeting-Aufnahmen mit getrennten Audioquellen, lokaler Parakeet-ASR und TXT/VTT/JSON-Export. Meet und Webex sind für gleichzeitigen Betrieb in derselben Instanz vorgesehen; Teams folgt als weiterer Provider. Jede Aufnahme hat ihren eigenen Provider und Worker. Zugänge bleiben getrennt, ASR, Datenbank, Storage, Scheduler und Kapazitätsgrenzen gemeinsam. Der vollständige Auftrag steht in [prompts.md](prompts.md).
+Self-hosted meeting transcription for Google Meet and Webex. wortlaut joins as a browser participant, captures incoming WebRTC audio sources, transcribes them with a local Parakeet model, and produces TXT, WebVTT, and JSON exports.
 
-**Noch keine Providerabnahme:** Meet-Beitritt und Browser-Capture sind implementiert, echte Teilnahme und samplebezogene Teilnehmerbindung sind noch offen. Auch Webex gibt derzeit ungebundene Sprecherquellen aus. `speaker_id: null`, `attribution_unknown: true` und `source_coverage: unknown` kennzeichnen diese Grenze. Fixtureaudio und erfolgreich verarbeiteter Text erfüllen die Sprecheranforderung nicht. Teams ist noch nicht implementiert.
+Meetings can be scheduled through the HTTP API or email invitations. Meet and Webex run side by side, with a provider selected for each recording. They share storage, transcription, and capacity limits. Microsoft Teams is planned but not implemented.
 
-## Entwicklungsstart
+## Current status
 
-Benötigt werden `uv`, Node.js/npm, `kubectl`, Tilt, Docker Buildx und Zugang zum vorhandenen Kubernetes-Context `data` einschließlich Registry und GPU. Keine Cluster-Treiber oder gemeinsame Infrastruktur installieren.
+wortlaut is under active development. Browser participation and transcription work, but reliable speaker attribution is unfinished.
+
+| Provider | Available path | Current limits |
+| --- | --- | --- |
+| Google Meet | Chromium web client; guest or saved browser session | Audio sources are not yet bound to verified participant sessions |
+| Webex | Chromium guest join; separate SDK path also available | Browser join and intelligible transcription verified live; participant binding and source coverage remain unverified. SDK path needs separate live validation |
+| Microsoft Teams | Planned | Not implemented |
+
+The Webex browser trial on 12 October 2026 received intelligible speech on two sources, with some duplicated speech. Receiving multiple tracks does not prove that each track represents a different participant. Unbound sources are explicitly marked `speaker_id: null` and `attribution_unknown: true`; source coverage remains `unknown`.
+
+The intended model is transcription per incoming source with a verified provider participant identity. Speaker diarization, voiceprints, and active-speaker name guesses are not substitutes for that binding. Meet uses the browser only: no Google Meet REST, Media, or Calendar API.
+
+## Architecture
+
+- **Meeting service** — Python/FastAPI, PostgreSQL-backed scheduling, Kubernetes worker management, audio ingest, exports, and email processing in one service.
+- **Worker** — TypeScript, Playwright, and sandboxed Chromium; one short-lived Kubernetes Job per meeting. Browser workers use a virtual display under Linux. The alternative Webex SDK path uses a hosted HTTPS page.
+- **ASR service** — a shared local Parakeet model for speech recognition.
+- **Storage** — PostgreSQL for state and transcripts, S3-compatible storage for audio.
+
+See [meeting service](services/meeting), [ASR service](services/asr), [worker](worker), and [deployment configuration](deploy).
+
+## Development setup
+
+The included Tilt setup targets the existing `data` Kubernetes cluster. It is not a standalone Docker quickstart: it requires access to that cluster, its registry, GPU resources, and configured ingress domain. Another environment needs corresponding changes to [Tiltfile](Tiltfile) and [deploy/dev](deploy/dev).
+
+Install `uv`, Node.js/npm, `kubectl`, Tilt, and Docker with Buildx, then run:
 
 ```sh
 make setup
 make dev
 ```
 
-`make setup` installiert gesperrte Abhängigkeiten und übernimmt `~/.kube/data-lan-mayflower` in die ignorierte `.dev/kubeconfig`; ein anderer Quellpfad ist über `WORTLAUT_SOURCE_KUBECONFIG` möglich. Der globale Context bleibt unverändert. Der Entwicklungsnamespace heißt `wortlaut-$(id -un)`, Images werden für `linux/amd64` mit Kubernetes-BuildKit gebaut. Private Dateien unter `.dev/` dürfen nicht eingecheckt werden.
+`make setup` installs locked dependencies and creates a private `.dev/kubeconfig` from `~/.kube/data-lan-mayflower`. Set `WORTLAUT_SOURCE_KUBECONFIG` to use another source containing context `data`. The global Kubernetes context is unchanged.
 
-Tilt: http://127.0.0.1:34604 · Meeting-API: http://127.0.0.1:34601 · ASR: http://127.0.0.1:34602 · PostgreSQL: 127.0.0.1:34632 · S3: http://127.0.0.1:34609. Worker erreichen API und Webex-SDK-Seite über `https://wortlaut-<benutzer>.data.mayflower.zone`.
+Tilt builds `linux/amd64` images using Kubernetes BuildKit and deploys to `wortlaut-$(id -un)`. Credentials are generated under the ignored `.dev/` directory and copied into Kubernetes Secrets.
 
-Vor Steuerung einer Tilt-Instanz deren Tiltfile-Pfad prüfen. Kubernetes-Aufrufe verwenden immer `.dev/kubeconfig`, `--context data` und den eigenen Namespace. Die Umgebung nach der Arbeit weiterlaufen lassen; kein automatisches `tilt down`, Prune oder Löschen persistierter Daten.
+| Service | Local address |
+| --- | --- |
+| Tilt | http://127.0.0.1:34604 |
+| Meeting API / OpenAPI UI | http://127.0.0.1:34601/docs |
+| ASR | http://127.0.0.1:34602 |
+| PostgreSQL | `127.0.0.1:34632` |
+| S3 | http://127.0.0.1:34609 |
 
-## Provider konfigurieren
+Workers use the configured HTTPS ingress to reach the meeting service. For direct cluster commands, always select the project kubeconfig, context, and namespace explicitly:
 
-Dateien enthalten einfache `NAME=WERT`-Zeilen und erhalten Dateimodus `600`. Interne API-, Storage- und GPU-Credentials erzeugt der Entwicklungsstart privat; der Betreiber-API-Token steht in `.dev/runtime.env`.
+```sh
+kubectl --kubeconfig .dev/kubeconfig --context data \
+  -n "wortlaut-$(id -un)" get pods
+```
 
-Für einen autorisierten Meet-Test in `.dev/meet.env`:
+## Enable meeting providers
+
+Provider files use `NAME=value` lines. Keep them private (`chmod 600`) and never commit credentials or browser session files. Both providers can be enabled at once.
+
+**Google Meet — `.dev/meet.env`:**
 
 ```dotenv
 WORTLAUT_ENABLE_GOOGLE_MEET=true
 WORTLAUT_MEET_LOCALE=de-DE
-# Nur bei Verwendung eines autorisierten Browseraccounts:
-WORTLAUT_MEET_STORAGE_STATE_SECRET=wortlaut-meet-browser
 ```
 
-Der Playwright-Browserzustand liegt dann in `.dev/meet-storage-state.json`. Der Entwicklungsstart übernimmt ihn in ein Kubernetes-Secret; ausschließlich Meet-Worker erhalten ihn schreibgeschützt und verwenden ein frisches Browserprofil. Ohne Zustand braucht das Zielmeeting zulässige Gastteilnahme und gegebenenfalls Zulassung durch den Gastgeber. Meet verwendet ausschließlich den Webclient mit Playwright/Chromium, keine Google-Media-, Meet-REST- oder Calendar-API. Die Aktivierung startet fällige Meet-Aufträge; nur autorisierte Testmeetings planen. Der derzeitige Capturepfad erfüllt die Teilnehmerbindung noch nicht.
+Guest access depends on meeting settings and host admission. To use an authorized saved browser session, place its Playwright storage state in `.dev/meet-storage-state.json` and set `WORTLAUT_MEET_STORAGE_STATE_SECRET=wortlaut-meet-browser`. Only Meet workers receive that Secret.
 
-Webex kann mit `WORTLAUT_ENABLE_WEBEX_BROWSER=true` in `.dev/webex.env` den Browser-Gastbeitritt ohne Service-App-Token verwenden. Dieser Pfad erfasst empfangene WebRTC-Quellen, weist aber noch keine Teilnehmerbindung nach. Die Zulassung durch den Gastgeber bleibt erforderlich. Ohne dieses Flag verwendet Webex den SDK-Pfad mit `WORTLAUT_WEBEX_SERVICE_TOKEN` in derselben Datei. Für Service-App-Refresh zusätzlich `WORTLAUT_ENABLE_WEBEX_REFRESH=true`, `WORTLAUT_WEBEX_CLIENT_ID`, `WORTLAUT_WEBEX_CLIENT_SECRET` und `WORTLAUT_WEBEX_REFRESH_TOKEN` setzen. Unveränderte lokale Dateien überschreiben das im Namespace-Secret rotierte Tokenpaar nicht. Bei gesperrtem Refresh aktuelle Credentials in der privaten Datei neu bereitstellen. Browser-Gastbeitritt und verständliche Transkription wurden am 12. Oktober 2026 im Kubernetes-Worker live geprüft. Zwei empfangene Quellen enthielten dabei teilweise dieselbe Sprache; die Teilnehmerbindung bleibt offen. SDK-Teilnahme und Tokenerneuerung sind noch ungeprüft; fehlender Webex-Zugang blockiert Meet nicht. Worker brauchen DNS, HTTPS und den Webex-Medienpfad.
+**Webex browser guest — `.dev/webex.env`:**
 
-Bei bereits laufender Umgebung geänderte Provider-/Mail-Secrets übernehmen und nur den eigenen Meeting-Dienst neu starten:
-
-```sh
-KUBECONFIG="$PWD/.dev/kubeconfig" WORTLAUT_NAMESPACE="wortlaut-$(id -un)" python3 scripts/dev-secrets.py
-kubectl --kubeconfig .dev/kubeconfig --context data -n "wortlaut-$(id -un)" rollout restart deployment/wortlaut-meeting
+```dotenv
+WORTLAUT_ENABLE_WEBEX_BROWSER=true
 ```
 
-Laufende Worker bleiben eigenständige Jobs. Ihre Prozesse müssen nachweislich beendet sein, bevor ein Ersatzbeitritt zulässig ist.
+This path needs no Service-App token. The host must start the room and admit the participant when required. The current browser flow was tested with a Webex personal room; other join flows may need additional handling.
 
-Meet-Worker starten vollständiges Chromium als normalen, sandboxed Browserprozess mit einem frischen anonymen Profil. Unter Linux stellt Xvfb eine virtuelle Anzeige bereit; Playwright verbindet sich anschließend über einen lokalen CDP-Port. Namen und Meeting-Schaltflächen werden unter Linux über `xdotool`/XTEST bedient; fehlt die X11-Anzeige, startet der Meet-Worker nicht. Playwright dient dabei der Seitenerkennung und Audioanbindung. Die bisherigen Stealth-Erweiterungen entfallen. `prejoin_denied` bezeichnet eine Ablehnung vor dem Absenden einer Beitrittsanfrage, `admission_denied` eine Ablehnung danach. `waiting_admission` wird erst nach sichtbarer Warteanzeige gemeldet; ein Klick allein beweist keine beim Gastgeber eingegangene Anfrage. Die Webex-Browserkonfiguration bleibt separat.
+For the alternative Webex SDK path, leave the browser flag disabled and configure `WORTLAUT_WEBEX_SERVICE_TOKEN`. Optional Service-App refresh uses `WORTLAUT_ENABLE_WEBEX_REFRESH`, `WORTLAUT_WEBEX_CLIENT_ID`, `WORTLAUT_WEBEX_CLIENT_SECRET`, and `WORTLAUT_WEBEX_REFRESH_TOKEN` in the same private file.
 
-## Aufnahme, Status und Export
-
-Den Betreiber-Token privat als `WORTLAUT_API_TOKEN` bereitstellen; keine Tokenwerte in URLs oder Logs. Im Beispiel Meetinglink, Termin und Idempotenzschlüssel ersetzen. Zeitzonen sind erforderlich. Derselbe Schlüssel mit identischem Auftrag liefert dieselbe Aufnahme; eine andere Nutzlast führt zu HTTP 409.
+After changing provider or mail configuration in a running environment:
 
 ```sh
-curl --fail-with-body http://127.0.0.1:34601/v1/recordings \
-  -H "Authorization: Bearer $WORTLAUT_API_TOKEN" \
-  -H 'Content-Type: application/json' -H 'Idempotency-Key: meet-test-001' \
-  --data '{"provider":"google_meet","meeting_url":"https://meet.google.com/abc-defg-hij","starts_at":"2026-10-08T09:00:00+02:00","ends_at":"2026-10-08T09:30:00+02:00"}'
+KUBECONFIG="$PWD/.dev/kubeconfig" WORTLAUT_NAMESPACE="wortlaut-$(id -un)" \
+  python3 scripts/dev-secrets.py
+kubectl --kubeconfig .dev/kubeconfig --context data \
+  -n "wortlaut-$(id -un)" rollout restart deployment/wortlaut-meeting
+```
 
-curl --fail-with-body 'http://127.0.0.1:34601/v1/recordings?limit=25' \
-  -H "Authorization: Bearer $WORTLAUT_API_TOKEN"
+## Schedule, inspect, and export a recording
 
-# RECORDING_ID durch die zurückgegebene Aufnahme-ID ersetzen.
+The operator API token is generated in `.dev/runtime.env`. Supply it privately as `WORTLAUT_API_TOKEN`; do not put it in URLs. Set `MEETING_URL` to a real meeting you are authorized to record, and `STARTS_AT` / `ENDS_AT` to ISO 8601 timestamps including a timezone.
+
+```sh
+# Requires jq. Use provider=webex for a Webex URL.
+IDEMPOTENCY_KEY=$(uuidgen) # Keep this value for retries of this request.
+jq -n --arg url "$MEETING_URL" --arg start "$STARTS_AT" --arg end "$ENDS_AT" \
+  '{provider:"google_meet", meeting_url:$url, starts_at:$start, ends_at:$end}' |
+  curl --fail-with-body http://127.0.0.1:34601/v1/recordings \
+    -H "Authorization: Bearer $WORTLAUT_API_TOKEN" \
+    -H 'Content-Type: application/json' \
+    -H "Idempotency-Key: $IDEMPOTENCY_KEY" --data-binary @-
+```
+
+Save the returned `id` as `RECORDING_ID`. Reusing an idempotency key with the same request returns the same recording; a different request returns HTTP 409. Retain the original key when retrying a request whose outcome is unknown.
+
+```sh
 curl --fail-with-body "http://127.0.0.1:34601/v1/recordings/$RECORDING_ID" \
   -H "Authorization: Bearer $WORTLAUT_API_TOKEN"
+
 curl --fail-with-body "http://127.0.0.1:34601/v1/recordings/$RECORDING_ID/exports/json" \
-  -H "Authorization: Bearer $WORTLAUT_API_TOKEN" -o aufnahme.json
+  -H "Authorization: Bearer $WORTLAUT_API_TOKEN" -o recording.json
+
+# End a recording early or cancel a scheduled recording.
+curl --fail-with-body -X POST "http://127.0.0.1:34601/v1/recordings/$RECORDING_ID/cancel" \
+  -H "Authorization: Bearer $WORTLAUT_API_TOKEN"
 ```
 
-Für Webex `provider=webex` und einen gültigen Webex-Link verwenden. Der Scheduler startet konfigurierte Aufträge standardmäßig 60 Sekunden vor Beginn, höchstens zwei gleichzeitig über alle Provider. Keine globale Providerumschaltung.
+Exports support `txt`, `vtt`, and `json`. They return HTTP 409 while processing is pending and HTTP 410 after transcript retention expires. The recording detail includes participation, processing, audio gaps, source attribution, worker diagnostics, and delivery status. `GET /v1/recordings` lists recordings with cursor pagination; see the OpenAPI UI for filters and other endpoints.
 
-Die Liste ist nach Startzeit aufsteigend sortiert. `limit` ist höchstens 100; `next_cursor` als `cursor` mit denselben Filtern übernehmen. Optional: `provider`, `starts_from` inklusive und `starts_before` exklusiv. Der Detailstatus zeigt Teilnahme, Verarbeitung, Quellenbindungen, angenommenes Audio, Lücken, Rückstau, Workerzustand und Versand. Abgeschlossene Verarbeitung bestätigt keine vollständige Quellenabdeckung oder richtige Sprecherzuordnung.
+By default, the scheduler starts workers 60 seconds before a meeting, allows two active meetings across all providers, and waits up to ten minutes for admission. Completed transcription does not imply complete audio coverage or correct speaker attribution.
 
-Exporte heißen `txt`, `vtt` und `json`. Vor Abschluss der Verarbeitung liefern sie 409, nach Transkriptaufbewahrung 410. Bekannte Lücken, fehlendes EOS, ungebundene Quellen und unvollständiger Drain bleiben sichtbar. Mehrdeutige Meetinglinks werden abgelehnt.
+## Email invitations and results
 
-## Einladungen und Ergebnisversand
-
-IMAP und SMTP sind zunächst deaktiviert. Beispielwerte in der privaten `.dev/mail.env` ersetzen:
+IMAP and SMTP are disabled by default. For a regular mailbox, configure `.dev/mail.env` with your provider's settings:
 
 ```dotenv
 WORTLAUT_ENABLE_IMAP=true
 WORTLAUT_IMAP_HOST=imap.example.org
 WORTLAUT_IMAP_USERNAME=bot@example.org
 WORTLAUT_IMAP_PASSWORD=REPLACE_PRIVATELY
-WORTLAUT_TRUSTED_SENDER_HEADER=X-Wortlaut-Authenticated-Sender
-WORTLAUT_ORGANIZER_PERMISSIONS={"sender@example.org":["organizer@example.org"]}
+WORTLAUT_MAIL_SENDER_AUTH=dkim
+WORTLAUT_MAIL_ALLOWED_SENDER_DOMAINS=["example.org"]
+WORTLAUT_MAIL_REPLY_TO_SENDER=true
 WORTLAUT_ENABLE_SMTP=true
 WORTLAUT_SMTP_HOST=smtp.example.org
 WORTLAUT_SMTP_USERNAME=bot@example.org
 WORTLAUT_SMTP_PASSWORD=REPLACE_PRIVATELY
 WORTLAUT_SMTP_FROM=bot@example.org
-WORTLAUT_RESULT_RECIPIENTS={"organizer@example.org":["recipient@example.org"],"default":["operator@example.org"]}
 ```
 
-Das vertrauenswürdige Mailgateway entfernt alle eingehenden Kopien von `X-Wortlaut-Authenticated-Sender` und setzt ihn erst nach eigener Absenderprüfung. Die bestätigte Adresse muss mit dem einzelnen MIME-From übereinstimmen; mitgelieferte `Authentication-Results` genügen nicht. Im Gateway-Modus IMAP nur mit diesem Gatewayvertrag aktivieren. Standard: IMAP über geprüftes TLS auf 993, SMTP über geprüftes STARTTLS auf 587. Zugangsdaten und Absenderregeln werden pro Installation konfiguriert.
+Defaults are IMAP over TLS on port 993 and SMTP with STARTTLS on port 587. DKIM mode verifies signatures against DNS and requires an allowed sender domain; the visible From address alone is insufficient. Calendar organizers must match the authenticated sender.
 
-Für ein normales IMAP-Postfach ohne eigenes Gateway stattdessen diese Einstellungen verwenden:
+Supported invitations include iCalendar messages for Meet/Webex and immediate Meet invitations containing a meeting link in text or HTML. Signed Google Meet notifications are supported with the inviter checked against the same domain allowlist. Immediate invitations default to 120 minutes from the signed sending time (`WORTLAUT_INSTANT_INVITE_MINUTES`). Duplicate messages do not create duplicate recordings.
 
-```dotenv
-WORTLAUT_MAIL_SENDER_AUTH=dkim
-WORTLAUT_MAIL_ALLOWED_SENDER_DOMAINS=["mayflower.de"]
-WORTLAUT_MAIL_REPLY_TO_SENDER=true
-```
+Alternatively, `WORTLAUT_MAIL_SENDER_AUTH=gateway` uses `WORTLAUT_TRUSTED_SENDER_HEADER` and `WORTLAUT_ORGANIZER_PERMISSIONS`. This requires a trusted mail gateway that strips incoming copies of the configured header and sets it after authenticating the sender. Ordinary mailboxes must not rely on a sender-supplied header.
 
-Dieser Modus prüft die DKIM-Signatur selbst gegen den öffentlichen DNS-Schlüssel.
-Er akzeptiert nur exakt freigegebene From-Domains mit passender Signaturdomain,
-RSA-SHA256, signierten MIME-Headern und vollständig signiertem Inhalt (kein `l=`).
-Gefälschte Prüfheader gewähren keinen Zugriff. Der ICS-Organisator muss mit dem
-Absender übereinstimmen; Stellvertreter und weitergeleitete fremde Termine werden
-abgewiesen. Bei temporären DNS-Fehlern bleibt die Nachricht zur Wiederholung offen.
-Mit `MAIL_REPLY_TO_SENDER` gehen Ergebnisse ausschließlich an diesen Organisator,
-nicht an CCs oder Reply-To-Adressen. Ohne passende DKIM-Signatur wird die Einladung
-abgewiesen, auch wenn die sichtbare Absenderadresse zur freigegebenen Domain gehört.
-Für IONOS: `imap.ionos.de:993` (TLS), `smtp.ionos.de:587` (STARTTLS).
-Passwörter gehören ausschließlich in die ignorierte `.dev/mail.env` und das
-Kubernetes-Secret. Nach einer Secret-Änderung den Meeting-Dienst neu starten,
-damit er die neuen Umgebungsvariablen übernimmt.
+With `WORTLAUT_MAIL_REPLY_TO_SENDER=true`, results go to the validated organizer/inviter, not arbitrary Reply-To or CC addresses. Explicit recipient mappings are available through `WORTLAUT_RESULT_RECIPIENTS`. Results include TXT/VTT/JSON attachments; large results use ZIP or authenticated download instructions. An uncertain SMTP result is marked `delivery_unknown`; explicitly retrying delivery may send a duplicate.
 
-Zusätzlich zu iCalendar verarbeitet der DKIM-Modus Soforteinladungen mit einem
-eindeutigen Meet-Link im Text oder HTML. Direkt versendete Mails müssen von einer
-freigegebenen Domain stammen. Google-Meet-Benachrichtigungen werden ausschließlich
-von `meetings-noreply@google.com` mit passender Google-DKIM-Signatur akzeptiert;
-der Einladende wird aus dem deutschen oder englischen Einladungstext gelesen und
-gegen dieselbe Domainfreigabe geprüft. Die Empfängerregel gilt für diesen Einladenden.
-Mehrdeutige Einladende/Links, fehlende signierte Date-/Message-ID-Header und
-abgelaufene Nachrichten werden abgewiesen. Die Message-ID verhindert doppelte
-Aufträge beim erneuten Import. Ohne Kalender-Endzeit gilt
-`WORTLAUT_INSTANT_INVITE_MINUTES=120` ab der signierten Versandzeit. Ältere
-Soforteinladungen starten keinen nachträglichen Beitritt.
-
-Eine Google-Calendar-Einladung mit eindeutigem Meet-Link läuft durch denselben MIME-/ICS-Pfad wie Webex. Ein bereinigtes, vom vertrauenswürdigen Gateway bestätigtes `.eml` lässt sich auch ohne IMAP importieren:
+## Tests
 
 ```sh
-curl --fail-with-body http://127.0.0.1:34601/v1/calendar/messages \
-  -H "Authorization: Bearer $WORTLAUT_API_TOKEN" \
-  -H 'Content-Type: message/rfc822' --data-binary @einladung.eml
-```
-
-Organizerberechtigung und Versandempfänger werden getrennt konfiguriert; Einladungs-CCs bestimmen keine Empfänger. Updates, Einzelabsagen, Sommerzeit und unterstützte RRULE/RDATE/EXDATE-Serien verwenden dauerhafte Kalenderidentitäten. `RANGE=THISANDFUTURE`, Änderungen am Zeitbezug eines bestehenden Serienmasters und hochfrequente Regeln sind nicht unterstützt; betroffene zukünftige Starts bleiben gesperrt. Link-/Zeitänderungen eines aktiven Vorkommens erzeugen einen Konflikt.
-
-Ergebnisse gehen als TXT/VTT/JSON-Anhänge an konfigurierte Empfänger. Über dem Anhangslimit wird zuerst ZIP verwendet, danach konkrete HTTPS-Downloadbefehle mit einem Bearer-Lesezugang ausschließlich für diese Aufnahme. Der globale API-Key wird nicht verteilt. Unbekannte SMTP-DATA-Annahme bleibt `delivery_unknown`; eine bewusste Wiederholung erfolgt über `POST /v1/recordings/{id}/delivery/retry` und kann die Mail nochmals zustellen. Ohne aufgenommenes Audio entsteht keine Ergebnismail.
-
-## Grenzen und Fehlerbehebung
-
-- `google_meet_not_configured` / `webex_not_configured`: Providerkonfiguration prüfen. Nicht startfähige Provider belegen keine Startplätze anderer Provider.
-- `audio_capacity_limit`: Rückstau, Storage und offene ASR-Aufträge prüfen. Defaults: zwei unbearbeitete Quellenstunden je Versuch, vier insgesamt, 2 GiB Audio und 2048 offene ASR-Aufträge. Die entsprechenden Settings sind in `services/meeting/src/wortlaut/settings.py` definiert.
-- `audio_metadata_capacity_limit` / `audio_ingest_rate_limit`: zu viele neue Datensätze. Je Quelle gelten 512 Chunks/Bindungen/Lücken pro 60-Sekunden-Samplefenster; je Versuch ein Burst von 1024 mit Nachfüllung von 64 Datensätzen/s. Identische Replays und EOS bleiben möglich; Reconnect setzt das Kontingent nicht zurück.
-- Der Worker puffert höchstens 120 Quellensekunden PCM über alle Epochen. Verworfenes Audio erscheint als endgültige Lücke. Dauerhaft gespeichertes Audio gewinnt gegen verlorene ACKs; akzeptierte Bindungen werden nicht nachträglich geändert.
-- Fehlender Worklet-Eingang erzeugt nur bei bekanntem Samplebereich eine Lücke. Nullsamples bleiben Audio. Unterbrechungen der Audio-Uhr erscheinen in `audio_clock`; unbekannte Dauer wird nicht als erfundene Samplezahl aufgefüllt.
-- Meet zeigt unter `receiver_sources[].encoded_transform` den Beobachterzustand, die Frameanzahl und höchstens die Metadaten des letzten Encoded-Frames. Vorhandene, reservierte und später ersetzende Provider-Transforms bleiben unangetastet. Fehlende API oder fehlgeschlagener Aufbau bleiben sichtbar; ein laufender Beobachter mit defekter Pipeline oder ausbleibender Antwort beendet den betroffenen Worker mit `encoded_transform_failed`. RTP-/Frame-/Empfangszeit ist keine PCM-Samplegrenze oder Teilnehmeridentität; die tatsächliche Bindung bleibt offen.
-- Einzelne defekte Audioobjekte werden nach begrenzter Behandlung ausgewiesen, temporäre Storagefehler bleiben wiederholbar. GPU-Ausfälle lassen ASR-Aufträge warten; CUDA-/MPS-Inferenzfehler setzen den eigenen ASR-Pod unbereit und lassen ihn durch Kubernetes ersetzen.
-- Audio bleibt nach Abschluss standardmäßig 24 Stunden erhalten, Text 30 Tage. Nach 72 Stunden über Terminende wird offene Verarbeitung sichtbar aufgegeben. Metadatenbereinigung wartet auf nachgewiesenes Workerende und offenen Versand; kleine Deduplizierungsdaten verhindern erneute Starts abgelaufener Aufnahmen.
-- Worker verwenden Chromiums Sandbox als UID 1000. Der aktuelle Job nutzt äußeres `Unconfined`-Seccomp für User-Namespaces; ein bereits vorhandenes passendes Nodeprofil lässt sich über `WORTLAUT_WORKER_SECCOMP_TYPE=Localhost` und `WORTLAUT_WORKER_SECCOMP_PROFILE` wählen. Keine Nodeprofile oder Kernelparameter automatisch verändern.
-
-## Prüfungen und offene Abnahme
-
-```sh
-make test
 make lint
+make test
 npm --prefix worker run build
 npm --prefix worker run test:audio
 npm --prefix worker run test:meet
-# Opt-in: 90 Sekunden Ausfall mit Quellenwechseln und verlorener EOS-Antwort
-WORTLAUT_TEST_LONG_TRANSPORT=true npm --prefix worker test
-# Opt-in: echte GPU mit zwei getrennten Fixturequellen, keine Providerabnahme
-WORTLAUT_TEST_NATIVE_ASR=true uv run --directory services/meeting pytest tests/test_asr.py::test_native_gpu_from_two_durable_sources_to_exports -q
 ```
 
-PostgreSQL-/S3-Tests verwenden echte isolierte Datenbank-/Storagegrenzen. Der Ingest-Lifecycle-Test prüft 70 Bindungswechsel eines Slots, Reconnect und unveränderliche Replays mit genauen PCM-Bytes und synthetischen Teilnehmer-IDs gegen PostgreSQL/S3; er ist keine Echtzeitlastmessung oder Providerabnahme. Chromium-Fixtures prüfen Empfang, Capture, Transport und Abschluss mit synthetischen Quellen, einschließlich Encoded-Frame-Metadaten, unverändertem Tonempfang, Schutz vorhandener Provider-Transforms und Beobachterausfall. Der 90-Sekunden-Langtest verwendet den echten WebSocket-Transport mit einem Loopback-Testempfänger; er prüft Puffergrenzen, genaue Bytes/Lücken und EOS-Replay, keine DB-/S3-Haltbarkeit oder Providerzuordnung. Der vorhandene GitHub-Workflow ist für portable Prüfungen mit temporärer PostgreSQL-/S3-Instanz vorgesehen; ein lokaler Lauf beweist keinen erfolgreichen GitHub-Lauf.
+Database and storage tests use isolated PostgreSQL schemas and S3 buckets. Run the development environment or configure `WORTLAUT_TEST_DATABASE_URL` and the S3 settings; tests requiring unavailable services may be skipped. Browser tests also require Playwright Chromium (`cd worker && npx playwright install chromium`). On Linux, the Meet browser suite also needs an X11 display, Xvfb, and `xdotool`. It includes the Webex guest-flow fixture. Fixtures verify controlled behavior, not live provider compatibility or participant identity.
 
-Für die Abnahme fehlen ein autorisiertes Meet-Testmeeting mit getrennten Sprecherreferenzen, die tatsächliche Medien-/Teilnehmersitzungsbindung, Quellenabdeckung und der durchgängige Einladungs-/Mailpfad. Für Webex fehlen nach dem erfolgreichen Browser-Probelauf weiterhin Teilnehmerbindung und Quellenabdeckung; der SDK-Pfad benötigt einen separaten echten Probelauf. Die im Pack verlangten längeren Sitzungen, mehr als 64 Quellenwechsel und Kapazitätsmessungen mit zwei Meetings bleiben eigenständige Nachweise. Konfigurierte Slots und Fixture-Sprecher-IDs beweisen keine Providerfähigkeit. Transitive Webex-Abhängigkeiten haben außerdem noch nicht abschließend bewertete Audit-Befunde.
+## Operational limits
+
+- Audio retention defaults to 24 hours after completion; transcript retention is 30 days. Unfinished processing expires 72 hours after the scheduled end.
+- Worker buffering, stored audio, and ASR backlog have bounded capacities. Dropped audio and incomplete capture remain visible in status and exports.
+- Browser UI changes, guest-access rules, and admission requirements can affect joins. A successful click is not proof of admission.
+- Chromium runs as UID 1000 with its sandbox enabled. Worker Jobs currently use outer `Unconfined` seccomp for user namespaces; a preinstalled local profile can be configured instead.
+- Calendar `RANGE=THISANDFUTURE`, changes to a series master's time basis, and high-frequency recurrence rules are unsupported.
+
+All meeting-service settings and defaults are in [settings.py](services/meeting/src/wortlaut/settings.py). Development contributions should follow [AGENTS.md](AGENTS.md).
