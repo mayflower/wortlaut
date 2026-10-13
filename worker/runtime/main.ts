@@ -2,6 +2,8 @@ import {randomUUID} from 'node:crypto';
 import type {Browser} from 'playwright';
 import {serviceRequest} from './http.js';
 import {MeetBrowser, MeetError} from './meet.js';
+import {TeamsBrowser} from './teams-browser.js';
+import {isTeamsMeeting} from '../src/teams-url.js';
 import {WebexBrowser} from './webex-browser.js';
 import {launchBrowser, nativeMeetInput} from './browser.js';
 
@@ -24,31 +26,35 @@ async function run(api: string, credential: string) {
   await request(`/v1/attempts/${attemptId}/claim`, 'POST', {worker_id: workerId});
   claimed = true;
   const bootstrap = await request(`/v1/attempts/${attemptId}/bootstrap`);
-  if (!['webex', 'google_meet'].includes(bootstrap.provider)) throw new Error('Unknown provider');
+  if (!['webex', 'google_meet', 'teams'].includes(bootstrap.provider)) throw new Error('Unknown provider');
+  const isTeams = bootstrap.provider === 'teams';
   const isMeet = bootstrap.provider === 'google_meet';
   const isWebexBrowser = bootstrap.provider === 'webex' && Boolean(bootstrap.webex_browser);
-  const pageUrl = new URL(isMeet || isWebexBrowser ? bootstrap.meeting_url : bootstrap.sdk_page_url);
+  const pageUrl = new URL(isMeet || isTeams || isWebexBrowser ? bootstrap.meeting_url : bootstrap.sdk_page_url);
   if (isWebexBrowser && (!pageUrl.hostname.endsWith('.webex.com') || pageUrl.port)) {
     throw new Error('Invalid Webex URL');
   }
   const deadline = Date.parse(bootstrap.deadline);
   sessionDeadline = deadline;
-  if (pageUrl.protocol !== 'https:' || pageUrl.username || pageUrl.password || pageUrl.search ||
+  if (pageUrl.protocol !== 'https:' || pageUrl.username || pageUrl.password || (!isTeams && pageUrl.search) ||
       !Number.isFinite(deadline)) {
     throw new Error('Provider page requires trusted HTTPS and a valid deadline');
   }
   if (isMeet && (pageUrl.hostname !== 'meet.google.com' || pageUrl.port ||
       !/^\/[a-z]{3}-[a-z]{4}-[a-z]{3}$/.test(pageUrl.pathname))) throw new Error('Invalid Meet URL');
+  if (isTeams && !isTeamsMeeting(pageUrl)) throw new Error('Invalid Teams URL');
   // No ignoreHTTPSErrors, device capture, foreign page selectors or disabled sandbox.
-  const browser = await launchBrowser(bootstrap.provider, isMeet ? bootstrap.meet.locale : undefined, isWebexBrowser);
+  const browser = await launchBrowser(bootstrap.provider, isMeet ? bootstrap.meet.locale : isTeams ? bootstrap.teams.locale : undefined, isWebexBrowser);
   startupBrowser = browser;
   const context = await browser.newContext({permissions: [],
+    ...(isTeams ? {viewport: null, locale: bootstrap.teams.locale} : {}),
     ...(isWebexBrowser ? {viewport: null, locale: 'en-US'} : {}),
     ...(isMeet ? {viewport: null, locale: bootstrap.meet.locale,
       ...(bootstrap.meet.auth_mode === 'account' ? {storageState: '/run/meet/storage-state.json'} : {})} : {}),
   });
   const page = await context.newPage();
   const meet = isMeet ? new MeetBrowser(page, bootstrap, api, credential, workerId, undefined, nativeMeetInput(page))
+    : isTeams ? new TeamsBrowser(page, bootstrap)
     : isWebexBrowser ? new WebexBrowser(page, bootstrap, api, credential, workerId) : undefined;
   let stopping: Promise<void> | undefined;
   let endReason = 'normal';

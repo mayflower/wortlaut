@@ -28,7 +28,9 @@ class Recording(Base):
     __tablename__ = "recordings"
     __table_args__ = (
         UniqueConstraint("calendar_entry_id", "recurrence_key"),
-        CheckConstraint("provider IN ('webex', 'google_meet')", name="recordings_provider"),
+        CheckConstraint(
+            "provider IN ('webex', 'google_meet', 'teams')", name="recordings_provider"
+        ),
         Index("ix_recordings_start_id", "starts_at", "id"),
     )
 

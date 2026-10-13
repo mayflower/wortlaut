@@ -180,7 +180,7 @@ class EncodedTransformEvidence(BaseModel):
 
 class ReceiverEvidence(BaseModel):
     provider_source_id: str = Field(max_length=256)
-    source_kind: Literal["speaker", "share_audio"]
+    source_kind: Literal["speaker", "share_audio", "unknown"]
     capture_path: Literal["rtc_receiver", "sdk_stream"]
     track_id: str | None = Field(default=None, max_length=256)
     csi: int | None = Field(default=None, ge=0, le=2**32 - 1)
@@ -748,6 +748,12 @@ def bootstrap(
                 "auth_mode": "account" if settings.meet_storage_state_secret else "guest",
             },
         }
+    if recording.provider == "teams":
+        if not settings.enable_teams:
+            raise HTTPException(503, "teams_not_configured")
+        return {**common, "teams": {
+            "display_name": settings.assistant_name, "locale": settings.teams_locale,
+        }}
     if settings.enable_webex_browser:
         return {**common, "webex_browser": {"display_name": settings.assistant_name}}
     issued_request_started = datetime.now(UTC)

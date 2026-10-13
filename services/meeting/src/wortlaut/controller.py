@@ -473,6 +473,7 @@ def controller_pass(engine, apis=None):
         for provider, configured in (
             ("webex", settings.enable_webex_browser or bool(settings.webex_service_token)),
             ("google_meet", settings.enable_google_meet),
+            ("teams", settings.enable_teams),
         ):
             if configured:
                 enabled.append(provider)
@@ -539,6 +540,10 @@ def controller_pass(engine, apis=None):
                 continue
             if recording.provider == "google_meet" and not settings.enable_google_meet:
                 recording.participation_reason = "google_meet_not_configured"
+                db.commit()
+                continue
+            if recording.provider == "teams" and not settings.enable_teams:
+                recording.participation_reason = "teams_not_configured"
                 db.commit()
                 continue
             attempt, token = new_attempt(db, recording, now)

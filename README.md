@@ -2,7 +2,7 @@
 
 Self-hosted meeting transcription for Google Meet and Webex. wortlaut joins as a browser participant, captures incoming WebRTC audio sources, transcribes them with a local Parakeet model, and produces TXT, WebVTT, and JSON exports.
 
-Meetings can be scheduled through the HTTP API or email invitations. Meet and Webex run side by side, with a provider selected for each recording. They share storage, transcription, and capacity limits. Microsoft Teams is planned but not implemented.
+Meetings can be scheduled through the HTTP API or email invitations. Meet and Webex run side by side, with a provider selected for each recording. They share storage, transcription, and capacity limits. Teams browser joining is experimental; transcription is not implemented.
 
 ## Current status
 
@@ -12,7 +12,7 @@ wortlaut is under active development. Browser participation and transcription wo
 | --- | --- | --- |
 | Google Meet | Chromium web client; guest or saved browser session | Audio sources are not yet bound to verified participant sessions |
 | Webex | Chromium guest join; separate SDK path also available | Browser join and intelligible transcription verified live; participant binding and source coverage remain unverified. SDK path needs separate live validation |
-| Microsoft Teams | Planned | Not implemented |
+| Microsoft Teams | Experimental Chromium guest join with English/German controls | Live admission and participant-bound separate audio are unverified; Teams PCM is blocked from ASR until separation is proved |
 
 The Webex browser trial on 12 October 2026 received intelligible speech on two sources, with some duplicated speech. Receiving multiple tracks does not prove that each track represents a different participant. Unbound sources are explicitly marked `speaker_id: null` and `attribution_unknown: true`; source coverage remains `unknown`.
 
@@ -59,7 +59,7 @@ kubectl --kubeconfig .dev/kubeconfig --context data \
 
 ## Enable meeting providers
 
-Provider files use `NAME=value` lines. Keep them private (`chmod 600`) and never commit credentials or browser session files. Both providers can be enabled at once.
+Provider files use `NAME=value` lines. Keep them private (`chmod 600`) and never commit credentials or browser session files. All providers can be enabled at once.
 
 **Google Meet — `.dev/meet.env`:**
 
@@ -79,6 +79,17 @@ WORTLAUT_ENABLE_WEBEX_BROWSER=true
 This path needs no Service-App token. The host must start the room and admit the participant when required. The current browser flow was tested with a Webex personal room; other join flows may need additional handling.
 
 For the alternative Webex SDK path, leave the browser flag disabled and configure `WORTLAUT_WEBEX_SERVICE_TOKEN`. Optional Service-App refresh uses `WORTLAUT_ENABLE_WEBEX_REFRESH`, `WORTLAUT_WEBEX_CLIENT_ID`, `WORTLAUT_WEBEX_CLIENT_SECRET`, and `WORTLAUT_WEBEX_REFRESH_TOKEN` in the same private file.
+
+**Teams browser guest — `.dev/teams.env`:**
+
+```dotenv
+WORTLAUT_ENABLE_TEAMS=true
+WORTLAUT_TEAMS_LOCALE=en-US
+```
+
+Use `provider: "teams"` with the full invitation URL, including its query parameters. Teams supports API scheduling and iCalendar invitations, with the same capacity limits as Meet and Webex.
+
+The browser worker handles English/German join controls and the admission lobby. It collects WebRTC receiver metadata but sends no audio to ASR: separate participant audio has not been verified. Browser fixtures pass; a live Teams test is still required.
 
 After changing provider or mail configuration in a running environment:
 

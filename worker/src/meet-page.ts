@@ -1,10 +1,12 @@
+import {isTeamsOrigin} from './teams-url.js';
 import {AudioCapture, type AudioClock, type CaptureSink} from './capture.js';
 import type {Chunk} from './chunks.js';
 import resamplerSource from '@alexanderolsen/libsamplerate-js/dist/libsamplerate.worklet.js?raw';
 import pcmSource from '../public/pcm-worklet.js?raw';
 import encodedObserverSource from '../public/encoded-audio-observer.js?raw';
 
-export type MeetCaptureConfig = {meeting_id: string; attempt_id: string; meeting_url: string; provider?: 'google_meet' | 'webex'};
+export type MeetCaptureConfig = {meeting_id: string; attempt_id: string; meeting_url: string;
+  provider?: 'google_meet' | 'webex' | 'teams'; teams_origins?: string[]};
 export type MeetBridgeMessage = {attempt_id: string; type: 'control' | 'chunk';
   metadata: Record<string, unknown>; pcm?: string};
 
@@ -33,6 +35,7 @@ type EncodedObservation = {id: number; pc: RTCPeerConnection; transform?: RTCRtp
 const config = window.wortlautMeetConfig;
 if (config.provider === 'webex'
   ? location.origin === 'https://web.webex.com' && location.pathname === '/meeting'
+  : config.provider === 'teams' ? window === window.top && isTeamsOrigin(new URL(location.href))
   : window === window.top && location.origin === 'https://meet.google.com' &&
     location.pathname === new URL(config.meeting_url).pathname) install(config);
 
@@ -214,13 +217,14 @@ function install(config: MeetCaptureConfig) {
           }
           if (source.track === receiver.track || stopping) continue;
           source.track = receiver.track;
-          // A receiver ID is diagnostic evidence only. No name, energy or tile
-          // determines the participant, and accepted PCM is never renamed later.
+          // Teams receivers may contain mixed audio; keep only their metadata.
+          if (config.provider === 'teams') continue;
           await capture.attach(receiver.track, config.meeting_id, config.attempt_id,
             {provider_source_id: source.id, source_kind: 'speaker', speaker_id: null,
               attribution_unknown: true}, sink);
         }
-        state.streams = new Set([...sources.values()].map((source) => source.track)).size;
+        state.streams = config.provider === 'teams' ? 0
+          : new Set([...sources.values()].map((source) => source.track)).size;
       }
     })().catch(() => { state.reason ||= 'capture_initialization_failed'; })
       .finally(() => { inspecting = undefined; }));
@@ -230,7 +234,8 @@ function install(config: MeetCaptureConfig) {
   const evidence = (receiver: RTCRtpReceiver, id: string) => {
     const source = (item: RTCRtpContributingSource) => ({source: item.source,
       timestamp: item.timestamp, rtp_timestamp: item.rtpTimestamp});
-    return {provider_source_id: id, source_kind: 'speaker', capture_path: 'rtc_receiver',
+    return {provider_source_id: id, source_kind: config.provider === 'teams' ? 'unknown' : 'speaker',
+      capture_path: 'rtc_receiver',
       track_id: receiver.track.id, csi: null, signaled_participant_id: null,
       source_state: receiver.track.readyState,
       encoded_transform: observations.get(receiver)?.evidence,

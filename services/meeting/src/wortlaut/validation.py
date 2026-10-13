@@ -4,7 +4,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from wortlaut.settings import get_settings
 
-Provider = Literal["webex", "google_meet"]
+Provider = Literal["webex", "google_meet", "teams"]
 
 
 def normalize_meeting_url(url: str) -> tuple[Provider, str]:
@@ -24,6 +24,18 @@ def normalize_meeting_url(url: str) -> tuple[Provider, str]:
         # redirect the browser and never change the recording's identity.
         return "google_meet", urlunsplit(
             ("https", "meet.google.com", parts.path.rstrip("/"), "", "")
+        )
+    if parts.hostname in ("teams.microsoft.com", "teams.live.com", "teams.cloud.microsoft"):
+        if (
+            parts.scheme != "https" or parts.username is not None
+            or parts.password is not None or parts.port not in (None, 443)
+            or not re.fullmatch(
+                r"/(?:meet/[0-9]+|l/meetup-join/[A-Za-z0-9_%.-]+/[0-9]+)/?", parts.path
+            )
+        ):
+            raise ValueError("Meeting URL must be an HTTPS Teams meeting link")
+        return "teams", urlunsplit(
+            ("https", parts.hostname, parts.path.rstrip("/"), parts.query, "")
         )
     return "webex", validate_webex_url(url)
 

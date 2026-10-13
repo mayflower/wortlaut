@@ -63,6 +63,9 @@ spec:
             - secretRef:
                 name: wortlaut-meet
                 optional: true
+            - secretRef:
+                name: wortlaut-teams
+                optional: true
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:

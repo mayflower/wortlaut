@@ -118,22 +118,26 @@ def pod(job, phase="Running"):
     )
 
 
-def test_meet_and_webex_start_parallel_with_their_own_configuration(
+def test_three_providers_start_parallel_with_their_own_configuration(
     client, database, cluster, monkeypatch
 ):
-    monkeypatch.setenv("WORTLAUT_MAX_ACTIVE_MEETINGS", "2")
+    monkeypatch.setenv("WORTLAUT_MAX_ACTIVE_MEETINGS", "3")
     monkeypatch.setenv("WORTLAUT_ENABLE_GOOGLE_MEET", "true")
     monkeypatch.setenv("WORTLAUT_MEET_STORAGE_STATE_SECRET", "wortlaut-meet-browser")
+    monkeypatch.setenv("WORTLAUT_ENABLE_TEAMS", "true")
     get_settings.cache_clear()
     webex = create(client, "webex")
     meet = create(
         client, "meet", {**request_body(), "meeting_url": "https://meet.google.com/abc-defg-hij"}
     )
+    teams = create(
+        client, "teams", {**request_body(), "meeting_url": "https://teams.microsoft.com/meet/123"}
+    )
     controller_pass(database, cluster.apis)
     controller_pass(database, cluster.apis)
-    assert len(cluster.jobs) == 2
+    assert len(cluster.jobs) == 3
     with Session(database) as db:
-        for identifier, provider in [(webex, "webex"), (meet, "google_meet")]:
+        for identifier, provider in [(webex, "webex"), (meet, "google_meet"), (teams, "teams")]:
             recording = db.get(Recording, uuid.UUID(identifier))
             assert recording.provider == provider
             assert recording.active_attempt_id is not None
@@ -151,7 +155,7 @@ def test_meet_and_webex_start_parallel_with_their_own_configuration(
         {**request_body(), "meeting_url": "https://meet.google.com/xyz-abcd-efg"},
     )
     controller_pass(database, cluster.apis)
-    assert len(cluster.jobs) == 2
+    assert len(cluster.jobs) == 3
     with Session(database) as db:
         queued = db.get(Recording, uuid.UUID(waiting))
         assert queued.active_attempt_id is None

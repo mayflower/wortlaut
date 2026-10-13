@@ -15,6 +15,8 @@ class Settings(BaseSettings):
     enable_webex_browser: bool = False
     enable_webex_refresh: bool = False
     enable_google_meet: bool = False
+    enable_teams: bool = False
+    teams_locale: str = "en-US"
     meet_storage_state_secret: str | None = None
     meet_locale: str = "de-DE"
     enable_imap: bool = False

@@ -110,8 +110,8 @@ export function nativeMeetInput(page: Page): MeetInput {
   }};
 }
 
-export async function launchBrowser(provider: 'google_meet' | 'webex', locale = 'en-US', webexBrowser = false) {
-  if (provider !== 'google_meet' && !webexBrowser) return chromium.launch({headless: true, chromiumSandbox: true,
+export async function launchBrowser(provider: 'google_meet' | 'webex' | 'teams', locale = 'en-US', webexBrowser = false) {
+  if (provider === 'webex' && !webexBrowser) return chromium.launch({headless: true, chromiumSandbox: true,
     args: ['--autoplay-policy=no-user-gesture-required']});
 
   // Start a regular, sandboxed Chromium process with a fresh anonymous profile.

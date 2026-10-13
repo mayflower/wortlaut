@@ -58,7 +58,7 @@ if not existing_storage.stdout.strip():
 
 for supplied_file, secret_name in (
     (webex_file, "wortlaut-webex"), (Path(".dev/mail.env"), "wortlaut-mail"),
-    (Path(".dev/meet.env"), "wortlaut-meet")
+    (Path(".dev/meet.env"), "wortlaut-meet"), (Path(".dev/teams.env"), "wortlaut-teams")
 ):
     if not supplied_file.exists():
         continue

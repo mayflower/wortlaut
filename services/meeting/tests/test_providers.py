@@ -243,3 +243,72 @@ def test_webex_browser_bootstrap_does_not_issue_sdk_credentials(client, monkeypa
     assert result["provider"] == "webex"
     assert result["webex_browser"] == {"display_name": "wortlaut"}
     assert "guest" not in result and "sdk_page_url" not in result
+
+
+@pytest.mark.parametrize("url", [
+    "https://teams.microsoft.com/l/meetup-join/19%3ameeting_abc%40thread.v2/0?context=%7B%7D",
+    "https://teams.microsoft.com/meet/123456789?p=fixture-passcode",
+    "https://teams.live.com/meet/123456789?p=fixture-passcode",
+    "https://teams.cloud.microsoft/meet/123456789?p=fixture-passcode",
+])
+def test_teams_preserves_invitation_identity(url):
+    assert normalize_meeting_url(url + "#fragment") == ("teams", url)
+
+
+@pytest.mark.parametrize("url", [
+    "http://teams.microsoft.com/meet/123",
+    "https://teams.microsoft.com.attacker.example/meet/123",
+    "https://user@teams.microsoft.com/meet/123",
+    "https://teams.microsoft.com:444/meet/123",
+    "https://teams.microsoft.com/redirect?url=https://example.com",
+    "https://teams.microsoft.com/meet/123/extra",
+])
+def test_teams_rejects_non_meeting_destinations(url):
+    with pytest.raises(ValueError):
+        normalize_meeting_url(url)
+
+
+def test_teams_bootstrap_is_independent_and_preserves_passcode(client, database, monkeypatch):
+    from wortlaut import app as app_module
+
+    monkeypatch.setattr(app_module, "guest_token", lambda *args: pytest.fail("Webex invoked"))
+    url = "https://teams.microsoft.com/meet/123456789?p=fixture-passcode"
+    identifier = create(client, body={**request_body(), "meeting_url": url, "provider": "teams"})
+    with Session(database) as db:
+        assert db.get(Recording, uuid.UUID(identifier)).provider == "teams"
+    attempt, credential = prepare(client, identifier)
+    client.post(f"/v1/attempts/{attempt}/claim", headers=credential, json={"worker_id": "teams"})
+    headers = {**credential, "X-Worker-ID": "teams"}
+    response = client.get(f"/v1/attempts/{attempt}/bootstrap", headers=headers)
+    assert response.status_code == 503
+    assert response.json()["detail"] == "teams_not_configured"
+    monkeypatch.setenv("WORTLAUT_ENABLE_TEAMS", "true")
+    get_settings.cache_clear()
+    response = client.get(f"/v1/attempts/{attempt}/bootstrap", headers=headers)
+    assert response.status_code == 200
+    assert response.headers["Cache-Control"] == "no-store"
+    data = response.json()
+    assert data["provider"] == "teams"
+    assert data["meeting_url"] == url
+    assert data["teams"] == {"display_name": "wortlaut", "locale": "en-US"}
+    assert "guest" not in data and "sdk_page_url" not in data and "meet" not in data
+    status = client.post(f"/v1/attempts/{attempt}/status", headers=headers, json={
+        "participation": "capturing", "capability": "unverified",
+        "receiver_sources": [{
+            "provider_source_id": f"teams:{identifier}:receiver:1",
+            "source_kind": "unknown", "capture_path": "rtc_receiver",
+            "track_id": "mainAudio", "signaled_participant_id": None,
+        }],
+    })
+    assert status.status_code == 200
+
+
+@pytest.mark.parametrize("url", [
+    "https://teams.microsoft.com/meet/123456789?p=fixture",
+    "https://teams.microsoft.com/l/meetup-join/19%3ameeting_abc%40thread.v2/0?context=%7B%7D",
+])
+def test_teams_calendar_invite(client, monkeypatch, url):
+    configure(monkeypatch)
+    event = imported(client, mail(link=url))
+    assert event["status"] == "accepted"
+    assert event["provider"] == "teams"

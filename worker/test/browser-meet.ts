@@ -4,6 +4,7 @@ import {createServer} from 'node:http';
 import {createRequire} from 'node:module';
 import {once} from 'node:events';
 import {launchBrowser, nativeMeetInput} from '../runtime/browser';
+import {TeamsBrowser} from '../runtime/teams-browser';
 import {WebexBrowser} from '../runtime/webex-browser';
 import {MeetBrowser, MeetError, type MeetBootstrap} from '../runtime/meet';
 
@@ -510,6 +511,74 @@ try {
   assert.equal((await webex.inspect()).participation, 'ended');
   assert.equal(await webexFrame.getByRole('button', {name: 'Leave meeting'}).count(), 0);
   await webexContext.close();
+
+  for (const german of [false, true]) {
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    const url = 'https://teams.microsoft.com/meet/123456789?p=fixture';
+    const join = german ? 'Jetzt teilnehmen' : 'Join now';
+    const lobby = german ? 'Sie sind im Wartebereich' : "Someone will let you in shortly";
+    const leave = german ? 'Verlassen' : 'Leave';
+    await page.route('https://teams.microsoft.com/**', route => route.fulfill({
+      contentType: 'text/html', body: `<label>${german ? 'Ihr Name' : 'Your name'}<input></label>
+      <label><input type="radio" name="audio" value="computer">${german ? 'Computeraudio' : 'Computer audio'}</label>
+      <button id="join">${join}</button><p id="waiting"></p>
+      <script>
+      let clicks = 0;
+      document.querySelector('#join').onclick = () => {
+        if (++clicks === 1) {
+          const modal = document.createElement('button');
+          modal.textContent = '${german ? 'Ohne Audio oder Video fortfahren' : 'Continue without audio or video'}';
+          modal.onclick = () => modal.remove();
+          document.body.append(modal);
+        } else {
+          document.querySelector('#join').remove();
+          document.querySelector('#waiting').textContent = '${lobby}';
+          const leave = document.createElement('button');
+          leave.textContent = '${leave}';
+          leave.onclick = () => leave.remove();
+          document.body.append(leave);
+        }
+      };
+      </script>`,
+    }));
+    const teams = new TeamsBrowser(page, {...bootstrap, provider: 'teams', meeting_url: url,
+      deadline: new Date(Date.now() + 60000).toISOString(),
+      teams: {display_name: 'wortlaut fixture', locale: german ? 'de-DE' : 'en-US'}},
+      assets);
+    await teams.prepare(); await page.goto(url); await teams.join();
+    assert.equal(await page.getByRole('textbox').inputValue(), 'wortlaut fixture');
+    assert.equal(await page.getByRole('radio').isChecked(), true);
+    assert.equal((await teams.inspect()).participation, 'waiting_admission',
+      'Leave button must not count as admission in lobby');
+    await page.locator('#waiting').evaluate(element => { element.textContent = ''; });
+    assert.equal((await teams.inspect()).participation, 'capturing');
+    // Native received PCM must remain blocked while separation is unproved.
+    await page.evaluate(async () => {
+      const producer = new AudioContext();
+      const oscillator = producer.createOscillator();
+      const destination = producer.createMediaStreamDestination();
+      oscillator.connect(destination); oscillator.start();
+      const sender = new RTCPeerConnection({iceServers: []});
+      const receiver = new RTCPeerConnection({iceServers: []});
+      sender.onicecandidate = event => { if (event.candidate) void receiver.addIceCandidate(event.candidate); };
+      receiver.onicecandidate = event => { if (event.candidate) void sender.addIceCandidate(event.candidate); };
+      sender.addTrack(destination.stream.getAudioTracks()[0]);
+      await sender.setLocalDescription(await sender.createOffer());
+      await receiver.setRemoteDescription(sender.localDescription!);
+      await receiver.setLocalDescription(await receiver.createAnswer());
+      await sender.setRemoteDescription(receiver.localDescription!);
+    });
+    await page.waitForFunction(() => window.wortlautMeet.inspect().receiver_sources.length > 0);
+    const state = await teams.inspect();
+    assert.equal(state.streams, 0);
+    assert.equal(state.audio_samples, 0);
+    assert.equal(state.capability, 'unverified');
+    assert.equal(state.reason, '');
+    await teams.stop('normal');
+    assert.equal(await page.getByRole('button', {name: leave, exact: true}).count(), 0);
+    await context.close();
+  }
 
   console.log(JSON.stringify({fixture: 'controlled Meet-origin DOM and native WebRTC; no provider identity proof',
     frequencies, samples: state.audio_samples, drained: state.drained, native_input_gaps: gaps.length,
