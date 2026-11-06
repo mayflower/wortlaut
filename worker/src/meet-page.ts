@@ -217,14 +217,13 @@ function install(config: MeetCaptureConfig) {
           }
           if (source.track === receiver.track || stopping) continue;
           source.track = receiver.track;
-          // Teams receivers may contain mixed audio; keep only their metadata.
-          if (config.provider === 'teams') continue;
+          // A receiver ID is diagnostic evidence only. No name, energy or tile
+          // determines the participant, and accepted PCM is never renamed later.
           await capture.attach(receiver.track, config.meeting_id, config.attempt_id,
             {provider_source_id: source.id, source_kind: 'speaker', speaker_id: null,
               attribution_unknown: true}, sink);
         }
-        state.streams = config.provider === 'teams' ? 0
-          : new Set([...sources.values()].map((source) => source.track)).size;
+        state.streams = new Set([...sources.values()].map((source) => source.track)).size;
       }
     })().catch(() => { state.reason ||= 'capture_initialization_failed'; })
       .finally(() => { inspecting = undefined; }));
@@ -234,7 +233,7 @@ function install(config: MeetCaptureConfig) {
   const evidence = (receiver: RTCRtpReceiver, id: string) => {
     const source = (item: RTCRtpContributingSource) => ({source: item.source,
       timestamp: item.timestamp, rtp_timestamp: item.rtpTimestamp});
-    return {provider_source_id: id, source_kind: config.provider === 'teams' ? 'unknown' : 'speaker',
+    return {provider_source_id: id, source_kind: 'speaker',
       capture_path: 'rtc_receiver',
       track_id: receiver.track.id, csi: null, signaled_participant_id: null,
       source_state: receiver.track.readyState,

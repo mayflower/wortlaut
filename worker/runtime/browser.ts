@@ -54,10 +54,12 @@ export function nativeMeetInput(page: Page): MeetInput {
     const y = Math.round(origin.y + box.y + box.height * random(0.35, 0.65));
     // Verify the actual X11 pointer event, not just our computed coordinates.
     const probe = await locator.evaluateHandle(element => {
-      const state = {hit: false};
-      const observe = (event: PointerEvent) => { state.hit = element.contains(event.target as Node); };
-      window.addEventListener('pointermove', observe, true);
-      return {state, dispose: () => window.removeEventListener('pointermove', observe, true)};
+      const state = {
+        hit: false,
+        handleEvent(event: PointerEvent) { state.hit = element.contains(event.target as Node); },
+      };
+      window.addEventListener('pointermove', state, true);
+      return {state, dispose() { window.removeEventListener('pointermove', state, true); }};
     });
     try {
       const position = (await run('getmouselocation', '--shell')).stdout;

@@ -84,7 +84,13 @@ def test_single_replay_versions_conflict_and_utc(client, database, monkeypatch):
 
 def test_active_changes_are_conflicts_and_cancel_uses_worker_stop(client, monkeypatch):
     configure(monkeypatch)
-    recording = imported(client, mail())["recording_id"]
+    recording = imported(
+        client,
+        mail(
+            starts="DTSTART;TZID=Europe/Berlin:20991024T100000",
+            ends="DTEND;TZID=Europe/Berlin:20991024T103000",
+        ),
+    )["recording_id"]
     attempt, credentials = prepare(client, recording)
     assert (
         client.post(
@@ -98,15 +104,23 @@ def test_active_changes_are_conflicts_and_cancel_uses_worker_stop(client, monkey
         client,
         mail(
             sequence=1,
-            starts="DTSTART;TZID=Europe/Berlin:20261024T110000",
-            ends="DTEND;TZID=Europe/Berlin:20261024T113000",
+            starts="DTSTART;TZID=Europe/Berlin:20991024T110000",
+            ends="DTEND;TZID=Europe/Berlin:20991024T113000",
         ),
     )
     assert result["reason"] == "active_change_conflict"
     state = client.get(f"/v1/recordings/{recording}", headers=API).json()
-    assert state["starts_at"].startswith("2026-10-24T08:00:00")
+    assert state["starts_at"].startswith("2099-10-24T08:00:00")
     assert state["active_attempt_id"] == attempt
-    assert imported(client, mail(sequence=2, method="CANCEL"))["status"] == "cancelled"
+    assert imported(
+        client,
+        mail(
+            sequence=2,
+            method="CANCEL",
+            starts="DTSTART;TZID=Europe/Berlin:20991024T110000",
+            ends="DTEND;TZID=Europe/Berlin:20991024T113000",
+        ),
+    )["status"] == "cancelled"
     response = client.post(
         f"/v1/attempts/{attempt}/status",
         headers={**credentials, "X-Worker-ID": "calendar-owner"},
@@ -326,3 +340,13 @@ def test_instant_invitations_plain_html_identity_and_replay(client, database, si
         "Join https://meet.google.com/abc-defg-hij",
         from_address="owner@mayflower.de", domain=b"mayflower.de",
     ))["status"] == "accepted"
+    teams_instant = imported(client, notice(
+        "Join https://teams.microsoft.com/meet/123456789?p=fixture",
+        from_address="owner@mayflower.de", domain=b"mayflower.de",
+    ))
+    assert (teams_instant["status"], teams_instant["provider"]) == ("accepted", "teams")
+    webex_instant = imported(client, notice(
+        "Join https://example.webex.com/meet/owner",
+        from_address="owner@mayflower.de", domain=b"mayflower.de",
+    ))
+    assert (webex_instant["status"], webex_instant["provider"]) == ("accepted", "webex")

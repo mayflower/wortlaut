@@ -1,4 +1,5 @@
 import type {Page} from 'playwright';
+import {AudioTransport} from '../src/transport.js';
 import {installMeetCapture, MeetError} from './meet.js';
 import {isTeamsOrigin} from '../src/teams-url.js';
 
@@ -13,6 +14,7 @@ const waiting = /Someone will let you in shortly|You[’']re in the lobby|Waitin
 
 // Join flow reference: Vexa f1a62fbbdfd2c98cb162582d82c31fe8102acc89.
 export class TeamsBrowser {
+  private readonly transport: AudioTransport;
   private initialize?: () => Promise<void>;
   private stopping?: Promise<void>;
   private reason = '';
@@ -20,14 +22,22 @@ export class TeamsBrowser {
   private drained: boolean | null = null;
 
   constructor(private readonly page: Page, private readonly bootstrap: TeamsBootstrap,
-    private readonly assets?: URL) {}
+    api: string, credential: string, workerId: string, private readonly assets?: URL) {
+    const url = new URL(`/v1/attempts/${bootstrap.attempt_id}/audio`, api);
+    if (!['https:', 'http:'].includes(url.protocol)) throw new MeetError('invalid_ingest_url');
+    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+    this.transport = new AudioTransport(url.href, credential, workerId, reason => { this.reason = reason; });
+  }
 
   async prepare() {
-    // Reject PCM until Teams source separation and participant binding are verified.
-    const reject = () => { this.reason = 'teams_unverified_audio_blocked'; };
-    this.initialize = await installMeetCapture(this.page, this.bootstrap,
-      {begin: reject, end: reject, gap: reject, chunk: reject,
-        error: reason => { this.reason = reason; }}, this.assets, 'teams');
+    this.initialize = await installMeetCapture(this.page, this.bootstrap, {
+      begin: metadata => this.transport.control(metadata as Record<string, unknown> & {id: string}),
+      end: metadata => this.transport.control(metadata as Record<string, unknown> & {id: string}),
+      gap: metadata => this.transport.control(metadata as Record<string, unknown> & {id: string}),
+      chunk: (metadata, pcm) => this.transport.chunk(metadata, pcm),
+      error: reason => { this.reason = reason; },
+    }, this.assets, 'teams');
+    this.transport.connect();
   }
 
   private async dismissMediaPrompt() {
@@ -134,7 +144,7 @@ export class TeamsBrowser {
       && await this.page.getByRole('button', {name: leaveLabel}).first().isVisible()) participation = 'capturing';
     return {...state, participation: this.stopping ? 'ended' : participation,
       reason: this.reason, stopped: Boolean(this.stopping || this.reason), drained: this.drained,
-      capability: 'unverified', streams: 0, audio_samples: 0,
+      capability: 'unverified', streams: state?.streams ?? 0, audio_samples: state?.audio_samples ?? 0,
       receiver_sources: state?.receiver_sources ?? [],
       configured_speaker_slots: null, configured_share_slots: null,
       participant_sources: {available: false, total: 0, truncated: false, sources: []}};
@@ -143,7 +153,8 @@ export class TeamsBrowser {
   stop(reason: string) {
     return this.stopping ??= (async () => {
       this.reason ||= reason === 'normal' ? '' : reason;
-      this.drained = await this.page.evaluate(() => window.wortlautMeet?.stop()).catch(() => false) === true;
+      const ended = await this.page.evaluate(() => window.wortlautMeet?.stop()).catch(() => false);
+      this.drained = await this.transport.drain() && ended === true;
       if (!isTeamsOrigin(new URL(this.page.url()))) return;
       const leave = this.page.getByRole('button', {name: leaveLabel}).first();
       if (await leave.isVisible()) await leave.click({timeout: 5000}).catch(() => {});

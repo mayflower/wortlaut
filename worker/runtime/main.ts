@@ -53,8 +53,11 @@ async function run(api: string, credential: string) {
       ...(bootstrap.meet.auth_mode === 'account' ? {storageState: '/run/meet/storage-state.json'} : {})} : {}),
   });
   const page = await context.newPage();
+  for (const other of browser.contexts()) {
+    if (other !== context) for (const blank of other.pages()) await blank.close().catch(() => {});
+  }
   const meet = isMeet ? new MeetBrowser(page, bootstrap, api, credential, workerId, undefined, nativeMeetInput(page))
-    : isTeams ? new TeamsBrowser(page, bootstrap)
+    : isTeams ? new TeamsBrowser(page, bootstrap, api, credential, workerId)
     : isWebexBrowser ? new WebexBrowser(page, bootstrap, api, credential, workerId) : undefined;
   let stopping: Promise<void> | undefined;
   let endReason = 'normal';

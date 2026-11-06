@@ -172,9 +172,14 @@ def test_meet_ics_fields_conflict_blocks_old_occurrence_and_can_be_resolved(
     client, database, monkeypatch
 ):
     configure(monkeypatch)
+    future = {
+        "starts": "DTSTART;TZID=Europe/Berlin:20991024T100000",
+        "ends": "DTEND;TZID=Europe/Berlin:20991024T103000",
+    }
     event = imported(
         client,
         mail(
+            **future,
             link=MEET + "?authuser=1",
             extra=(f"X-GOOGLE-CONFERENCE:{MEET}\r\nDESCRIPTION:{MEET}?utm_source=calendar\r\n"),
         ),
@@ -183,15 +188,22 @@ def test_meet_ics_fields_conflict_blocks_old_occurrence_and_can_be_resolved(
     identifier = event["recording_id"]
     conflict = imported(
         client,
-        mail(sequence=1, link=MEET, extra=("LOCATION:https://example.webex.com/meet/other\r\n")),
+        mail(
+            **future,
+            sequence=1,
+            link=MEET,
+            extra=("LOCATION:https://example.webex.com/meet/other\r\n"),
+        ),
     )
     assert (conflict["status"], conflict["reason"]) == ("conflict", "meeting_link_ambiguous")
     assert client.post(f"/v1/recordings/{identifier}/attempts", headers=API).status_code == 409
-    resolved = imported(client, mail(sequence=2, link="", extra=f"X-GOOGLE-CONFERENCE:{MEET}\r\n"))
+    resolved = imported(
+        client, mail(**future, sequence=2, link="", extra=f"X-GOOGLE-CONFERENCE:{MEET}\r\n")
+    )
     assert resolved["recording_id"] == identifier
     assert resolved["status"] == "accepted"
     attempt, _ = prepare(client, identifier)
-    changed = imported(client, mail(sequence=3))
+    changed = imported(client, mail(**future, sequence=3))
     assert changed["reason"] == "active_change_conflict"
     state = client.get(f"/v1/recordings/{identifier}", headers=API).json()
     assert state["provider"] == "google_meet" and state["active_attempt_id"] == attempt

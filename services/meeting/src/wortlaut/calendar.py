@@ -384,7 +384,8 @@ def instant_calendar(message, authenticated):
             texts.append(" ".join(parser.text))
             links.extend(parser.links)
     body = " ".join(" ".join(texts).split())
-    if authenticated == "meetings-noreply@google.com":
+    google_notice = authenticated == "meetings-noreply@google.com"
+    if google_notice:
         inviters = set(re.findall(
             r"([a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9.-]+) "
             r"(?:lädt Sie zu einem gerade stattfindenden Videoanruf ein|"
@@ -395,13 +396,23 @@ def instant_calendar(message, authenticated):
         authenticated = inviters.pop().lower()
     if authenticated.rsplit("@", 1)[-1] not in settings.mail_allowed_sender_domains:
         raise ValueError("instant_inviter_not_allowed")
-    candidates = re.findall(
-        r"(?<![\w.@/-])(?:https://)?meet\.google\.com/[a-z]{3}-[a-z]{4}-[a-z]{3}"
-        r"(?![\w/-])", body + " " + " ".join(links)
-    )
-    urls = {normalize_meeting_url(
+    content = body + " " + " ".join(links)
+    candidates = [
         url if url.startswith("https://") else "https://" + url
-    )[1] for url in candidates}
+        for url in re.findall(
+            r"(?<![\w.@/-])(?:https://)?meet\.google\.com/[a-z]{3}-[a-z]{4}-[a-z]{3}"
+            r"(?![\w/-])",
+            content,
+        )
+    ]
+    if not google_notice:
+        for candidate in re.findall(r'https://[^\s<>"\']+', content):
+            candidate = candidate.rstrip(".,;)")
+            try:
+                candidates.append(meeting_link({}, candidate))
+            except ValueError:
+                continue
+    urls = {normalize_meeting_url(url)[1] for url in candidates}
     if len(urls) != 1:
         raise ValueError("instant_meeting_ambiguous")
     event = Event()

@@ -434,14 +434,14 @@ try {
   if (process.platform === 'linux') {
     const screenX = await pending.page.evaluate(() => window.screenX);
     await pending.page.evaluate(value => {
-      Object.defineProperty(window, 'screenX', {configurable: true, get: () => value + 200});
+      Object.defineProperty(window, 'screenX', {configurable: true, get() { return value + 200; }});
     }, screenX);
     await assert.rejects(nativeMeetInput(pending.page).click(pending.page.locator('#join')),
       /Native pointer missed target/);
     assert.equal(await pending.page.locator('#join').count(), 1);
     assert.equal(await pending.page.locator('#waiting').innerText(), '');
     await pending.page.evaluate(value => {
-      Object.defineProperty(window, 'screenX', {configurable: true, get: () => value});
+      Object.defineProperty(window, 'screenX', {configurable: true, get() { return value; }});
     }, screenX);
   }
   await pending.page.locator('#join').evaluate(element => { (element as HTMLElement).onclick = () => {}; });
@@ -542,10 +542,12 @@ try {
       };
       </script>`,
     }));
-    const teams = new TeamsBrowser(page, {...bootstrap, provider: 'teams', meeting_url: url,
+    const teamsAttemptId = randomUUID();
+    const beforeTeams = frames.length;
+    const teams = new TeamsBrowser(page, {...bootstrap, provider: 'teams', attempt_id: teamsAttemptId, meeting_url: url,
       deadline: new Date(Date.now() + 60000).toISOString(),
       teams: {display_name: 'wortlaut fixture', locale: german ? 'de-DE' : 'en-US'}},
-      assets);
+      `http://127.0.0.1:${address.port}`, 'fixture-node-secret', randomUUID(), assets);
     await teams.prepare(); await page.goto(url); await teams.join();
     assert.equal(await page.getByRole('textbox').inputValue(), 'wortlaut fixture');
     assert.equal(await page.getByRole('radio').isChecked(), true);
@@ -553,7 +555,6 @@ try {
       'Leave button must not count as admission in lobby');
     await page.locator('#waiting').evaluate(element => { element.textContent = ''; });
     assert.equal((await teams.inspect()).participation, 'capturing');
-    // Native received PCM must remain blocked while separation is unproved.
     await page.evaluate(async () => {
       const producer = new AudioContext();
       const oscillator = producer.createOscillator();
@@ -561,6 +562,10 @@ try {
       oscillator.connect(destination); oscillator.start();
       const sender = new RTCPeerConnection({iceServers: []});
       const receiver = new RTCPeerConnection({iceServers: []});
+      receiver.ontrack = event => {
+        const audio = document.createElement('audio'); audio.autoplay = true;
+        audio.srcObject = new MediaStream([event.track]); document.body.append(audio);
+      };
       sender.onicecandidate = event => { if (event.candidate) void receiver.addIceCandidate(event.candidate); };
       receiver.onicecandidate = event => { if (event.candidate) void sender.addIceCandidate(event.candidate); };
       sender.addTrack(destination.stream.getAudioTracks()[0]);
@@ -568,15 +573,30 @@ try {
       await receiver.setRemoteDescription(sender.localDescription!);
       await receiver.setLocalDescription(await receiver.createAnswer());
       await sender.setRemoteDescription(receiver.localDescription!);
+      await producer.resume();
+      Object.assign(window, {async finishTeamsProducer() {
+        oscillator.stop(); sender.close(); receiver.close(); await producer.close();
+      }});
     });
-    await page.waitForFunction(() => window.wortlautMeet.inspect().receiver_sources.length > 0);
+    await page.waitForFunction(() => window.wortlautMeet.inspect().audio_samples > 16000,
+      undefined, {timeout: 15000});
     const state = await teams.inspect();
-    assert.equal(state.streams, 0);
-    assert.equal(state.audio_samples, 0);
+    assert.equal(state.streams, 1);
+    assert.ok(state.audio_samples > 16000);
     assert.equal(state.capability, 'unverified');
     assert.equal(state.reason, '');
     await teams.stop('normal');
+    assert.equal((await teams.inspect()).drained, true);
+    const teamsFrames = frames.slice(beforeTeams);
+    assert.ok(teamsFrames.some(f => f.metadata.type === 'begin' &&
+      f.metadata.attempt_id === teamsAttemptId &&
+      f.metadata.provider_source_id === `teams:${bootstrap.meeting_id}:receiver:1` &&
+      f.metadata.attribution_unknown === true));
+    assert.ok(teamsFrames.some(f => Boolean(f.pcm) && f.metadata.attempt_id === teamsAttemptId));
+    assert.ok(teamsFrames.some(f => f.metadata.type === 'end' &&
+      String(f.metadata.id).startsWith(`${teamsAttemptId}/`)));
     assert.equal(await page.getByRole('button', {name: leave, exact: true}).count(), 0);
+    await page.evaluate(() => (window as any).finishTeamsProducer());
     await context.close();
   }
 
