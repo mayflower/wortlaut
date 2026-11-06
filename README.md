@@ -15,7 +15,7 @@ Meetings can be scheduled through the HTTP API or email invitations. Meet, Webex
 ## Global Invariants
 
 - `[worker/src/capture.ts:AudioCapture]` & `[services/meeting/src/wortlaut/ingest.py:SourceBinding]`: Incoming WebRTC audio tracks are captured in isolated `AudioWorkletNode` streams (`16000` Hz mono `pcm_s16le`) without mixing; speaker streams must either carry a verified `speaker_id` or explicitly set `attribution_unknown=True` (with `speaker_id=None`, `participant_id=None`, `participant_name=None`).
-- `[worker/runtime/teams-browser.ts:TeamsBrowser.disableDevices]`: Microsoft Teams worker sessions verify all `RTCPeerConnection` senders before joining and abort with `teams_sending_device_active` if any sender has a live enabled track; incoming WebRTC audio receivers are captured with `attribution_unknown: true` and `capability: 'unverified'`.
+- `[worker/runtime/teams-browser.ts:TeamsBrowser.disableDevices]` & `[worker/src/meet-page.ts:resolveReceiver]`: Microsoft Teams worker sessions verify all `RTCPeerConnection` senders before joining and abort with `teams_sending_device_active` if any sender has a live enabled track; incoming WebRTC audio receivers are bound or mid-stream rebound (`AudioCapture.rebind`) with `attribution_unknown: false` when `RTCDataChannel` participant signaling and RTP `csrc`/`ssrc`/`track_id`/`stream_id` match unambiguously, falling back to `attribution_unknown: true` when unverified.
 - `[services/meeting/src/wortlaut/ingest.py:accept_chunk]` & `[services/meeting/src/wortlaut/controller.py:reconcile_attempt]`: Cross-component admission and state transitions are serialized in PostgreSQL using advisory locks (`749836123` for audio/ASR capacity, `749836124` for scheduler job starts, `749836125` for calendar/mail mutations), and worker bootstrap `Secret`s are retained until Pod termination (`wortlaut/termination-observed`) is recorded.
 - `[services/asr/app.py:infer]` & `[services/meeting/src/wortlaut/asr.py:commit_result]`: The GPU ASR service executes at most one Parakeet inference at a time (`HTTP 429` with `Retry-After: 5` when busy, `HTTP 503` on latched `torch.AcceleratorError`), and committed `TranscriptSegment` rows in PostgreSQL are never overwritten or duplicated.
 - `[scripts/setup.sh:tool]` & `[scripts/dev-secrets.py:WORTLAUT_NAMESPACE]`: Local cluster operations target Kubernetes context `data` via `.dev/kubeconfig` in namespace `wortlaut-$(id -un)` without mutating global kubeconfig state, and credentials are stored exclusively in `0600` `.dev/*.env` files and Kubernetes `Secret`s.
@@ -49,7 +49,7 @@ The intended model is transcription per incoming source with a verified provider
 
 ## Architecture
 
-- **Meeting service** — Python/FastAPI, PostgreSQL-backed scheduling, Kubernetes worker management, audio ingest, exports, and email processing in one service.
+- **Meeting service** — Python/FastAPI, integrated Web-UI (`/` and `/ui`), PostgreSQL-backed scheduling, Kubernetes worker management, audio ingest, exports, and email processing in one service.
 - **Worker** — TypeScript, Playwright, and sandboxed Chromium; one short-lived Kubernetes Job per meeting. Browser workers use a virtual display under Linux. The alternative Webex SDK path uses a hosted HTTPS page.
 - **ASR service** — a shared local Parakeet model for speech recognition.
 - **Storage** — PostgreSQL for state and transcripts, S3-compatible storage for audio.
@@ -74,6 +74,7 @@ Tilt builds `linux/amd64` images using Kubernetes BuildKit and deploys to `wortl
 | Service | Local address |
 | --- | --- |
 | Tilt | http://127.0.0.1:34604 |
+| Meeting Web-UI | http://127.0.0.1:34601/ui |
 | Meeting API / OpenAPI UI | http://127.0.0.1:34601/docs |
 | ASR | http://127.0.0.1:34602 |
 | PostgreSQL | `127.0.0.1:34632` |
@@ -158,7 +159,7 @@ curl --fail-with-body -X POST "http://127.0.0.1:34601/v1/recordings/$RECORDING_I
   -H "Authorization: Bearer $WORTLAUT_API_TOKEN"
 ```
 
-Exports support `txt`, `vtt`, and `json`. They return HTTP 409 while processing is pending and HTTP 410 after transcript retention expires. The recording detail includes participation, processing, audio gaps, source attribution, worker diagnostics, and delivery status. `GET /v1/recordings` lists recordings with cursor pagination; see the OpenAPI UI for filters and other endpoints.
+Exports support `txt`, `vtt`, and `json`. They return HTTP 409 while processing is pending and HTTP 410 after transcript retention expires. The recording detail includes participation, processing, audio gaps, source attribution, worker diagnostics, and delivery status. `GET /v1/recordings/{id}/transcript` returns live or completed transcript segments, and `PATCH /v1/recordings/{id}/sources` assigns manual speaker labels per `provider_source_id` (also available in the integrated Web-UI at `/ui`). `GET /v1/recordings` lists recordings with cursor pagination; see the OpenAPI UI for filters and other endpoints.
 
 By default, the scheduler starts workers 60 seconds before a meeting, allows two active meetings across all providers, and waits up to ten minutes for admission. Completed transcription does not imply complete audio coverage or correct speaker attribution.
 
@@ -183,11 +184,11 @@ WORTLAUT_SMTP_FROM=bot@example.org
 
 Defaults are IMAP over TLS on port 993 and SMTP with STARTTLS on port 587. DKIM mode verifies signatures against DNS and requires an allowed sender domain; the visible From address alone is insufficient. Calendar organizers must match the authenticated sender.
 
-Supported invitations include iCalendar messages for Meet/Webex and immediate Meet invitations containing a meeting link in text or HTML. Signed Google Meet notifications are supported with the inviter checked against the same domain allowlist. Immediate invitations default to 120 minutes from the signed sending time (`WORTLAUT_INSTANT_INVITE_MINUTES`). Duplicate messages do not create duplicate recordings.
+Supported invitations include iCalendar messages and immediate email invitations containing a meeting link in text or HTML for Google Meet, Webex, and Microsoft Teams. Signed Google Meet notifications are supported with the inviter checked against the same domain allowlist. Immediate invitations default to 120 minutes from the signed sending time (`WORTLAUT_INSTANT_INVITE_MINUTES`). Duplicate messages do not create duplicate recordings.
 
 Alternatively, `WORTLAUT_MAIL_SENDER_AUTH=gateway` uses `WORTLAUT_TRUSTED_SENDER_HEADER` and `WORTLAUT_ORGANIZER_PERMISSIONS`. This requires a trusted mail gateway that strips incoming copies of the configured header and sets it after authenticating the sender. Ordinary mailboxes must not rely on a sender-supplied header.
 
-With `WORTLAUT_MAIL_REPLY_TO_SENDER=true`, results go to the validated organizer/inviter, not arbitrary Reply-To or CC addresses. Explicit recipient mappings are available through `WORTLAUT_RESULT_RECIPIENTS`. Results include TXT/VTT/JSON attachments; large results use ZIP or authenticated download instructions. An uncertain SMTP result is marked `delivery_unknown`; explicitly retrying delivery may send a duplicate.
+With `WORTLAUT_MAIL_REPLY_TO_SENDER=true`, results go to the validated organizer/inviter, not arbitrary Reply-To or CC addresses. Explicit recipient mappings are available through `WORTLAUT_RESULT_RECIPIENTS`. Results include TXT/VTT/JSON attachments; large results use ZIP or authenticated download instructions. When a calendar-invited recording or a recording ending with a known join/lobby failure (`FAILURE_REASONS`) finishes without recorded audio, `wortlaut` sends a failure notification email explaining the termination reason. An uncertain SMTP result is marked `delivery_unknown`; explicitly retrying delivery may send a duplicate.
 
 ## Tests
 

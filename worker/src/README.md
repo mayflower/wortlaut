@@ -4,17 +4,17 @@
 In-page browser media capture, 5-second PCM chunking, WebSocket ingest transport, and provider SDK/WebRTC inspection modules for Webex, Google Meet, and Microsoft Teams.
 
 ## Interface
-- `[capture.ts:CaptureSink]`: Callback contract `{chunk, begin, end, gap, error}` for captured audio streams.
+- `[capture.ts:CaptureSink]`: Callback contract `{chunk, begin, bind?, end, gap, error}` for captured audio streams.
 - `[capture.ts:AudioClock]`: `AudioContext` clock state and interruption history type.
-- `[capture.ts:AudioCapture]`: Manages shared `AudioContext`, `wortlaut-pcm` `AudioWorkletNode` instances per `MediaStreamTrack`, clock interruption tracking, and automatic epoch restart on resume.
-- `[chunks.ts:Binding]`: Source attribution metadata type (`provider_source_id`, `speaker_id`, `source_kind`, `attribution_unknown`, `participant_id`).
+- `[capture.ts:AudioCapture]`: Manages shared `AudioContext`, `wortlaut-pcm` `AudioWorkletNode` instances per `MediaStreamTrack`, sample-accurate source rebinding (`rebind`), clock interruption tracking, and automatic epoch restart on resume.
+- `[chunks.ts:Binding]`: Source attribution metadata type (`provider_source_id`, `speaker_id`, `source_kind`, `attribution_unknown`, `participant_id`, `participant_name`).
 - `[chunks.ts:Chunk]`: Complete metadata record for a 16 kHz mono `pcm_s16le` audio chunk.
 - `[chunks.ts:chunkId]`: Formats deterministic chunk IDs `${attempt_id}/${stream_id}/${epoch}/${sequence}`.
-- `[chunks.ts:Chunker]`: Buffers contiguous 16 kHz mono `s16le` PCM into 5-second (`16000 * 5 * 2` byte) chunks and records sample-accurate gaps.
+- `[chunks.ts:Chunker]`: Buffers contiguous 16 kHz mono `s16le` PCM into 5-second (`16000 * 5 * 2` byte) chunks, records sample-accurate gaps, and supports mid-stream source rebinding (`bindAtSample`, `finalSample`).
 - `[chunks.ts:audioFrame]`: Serializes a `Chunk` metadata header and raw PCM payload into a binary frame (`uint32be` JSON length + UTF-8 JSON + raw `pcm_s16le`).
 - `[meet-page.ts:MeetCaptureConfig]`: Configuration injected onto `window.wortlautMeetConfig`.
 - `[meet-page.ts:MeetBridgeMessage]`: Message schema sent across `window.wortlautMeetBridge`.
-- `[meet-page.ts:window.wortlautMeet]`: In-page controller (`{inspect, stop}`) polling `RTCPeerConnection` audio receivers, managing `RTCRtpScriptTransform` encoded frame observers, and bridging 5-second PCM chunks.
+- `[meet-page.ts:window.wortlautMeet]`: In-page controller (`{inspect, stop}`) polling `RTCPeerConnection` audio receivers, ingesting `RTCDataChannel` participant signaling (`onDataMessage`, `ingestParticipantRecord`), resolving RTP `csrc`/`ssrc`/`track_id`/`stream_id` participant bindings (`resolveReceiver`, `capture.rebind`, `participant_sources`), managing `RTCRtpScriptTransform` encoded frame observers, and bridging 5-second PCM chunks.
 - `[page.ts:window.wortlaut]`: Webex SDK page controller (`{start, stop, renewGuest, inspectReceivers, state}`).
 - `[page.ts:window.wortlautAudioTest]`: Synthetic 440 Hz / 880 Hz dual-oscillator capture fixture for browser audio verification.
 - `[teams-url.ts:teamsOrigins]`: Allowed Microsoft Teams web client origins (`https://teams.microsoft.com`, `https://teams.live.com`, `https://teams.cloud.microsoft`).

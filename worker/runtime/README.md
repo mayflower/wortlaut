@@ -11,7 +11,7 @@ Node.js and Playwright worker runtime orchestrating meeting attempt claim/bootst
 - `[main.ts:run]`: Entry point claiming `/v1/attempts/${attemptId}/claim`, fetching `/v1/attempts/${attemptId}/bootstrap`, running provider session lifecycle, renewing guest tokens, and posting `/v1/attempts/${attemptId}/status`.
 - `[meet.ts:MeetBootstrap]`: Bootstrap configuration type for `google_meet` attempts.
 - `[meet.ts:MeetError]`: Structured provider failure error carrying a machine-readable `reason`.
-- `[meet.ts:installMeetCapture]`: Installs `window.wortlautMeetBridge` binding and `RTCPeerConnection` init-script hook, then evaluates `dist/meet/capture.js` in the verified provider frame.
+- `[meet.ts:installMeetCapture]`: Installs `window.wortlautMeetBridge` binding and `RTCPeerConnection` / `RTCDataChannel` init-script hooks (`connections`, `received`, `encodedReserved`, `receiverStreams`, `dataChannels`, `dataMessages`, `onDataMessage`), then evaluates `dist/meet/capture.js` in the verified provider frame.
 - `[meet.ts:MeetBrowser]`: Playwright controller for Google Meet prejoin device muting, guest/account join, reCAPTCHA/consent/lobby detection, and capture teardown.
 - `[teams-browser.ts:TeamsBootstrap]`: Bootstrap configuration type for `teams` attempts.
 - `[teams-browser.ts:TeamsBrowser]`: Playwright controller for Microsoft Teams web client prejoin, sender-track verification, and per-receiver WebRTC audio capture.
@@ -23,9 +23,9 @@ Node.js and Playwright worker runtime orchestrating meeting attempt claim/bootst
 - `[main.ts:run]`: Reports `participation: 'ended'` only after `browser.close()` completes; upgrades `normal` end reason to `audio_drain_incomplete` if `diagnostics.drained === false`.
 - `[main.ts:run]`: Never logs raw SDK error messages or tokens on failure; logs only stack locations matching `/app/worker/dist-worker/...`.
 - `[http.ts:serviceRequest]`: Disallows HTTP redirects (`redirect: 'error'`) and retries only transient errors or HTTP status codes `408`, `429`, `500`, `502`, `503`, `504` up to `Math.min(Date.now() + 120000, deadline)`.
-- `[meet.ts:installMeetCapture]`: Rejects bridge messages with `MeetError('browser_bridge_rejected')` unless frame origin/path, `attempt_id`, `meeting_id`, `16000` Hz mono `pcm_s16le` format, UUID `stream_id`/`epoch`, active stream cap (`<= 64`), and base64 chunk bounds (`<= 80000` samples) match.
+- `[meet.ts:installMeetCapture]`: Rejects bridge messages with `MeetError('browser_bridge_rejected')` unless frame origin/path, `attempt_id`, `meeting_id`, `16000` Hz mono `pcm_s16le` format, UUID `stream_id`/`epoch`, control frame type (`stream_begin`, `bind`, `stream_end`, `gap`), active stream cap (`<= 64`), and base64 chunk bounds (`<= 80000` samples) match.
 - `[meet.ts:MeetBrowser.join]`: Refuses to join unless both microphone and camera send controls are confirmed off (or permissions are denied with no matching media devices) and detects visible reCAPTCHA challenges as `human_verification_required` without interacting with them.
-- `[teams-browser.ts:TeamsBrowser.disableDevices]`: Aborts with `teams_sending_device_active` if any `RTCPeerConnection` sender has a live enabled track, and streams incoming WebRTC audio receivers via `AudioTransport` with `attribution_unknown: true` and `capability: 'unverified'`.
+- `[teams-browser.ts:TeamsBrowser.disableDevices]` & `[teams-browser.ts:TeamsBrowser.join]`: Aborts with `teams_sending_device_active` if any `RTCPeerConnection` sender has a live enabled track, hooks `RTCPeerConnection` (`receiverStreams`) and `RTCDataChannel` (`dataChannels`, `dataMessages`, `onDataMessage`) to bind or rebind incoming WebRTC audio receivers (`attribution_unknown: false` when signaled, falling back to `attribution_unknown: true` when unverified), and forwards `participant_sources` in status snapshots.
 
 ## Side Effects
 - `[browser.ts:launchBrowser]`: Spawns `Xvfb` and `chromium` child processes, allocates temporary profile directories `/tmp/wortlaut-meet-*`, connects Playwright over local CDP, and removes the temporary profile on disconnect.

@@ -1,12 +1,14 @@
 # wortlaut
 
 ## Overview
-Core Python package for the `wortlaut` meeting service. It implements the FastAPI HTTP and WebSocket API, SQLAlchemy PostgreSQL models, S3 immutable audio chunk storage, per-source WebRTC VAD segmentation, Parakeet GPU ASR job orchestration, Kubernetes worker `Job`/`Secret` reconciliation, authenticated IMAP/ICS calendar intake, recurring event expansion, SMTP transcript delivery, and staged data retention.
+Core Python package for the `wortlaut` meeting service. It implements the FastAPI HTTP and WebSocket API, integrated operator and transcript Web-UI (`ui.py`), manual per-source speaker labeling (`PATCH /v1/recordings/{recording_id}/sources`), SQLAlchemy PostgreSQL models, S3 immutable audio chunk storage, per-source WebRTC VAD segmentation, Parakeet GPU ASR job orchestration, Kubernetes worker `Job`/`Secret` reconciliation, authenticated IMAP/ICS calendar intake, recurring event expansion, SMTP transcript and failure-notification delivery, and staged data retention.
 
 ## Interface
 - `[app.py:app]`: FastAPI application mounting `/sdk` (when present) and exposing:
+  - `GET /` and `GET /ui` (`[app.py:web_ui]`, `[ui.py:render_ui]`)
   - `GET /health/live` (`[app.py:live]`) and `GET /health/ready` (`[app.py:ready]`)
   - `POST /v1/recordings` (`[app.py:create_recording]`), `GET /v1/recordings` (`[app.py:list_recordings]`), `GET /v1/recordings/{recording_id}` (`[app.py:get_recording]`)
+  - `GET /v1/recordings/{recording_id}/transcript` (`[app.py:get_transcript]`), `PATCH /v1/recordings/{recording_id}/sources` (`[app.py:update_source_labels]`, `[app.py:SourceLabelsRequest]`)
   - `POST /v1/recordings/{recording_id}/attempts` (`[app.py:prepare_attempt]`), `POST /v1/recordings/{recording_id}/cancel` (`[app.py:cancel_recording]`)
   - `POST /v1/recordings/{recording_id}/delivery/retry` (`[app.py:retry_delivery]`)
   - `GET /v1/recordings/{recording_id}/exports/{format}` (`[app.py:get_export]`)
@@ -26,8 +28,9 @@ Core Python package for the `wortlaut` meeting service. It implements the FastAP
 - `[controller.py:kubernetes_api]`, `[controller.py:controller_pass]`, `[controller.py:reconcile_attempt]`, `[controller.py:new_attempt]`, `[controller.py:request_cancellation]`, `[controller.py:job_body]`, `[controller.py:read_job]`, `[controller.py:forget_secret]`, `[controller.py:release_pod_evidence]`: Kubernetes `Job`, `Pod` finalizer, and bootstrap `Secret` lifecycle controller.
 - `[calendar.py:AmbiguousMeetingLink]`, `[calendar.py:InvitationHTML]`, `[calendar.py:utc]`, `[calendar.py:dkim_dns]`, `[calendar.py:sender]`, `[calendar.py:meeting_link]`, `[calendar.py:entry_json]`, `[calendar.py:import_event]`, `[calendar.py:recurrence_anchor]`, `[calendar.py:instant_calendar]`, `[calendar.py:import_mail]`, `[calendar.py:consume_imap_message]`, `[calendar.py:imap_pass]`: Authenticated MIME/ICS and instant-invitation ingestion.
 - `[recurrence.py:recurrence_pass]` & `[recurrence.py:expand_series]`: Bounded materialization of recurring `CalendarEntry` series into `Recording` rows.
-- `[exports.py:export_data]`, `[exports.py:render_export]`, `[exports.py:export_reader_token]`, `[exports.py:timestamp]`, `[exports.py:speaker_label]`: Transcript and quality assembly in `json`, `txt`, and `vtt` formats plus HMAC reader token generation.
-- `[mail.py:smtp_pass]`, `[mail.py:build_message]`, `[mail.py:transmit]`, `[mail.py:delivery_json]`: SMTP transcript delivery with automatic ZIP compression or HTTPS `curl` download fallback when attachments exceed `mail_attachment_limit_bytes`.
+- `[exports.py:export_data]`, `[exports.py:render_export]`, `[exports.py:export_reader_token]`, `[exports.py:timestamp]`, `[exports.py:speaker_label]`: Transcript and quality assembly in `json`, `txt`, and `vtt` formats (applying `manual_speaker_name` from `AudioStream.contract` and exposing `source_labels`) plus HMAC reader token generation.
+- `[mail.py:FAILURE_REASONS]`, `[mail.py:effective_participation_reason]`, `[mail.py:smtp_pass]`, `[mail.py:build_message]`, `[mail.py:transmit]`, `[mail.py:delivery_json]`: SMTP transcript and join/lobby failure notification delivery (`no_audio_received` / `FAILURE_REASONS`) with automatic ZIP compression or HTTPS `curl` download fallback when attachments exceed `mail_attachment_limit_bytes`.
+- `[ui.py:UI_HTML]`, `[ui.py:render_ui]`: Self-contained German operator and live/completed transcript Web-UI served at `GET /` and `GET /ui`.
 - `[retention.py:retention_pass]`, `[retention.py:remove_audio_metadata]`, `[retention.py:calendar_retention]`: Staged expiration of S3 audio objects, transcript segments, attempt/delivery metadata, and calendar PII.
 - `[storage.py:AudioStorage]`, `[storage.py:get_storage]`, `[storage.py:canonical]`, `[storage.py:ObjectConflict]`: S3 object storage client framing PCM with `WORTLAUT1` headers and SHA-256 metadata verification.
 - `[validation.py:Provider]`, `[validation.py:normalize_meeting_url]`, `[validation.py:validate_webex_url]`: Provider URL normalization for `webex`, `google_meet`, and `teams`.
