@@ -65,7 +65,7 @@ class Settings(BaseSettings):
     worker_seccomp_type: Literal["Unconfined", "Localhost"] = "Unconfined"
     worker_seccomp_profile: str | None = None
     sdk_directory: Path = Path("/app/sdk")
-    s3_endpoint: str = "http://minio:9000"
+    s3_endpoint: str = "http://rustfs:9000"
     s3_bucket: str = "wortlaut-audio"
     s3_access_key: SecretStr | None = None
     s3_secret_key: SecretStr | None = None

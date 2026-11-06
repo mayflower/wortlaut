@@ -29,8 +29,8 @@ jobs:
       # tests remain opt-in; no production credentials enter PR workflows.
       WORTLAUT_TEST_DATABASE_URL: postgresql+psycopg://wortlaut_test:fixture-postgres-password@127.0.0.1:5432/wortlaut_test
       WORTLAUT_TEST_S3_ENDPOINT: http://127.0.0.1:34609
-      WORTLAUT_S3_ACCESS_KEY: fixture-minio-user
-      WORTLAUT_S3_SECRET_KEY: fixture-minio-password
+      WORTLAUT_S3_ACCESS_KEY: fixture-s3-user
+      WORTLAUT_S3_SECRET_KEY: fixture-s3-password
       PYTEST_ADDOPTS: --tb=line -ra
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -51,11 +51,12 @@ jobs:
         run: |
           docker run --detach --name wortlaut-test-s3 \
             --publish 127.0.0.1:34609:9000 \
-            --env MINIO_ROOT_USER=fixture-minio-user \
-            --env MINIO_ROOT_PASSWORD=fixture-minio-password \
-            minio/minio:RELEASE.2025-09-07T16-13-09Z server /data
-          curl --fail --retry 30 --retry-delay 1 --retry-connrefused \
-            http://127.0.0.1:34609/minio/health/ready
+            --env RUSTFS_ACCESS_KEY=fixture-s3-user \
+            --env RUSTFS_SECRET_KEY=fixture-s3-password \
+            --env RUSTFS_OBS_LOG_DIRECTORY= \
+            rustfs/rustfs:1.0.4@sha256:ed9210d6411d77ffceb70d94b964a3cb7d225983368bc25bebe01e995293dcc2 /data
+          curl --fail --retry 30 --retry-delay 1 --retry-all-errors \
+            http://127.0.0.1:34609/health/ready
       - name: Lint and behavior tests with PostgreSQL/S3
         run: |
           make lint

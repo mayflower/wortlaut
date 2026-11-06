@@ -5,5 +5,5 @@ resources:
   - postgres.yaml
   - meeting.yaml
   - controller-rbac.yaml
-  - minio.yaml
+  - rustfs.yaml
   - asr.yaml
