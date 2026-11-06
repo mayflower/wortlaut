@@ -38,16 +38,31 @@ export async function installMeetCapture(page: Page, bootstrap: Pick<MeetBootstr
     }
     const key = `${metadata.stream_id}/${metadata.epoch}`;
     const unsigned = (value: unknown) => Number.isSafeInteger(value) && (value as number) >= 0;
+    const validBinding = () => (metadata.source_kind === 'speaker' || metadata.source_kind === 'share_audio') &&
+      (metadata.attribution_unknown === true
+        ? metadata.speaker_id === null && metadata.participant_id == null && metadata.participant_name == null
+        : metadata.attribution_unknown === false &&
+          (metadata.source_kind === 'share_audio'
+            ? metadata.speaker_id === null || (typeof metadata.speaker_id === 'string' && metadata.speaker_id.length >= 1 && metadata.speaker_id.length <= 200)
+            : typeof metadata.speaker_id === 'string' && metadata.speaker_id.length >= 1 && metadata.speaker_id.length <= 200) &&
+          (metadata.participant_id == null || (typeof metadata.participant_id === 'string' && metadata.participant_id.length >= 1 && metadata.participant_id.length <= 200)) &&
+          (metadata.participant_name == null || (typeof metadata.participant_name === 'string' && metadata.participant_name.length >= 1 && metadata.participant_name.length <= 200))) &&
+      typeof metadata.provider_source_id === 'string' && metadata.provider_source_id.length <= 200 &&
+      metadata.provider_source_id.startsWith(`${provider}:${bootstrap.meeting_id}:receiver:`);
     const binding = () => metadata.meeting_id === bootstrap.meeting_id &&
       metadata.attempt_id === bootstrap.attempt_id && metadata.sample_rate === 16000 &&
-      metadata.channels === 1 && metadata.encoding === 'pcm_s16le' &&
-      metadata.source_kind === 'speaker' && metadata.speaker_id === null && metadata.attribution_unknown === true &&
-      typeof metadata.provider_source_id === 'string' && metadata.provider_source_id.length <= 256 &&
-      metadata.provider_source_id.startsWith(`${provider}:${bootstrap.meeting_id}:receiver:`);
+      metadata.channels === 1 && metadata.encoding === 'pcm_s16le' && validBinding();
     if (raw.type === 'control' && metadata.type === 'begin') {
       if (!binding() || (active.size >= 64 && !active.has(key)) ||
           metadata.id !== `${bootstrap.attempt_id}/${key}/begin`) throw new MeetError('browser_bridge_rejected');
       active.add(key); sink.begin(metadata);
+    } else if (raw.type === 'control' && metadata.type === 'bind') {
+      if (!active.has(key) || !validBinding() || !unsigned(metadata.start_sample) ||
+          (metadata.start_sample as number) < 1 ||
+          metadata.id !== `${bootstrap.attempt_id}/${key}/${metadata.start_sample}/bind`) {
+        throw new MeetError('browser_bridge_rejected');
+      }
+      sink.bind?.(metadata);
     } else if (raw.type === 'control' && metadata.type === 'end') {
       if (!active.has(key) || !unsigned(metadata.final_sample) ||
           !Number.isSafeInteger(metadata.last_sequence) || (metadata.last_sequence as number) < -1 ||
@@ -85,14 +100,34 @@ export async function installMeetCapture(page: Page, bootstrap: Pick<MeetBootstr
     window.wortlautMeetConfig = config;
     const connections = new Set<RTCPeerConnection>(), received = new WeakSet<RTCRtpReceiver>();
     const encodedReserved = new WeakSet<RTCPeerConnection>();
-    window.wortlautMeetReceivers = {connections, received, encodedReserved};
+    const receiverStreams = new WeakMap<RTCRtpReceiver, string[]>();
+    const dataChannels = new Set<RTCDataChannel>();
+    const dataMessages: unknown[] = [];
+    window.wortlautMeetReceivers = {connections, received, encodedReserved, receiverStreams, dataChannels, dataMessages};
     const Native = window.RTCPeerConnection;
     window.RTCPeerConnection = new Proxy(Native, {construct(target, args, newTarget) {
       const pc = Reflect.construct(target, args, newTarget) as RTCPeerConnection;
       connections.add(pc);
       if (args[0]?.encodedInsertableStreams === true) encodedReserved.add(pc);
+      pc.createDataChannel = new Proxy(pc.createDataChannel, {apply(fn, thisArg, channelArgs) {
+        const channel = Reflect.apply(fn, thisArg, channelArgs) as RTCDataChannel;
+        dataChannels.add(channel);
+        channel.addEventListener('message', (event) => {
+          if (dataMessages.length < 256) dataMessages.push(event.data);
+          window.wortlautMeetReceivers.onDataMessage?.(event.data);
+        });
+        return channel;
+      }});
+      pc.addEventListener('datachannel', (event) => {
+        dataChannels.add(event.channel);
+        event.channel.addEventListener('message', (msg) => {
+          if (dataMessages.length < 256) dataMessages.push(msg.data);
+          window.wortlautMeetReceivers.onDataMessage?.(msg.data);
+        });
+      });
       pc.addEventListener('track', (event) => {
         received.add(event.receiver);
+        receiverStreams.set(event.receiver, event.streams.map((stream) => stream.id));
         window.wortlautMeetReceivers.observe?.(event.receiver, pc);
       });
       pc.addEventListener('connectionstatechange', () => {
@@ -182,6 +217,7 @@ export class MeetBrowser {
   async prepare() {
     this.initialize = await installMeetCapture(this.page, this.bootstrap, {
       begin: (metadata) => this.transport.control(metadata as Record<string, unknown> & {id: string}),
+      bind: (metadata) => this.transport.control(metadata as Record<string, unknown> & {id: string}),
       end: (metadata) => this.transport.control(metadata as Record<string, unknown> & {id: string}),
       gap: (metadata) => this.transport.control(metadata as Record<string, unknown> & {id: string}),
       chunk: (metadata, pcm) => this.transport.chunk(metadata, pcm),
@@ -278,7 +314,7 @@ export class MeetBrowser {
       configured_speaker_slots: null, configured_share_slots: null,
       receiver_sources: state?.receiver_sources ?? [],
       audio_clock: state?.audio_clock,
-      participant_sources: {available: false, total: 0, truncated: false, sources: []}};
+      participant_sources: state?.participant_sources ?? {available: false, total: 0, truncated: false, sources: []}};
   }
 
   stop(reason: string) {

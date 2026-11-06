@@ -562,6 +562,7 @@ try {
       oscillator.connect(destination); oscillator.start();
       const sender = new RTCPeerConnection({iceServers: []});
       const receiver = new RTCPeerConnection({iceServers: []});
+      const roster = sender.createDataChannel('roster');
       receiver.ontrack = event => {
         const audio = document.createElement('audio'); audio.autoplay = true;
         audio.srcObject = new MediaStream([event.track]); document.body.append(audio);
@@ -574,17 +575,42 @@ try {
       await receiver.setLocalDescription(await receiver.createAnswer());
       await sender.setRemoteDescription(receiver.localDescription!);
       await producer.resume();
-      Object.assign(window, {async finishTeamsProducer() {
-        oscillator.stop(); sender.close(); receiver.close(); await producer.close();
-      }});
+      Object.assign(window, {
+        sendTeamsRoster() {
+          const trackId = receiver.getReceivers()[0]?.track?.id;
+          const ssrc = receiver.getReceivers()[0]?.getSynchronizationSources()?.[0]?.source ?? 1001;
+          roster.send(JSON.stringify({
+            participants: [{
+              participant_id: 'alice-session',
+              participant_name: 'Alice Example',
+              audio_csis: [ssrc],
+              track_id: trackId,
+            }],
+          }));
+        },
+        async finishTeamsProducer() {
+          roster.close(); oscillator.stop(); sender.close(); receiver.close(); await producer.close();
+        },
+      });
     });
-    await page.waitForFunction(() => window.wortlautMeet.inspect().audio_samples > 16000,
+    await page.waitForFunction(() => window.wortlautMeet.inspect().audio_samples > 8000,
       undefined, {timeout: 15000});
+    await page.evaluate(() => (window as any).sendTeamsRoster());
+    await page.waitForFunction(() => {
+      const inspected = window.wortlautMeet.inspect();
+      return inspected.participant_sources.available === true &&
+        inspected.receiver_sources[0]?.signaled_participant_id === 'alice-session' &&
+        inspected.audio_samples > 16000;
+    }, undefined, {timeout: 15000});
     const state = await teams.inspect();
     assert.equal(state.streams, 1);
     assert.ok(state.audio_samples > 16000);
     assert.equal(state.capability, 'unverified');
     assert.equal(state.reason, '');
+    assert.equal(state.participant_sources.available, true);
+    assert.equal(state.participant_sources.total, 1);
+    assert.equal(state.participant_sources.sources[0]?.participant_id, 'alice-session');
+    assert.equal((state.receiver_sources[0] as any)?.signaled_participant_id, 'alice-session');
     await teams.stop('normal');
     assert.equal((await teams.inspect()).drained, true);
     const teamsFrames = frames.slice(beforeTeams);
@@ -592,7 +618,13 @@ try {
       f.metadata.attempt_id === teamsAttemptId &&
       f.metadata.provider_source_id === `teams:${bootstrap.meeting_id}:receiver:1` &&
       f.metadata.attribution_unknown === true));
-    assert.ok(teamsFrames.some(f => Boolean(f.pcm) && f.metadata.attempt_id === teamsAttemptId));
+    assert.ok(teamsFrames.some(f => f.metadata.type === 'bind' &&
+      f.metadata.speaker_id === 'alice-session' &&
+      f.metadata.participant_id === 'alice-session' &&
+      f.metadata.participant_name === 'Alice Example' &&
+      f.metadata.attribution_unknown === false));
+    assert.ok(teamsFrames.some(f => Boolean(f.pcm) && f.metadata.attempt_id === teamsAttemptId &&
+      f.metadata.speaker_id === 'alice-session' && f.metadata.attribution_unknown === false));
     assert.ok(teamsFrames.some(f => f.metadata.type === 'end' &&
       String(f.metadata.id).startsWith(`${teamsAttemptId}/`)));
     assert.equal(await page.getByRole('button', {name: leave, exact: true}).count(), 0);

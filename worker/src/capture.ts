@@ -3,11 +3,13 @@ import {type Binding, type Chunk, Chunker} from './chunks.js';
 export type CaptureSink = {
   chunk: (metadata: Chunk, pcm: Uint8Array) => void;
   begin: (metadata: Record<string, unknown>) => void;
+  bind?: (metadata: Record<string, unknown>) => void;
   end: (metadata: Record<string, unknown>) => void;
   gap: (metadata: Record<string, unknown>) => void;
   error: (reason: string) => void;
 };
 type Handle = {stop: () => Promise<void>; suspend: () => void;
+  rebind: (binding: Binding) => void;
   restart: () => Promise<Handle>; error: (reason: string) => void};
 export type AudioClock = {state: string; total_interruptions: number;
   interruptions: {reason: 'suspended' | 'interrupted'; observed_start_utc: string;
@@ -109,6 +111,13 @@ export class AudioCapture {
     return true;
   }
 
+  async rebind(track: MediaStreamTrack, binding: Binding): Promise<boolean> {
+    const pending = this.captures.get(track);
+    if (!pending || this.closed || track.readyState === 'ended') return false;
+    (await pending).rebind(binding);
+    return true;
+  }
+
   async detach(track: MediaStreamTrack) {
     const pending = this.captures.get(track);
     if (!pending) return;
@@ -129,6 +138,9 @@ export class AudioCapture {
     const source = this.context.createMediaStreamSource(new MediaStream([track]));
     const clockAnchor = {...this.clockAnchor};
     let chunker: Chunker | undefined;
+    let currentBinding: Binding = {...binding};
+    let pendingBinding: Binding | undefined;
+    let lastBoundSample = 0;
     let gapStart = 0, gapEnd = 0;
     const flushGap = () => {
       if (gapEnd === gapStart || !chunker) return;
@@ -136,6 +148,19 @@ export class AudioCapture {
       sink.gap({type: 'gap', id: `${attemptId}/${streamId}/${epoch}/${range.sequence}/gap`,
         stream_id: streamId, epoch, ...range, reason: 'capture_input_missing', final: true});
       gapStart = gapEnd;
+    };
+    const applyPendingBind = () => {
+      if (!pendingBinding || !chunker || stopping) return;
+      flushGap();
+      chunker.flush();
+      const sample = chunker.finalSample;
+      if (sample <= lastBoundSample) return;
+      currentBinding = {...pendingBinding};
+      pendingBinding = undefined;
+      lastBoundSample = sample;
+      chunker.bindAtSample(currentBinding, sample);
+      sink.bind?.({type: 'bind', id: `${attemptId}/${streamId}/${epoch}/${sample}/bind`,
+        stream_id: streamId, epoch, start_sample: sample, ...currentBinding});
     };
     let ended!: () => void;
     const done = new Promise<void>((resolve) => { ended = resolve; });
@@ -155,8 +180,8 @@ export class AudioCapture {
             epoch, sample_rate: 16000 as const, channels: 1 as const, encoding: 'pcm_s16le' as const,
             monotonic_origin_ms: origin, session_monotonic_origin_ms: this.anchor.monotonic_ms,
             session_utc_origin: this.anchor.utc};
-          chunker = new Chunker(identity, binding, sink.chunk);
-          sink.begin({...identity, ...binding, type: 'begin', id: `${attemptId}/${streamId}/${epoch}/begin`});
+          chunker = new Chunker(identity, currentBinding, sink.chunk);
+          sink.begin({...identity, ...currentBinding, type: 'begin', id: `${attemptId}/${streamId}/${epoch}/begin`});
         }
         try {
           if (data.type === 'gap') {
@@ -169,6 +194,7 @@ export class AudioCapture {
             }
           } else {
             flushGap(); chunker.append(new Uint8Array(data.bytes), data.start_sample);
+            if (pendingBinding) applyPendingBind();
           }
         }
         catch { sink.error('audio_discontinuity'); }
@@ -183,7 +209,19 @@ export class AudioCapture {
     };
     let stopping: Promise<void> | undefined;
     const handle: Handle = {error: sink.error,
-      restart: () => this.create(track, meetingId, attemptId, binding, sink),
+      rebind: (next: Binding) => {
+        const active = pendingBinding ?? currentBinding;
+        if (active.provider_source_id === next.provider_source_id &&
+            active.speaker_id === next.speaker_id &&
+            active.source_kind === next.source_kind &&
+            active.attribution_unknown === next.attribution_unknown &&
+            active.participant_id === next.participant_id &&
+            active.participant_name === next.participant_name) return;
+        if (!chunker) { currentBinding = {...next}; pendingBinding = undefined; return; }
+        pendingBinding = {...next};
+        applyPendingBind();
+      },
+      restart: () => this.create(track, meetingId, attemptId, pendingBinding ?? currentBinding, sink),
       suspend: () => {
         node.parameters.get('capturing')!.setValueAtTime(0, this.context.currentTime);
         node.port.postMessage({type: 'stop'});

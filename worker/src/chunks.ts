@@ -4,6 +4,7 @@ export type Binding = {
   source_kind: 'speaker' | 'share_audio';
   attribution_unknown: boolean;
   participant_id?: string;
+  participant_name?: string;
 };
 
 export type Chunk = Binding & {

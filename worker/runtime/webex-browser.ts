@@ -39,6 +39,7 @@ export class WebexBrowser {
   async prepare() {
     this.initialize = await installMeetCapture(this.page, this.bootstrap, {
       begin: metadata => this.transport.control(metadata as Record<string, unknown> & {id: string}),
+      bind: metadata => this.transport.control(metadata as Record<string, unknown> & {id: string}),
       end: metadata => this.transport.control(metadata as Record<string, unknown> & {id: string}),
       gap: metadata => this.transport.control(metadata as Record<string, unknown> & {id: string}),
       chunk: (metadata, pcm) => this.transport.chunk(metadata, pcm),
@@ -95,7 +96,8 @@ export class WebexBrowser {
       reason: this.reason, stopped: Boolean(this.stopping || this.reason), drained: this.drained,
       streams: state?.streams ?? 0, audio_samples: state?.audio_samples ?? 0,
       receiver_sources: state?.receiver_sources ?? [], configured_speaker_slots: null,
-      configured_share_slots: null, participant_sources: {available: false, total: 0, truncated: false, sources: []}};
+      configured_share_slots: null,
+      participant_sources: state?.participant_sources ?? {available: false, total: 0, truncated: false, sources: []}};
   }
 
   stop(reason: string) {
