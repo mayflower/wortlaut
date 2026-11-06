@@ -405,3 +405,108 @@ def test_audio_clock_interruption_is_persisted_and_visible_without_inventing_sam
             "Audio-Uhr unterbrochen: True"
             in client.get(f"/v1/recordings/{recording}/exports/{format}", headers=API).text
         )
+
+
+def test_web_ui_and_manual_source_labels_update_transcript_and_exports(
+    client, database, storage
+):
+    from test_ingest import authenticate, begin, source
+    from test_processing import send_pcm
+
+    from wortlaut.asr import commit_result, finalize_processing
+    from wortlaut.models import AsrJob, AudioStream
+    from wortlaut.processing import segmentation_pass
+
+    for path in ("/", "/ui"):
+        ui = client.get(path)
+        assert ui.status_code == 200
+        assert "text/html" in ui.headers["content-type"]
+        assert "Bot in ein Meeting schicken" in ui.text
+
+    attempt, credential, identity = source(client)
+    unbound = {
+        **identity,
+        "provider_source_id": "teams:fixture:receiver:1",
+        "speaker_id": None,
+        "attribution_unknown": True,
+    }
+    with client.websocket_connect(f"/v1/attempts/{attempt}/audio") as socket:
+        authenticate(socket, credential)
+        socket.send_json(begin(unbound))
+        assert socket.receive_json()["type"] == "ack"
+        send_pcm(socket, unbound, b"\0\0" * 16000, 0, 0)
+        socket.send_json(
+            {
+                "type": "end",
+                "id": begin(unbound)["id"] + "/end",
+                "stream_id": unbound["stream_id"],
+                "epoch": unbound["epoch"],
+                "final_sample": 16000,
+                "last_sequence": 0,
+            }
+        )
+        assert socket.receive_json()["type"] == "ack"
+
+    recording = unbound["meeting_id"]
+    with Session(database) as db:
+        stream = db.scalar(select(AudioStream))
+        job = AsrJob(
+            id="manual-label-job",
+            stream_id=stream.id,
+            start_sample=0,
+            end_sample=16000,
+            core_start=0,
+            core_end=16000,
+            binding={},
+        )
+        db.add(job)
+        db.flush()
+        commit_result(
+            db,
+            job.id,
+            {
+                "id": job.id,
+                "stream_id": str(stream.stream_id),
+                "epoch": str(stream.epoch),
+                "source_kind": "speaker",
+                "speaker_id": None,
+                "provider_source_id": "teams:fixture:receiver:1",
+                "attribution_unknown": True,
+                "session_utc_origin": stream.contract["session_utc_origin"],
+                "start": 0.0,
+                "end": 1.0,
+                "text": "Guten Tag zusammen.",
+                "words": [{"word": "Guten", "start": 0.0, "end": 0.5}],
+            },
+        )
+
+    # Live transcript endpoint works even before recording ends.
+    live_transcript = client.get(f"/v1/recordings/{recording}/transcript", headers=API)
+    assert live_transcript.status_code == 200
+    assert (
+        live_transcript.json()["segments"][0]["speaker_label"]
+        == "Quelle teams:fixture:receiver:1 (Zuordnung unklar)"
+    )
+
+    patch = client.patch(
+        f"/v1/recordings/{recording}/sources",
+        headers=API,
+        json={"labels": {"teams:fixture:receiver:1": "Max Mustermann"}},
+    )
+    assert patch.status_code == 200
+    assert patch.json() == {"source_labels": {"teams:fixture:receiver:1": "Max Mustermann"}}
+
+    client.post(
+        f"/v1/attempts/{attempt}/status",
+        headers={"Authorization": "Bearer " + credential, "X-Worker-ID": "fixture-worker"},
+        json={"participation": "ended", "reason": "normal"},
+    )
+    segmentation_pass(database)
+    finalize_processing(database)
+
+    txt = client.get(f"/v1/recordings/{recording}/exports/txt", headers=API).text
+    assert "Max Mustermann: Guten Tag zusammen." in txt
+    exported = client.get(f"/v1/recordings/{recording}/exports/json", headers=API).json()
+    assert exported["source_labels"] == {"teams:fixture:receiver:1": "Max Mustermann"}
+    assert exported["segments"][0]["speaker_label"] == "Max Mustermann"
+    assert exported["quality"]["attribution_unknown"] is True

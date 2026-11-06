@@ -275,7 +275,13 @@ def test_dkim_calendar_result_goes_to_authenticated_sender(
 
     from wortlaut.models import CalendarEntry
 
-    invitation = imported(client, signed_invite())
+    invitation = imported(
+        client,
+        signed_invite(
+            starts="DTSTART;TZID=Europe/Berlin:20991024T100000",
+            ends="DTEND;TZID=Europe/Berlin:20991024T103000",
+        ),
+    )
     assert invitation["status"] == "accepted"
     recording = finished_capture(client, database)
     with Session(database) as db:
@@ -285,3 +291,38 @@ def test_dkim_calendar_result_goes_to_authenticated_sender(
     smtp_pass(database)
     assert smtp.envelopes == [["owner@mayflower.de"]]
     assert len(list(smtp.messages[0].iter_attachments())) == 3
+
+
+def test_failed_join_without_audio_sends_notification_mail(
+    client, database, storage, smtp, signed_invite
+):
+    from test_calendar import imported
+    from test_recordings import prepare
+
+    invitation = imported(
+        client,
+        signed_invite(
+            starts="DTSTART;TZID=Europe/Berlin:20991024T100000",
+            ends="DTEND;TZID=Europe/Berlin:20991024T103000",
+        ),
+    )
+    assert invitation["status"] == "accepted"
+    recording = uuid.UUID(invitation["recording_id"])
+    attempt, headers = prepare(client, str(recording))
+    client.post(f"/v1/attempts/{attempt}/claim", headers=headers, json={"worker_id": "owner"})
+    response = client.post(
+        f"/v1/attempts/{attempt}/status",
+        headers={**headers, "X-Worker-ID": "owner"},
+        json={"participation": "ended", "reason": "lobby_timeout", "drained": True},
+    )
+    assert response.status_code == 200
+    finalize_processing(database)
+    smtp_pass(database)
+    assert smtp.envelopes == [["owner@mayflower.de"]]
+    assert len(smtp.messages) == 1
+    message = smtp.messages[0]
+    assert "fehlgeschlagen (lobby_timeout)" in message["Subject"]
+    assert not list(message.iter_attachments())
+    body = message.get_body(preferencelist=("plain",)).get_content()
+    assert "Zeitüberschreitung im Wartebereich" in body
+    assert "Grund: lobby_timeout" in body

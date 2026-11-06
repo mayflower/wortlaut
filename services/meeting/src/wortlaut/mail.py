@@ -18,6 +18,39 @@ from wortlaut.exports import export_data, export_reader_token, render_export
 from wortlaut.models import Attempt, AudioChunk, AudioStream, CalendarEntry, Delivery, Recording
 from wortlaut.settings import get_settings
 
+FAILURE_REASONS = {
+    "lobby_timeout": "Zeitüberschreitung im Wartebereich (Bot wurde nicht eingelassen)",
+    "admission_denied": "Beitritt wurde vom Host oder Meeting-Provider abgelehnt",
+    "prejoin_denied": "Meeting-Teilnahme wurde vor dem Beitritt vom Provider verweigert",
+    "human_verification_required": (
+        "Google Meet verlangt eine menschliche Sicherheits-/CAPTCHA-Prüfung"
+    ),
+    "consent_required": "Zustimmungsdialog im Meeting blockiert den automatischen Beitritt",
+    "teams_auth_required": (
+        "Microsoft Teams verlangt eine Konto-Anmeldung (Gastbeitritt nicht erlaubt)"
+    ),
+    "teams_verification_required": "Microsoft Teams verlangt einen Bestätigungscode",
+    "teams_prejoin_timeout": "Microsoft Teams Beitrittsseite hat nicht rechtzeitig geladen",
+    "auth_session_missing": "Anmeldesitzung fehlt oder ist abgelaufen",
+    "join_button_missing": "Beitrittsschaltfläche auf der Meeting-Seite nicht gefunden",
+    "guest_name_missing": "Gast-Namensfeld auf der Meeting-Seite nicht verfügbar",
+    "guest_name_input_failed": "Gastname konnte nicht eingegeben werden",
+    "meeting_not_found": "Besprechung wurde beim Provider nicht gefunden",
+    "missed": "Terminzeitfenster war vor dem Start bereits abgelaufen",
+    "removed": "Bot wurde aus der Besprechung entfernt",
+    "worker_failed": "Worker-Prozess wurde unerwartet beendet",
+    "worker_startup_failed": "Browser-Start im Worker fehlgeschlagen",
+}
+
+
+def effective_participation_reason(data: dict) -> str | None:
+    if data.get("participation_reason"):
+        return data["participation_reason"]
+    for attempt in reversed(data.get("attempts", [])):
+        if attempt.get("end_reason"):
+            return attempt["end_reason"]
+    return None
+
 
 def delivery_json(delivery):
     if delivery is None:
@@ -41,9 +74,25 @@ def build_message(db, recording, delivery):
     message["From"] = settings.smtp_from
     message["To"] = ", ".join(delivery.recipients)
     message["Message-ID"] = delivery.message_id
-    message["Subject"] = f"wortlaut: Aufnahme {recording.id}"
     period = data["scheduled_period"]
     quality = data["quality"]
+    reason = effective_participation_reason(data)
+    explanation = FAILURE_REASONS.get(reason) if reason else None
+    if quality["no_audio_received"]:
+        message["Subject"] = (
+            f"wortlaut: Aufnahme {recording.id} fehlgeschlagen ({reason or 'no_audio_received'})"
+        )
+        body = (
+            f"wortlaut – {recording.provider}\nTermin: {period['start']} bis {period['end']}\n"
+            f"Teilnahme: {data['participation']}; "
+            f"Grund: {reason or 'unbekannt'}\n"
+            f"Hinweis: {explanation or 'Es wurde kein Audio im Meeting empfangen.'}\n"
+            f"Verarbeitung: {data['processing']}\n"
+            "Es wurde kein Audio aufgezeichnet; daher sind keine Transkript-Exporte angehängt.\n"
+        )
+        message.set_content(body)
+        return message
+    message["Subject"] = f"wortlaut: Aufnahme {recording.id}"
     attribution = "unklar" if quality["attribution_unknown"] else "keine ungebundenen Samples"
     drain = "unvollständig" if quality["incomplete_drain"] else "kein bekannter Drain-Fehler"
     clock = (
@@ -58,8 +107,9 @@ def build_message(db, recording, delivery):
         f"wortlaut – {recording.provider}\nTermin: {period['start']} bis {period['end']}\n"
         f"Letztes bekanntes Audio: {data['last_known_audio_utc'] or 'unbekannt'}\n"
         f"Teilnahme: {data['participation']}; "
-        f"Grund: {data['participation_reason'] or 'unbekannt'}\n"
-        f"Verarbeitung: {data['processing']}\n"
+        f"Grund: {reason or 'unbekannt'}\n"
+        + (f"Hinweis: {explanation}\n" if explanation else "")
+        + f"Verarbeitung: {data['processing']}\n"
         f"Audiolücken: {'vorhanden' if quality['has_audio_gaps'] else 'keine bekannten'}\n"
         f"Audio-Uhr: {clock}\n"
         f"Aufnahmeende: {'unbekannt' if quality['capture_end_unknown'] else 'bekannt'}\n"
@@ -216,7 +266,21 @@ def smtp_pass(engine):
                     )
                     .limit(1)
                 )
-                if not has_audio or not recipients:
+                end_reason = recording.participation_reason or db.scalar(
+                    select(Attempt.end_reason)
+                    .where(
+                        Attempt.recording_id == recording.id,
+                        Attempt.end_reason.is_not(None),
+                    )
+                    .order_by(Attempt.ended_at.desc().nullslast())
+                    .limit(1)
+                )
+                failed_join = (
+                    recording.participation == "ended"
+                    and recording.cancelled_at is None
+                    and (entry is not None or end_reason in FAILURE_REASONS)
+                )
+                if (not has_audio and not failed_join) or not recipients:
                     continue
                 domain = parseaddr(settings.smtp_from)[1].rsplit("@", 1)[-1]
                 delivery = Delivery(

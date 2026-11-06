@@ -22,6 +22,7 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import AwareDatetime, BaseModel, Field, ValidationError, model_validator
 from sqlalchemy import func, select, text, tuple_
@@ -51,6 +52,7 @@ from wortlaut.recurrence import recurrence_pass
 from wortlaut.retention import retention_pass
 from wortlaut.settings import get_settings
 from wortlaut.storage import get_storage
+from wortlaut.ui import render_ui
 from wortlaut.validation import Provider, normalize_meeting_url
 from wortlaut.webex import WebexUnavailable, guest_token
 
@@ -147,6 +149,13 @@ class RecordingRequest(BaseModel):
 
 class ClaimRequest(BaseModel):
     worker_id: str = Field(min_length=1, max_length=128)
+
+
+class SourceLabelsRequest(BaseModel):
+    labels: dict[
+        Annotated[str, Field(min_length=1, max_length=256)],
+        Annotated[str, Field(max_length=200)],
+    ] = Field(max_length=64)
 
 
 class RtpSourceEvidence(BaseModel):
@@ -265,6 +274,12 @@ def recording_json(recording: Recording) -> dict:
         "calendar_conflict": recording.calendar_conflict,
         "recurrence_key": recording.recurrence_key,
     }
+
+
+@app.get("/", response_class=HTMLResponse)
+@app.get("/ui", response_class=HTMLResponse)
+def web_ui():
+    return HTMLResponse(render_ui(), headers={"Cache-Control": "no-store"})
 
 
 @app.get("/health/live")
@@ -633,6 +648,49 @@ def cancel_recording(recording_id: uuid.UUID, db: Db):
     return recording_json(recording)
 
 
+@app.get("/v1/recordings/{recording_id}/transcript", dependencies=[Depends(api_auth)])
+def get_transcript(recording_id: uuid.UUID, db: Db):
+    recording = db.get(Recording, recording_id)
+    if recording is None:
+        raise HTTPException(404, "Recording not found")
+    if recording.transcript_deleted_at:
+        raise HTTPException(410, "Transcript retention expired")
+    return export_data(db, recording)
+
+
+@app.patch("/v1/recordings/{recording_id}/sources", dependencies=[Depends(api_auth)])
+def update_source_labels(recording_id: uuid.UUID, body: SourceLabelsRequest, db: Db):
+    recording = db.scalar(select(Recording).where(Recording.id == recording_id).with_for_update())
+    if recording is None:
+        raise HTTPException(404, "Recording not found")
+    if recording.transcript_deleted_at is not None:
+        raise HTTPException(410, "Transcript retention expired")
+    attempts = db.scalars(select(Attempt).where(Attempt.recording_id == recording.id)).all()
+    streams = db.scalars(
+        select(AudioStream)
+        .where(AudioStream.attempt_id.in_([a.id for a in attempts]))
+        .with_for_update()
+    ).all()
+    for stream in streams:
+        source_id = stream.contract.get("provider_source_id")
+        if source_id in body.labels:
+            cleaned = " ".join(body.labels[source_id].split())
+            updated = dict(stream.contract)
+            if cleaned:
+                updated["manual_speaker_name"] = cleaned
+            else:
+                updated.pop("manual_speaker_name", None)
+            stream.contract = updated
+    db.commit()
+    return {
+        "source_labels": {
+            s.contract["provider_source_id"]: s.contract["manual_speaker_name"]
+            for s in streams
+            if s.contract.get("provider_source_id") and s.contract.get("manual_speaker_name")
+        }
+    }
+
+
 @app.get("/v1/recordings/{recording_id}/exports/{format}")
 def get_export(
     recording_id: uuid.UUID,
@@ -817,6 +875,9 @@ def worker_status(
     if body.participation == "ended":
         attempt.ended_at = datetime.now(UTC)
         attempt.end_reason = body.reason or "normal"
+        recording.participation_reason = attempt.end_reason
+    elif not recording.cancelled_at:
+        recording.participation_reason = body.reason or None
     db.commit()
     return {
         "accepted": True,

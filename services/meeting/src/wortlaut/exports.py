@@ -38,7 +38,9 @@ def timestamp(seconds: float):
     return f"{hours:02}:{minutes:02}:{seconds:02}.{fraction:03}"
 
 
-def speaker_label(segment):
+def speaker_label(segment, custom_labels: dict[str, str] | None = None):
+    if custom_labels and segment.get("provider_source_id") in custom_labels:
+        return custom_labels[segment["provider_source_id"]]
     if segment["source_kind"] == "share_audio":
         return "Freigabe-Audio"
     if segment["attribution_unknown"]:
@@ -51,6 +53,11 @@ def export_data(db: Session, recording: Recording):
     streams = db.scalars(
         select(AudioStream).where(AudioStream.attempt_id.in_([a.id for a in attempts]))
     ).all()
+    source_labels = {
+        s.contract["provider_source_id"]: s.contract["manual_speaker_name"]
+        for s in streams
+        if s.contract.get("provider_source_id") and s.contract.get("manual_speaker_name")
+    }
     segments = [
         dict(s.result)
         for s in db.scalars(
@@ -69,7 +76,7 @@ def export_data(db: Session, recording: Recording):
             {**word, "start": word["start"] + delta, "end": word["end"] + delta}
             for word in segment["words"]
         ]
-        segment["speaker_label"] = speaker_label(segment)
+        segment["speaker_label"] = speaker_label(segment, source_labels)
     segments.sort(key=lambda s: (s["start"], s["stream_id"], s["id"]))
     qualities = [
         {
@@ -149,6 +156,7 @@ def export_data(db: Session, recording: Recording):
             "participant_identity_requirement": "required",
             "streams": qualities,
         },
+        "source_labels": source_labels,
         "segments": segments,
     }
 
