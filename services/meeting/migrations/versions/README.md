@@ -1,7 +1,7 @@
 # versions
 
 ## Overview
-Alembic schema migration revisions (`0001` through `0022`) defining and evolving the PostgreSQL relational schema for `wortlaut` recordings, capture attempts, audio streams, chunks, controls, ASR jobs, transcript segments, calendar entries, mail cursors/imports, and SMTP deliveries.
+Alembic schema migration revisions (`0001` through `0023`) defining and evolving the PostgreSQL relational schema for `wortlaut` recordings, capture attempts, audio streams, chunks, controls, ASR jobs, transcript segments, calendar entries, mail cursors/imports, and SMTP deliveries.
 
 ## Interface
 - `[0001_recordings.py:upgrade]` / `[0001_recordings.py:downgrade]`: Creates `recordings` and `attempts` tables and `ix_attempts_recording_id` index (`revision = "0001"`, `down_revision = None`).
@@ -26,13 +26,14 @@ Alembic schema migration revisions (`0001` through `0022`) defining and evolving
 - `[0020_ingest_rate.py:upgrade]` / `[0020_ingest_rate.py:downgrade]`: Adds token-bucket rate limit columns (`audio_ingest_tokens`, `audio_ingest_refilled_at`) on `attempts` (`revision = "0020"`).
 - `[0021_active_sources.py:upgrade]` / `[0021_active_sources.py:downgrade]`: Adds partial index `ix_audio_streams_active_attempt` on `audio_streams` (`revision = "0021"`).
 - `[0022_teams.py:upgrade]` / `[0022_teams.py:downgrade]`: Updates `recordings_provider` check constraint on `recordings` to allow `('webex', 'google_meet', 'teams')` (`revision = "0022"`, `down_revision = "0021"`).
+- `[0023_recording_title_and_guest_name.py:upgrade]` / `[0023_recording_title_and_guest_name.py:downgrade]`: Adds nullable `title` (`String(200)`) and `guest_name` (`String(120)`) columns on `recordings` (`revision = "0023"`, `down_revision = "0022"`).
 
 ## Invariants
-- `[0001_recordings.py:revision]` .. `[0022_teams.py:revision]`: Revisions form a single linear chain from `0001` (`down_revision = None`) to `0022` (`down_revision = "0021"`).
+- `[0001_recordings.py:revision]` .. `[0023_recording_title_and_guest_name.py:revision]`: Revisions form a single linear chain from `0001` (`down_revision = None`) to `0023` (`down_revision = "0022"`).
 - `[0022_teams.py:upgrade]`: The `recordings_provider` check constraint on `recordings` restricts `provider` values to `('webex', 'google_meet', 'teams')`.
 
 ## Side Effects
-- `[0001_recordings.py:upgrade]` .. `[0022_teams.py:upgrade]`: Executes DDL operations (`create_table`, `drop_table`, `add_column`, `create_index`, `create_check_constraint`, `drop_constraint`) against the target PostgreSQL database via `alembic.op`.
+- `[0001_recordings.py:upgrade]` .. `[0023_recording_title_and_guest_name.py:upgrade]`: Executes DDL operations (`create_table`, `drop_table`, `add_column`, `drop_column`, `create_index`, `create_check_constraint`, `drop_constraint`) against the target PostgreSQL database via `alembic.op`.
 
 ## Verification
 - Run: `uv run --directory services/meeting pytest`

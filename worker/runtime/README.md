@@ -8,15 +8,15 @@ Node.js and Playwright worker runtime orchestrating meeting attempt claim/bootst
 - `[browser.ts:nativeMeetInput]`: X11 `xdotool` pointer and keyboard input driver for Google Meet prejoin and in-call controls.
 - `[browser.ts:launchBrowser]`: Launches headless Playwright Chromium for Webex SDK mode or a regular sandboxed Chromium process over CDP (with `Xvfb` on Linux when `DISPLAY` is unset) for `google_meet`, `teams`, or browser-based `webex`.
 - `[http.ts:serviceRequest]`: Idempotent HTTP client with retry and backoff for `/v1/attempts/...` control-plane requests.
-- `[main.ts:run]`: Entry point claiming `/v1/attempts/${attemptId}/claim`, fetching `/v1/attempts/${attemptId}/bootstrap`, running provider session lifecycle, renewing guest tokens, and posting `/v1/attempts/${attemptId}/status`.
+- `[main.ts:run]`: Entry point claiming `/v1/attempts/${attemptId}/claim`, fetching `/v1/attempts/${attemptId}/bootstrap`, running provider session lifecycle (including empty-room auto-leave `room_empty` after `empty_room_timeout_seconds`, default 300s), renewing guest tokens, and posting `/v1/attempts/${attemptId}/status`.
 - `[meet.ts:MeetBootstrap]`: Bootstrap configuration type for `google_meet` attempts.
 - `[meet.ts:MeetError]`: Structured provider failure error carrying a machine-readable `reason`.
-- `[meet.ts:installMeetCapture]`: Installs `window.wortlautMeetBridge` binding and `RTCPeerConnection` / `RTCDataChannel` init-script hooks (`connections`, `received`, `encodedReserved`, `receiverStreams`, `dataChannels`, `dataMessages`, `onDataMessage`), then evaluates `dist/meet/capture.js` in the verified provider frame.
-- `[meet.ts:MeetBrowser]`: Playwright controller for Google Meet prejoin device muting, guest/account join, reCAPTCHA/consent/lobby detection, and capture teardown.
+- `[meet.ts:installMeetCapture]`: Installs `window.wortlautMeetBridge` binding and `RTCPeerConnection` / `RTCDataChannel` / SDP / `fetch` / `XMLHttpRequest` / `WebSocket` init-script hooks (`connections`, `received`, `encodedReserved`, `receiverStreams`, `dataChannels`, `dataMessages`, `onDataMessage`, `remoteDescriptions`, `onRemoteDescription`), then evaluates `dist/meet/capture.js` in the verified provider frame.
+- `[meet.ts:MeetBrowser]`: Playwright controller for Google Meet prejoin device muting, guest/account join, non-invasive participant roster side-panel opening, reCAPTCHA/consent/lobby detection, and capture teardown.
 - `[teams-browser.ts:TeamsBootstrap]`: Bootstrap configuration type for `teams` attempts.
-- `[teams-browser.ts:TeamsBrowser]`: Playwright controller for Microsoft Teams web client prejoin, sender-track verification, and per-receiver WebRTC audio capture.
+- `[teams-browser.ts:TeamsBrowser]`: Playwright controller for Microsoft Teams web client prejoin, sender-track verification, non-invasive participant roster side-panel opening, and per-receiver WebRTC audio capture.
 - `[webex-browser.ts:WebexBrowserBootstrap]`: Bootstrap configuration type for browser-based `webex` attempts.
-- `[webex-browser.ts:WebexBrowser]`: Playwright controller for `https://web.webex.com/meeting` iframe join and capture.
+- `[webex-browser.ts:WebexBrowser]`: Playwright controller for `https://web.webex.com/meeting` iframe join, non-invasive participant roster side-panel opening, and capture.
 
 ## Invariants
 - `[main.ts:run]`: Requires `WORTLAUT_API_URL`, `WORTLAUT_ATTEMPT_ID`, and `WORTLAUT_BOOTSTRAP_CREDENTIAL` environment variables; enforces `https:` provider URLs without credentials and validates provider-specific hostnames and paths.

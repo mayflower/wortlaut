@@ -1,21 +1,21 @@
 # wortlaut
 
 ## Overview
-Core Python package for the `wortlaut` meeting service. It implements the FastAPI HTTP and WebSocket API, integrated operator and transcript Web-UI (`ui.py`), manual per-source speaker labeling (`PATCH /v1/recordings/{recording_id}/sources`), SQLAlchemy PostgreSQL models, S3 immutable audio chunk storage, per-source WebRTC VAD segmentation, Parakeet GPU ASR job orchestration, Kubernetes worker `Job`/`Secret` reconciliation, authenticated IMAP/ICS calendar intake, recurring event expansion, SMTP transcript and failure-notification delivery, and staged data retention.
+Core Python package for the `wortlaut` meeting service. It implements the FastAPI HTTP and WebSocket API, integrated operator and transcript Web-UI (`ui.py`), automatic browser DOM and WebRTC/signaling participant attribution, OpenTelemetry OTLP/HTTP trace and Loki structured log telemetry (`telemetry.py`), SQLAlchemy PostgreSQL models, S3 immutable audio chunk storage, per-source WebRTC VAD segmentation, Parakeet GPU ASR job orchestration, Kubernetes worker `Job`/`Secret` reconciliation, authenticated IMAP/ICS calendar intake, recurring event expansion, SMTP transcript and failure-notification delivery, and staged data retention.
 
 ## Interface
 - `[app.py:app]`: FastAPI application mounting `/sdk` (when present) and exposing:
   - `GET /` and `GET /ui` (`[app.py:web_ui]`, `[ui.py:render_ui]`)
   - `GET /health/live` (`[app.py:live]`) and `GET /health/ready` (`[app.py:ready]`)
   - `POST /v1/recordings` (`[app.py:create_recording]`), `GET /v1/recordings` (`[app.py:list_recordings]`), `GET /v1/recordings/{recording_id}` (`[app.py:get_recording]`)
-  - `GET /v1/recordings/{recording_id}/transcript` (`[app.py:get_transcript]`), `PATCH /v1/recordings/{recording_id}/sources` (`[app.py:update_source_labels]`, `[app.py:SourceLabelsRequest]`)
+  - `GET /v1/recordings/{recording_id}/transcript` (`[app.py:get_transcript]`)
   - `POST /v1/recordings/{recording_id}/attempts` (`[app.py:prepare_attempt]`), `POST /v1/recordings/{recording_id}/cancel` (`[app.py:cancel_recording]`)
   - `POST /v1/recordings/{recording_id}/delivery/retry` (`[app.py:retry_delivery]`)
   - `GET /v1/recordings/{recording_id}/exports/{format}` (`[app.py:get_export]`)
   - `POST /v1/calendar/messages` (`[app.py:import_calendar_message]`), `GET /v1/calendar` (`[app.py:calendar_status]`)
   - `POST /v1/attempts/{attempt_id}/claim` (`[app.py:claim]`), `GET /v1/attempts/{attempt_id}/bootstrap` (`[app.py:bootstrap]`), `POST /v1/attempts/{attempt_id}/status` (`[app.py:worker_status]`)
   - `WEBSOCKET /v1/attempts/{attempt_id}/audio` (`[app.py:audio_socket]`, `[app.py:ingest_message]`)
-- `[app.py:RecordingRequest]`, `[app.py:ClaimRequest]`, `[app.py:RtpSourceEvidence]`, `[app.py:EncodedFrameEvidence]`, `[app.py:EncodedTransformEvidence]`, `[app.py:ReceiverEvidence]`, `[app.py:ParticipantSourceEvidence]`, `[app.py:ParticipantEvidence]`, `[app.py:ClockInterruption]`, `[app.py:AudioClockEvidence]`, `[app.py:WorkerStatus]`: Pydantic request and diagnostic evidence schemas.
+- `[app.py:RecordingRequest]`, `[app.py:ClaimRequest]`, `[app.py:RtpSourceEvidence]`, `[app.py:EncodedFrameEvidence]`, `[app.py:EncodedTransformEvidence]`, `[app.py:ReceiverEvidence]`, `[app.py:ParticipantSourceEvidence]`, `[app.py:ParticipantEvidence]`, `[app.py:ClockInterruption]`, `[app.py:AudioClockEvidence]`, `[app.py:DataChannelEvidence]`, `[app.py:SdpEvidence]`, `[app.py:WorkerStatus]`: Pydantic request and diagnostic evidence schemas.
 - `[app.py:processing_loop]`, `[app.py:lifespan]`, `[app.py:bearer_value]`, `[app.py:api_auth]`, `[app.py:recording_json]`, `[app.py:authenticated_attempt]`: Application lifecycle, Bearer authentication, and serialization helpers.
 - `[models.py:Base]`: SQLAlchemy `DeclarativeBase` and ORM models:
   - `[models.py:Recording]` (`recordings`), `[models.py:Attempt]` (`attempts`), `[models.py:AudioStream]` (`audio_streams`), `[models.py:AudioChunk]` (`audio_chunks`), `[models.py:AudioControl]` (`audio_controls`), `[models.py:AsrJob]` (`asr_jobs`), `[models.py:TranscriptSegment]` (`transcript_segments`), `[models.py:CalendarEntry]` (`calendar_entries`), `[models.py:MailCursor]` (`mail_cursors`), `[models.py:MailImport]` (`mail_imports`), `[models.py:Delivery]` (`deliveries`).
@@ -28,7 +28,8 @@ Core Python package for the `wortlaut` meeting service. It implements the FastAP
 - `[controller.py:kubernetes_api]`, `[controller.py:controller_pass]`, `[controller.py:reconcile_attempt]`, `[controller.py:new_attempt]`, `[controller.py:request_cancellation]`, `[controller.py:job_body]`, `[controller.py:read_job]`, `[controller.py:forget_secret]`, `[controller.py:release_pod_evidence]`: Kubernetes `Job`, `Pod` finalizer, and bootstrap `Secret` lifecycle controller.
 - `[calendar.py:AmbiguousMeetingLink]`, `[calendar.py:InvitationHTML]`, `[calendar.py:utc]`, `[calendar.py:dkim_dns]`, `[calendar.py:sender]`, `[calendar.py:meeting_link]`, `[calendar.py:entry_json]`, `[calendar.py:import_event]`, `[calendar.py:recurrence_anchor]`, `[calendar.py:instant_calendar]`, `[calendar.py:import_mail]`, `[calendar.py:consume_imap_message]`, `[calendar.py:imap_pass]`: Authenticated MIME/ICS and instant-invitation ingestion.
 - `[recurrence.py:recurrence_pass]` & `[recurrence.py:expand_series]`: Bounded materialization of recurring `CalendarEntry` series into `Recording` rows.
-- `[exports.py:export_data]`, `[exports.py:render_export]`, `[exports.py:export_reader_token]`, `[exports.py:timestamp]`, `[exports.py:speaker_label]`: Transcript and quality assembly in `json`, `txt`, and `vtt` formats (applying `manual_speaker_name` from `AudioStream.contract` and exposing `source_labels`) plus HMAC reader token generation.
+- `[exports.py:export_data]`, `[exports.py:_build_sources_summary]`, `[exports.py:render_export]`, `[exports.py:export_reader_token]`, `[exports.py:timestamp]`, `[exports.py:speaker_label]`: Transcript, per-source summary (`sources_summary`), and quality assembly in `json`, `txt`, and `vtt` formats (resolving browser `participant_name`s and backfilling initial unattributed segment prefixes on single-speaker streams from `AudioControl(kind="bind")`) plus HMAC reader token generation.
+- `[telemetry.py:build_otlp_trace_payload]`, `[telemetry.py:emit_span]`, `[telemetry.py:record_worker_status_telemetry]`: Structured JSON log emission (`wortlaut.telemetry`) and OpenTelemetry OTLP/HTTP trace export (`wortlaut.worker.status`) for WebRTC receivers, DOM/signaled participants, SDP descriptions, and signaling channels.
 - `[mail.py:FAILURE_REASONS]`, `[mail.py:effective_participation_reason]`, `[mail.py:smtp_pass]`, `[mail.py:build_message]`, `[mail.py:transmit]`, `[mail.py:delivery_json]`: SMTP transcript and join/lobby failure notification delivery (`no_audio_received` / `FAILURE_REASONS`) with automatic ZIP compression or HTTPS `curl` download fallback when attachments exceed `mail_attachment_limit_bytes`.
 - `[ui.py:UI_HTML]`, `[ui.py:render_ui]`: Self-contained German operator and live/completed transcript Web-UI served at `GET /` and `GET /ui`.
 - `[retention.py:retention_pass]`, `[retention.py:remove_audio_metadata]`, `[retention.py:calendar_retention]`: Staged expiration of S3 audio objects, transcript segments, attempt/delivery metadata, and calendar PII.
@@ -53,6 +54,7 @@ Core Python package for the `wortlaut` meeting service. It implements the FastAP
 - `[webex.py:guest_token]`: Makes HTTPS requests to `https://webexapis.com/v1/guests/token` and `https://webexapis.com/v1/access_token`, and reads/patches the `wortlaut-webex` Kubernetes `Secret` when `enable_webex_refresh` is enabled.
 - `[calendar.py:imap_pass]` & `[calendar.py:dkim_dns]`: Connects to the configured IMAP server over SSL (`imaplib.IMAP4_SSL`) to fetch messages and resolves DNS `TXT` records (`dns.resolver.resolve`) for DKIM verification.
 - `[mail.py:transmit]`: Connects to the configured SMTP relay via `smtplib.SMTP` / `smtplib.SMTP_SSL` and sends result emails.
+- `[telemetry.py:emit_span]`: Logs structured JSON trace records to `wortlaut.telemetry` and posts OTLP/HTTP JSON trace payloads to `settings.otlp_endpoint` when configured.
 
 ## Verification
 - Run: `uv run --directory services/meeting pytest`

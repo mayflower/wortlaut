@@ -22,11 +22,12 @@ Meetings can be scheduled through the HTTP API or email invitations. Meet, Webex
 
 ## Global Side Effects
 
-- `[services/meeting/src/wortlaut/database.py:get_engine]` & `[services/meeting/migrations/env.py]`: Connects to PostgreSQL to apply Alembic migrations (`0001`–`0022`) and mutate recording, attempt, stream, chunk, control, ASR job, transcript segment, calendar, and mail delivery tables.
+- `[services/meeting/src/wortlaut/database.py:get_engine]` & `[services/meeting/migrations/env.py]`: Connects to PostgreSQL to apply Alembic migrations (`0001`–`0023`) and mutate recording, attempt, stream, chunk, control, ASR job, transcript segment, calendar, and mail delivery tables.
 - `[services/meeting/src/wortlaut/storage.py:AudioStorage]`: Writes (`IfNoneMatch="*"`), reads, and expires `WORTLAUT1`-framed PCM objects under `audio/{recording_id}/...` in S3-compatible storage.
 - `[services/meeting/src/wortlaut/controller.py:controller_pass]` & `[worker/runtime/main.ts:run]`: Reconciles per-attempt Kubernetes `batch/v1` `Job`s, `v1` `Secret`s, and `Pod` finalizers; worker pods launch sandboxed Chromium (`Xvfb`/`xdotool` on Linux) and stream captured PCM over WebSocket `/v1/attempts/{attempt_id}/audio` to the meeting service.
 - `[services/meeting/src/wortlaut/asr.py:inference_pass]` & `[services/asr/app.py:transcribe]`: Streams segmented 16 kHz mono PCM over HTTP `POST /v1/transcribe` to the CUDA-backed NVIDIA Parakeet (`nvidia/parakeet-tdt-0.6b-v3`) service.
 - `[services/meeting/src/wortlaut/calendar.py:imap_pass]`, `[services/meeting/src/wortlaut/mail.py:transmit]`, & `[services/meeting/src/wortlaut/webex.py:guest_token]`: Polls IMAP over TLS with DNS TXT DKIM verification, sends transcript exports over SMTP/STARTTLS, and exchanges Webex guest/OAuth tokens with `https://webexapis.com`.
+- `[services/meeting/src/wortlaut/telemetry.py:record_worker_status_telemetry]` & `[deploy/dev/grafana-dashboard.yaml]`: Emits structured JSON telemetry logs for Loki and exports OpenTelemetry OTLP/HTTP trace spans (`wortlaut.worker.status`) to `settings.otlp_endpoint` (Grafana/Tempo/Alloy stack).
 
 ## System Verification
 
@@ -159,7 +160,7 @@ curl --fail-with-body -X POST "http://127.0.0.1:34601/v1/recordings/$RECORDING_I
   -H "Authorization: Bearer $WORTLAUT_API_TOKEN"
 ```
 
-Exports support `txt`, `vtt`, and `json`. They return HTTP 409 while processing is pending and HTTP 410 after transcript retention expires. The recording detail includes participation, processing, audio gaps, source attribution, worker diagnostics, and delivery status. `GET /v1/recordings/{id}/transcript` returns live or completed transcript segments, and `PATCH /v1/recordings/{id}/sources` assigns manual speaker labels per `provider_source_id` (also available in the integrated Web-UI at `/ui`). `GET /v1/recordings` lists recordings with cursor pagination; see the OpenAPI UI for filters and other endpoints.
+Exports support `txt`, `vtt`, and `json`. They return HTTP 409 while processing is pending and HTTP 410 after transcript retention expires. The recording detail includes participation, processing, audio gaps, source attribution, worker diagnostics, `live_status`, and delivery status. `GET /v1/recordings/{id}/transcript` returns live or completed transcript segments with automatic browser DOM and WebRTC/signaling participant name resolution (also available in the integrated Web-UI at `/ui`). `GET /v1/recordings` lists recordings with cursor pagination; see the OpenAPI UI for filters and other endpoints.
 
 By default, the scheduler starts workers 60 seconds before a meeting, allows two active meetings across all providers, and waits up to ten minutes for admission. Completed transcription does not imply complete audio coverage or correct speaker attribution.
 
