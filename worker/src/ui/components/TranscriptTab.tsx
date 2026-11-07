@@ -279,7 +279,7 @@ export function TranscriptTab({
         </Button>
       </div>
 
-      <div className="segments max-h-[60vh] space-y-3 overflow-y-auto pr-1">
+      <div className="segments space-y-3">
         {dialogueGroups.length === 0 ? (
           <div className="rounded-xl border border-dashed border-slate-800 bg-slate-950/40 p-10 text-center space-y-2">
             <MessageSquareText className="mx-auto h-7 w-7 text-slate-600" />
