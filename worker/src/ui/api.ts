@@ -9,7 +9,17 @@ import type {
 } from './types';
 
 const STORAGE_KEY = 'wortlaut_api_token';
-const READER_TOKEN_RE = /^wortlaut-read-([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\.[A-Za-z0-9_-]+$/;
+const READER_TOKEN_RE =
+  /^wortlaut-read-([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\.([A-Za-z0-9_-]+)$/;
+
+export function normalizeBearerToken(rawToken: string): string {
+  const trimmed = rawToken.trim();
+  const match = READER_TOKEN_RE.exec(trimmed);
+  if (match) {
+    return `wortlaut-read-${match[2]}`;
+  }
+  return trimmed;
+}
 
 export function parseTokenAuthMode(rawToken: string): AuthMode {
   const trimmed = rawToken.trim();
@@ -18,7 +28,11 @@ export function parseTokenAuthMode(rawToken: string): AuthMode {
   }
   const match = READER_TOKEN_RE.exec(trimmed);
   if (match) {
-    return { kind: 'reader', token: trimmed, recordingId: match[1].toLowerCase() };
+    return {
+      kind: 'reader',
+      token: `wortlaut-read-${match[2]}`,
+      recordingId: match[1].toLowerCase(),
+    };
   }
   return { kind: 'operator', token: trimmed };
 }
@@ -131,7 +145,7 @@ export async function apiRequest<T>(
 ): Promise<T> {
   const headers = new Headers(options.headers || {});
   if (token) {
-    headers.set('Authorization', `Bearer ${token}`);
+    headers.set('Authorization', `Bearer ${normalizeBearerToken(token)}`);
   }
   if (options.body && typeof options.body === 'string' && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json');
@@ -234,6 +248,15 @@ export async function retryMailDelivery(
   });
 }
 
+export async function issueReaderToken(
+  token: string,
+  recordingId: string
+): Promise<{ recording_id: string; reader_token: string; ui_token: string }> {
+  return apiRequest(`/v1/recordings/${encodeURIComponent(recordingId)}/reader-token`, token, {
+    method: 'POST',
+  });
+}
+
 export async function importCalendarPayload(
   token: string,
   rawContent: string
@@ -281,7 +304,7 @@ export async function downloadExportFile(
   const res = await fetch(
     `/v1/recordings/${encodeURIComponent(recordingId)}/exports/${format}`,
     {
-      headers: { Authorization: `Bearer ${token}` },
+      headers: { Authorization: `Bearer ${normalizeBearerToken(token)}` },
     }
   );
   if (!res.ok) {

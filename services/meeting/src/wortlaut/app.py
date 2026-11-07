@@ -820,6 +820,29 @@ def retry_delivery(recording_id: uuid.UUID, db: Db):
     return delivery_json(delivery)
 
 
+@app.post("/v1/recordings/{recording_id}/reader-token", dependencies=[Depends(api_auth)])
+def issue_reader_token(recording_id: uuid.UUID, db: Db, response: Response):
+    recording = db.scalar(select(Recording).where(Recording.id == recording_id).with_for_update())
+    if recording is None:
+        raise HTTPException(404, "Recording not found")
+    if recording.transcript_deleted_at is not None:
+        raise HTTPException(410, "Transcript retention expired")
+    if recording.processing_finished_at is None:
+        raise HTTPException(409, "Transcript processing not finished yet")
+    recording.export_reader_nonce = recording.export_reader_nonce or uuid.uuid4()
+    db.commit()
+    credential = export_reader_token(recording)
+    if not credential:
+        raise HTTPException(410, "Transcript retention expired")
+    sig = credential.removeprefix("wortlaut-read-")
+    response.headers["Cache-Control"] = "no-store"
+    return {
+        "recording_id": str(recording.id),
+        "reader_token": credential,
+        "ui_token": f"wortlaut-read-{recording.id}.{sig}",
+    }
+
+
 @app.post("/v1/recordings/{recording_id}/attempts", dependencies=[Depends(api_auth)])
 def prepare_attempt(recording_id: uuid.UUID, db: Db, response: Response):
     recording = db.scalar(select(Recording).where(Recording.id == recording_id).with_for_update())

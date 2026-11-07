@@ -58,6 +58,10 @@ export function RecordingSidebar({
   isLoading,
 }: RecordingSidebarProps) {
   const failureReasons = getFailureReasons();
+  const hasActiveFilter =
+    Boolean(providerFilter) ||
+    quickFilter !== 'all' ||
+    Boolean(titleSearch.trim());
 
   return (
     <div className="mx-auto max-w-6xl space-y-5">
@@ -141,16 +145,34 @@ export function RecordingSidebar({
           <div className="p-12 text-center space-y-3">
             <FolderOpen className="mx-auto h-8 w-8 text-slate-600" />
             <div className="text-sm font-medium text-slate-300">
-              Keine Meetings für diesen Filter gefunden
+              {hasActiveFilter
+                ? 'Keine Meetings für diesen Filter gefunden'
+                : 'Noch keine Meetings aufgezeichnet'}
             </div>
             <p className="text-xs text-slate-500">
-              Passen Sie den Suchbegriff an oder starten Sie eine neue
-              Meeting-Aufzeichnung.
+              {hasActiveFilter
+                ? 'Setzen Sie die Filter zurück oder passen Sie Ihren Suchbegriff an.'
+                : 'Starten Sie Ihre erste Aufzeichnung per Meeting-Link oder Kalendereinladung.'}
             </p>
-            <Button variant="primary" size="sm" onClick={onOpenNewRecording}>
-              <Plus className="h-3.5 w-3.5" />
-              <span>Bot in Meeting schicken</span>
-            </Button>
+            <div className="flex items-center justify-center gap-2">
+              {hasActiveFilter && (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => {
+                    onProviderFilterChange('');
+                    onQuickFilterChange('all');
+                    onTitleSearchChange('');
+                  }}
+                >
+                  <span>Filter zurücksetzen</span>
+                </Button>
+              )}
+              <Button variant="primary" size="sm" onClick={onOpenNewRecording}>
+                <Plus className="h-3.5 w-3.5" />
+                <span>Bot in Meeting schicken</span>
+              </Button>
+            </div>
           </div>
         ) : (
           recordings.map((item) => {

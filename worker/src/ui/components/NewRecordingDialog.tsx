@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { CalendarPlus, Link2, Upload, Video } from 'lucide-react';
 import {
   createRecording,
@@ -24,6 +24,7 @@ export interface NewRecordingDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   token: string;
+  initialTab?: 'link' | 'ics';
   onCreatedRecording: (recordingId: string) => void;
   onImportedCalendar: (recordingId: string | null) => void;
 }
@@ -32,10 +33,17 @@ export function NewRecordingDialog({
   open,
   onOpenChange,
   token,
+  initialTab = 'link',
   onCreatedRecording,
   onImportedCalendar,
 }: NewRecordingDialogProps) {
-  const [tab, setTab] = useState<'link' | 'ics'>('link');
+  const [tab, setTab] = useState<'link' | 'ics'>(initialTab);
+
+  useEffect(() => {
+    if (open) {
+      setTab(initialTab);
+    }
+  }, [open, initialTab]);
   const [meetingUrl, setMeetingUrl] = useState('');
   const [title, setTitle] = useState('');
   const [guestName, setGuestName] = useState('');

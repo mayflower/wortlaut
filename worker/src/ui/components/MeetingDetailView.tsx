@@ -10,6 +10,7 @@ import {
   FileText,
   RotateCcw,
   Settings2,
+  Share2,
   ShieldCheck,
   Square,
   Subtitles,
@@ -35,6 +36,7 @@ export interface MeetingDetailViewProps {
   onRejoin: () => void;
   onCancel: () => void;
   onRetryMail: () => void;
+  onShareReaderLink?: () => Promise<string | null>;
   onDownload: (format: 'txt' | 'vtt' | 'json') => void;
   actionBusy: boolean;
   actionError: string | null;
@@ -57,6 +59,7 @@ export function MeetingDetailView({
   onRejoin,
   onCancel,
   onRetryMail,
+  onShareReaderLink,
   onDownload,
   actionBusy,
   actionError,
@@ -64,6 +67,7 @@ export function MeetingDetailView({
   const [selectedSourceFilter, setSelectedSourceFilter] = useState<string>('');
   const [showTechDetails, setShowTechDetails] = useState<boolean>(false);
   const [copiedId, setCopiedId] = useState<boolean>(false);
+  const [copiedShareLink, setCopiedShareLink] = useState<boolean>(false);
   const instance = getInstanceInfo();
 
   const canCancel =
@@ -101,8 +105,18 @@ export function MeetingDetailView({
     setTimeout(() => setCopiedId(false), 1500);
   };
 
+  const handleShareClick = async () => {
+    if (!onShareReaderLink) return;
+    const url = await onShareReaderLink();
+    if (url && navigator.clipboard) {
+      await navigator.clipboard.writeText(url).catch(() => {});
+      setCopiedShareLink(true);
+      setTimeout(() => setCopiedShareLink(false), 2200);
+    }
+  };
+
   return (
-    <div id="detail-panel" className="mx-auto max-w-6xl space-y-6 p-6 lg:p-8">
+    <div id="detail-panel" className="mx-auto max-w-6xl space-y-6">
       {/* Top Breadcrumb & Action Bar */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         {onBack ? (
@@ -119,6 +133,29 @@ export function MeetingDetailView({
         )}
 
         <div className="flex flex-wrap items-center gap-2">
+          {isOperator && exportsReady && onShareReaderLink && (
+            <Button
+              variant="secondary"
+              size="sm"
+              id="share-reader-link-btn"
+              disabled={actionBusy}
+              onClick={handleShareClick}
+              title="Erzeugt einen schreibgeschützten Direktlink nur für dieses Meeting"
+            >
+              {copiedShareLink ? (
+                <>
+                  <Check className="h-3.5 w-3.5 text-emerald-400" />
+                  <span>Lese-Link kopiert!</span>
+                </>
+              ) : (
+                <>
+                  <Share2 className="h-3.5 w-3.5 text-sky-400" />
+                  <span>Lese-Link teilen</span>
+                </>
+              )}
+            </Button>
+          )}
+
           {canRejoin && (
             <Button
               variant="secondary"

@@ -96,6 +96,18 @@ export function CalendarWorkspace({
                   )}
                 </Button>
               </div>
+              {instance.mail.allowedDomains.length > 0 && (
+                <p className="text-[11px] text-slate-400 pt-0.5">
+                  Berechtigte Absender-Domains ({instance.mail.senderAuth.toUpperCase()}):{' '}
+                  <strong className="text-slate-200">
+                    {instance.mail.allowedDomains
+                      .map((d) => `@${d}`)
+                      .join(', ')}
+                  </strong>
+                  . Nach Meeting-Ende wird das fertige Transkript automatisch an
+                  den Organisator gesendet.
+                </p>
+              )}
             </>
           ) : (
             <p className="text-xs leading-relaxed text-slate-400">

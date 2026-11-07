@@ -27,6 +27,18 @@ export function DiagnosticsTab({
   retryingMail,
 }: DiagnosticsTabProps) {
   const [copiedJson, setCopiedJson] = useState(false);
+  const [copiedCurl, setCopiedCurl] = useState(false);
+
+  const origin =
+    typeof window !== 'undefined' ? window.location.origin : '';
+  const curlSnippet = `curl --fail -H "Authorization: Bearer $WORTLAUT_TOKEN" "${origin}/v1/recordings/${recording.id}/exports/json"`;
+
+  const handleCopyCurl = async () => {
+    if (!navigator.clipboard) return;
+    await navigator.clipboard.writeText(curlSnippet).catch(() => {});
+    setCopiedCurl(true);
+    setTimeout(() => setCopiedCurl(false), 1800);
+  };
 
   const canRetryMail =
     isOperator &&
@@ -214,6 +226,30 @@ export function DiagnosticsTab({
           </div>
         </div>
       )}
+
+      <div className="rounded-xl border border-slate-800 bg-slate-950/75 p-4 space-y-2">
+        <div className="flex items-center justify-between">
+          <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+            REST-API / Integrations-Abruf (cURL)
+          </span>
+          <Button variant="secondary" size="sm" onClick={handleCopyCurl}>
+            {copiedCurl ? (
+              <>
+                <Check className="h-3.5 w-3.5 text-emerald-400" />
+                <span>cURL kopiert</span>
+              </>
+            ) : (
+              <>
+                <Copy className="h-3.5 w-3.5" />
+                <span>cURL kopieren</span>
+              </>
+            )}
+          </Button>
+        </div>
+        <pre className="overflow-x-auto rounded-lg border border-slate-800 bg-slate-900/90 p-3 font-mono text-[11px] text-sky-300">
+          {curlSnippet}
+        </pre>
+      </div>
 
       <div className="rounded-xl border border-slate-800 bg-slate-950/75 p-4 space-y-2">
         <div className="flex items-center justify-between">

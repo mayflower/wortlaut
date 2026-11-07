@@ -321,6 +321,16 @@ export function HomeView({
             </div>
           )}
 
+          {detectedProvider === 'google_meet' &&
+            !instance.providers.google_meet_auth_session && (
+              <div className="rounded-lg border border-sky-800/70 bg-sky-950/40 px-3.5 py-2 text-xs text-sky-200">
+                <strong>Hinweis für Google Meet:</strong> Der Bot tritt als Gast{' '}
+                <strong>„{guestName.trim() || instance.assistantName}“</strong>{' '}
+                bei. Bitte stellen Sie sicher, dass Gäste im Meeting-Warteraum
+                zugelassen werden können.
+              </div>
+            )}
+
           {error && (
             <div className="rounded-lg border border-red-800/80 bg-red-950/60 px-3.5 py-2 text-xs text-red-200">
               {error}
@@ -504,15 +514,68 @@ export function HomeView({
         </div>
 
         {recentCompleted.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-slate-800 bg-slate-900/40 p-10 text-center space-y-2">
-            <Mic className="mx-auto h-7 w-7 text-slate-600" />
-            <div className="text-sm font-medium text-slate-300">
-              Noch keine abgeschlossenen Aufzeichnungen
+          <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6 space-y-5">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800/80 pb-4">
+              <div>
+                <h3 className="text-sm font-bold text-white">
+                  Willkommen! So entsteht Ihr erstes Meeting-Transkript in 3
+                  Schritten:
+                </h3>
+                <p className="text-xs text-slate-400">
+                  Noch keine Besprechungen aufgezeichnet — starten Sie oben
+                  sofort ein Live-Meeting oder planen Sie einen Termin per
+                  Kalender ein.
+                </p>
+              </div>
             </div>
-            <p className="text-xs text-slate-500">
-              Fügen Sie oben einen Meeting-Link ein, um Ihre erste Besprechung
-              aufzuzeichnen und zu transkribieren.
-            </p>
+
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+              <div className="rounded-xl border border-slate-800/90 bg-slate-950/70 p-4 space-y-2">
+                <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-sky-500/20 text-xs font-bold text-sky-300 border border-sky-500/40">
+                  1
+                </span>
+                <div className="text-xs font-bold text-white">
+                  Link einfügen oder Bot einladen
+                </div>
+                <p className="text-xs leading-relaxed text-slate-400">
+                  Fügen Sie oben einen Google Meet-, Teams- oder Webex-Link ein
+                  oder laden Sie{' '}
+                  <code className="text-slate-200">
+                    {instance.botEmail || 'den Bot'}
+                  </code>{' '}
+                  in Ihrem Kalender als Gast ein.
+                </p>
+              </div>
+
+              <div className="rounded-xl border border-slate-800/90 bg-slate-950/70 p-4 space-y-2">
+                <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-amber-500/20 text-xs font-bold text-amber-300 border border-amber-500/40">
+                  2
+                </span>
+                <div className="text-xs font-bold text-white">
+                  Bot „{instance.assistantName}“ im Warteraum zulassen
+                </div>
+                <p className="text-xs leading-relaxed text-slate-400">
+                  Der Bot tritt stummgeschaltet (ohne Kamera/Mikrofon) bei.
+                  Lassen Sie ihn im Meeting-Warteraum zu — hier in der UI sehen
+                  Sie den Live-Status in Echtzeit.
+                </p>
+              </div>
+
+              <div className="rounded-xl border border-slate-800/90 bg-slate-950/70 p-4 space-y-2">
+                <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-emerald-500/20 text-xs font-bold text-emerald-300 border border-emerald-500/40">
+                  3
+                </span>
+                <div className="text-xs font-bold text-white">
+                  Sprechergetrenntes Transkript &amp; Export
+                </div>
+                <p className="text-xs leading-relaxed text-slate-400">
+                  Jede Audiospur wird vor dem Mix getrennt erfasst und lokal per
+                  Parakeet-GPU transkribiert. Sie erhalten Redeanteile, Suche
+                  sowie <code>.txt</code>, <code>.vtt</code> und{' '}
+                  <code>.json</code>.
+                </p>
+              </div>
+            </div>
           </div>
         ) : (
           <div className="overflow-hidden rounded-xl border border-slate-800 bg-slate-900/75 divide-y divide-slate-800/80">

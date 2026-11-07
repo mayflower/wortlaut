@@ -9,6 +9,7 @@ import {
   fetchRecordingDetail,
   fetchRecordings,
   fetchTranscript,
+  issueReaderToken,
   loadInitialToken,
   parseTokenAuthMode,
   rejoinRecording,
@@ -46,6 +47,7 @@ export function App() {
     () => parseTokenAuthMode(loadInitialToken()).kind === 'unauthenticated'
   );
   const [newRecordingOpen, setNewRecordingOpen] = useState<boolean>(false);
+  const [newRecordingTab, setNewRecordingTab] = useState<'link' | 'ics'>('link');
   const [actionBusy, setActionBusy] = useState<boolean>(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
@@ -221,6 +223,12 @@ export function App() {
         return;
       }
     }
+    setNewRecordingTab('link');
+    setNewRecordingOpen(true);
+  };
+
+  const handleOpenIcsImportModal = () => {
+    setNewRecordingTab('ics');
     setNewRecordingOpen(true);
   };
 
@@ -279,6 +287,18 @@ export function App() {
     }
   };
 
+  const handleShareReaderLink = async (): Promise<string | null> => {
+    if (!rec) return null;
+    setActionError(null);
+    try {
+      const res = await issueReaderToken(token, rec.id);
+      return `${window.location.origin}/ui#token=${res.ui_token}`;
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
+      return null;
+    }
+  };
+
   return (
     <div className="min-h-screen bg-[#0b1120] text-slate-100">
       <HeaderBar
@@ -309,6 +329,7 @@ export function App() {
           open={newRecordingOpen}
           onOpenChange={setNewRecordingOpen}
           token={token}
+          initialTab={newRecordingTab}
           onCreatedRecording={(id) => {
             handleSelectRecording(id);
             queryClient.invalidateQueries();
@@ -366,6 +387,7 @@ export function App() {
                 onCancel={handleCancel}
                 onRejoin={handleRejoin}
                 onRetryMail={handleRetryMail}
+                onShareReaderLink={handleShareReaderLink}
                 onDownload={handleDownload}
                 actionBusy={actionBusy}
                 actionError={actionError}
@@ -379,7 +401,7 @@ export function App() {
               onOpenRecording={handleSelectRecording}
               onNavigateMeetings={() => handleChangeNav('meetings')}
               onNavigateCalendar={() => handleChangeNav('calendar')}
-              onOpenIcsImport={() => setNewRecordingOpen(true)}
+              onOpenIcsImport={handleOpenIcsImportModal}
               onCreatedRecording={(id) => {
                 handleSelectRecording(id);
                 queryClient.invalidateQueries();
@@ -396,7 +418,10 @@ export function App() {
               onQuickFilterChange={setQuickFilter}
               titleSearch={titleSearch}
               onTitleSearchChange={setTitleSearch}
-              onOpenNewRecording={() => setNewRecordingOpen(true)}
+              onOpenNewRecording={() => {
+                setNewRecordingTab('link');
+                setNewRecordingOpen(true);
+              }}
               isLoading={
                 filteredRecordingsQuery.isLoading ||
                 allRecordingsQuery.isLoading
@@ -406,7 +431,7 @@ export function App() {
             <CalendarWorkspace
               events={calendarQuery.data?.events || []}
               onSelectRecording={handleSelectRecording}
-              onOpenImportModal={() => setNewRecordingOpen(true)}
+              onOpenImportModal={handleOpenIcsImportModal}
             />
           ) : (
             <SystemView
