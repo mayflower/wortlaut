@@ -5,6 +5,7 @@ import {isTeamsOrigin} from '../src/teams-url.js';
 
 export type TeamsBootstrap = {provider: 'teams'; meeting_id: string; attempt_id: string;
   meeting_url: string; deadline: string; lobby_timeout_seconds: number;
+  empty_room_timeout_seconds?: number;
   teams: {display_name: string; locale: string}};
 
 const browserLabel = /^(Continue on this browser|Join on the web instead|In diesem Browser fortfahren|Stattdessen im Web teilnehmen)$/i;
@@ -146,9 +147,11 @@ export class TeamsBrowser {
     return {...state, participation: this.stopping ? 'ended' : participation,
       reason: this.reason, stopped: Boolean(this.stopping || this.reason), drained: this.drained,
       capability: 'unverified', streams: state?.streams ?? 0, audio_samples: state?.audio_samples ?? 0,
+      active_audio_samples: state?.active_audio_samples ?? 0,
       receiver_sources: state?.receiver_sources ?? [],
       configured_speaker_slots: null, configured_share_slots: null,
-      participant_sources: state?.participant_sources ?? {available: false, total: 0, truncated: false, sources: []}};
+      participant_sources: state?.participant_sources ?? {available: false, total: 0, truncated: false, sources: []},
+      data_channels: state?.data_channels ?? []};
   }
 
   stop(reason: string) {

@@ -605,12 +605,15 @@ try {
     const state = await teams.inspect();
     assert.equal(state.streams, 1);
     assert.ok(state.audio_samples > 16000);
+    assert.ok(state.active_audio_samples > 16000);
     assert.equal(state.capability, 'unverified');
     assert.equal(state.reason, '');
     assert.equal(state.participant_sources.available, true);
     assert.equal(state.participant_sources.total, 1);
     assert.equal(state.participant_sources.sources[0]?.participant_id, 'alice-session');
     assert.equal((state.receiver_sources[0] as any)?.signaled_participant_id, 'alice-session');
+    assert.ok(state.data_channels.some((dc) => dc.label === 'roster' && dc.json_frames >= 1 &&
+      dc.json_keys.includes('participants') && dc.json_keys.includes('participant_id')));
     await teams.stop('normal');
     assert.equal((await teams.inspect()).drained, true);
     const teamsFrames = frames.slice(beforeTeams);

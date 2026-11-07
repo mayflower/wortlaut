@@ -32,10 +32,20 @@ type ParticipantSourcesState = {
   sources: {participant_id: string; audio_csis: number[]; share_audio_csis: number[]}[];
 };
 
-type MeetCaptureState = {streams: number; audio_samples: number; reason: string;
-  capture_ready: boolean; stopped: boolean; drained: boolean;
+type DataChannelState = {
+  label: string;
+  ready_state: string;
+  text_frames: number;
+  binary_frames: number;
+  json_frames: number;
+  json_keys: string[];
+};
+
+type MeetCaptureState = {streams: number; audio_samples: number; active_audio_samples: number;
+  reason: string; capture_ready: boolean; stopped: boolean; drained: boolean;
   receiver_sources: Record<string, unknown>[];
-  participant_sources: ParticipantSourcesState};
+  participant_sources: ParticipantSourcesState;
+  data_channels: DataChannelState[]};
 
 type EncodedEvidence = {state: 'unsupported' | 'failed' | 'waiting_frames' | 'observing' |
   'metadata_unavailable' | 'provider_transform' | 'provider_reserved' | 'replaced' | 'stopped';
@@ -53,9 +63,10 @@ if (config.provider === 'webex'
     location.pathname === new URL(config.meeting_url).pathname) install(config);
 
 function install(config: MeetCaptureConfig) {
-  const state: MeetCaptureState = {streams: 0, audio_samples: 0, reason: '', stopped: false,
-    capture_ready: false, drained: false, receiver_sources: [],
-    participant_sources: {available: false, total: 0, truncated: false, sources: []}};
+  const state: MeetCaptureState = {streams: 0, audio_samples: 0, active_audio_samples: 0,
+    reason: '', stopped: false, capture_ready: false, drained: false, receiver_sources: [],
+    participant_sources: {available: false, total: 0, truncated: false, sources: []},
+    data_channels: []};
   // The pinned modules travel in this local bundle. Blob URLs never resolve
   // to Google or a CDN and are subject to the page's actual CSP.
   const modules = [resamplerSource, pcmSource].map((source) =>
@@ -116,15 +127,54 @@ function install(config: MeetCaptureConfig) {
     return true;
   }
 
-  function onDataMessage(raw: unknown) {
+  const channelStats = new Map<string, {
+    ready_state: string; text_frames: number; binary_frames: number;
+    json_frames: number; json_keys: Set<string>;
+  }>();
+
+  function getChannelStat(label: string, readyState = 'open') {
+    const clean = (label || 'default').slice(0, 128);
+    let stat = channelStats.get(clean);
+    if (!stat && channelStats.size < 32) {
+      stat = {ready_state: readyState, text_frames: 0, binary_frames: 0,
+        json_frames: 0, json_keys: new Set()};
+      channelStats.set(clean, stat);
+    }
+    if (stat) stat.ready_state = readyState;
+    return stat;
+  }
+
+  function onDataMessage(input: unknown) {
+    let raw = input;
+    let label = 'default';
+    let readyState = 'open';
+    if (input && typeof input === 'object' && !(input instanceof ArrayBuffer) &&
+        !ArrayBuffer.isView(input) && '__wortlautChannel' in (input as Record<string, unknown>)) {
+      const env = input as {__wortlautChannel: string; readyState?: string; data: unknown};
+      label = env.__wortlautChannel || 'default';
+      readyState = env.readyState || 'open';
+      raw = env.data;
+    }
+    const stat = getChannelStat(label, readyState);
     let text = '';
-    if (typeof raw === 'string') text = raw;
-    else if (raw instanceof ArrayBuffer && raw.byteLength <= 65536) text = new TextDecoder().decode(raw);
-    else if (ArrayBuffer.isView(raw) && raw.byteLength <= 65536) text = new TextDecoder().decode(raw);
+    if (typeof raw === 'string') {
+      if (stat) stat.text_frames++;
+      text = raw;
+    } else if (raw instanceof ArrayBuffer && raw.byteLength <= 65536) {
+      if (stat) stat.binary_frames++;
+      text = new TextDecoder().decode(raw);
+    } else if (ArrayBuffer.isView(raw) && raw.byteLength <= 65536) {
+      if (stat) stat.binary_frames++;
+      text = new TextDecoder().decode(raw);
+    } else if (raw instanceof ArrayBuffer || ArrayBuffer.isView(raw)) {
+      if (stat) stat.binary_frames++;
+      return;
+    }
     text = text.trim();
     if (!text || text.length > 65536 || (text[0] !== '{' && text[0] !== '[')) return;
     let parsed: unknown;
     try { parsed = JSON.parse(text); } catch { return; }
+    if (stat) stat.json_frames++;
     const queue: unknown[] = [parsed];
     let updated = false, visited = 0;
     while (queue.length && visited < 512) {
@@ -134,6 +184,13 @@ function install(config: MeetCaptureConfig) {
         for (const item of current.slice(0, 256)) queue.push(item);
       } else if (current && typeof current === 'object') {
         const record = current as Record<string, unknown>;
+        if (stat && stat.json_keys.size < 32) {
+          for (const k of Object.keys(record)) {
+            if (/^[a-zA-Z0-9_.-]{1,64}$/.test(k) && stat.json_keys.size < 32) {
+              stat.json_keys.add(k);
+            }
+          }
+        }
         if (ingestParticipantRecord(record)) updated = true;
         for (const key of ['participants', 'sources', 'roster', 'members', 'endpoints', 'data', 'payload']) {
           if (record[key] && typeof record[key] === 'object') queue.push(record[key]);
@@ -258,6 +315,13 @@ function install(config: MeetCaptureConfig) {
       const encoded = btoa(raw);
       send({attempt_id: config.attempt_id, type: 'chunk', metadata, pcm: encoded}, encoded.length + 8192);
       state.audio_samples += metadata.sample_count;
+      const view = new DataView(pcm.buffer, pcm.byteOffset, pcm.byteLength);
+      for (let i = 0; i + 1 < pcm.byteLength; i += 2) {
+        if (Math.abs(view.getInt16(i, true)) >= 200) {
+          state.active_audio_samples += metadata.sample_count;
+          break;
+        }
+      }
     }, error: (reason) => { state.reason = reason; }};
 
   function resolveReceiver(receiver: RTCRtpReceiver): {
@@ -420,6 +484,9 @@ function install(config: MeetCaptureConfig) {
   };
   window.wortlautMeet = {
     inspect: () => {
+      for (const dc of window.wortlautMeetReceivers.dataChannels ?? []) {
+        getChannelStat(dc.label || 'default', dc.readyState || 'open');
+      }
       state.receiver_sources = [...sources].slice(0, 64).map(([receiver, source]) => evidence(receiver, source.id));
       state.participant_sources = {
         available: participants.size > 0,
@@ -431,6 +498,14 @@ function install(config: MeetCaptureConfig) {
           share_audio_csis: [...p.share_audio_csis].slice(0, 64),
         })),
       };
+      state.data_channels = [...channelStats.entries()].slice(0, 32).map(([label, s]) => ({
+        label,
+        ready_state: s.ready_state,
+        text_frames: s.text_frames,
+        binary_frames: s.binary_frames,
+        json_frames: s.json_frames,
+        json_keys: [...s.json_keys].slice(0, 32),
+      }));
       return {...state, audio_clock: capture.inspectClock()};
     },
     stop: () => stopping ??= (async () => {

@@ -63,9 +63,12 @@ async function run(api: string, credential: string) {
   let endReason = 'normal';
   let diagnostics: Record<string, unknown> = {capability: 'unverified', streams: 0, audio_samples: 0, drained: null,
     configured_speaker_slots: 0, configured_share_slots: 0,
-    receiver_sources: [], participant_sources: {available: false, total: 0, truncated: false, sources: []}};
+    receiver_sources: [], participant_sources: {available: false, total: 0, truncated: false, sources: []},
+    data_channels: []};
   let signalStop!: () => void;
   let lobbySince: number | undefined;
+  let emptySince: number | undefined;
+  let lastActiveSamples = 0;
   const stopped = new Promise<void>((resolve) => { signalStop = resolve; });
   async function stop(reason: string) {
     return stopping ??= (async () => {
@@ -109,7 +112,9 @@ async function run(api: string, credential: string) {
       diagnostics = {capability: state.capability, streams: state.streams,
         configured_speaker_slots: state.configured_speaker_slots, configured_share_slots: state.configured_share_slots,
         audio_samples: state.audio_samples, receiver_sources: state.receiver_sources,
-        participant_sources: state.participant_sources, audio_clock: state.audio_clock,
+        participant_sources: state.participant_sources,
+        data_channels: state.data_channels ?? [],
+        audio_clock: state.audio_clock,
         drained: state.stopped ? state.drained : null};
       if (state.stopped || state.participation === 'ended') {
         await stop(state.reason || 'normal');
@@ -122,6 +127,22 @@ async function run(api: string, credential: string) {
           return;
         }
       } else { lobbySince = undefined; }
+      if (state.participation === 'capturing') {
+        const activeSamples = typeof state.active_audio_samples === 'number'
+          ? state.active_audio_samples
+          : (state.streams > 0 ? state.audio_samples : 0);
+        if (activeSamples > lastActiveSamples && state.streams > 0) {
+          lastActiveSamples = activeSamples;
+          emptySince = undefined;
+        } else {
+          emptySince ??= performance.now();
+          const emptyTimeoutSeconds = bootstrap.empty_room_timeout_seconds ?? 300;
+          if (performance.now() - emptySince >= emptyTimeoutSeconds * 1000) {
+            await stop('room_empty');
+            return;
+          }
+        }
+      } else { emptySince = undefined; }
       if (Date.now() >= renewAt && renewAt < deadline) {
         try {
           const renewed = await request(`/v1/attempts/${attemptId}/bootstrap`, 'GET', undefined,
@@ -180,7 +201,9 @@ async function run(api: string, credential: string) {
       diagnostics = {capability: state.capability, streams: state.streams,
         configured_speaker_slots: state.configured_speaker_slots, configured_share_slots: state.configured_share_slots,
         audio_samples: state.audio_samples, receiver_sources: state.receiver_sources,
-        participant_sources: state.participant_sources, audio_clock: state.audio_clock, drained: state.drained};
+        participant_sources: state.participant_sources,
+        data_channels: state.data_channels ?? [],
+        audio_clock: state.audio_clock, drained: state.drained};
     } catch { /* preserve last known diagnostics */ }
     // An SDK event alone is not proof of process termination. Report ended only
     // after Chromium has closed; lost status ACKs can replay the same final report.

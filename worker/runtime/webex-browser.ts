@@ -4,6 +4,7 @@ import {installMeetCapture, MeetError} from './meet.js';
 
 export type WebexBrowserBootstrap = {provider: 'webex'; meeting_id: string; attempt_id: string;
   meeting_url: string; deadline: string; lobby_timeout_seconds: number;
+  empty_room_timeout_seconds?: number;
   webex_browser: {display_name: string}};
 
 // Webex's join-service page embeds the web meeting client at this exact origin.
@@ -95,9 +96,11 @@ export class WebexBrowser {
     return {...state, capability: 'unverified', participation: this.stopping ? 'ended' : participation,
       reason: this.reason, stopped: Boolean(this.stopping || this.reason), drained: this.drained,
       streams: state?.streams ?? 0, audio_samples: state?.audio_samples ?? 0,
+      active_audio_samples: state?.active_audio_samples ?? 0,
       receiver_sources: state?.receiver_sources ?? [], configured_speaker_slots: null,
       configured_share_slots: null,
-      participant_sources: state?.participant_sources ?? {available: false, total: 0, truncated: false, sources: []}};
+      participant_sources: state?.participant_sources ?? {available: false, total: 0, truncated: false, sources: []},
+      data_channels: state?.data_channels ?? []};
   }
 
   stop(reason: string) {

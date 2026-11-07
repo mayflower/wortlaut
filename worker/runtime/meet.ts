@@ -9,6 +9,7 @@ import {isTeamsOrigin, teamsOrigins} from '../src/teams-url.js';
 
 export type MeetBootstrap = {provider: 'google_meet'; meeting_id: string; attempt_id: string;
   meeting_url: string; deadline: string; lobby_timeout_seconds: number;
+  empty_room_timeout_seconds?: number;
   meet: {display_name: string; locale: string; auth_mode: 'guest' | 'account'}};
 
 export class MeetError extends Error {
@@ -113,16 +114,20 @@ export async function installMeetCapture(page: Page, bootstrap: Pick<MeetBootstr
         const channel = Reflect.apply(fn, thisArg, channelArgs) as RTCDataChannel;
         dataChannels.add(channel);
         channel.addEventListener('message', (event) => {
-          if (dataMessages.length < 256) dataMessages.push(event.data);
-          window.wortlautMeetReceivers.onDataMessage?.(event.data);
+          const wrapped = {__wortlautChannel: channel.label || 'default',
+            readyState: channel.readyState || 'open', data: event.data};
+          if (dataMessages.length < 256) dataMessages.push(wrapped);
+          window.wortlautMeetReceivers.onDataMessage?.(wrapped);
         });
         return channel;
       }});
       pc.addEventListener('datachannel', (event) => {
         dataChannels.add(event.channel);
         event.channel.addEventListener('message', (msg) => {
-          if (dataMessages.length < 256) dataMessages.push(msg.data);
-          window.wortlautMeetReceivers.onDataMessage?.(msg.data);
+          const wrapped = {__wortlautChannel: event.channel.label || 'default',
+            readyState: event.channel.readyState || 'open', data: msg.data};
+          if (dataMessages.length < 256) dataMessages.push(wrapped);
+          window.wortlautMeetReceivers.onDataMessage?.(wrapped);
         });
       });
       pc.addEventListener('track', (event) => {
@@ -310,11 +315,14 @@ export class MeetBrowser {
     return {capability: 'unverified', participation: this.stopping ? 'ended' : this.participation,
       reason: this.reason || (this.participation === 'capturing' ? 'source_binding_unverified' : ''),
       stopped: Boolean(this.reason || this.stopping), streams: state?.streams ?? 0,
-      audio_samples: state?.audio_samples ?? 0, drained: this.stopping ? this.drained : null,
+      audio_samples: state?.audio_samples ?? 0,
+      active_audio_samples: state?.active_audio_samples ?? 0,
+      drained: this.stopping ? this.drained : null,
       configured_speaker_slots: null, configured_share_slots: null,
       receiver_sources: state?.receiver_sources ?? [],
       audio_clock: state?.audio_clock,
-      participant_sources: state?.participant_sources ?? {available: false, total: 0, truncated: false, sources: []}};
+      participant_sources: state?.participant_sources ?? {available: false, total: 0, truncated: false, sources: []},
+      data_channels: state?.data_channels ?? []};
   }
 
   stop(reason: string) {
