@@ -21,4 +21,5 @@ fi
 test "$(kubectl --kubeconfig .dev/kubeconfig config current-context)" = data
 uv sync --project services/meeting
 npm --prefix worker ci
+npm --prefix worker run build
 printf 'wortlaut ready for make dev (context data; no workloads started by setup).\n'

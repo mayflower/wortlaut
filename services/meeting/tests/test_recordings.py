@@ -954,6 +954,11 @@ def test_persona_workflows_rejoin_desc_filters_reader_token_and_metrics(client, 
     filtered = client.get("/v1/recordings?q=Architektur", headers=API).json()["items"]
     assert [item["id"] for item in filtered] == [second]
 
+    multi_part = client.get(
+        "/v1/recordings?participation=scheduled,capturing", headers=API
+    ).json()["items"]
+    assert {item["id"] for item in multi_part} >= {first, second}
+
     attempt, creds = prepare(client, first)
     client.post(f"/v1/attempts/{attempt}/claim", headers=creds, json={"worker_id": "w1"})
     client.post(
@@ -987,6 +992,14 @@ def test_persona_workflows_rejoin_desc_filters_reader_token_and_metrics(client, 
         headers={"Authorization": f"Bearer {reader_tok}"},
     )
     assert trans_res.status_code == 200
+
+    rec_reader_res = client.get(
+        f"/v1/recordings/{second}",
+        headers={"Authorization": f"Bearer {reader_tok}"},
+    )
+    assert rec_reader_res.status_code == 200
+    assert rec_reader_res.json()["title"] == "Architektur Review Beta"
+    assert all("job_name" not in a for a in rec_reader_res.json().get("attempts", []))
 
     metrics_res = client.get("/metrics", headers=API)
     assert metrics_res.status_code == 200

@@ -488,7 +488,7 @@ def list_recordings(
     limit: Annotated[int, Query(ge=1, le=100)] = 25,
     cursor: Annotated[str | None, Query(max_length=200)] = None,
     provider: Provider | None = None,
-    participation: Annotated[str | None, Query(max_length=32)] = None,
+    participation: Annotated[str | None, Query(max_length=128)] = None,
     processing: Annotated[str | None, Query(max_length=32)] = None,
     q: Annotated[str | None, Query(max_length=200)] = None,
     order: Literal["asc", "desc"] = "asc",
@@ -504,7 +504,11 @@ def list_recordings(
     if provider:
         query = query.where(Recording.provider == provider)
     if participation:
-        query = query.where(Recording.participation == participation)
+        parts = [p.strip() for p in participation.split(",") if p.strip()]
+        if len(parts) == 1:
+            query = query.where(Recording.participation == parts[0])
+        elif parts:
+            query = query.where(Recording.participation.in_(parts))
     if processing:
         query = query.where(Recording.processing == processing)
     if q and q.strip():
@@ -656,13 +660,32 @@ def list_recordings(
     return {"items": items, "next_cursor": next_cursor}
 
 
-@app.get("/v1/recordings/{recording_id}", dependencies=[Depends(api_auth)])
-def get_recording(recording_id: uuid.UUID, db: Db):
+@app.get("/v1/recordings/{recording_id}")
+def get_recording(
+    recording_id: uuid.UUID,
+    db: Db,
+    authorization: Annotated[str | None, Header()] = None,
+):
+    token = bearer_value(authorization)
     recording = db.get(Recording, recording_id)
+    reader = export_reader_token(recording) if recording else None
+    is_operator = secrets.compare_digest(
+        token.encode(), get_settings().api_token.get_secret_value().encode()
+    )
+    is_reader = reader is not None and secrets.compare_digest(token.encode(), reader.encode())
+    if not is_operator and not is_reader:
+        raise HTTPException(401, "Invalid API credential")
     if not recording:
         raise HTTPException(404, "Recording not found")
     result = recording_json(recording)
-    result["delivery"] = delivery_json(db.get(Delivery, recording.id))
+    raw_delivery = delivery_json(db.get(Delivery, recording.id))
+    if not is_operator and isinstance(raw_delivery, dict):
+        raw_delivery = {
+            k: v
+            for k, v in raw_delivery.items()
+            if k not in ("accepted_recipients", "message_id")
+        }
+    result["delivery"] = raw_delivery
     attempts = db.scalars(select(Attempt).where(Attempt.recording_id == recording.id)).all()
     result["attempts"] = [
         {
@@ -670,11 +693,17 @@ def get_recording(recording_id: uuid.UUID, db: Db):
             "last_heartbeat_at": a.last_heartbeat_at,
             "ended_at": a.ended_at,
             "end_reason": a.end_reason,
-            "diagnostics": a.diagnostics,
-            "job_name": a.job_name,
-            "job_uid": a.job_uid,
-            "pod_uids": a.pod_uids,
-            "process_ended_at": a.process_ended_at,
+            **(
+                {
+                    "diagnostics": a.diagnostics,
+                    "job_name": a.job_name,
+                    "job_uid": a.job_uid,
+                    "pod_uids": a.pod_uids,
+                    "process_ended_at": a.process_ended_at,
+                }
+                if is_operator
+                else {}
+            ),
         }
         for a in attempts
     ]
