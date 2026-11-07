@@ -510,3 +510,111 @@ def test_web_ui_and_manual_source_labels_update_transcript_and_exports(
     assert exported["source_labels"] == {"teams:fixture:receiver:1": "Max Mustermann"}
     assert exported["segments"][0]["speaker_label"] == "Max Mustermann"
     assert exported["quality"]["attribution_unknown"] is True
+    assert exported["sources_summary"][0]["provider_source_id"] == "teams:fixture:receiver:1"
+    assert exported["sources_summary"][0]["manual_speaker_name"] == "Max Mustermann"
+    assert exported["sources_summary"][0]["segment_count"] == 1
+    assert exported["sources_summary"][0]["speech_seconds"] == 1.0
+    assert exported["sources_summary"][0]["sample_text"] == "Guten Tag zusammen."
+
+
+def test_recording_title_guest_name_empty_room_timeout_and_otlp_telemetry(
+    client, database, monkeypatch
+):
+    from wortlaut import telemetry
+    from wortlaut.settings import get_settings
+
+    exported_spans = []
+
+    def fake_post(url, *, json=None, headers=None, timeout=None):
+        exported_spans.append((url, json, headers))
+
+    monkeypatch.setenv("WORTLAUT_ENABLE_TEAMS", "true")
+    monkeypatch.setenv(
+        "WORTLAUT_OTLP_ENDPOINT",
+        "http://monitoring-stack-alloy.monitoring.svc.cluster.local:4318/v1/traces",
+    )
+    get_settings.cache_clear()
+    monkeypatch.setattr(telemetry.httpx, "post", fake_post)
+
+    now = datetime.now(UTC)
+    response = client.post(
+        "/v1/recordings",
+        headers={**API, "Idempotency-Key": "titled-teams"},
+        json={
+            "meeting_url": "https://teams.microsoft.com/meet/123456789?p=secret",
+            "starts_at": now.isoformat(),
+            "ends_at": (now + timedelta(minutes=30)).isoformat(),
+            "title": "  Architecture   Sync  ",
+            "guest_name": "  wortlaut Notizen  ",
+        },
+    )
+    assert response.status_code == 200
+    created = response.json()
+    assert created["title"] == "Architecture Sync"
+    assert created["guest_name"] == "wortlaut Notizen"
+
+    attempt, headers = prepare(client, created["id"])
+    client.post(f"/v1/attempts/{attempt}/claim", headers=headers, json={"worker_id": "owner"})
+    owner = {**headers, "X-Worker-ID": "owner"}
+    boot = client.get(f"/v1/attempts/{attempt}/bootstrap", headers=owner).json()
+    assert boot["empty_room_timeout_seconds"] == 300
+    assert boot["teams"]["display_name"] == "wortlaut Notizen"
+
+    status = client.post(
+        f"/v1/attempts/{attempt}/status",
+        headers=owner,
+        json={
+            "participation": "capturing",
+            "streams": 1,
+            "audio_samples": 16000,
+            "receiver_sources": [
+                {
+                    "provider_source_id": f"teams:{created['id']}:receiver:1",
+                    "source_kind": "speaker",
+                    "capture_path": "rtc_receiver",
+                    "track_id": "audio-1",
+                    "csi": 1001,
+                    "signaled_participant_id": "alice-id",
+                    "ssrc": [{"source": 1001, "timestamp": 1.0, "rtp_timestamp": 160}],
+                    "csrc": [],
+                }
+            ],
+            "participant_sources": {
+                "available": True,
+                "total": 1,
+                "truncated": False,
+                "sources": [
+                    {
+                        "participant_id": "alice-id",
+                        "audio_csis": [1001],
+                        "share_audio_csis": [],
+                    }
+                ],
+            },
+            "data_channels": [
+                {
+                    "label": "roster-v1",
+                    "ready_state": "open",
+                    "text_frames": 3,
+                    "binary_frames": 0,
+                    "json_frames": 3,
+                    "json_keys": ["audio_csis", "participant_id", "participants"],
+                }
+            ],
+        },
+    )
+    assert status.status_code == 200
+    assert len(exported_spans) == 1
+    url, otlp_payload, _ = exported_spans[0]
+    assert url == "http://monitoring-stack-alloy.monitoring.svc.cluster.local:4318/v1/traces"
+    span = otlp_payload["resourceSpans"][0]["scopeSpans"][0]["spans"][0]
+    assert span["name"] == "wortlaut.worker.status"
+    assert span["traceId"] == created["id"].replace("-", "")
+    attrs = {item["key"]: item["value"] for item in span["attributes"]}
+    assert attrs["wortlaut.provider"] == {"stringValue": "teams"}
+    assert attrs["wortlaut.bound_receiver_count"] == {"intValue": "1"}
+    assert attrs["wortlaut.data_channel_labels"] == {"stringValue": "roster-v1"}
+    assert attrs["wortlaut.data_channel_json_keys"] == {
+        "stringValue": "audio_csis,participant_id,participants"
+    }
+    get_settings.cache_clear()

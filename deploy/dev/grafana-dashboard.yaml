@@ -1,0 +1,63 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: wortlaut-grafana-dashboard
+  labels:
+    grafana_dashboard: '1'
+data:
+  wortlaut-telemetry.json: |
+    {
+      "uid": "wortlaut-telemetry",
+      "title": "wortlaut – Meeting Transcription & WebRTC Telemetry",
+      "tags": ["wortlaut", "webrtc", "otel"],
+      "timezone": "browser",
+      "schemaVersion": 39,
+      "version": 1,
+      "refresh": "10s",
+      "templating": {
+        "list": [
+          {
+            "name": "namespace",
+            "type": "query",
+            "datasource": { "type": "prometheus", "uid": "prometheus" },
+            "query": "label_values(kube_pod_info{pod=~\"wortlaut-.*\"}, namespace)",
+            "current": { "text": "wortlaut-johann", "value": "wortlaut-johann" },
+            "refresh": 2
+          }
+        ]
+      },
+      "panels": [
+        {
+          "id": 1,
+          "title": "Worker Status & WebRTC Signaling Traces (Tempo)",
+          "type": "traces",
+          "gridPos": { "h": 10, "w": 24, "x": 0, "y": 0 },
+          "datasource": { "type": "tempo", "uid": "tempo" },
+          "targets": [
+            {
+              "refId": "A",
+              "queryType": "traceql",
+              "query": "{ resource.service.name = \"wortlaut-meeting\" && name = \"wortlaut.worker.status\" }"
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "title": "Structured Telemetry & WebRTC DataChannel Logs (Loki)",
+          "type": "logs",
+          "gridPos": { "h": 12, "w": 24, "x": 0, "y": 10 },
+          "datasource": { "type": "loki", "uid": "loki" },
+          "options": {
+            "showTime": true,
+            "wrapLogMessage": true,
+            "enableLogDetails": true
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "{namespace=~\"$namespace\"} |= \"wortlaut.worker.status\""
+            }
+          ]
+        }
+      ]
+    }

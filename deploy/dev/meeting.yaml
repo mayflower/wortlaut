@@ -8,6 +8,7 @@ data:
   WORTLAUT_ENABLE_CONTROLLER: 'true'
   WORTLAUT_NAMESPACE: wortlaut-dev
   WORTLAUT_API_URL: https://wortlaut-dev.data.mayflower.zone/
+  WORTLAUT_OTLP_ENDPOINT: http://monitoring-stack-alloy.monitoring.svc.cluster.local:4318/v1/traces
 ---
 apiVersion: v1
 kind: ServiceAccount

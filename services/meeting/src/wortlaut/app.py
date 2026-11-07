@@ -52,6 +52,7 @@ from wortlaut.recurrence import recurrence_pass
 from wortlaut.retention import retention_pass
 from wortlaut.settings import get_settings
 from wortlaut.storage import get_storage
+from wortlaut.telemetry import record_worker_status_telemetry
 from wortlaut.ui import render_ui
 from wortlaut.validation import Provider, normalize_meeting_url
 from wortlaut.webex import WebexUnavailable, guest_token
@@ -131,6 +132,8 @@ class RecordingRequest(BaseModel):
     provider: Provider | None = None
     starts_at: datetime
     ends_at: datetime
+    title: str | None = Field(default=None, max_length=200)
+    guest_name: str | None = Field(default=None, max_length=120)
 
     @model_validator(mode="after")
     def valid(self):
@@ -144,6 +147,10 @@ class RecordingRequest(BaseModel):
             raise ValueError("Meeting end must follow start")
         self.starts_at = self.starts_at.astimezone(UTC)
         self.ends_at = self.ends_at.astimezone(UTC)
+        if self.title is not None:
+            self.title = " ".join(self.title.split()) or None
+        if self.guest_name is not None:
+            self.guest_name = " ".join(self.guest_name.split()) or None
         return self
 
 
@@ -237,6 +244,17 @@ class AudioClockEvidence(BaseModel):
         return self
 
 
+class DataChannelEvidence(BaseModel):
+    label: str = Field(default="", max_length=128)
+    ready_state: str = Field(default="unknown", max_length=32)
+    text_frames: int = Field(default=0, ge=0)
+    binary_frames: int = Field(default=0, ge=0)
+    json_frames: int = Field(default=0, ge=0)
+    json_keys: list[Annotated[str, Field(min_length=1, max_length=64)]] = Field(
+        default_factory=list, max_length=32
+    )
+
+
 class WorkerStatus(BaseModel):
     participation: Literal["joining", "waiting_admission", "capturing", "ended"]
     capability: Literal["unverified", "capability_unsupported", "verified"] = "unverified"
@@ -248,6 +266,7 @@ class WorkerStatus(BaseModel):
     drained: bool | None = None
     receiver_sources: list[ReceiverEvidence] = Field(default_factory=list, max_length=64)
     participant_sources: ParticipantEvidence = Field(default_factory=ParticipantEvidence)
+    data_channels: list[DataChannelEvidence] = Field(default_factory=list, max_length=32)
     audio_clock: AudioClockEvidence = Field(default_factory=AudioClockEvidence)
 
 
@@ -255,6 +274,8 @@ def recording_json(recording: Recording) -> dict:
     return {
         "id": str(recording.id),
         "provider": recording.provider,
+        "title": recording.title,
+        "guest_name": recording.guest_name,
         "starts_at": recording.starts_at,
         "ends_at": recording.ends_at,
         "participation": recording.participation,
@@ -308,6 +329,10 @@ def create_recording(
     # idempotency keys. Explicit and inferred providers have the same identity.
     if body.provider == "webex":
         payload.pop("provider")
+    if body.title is None:
+        payload.pop("title", None)
+    if body.guest_name is None:
+        payload.pop("guest_name", None)
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
     existing = db.scalar(select(Recording).where(Recording.idempotency_key == idempotency_key))
     if existing:
@@ -787,6 +812,7 @@ def bootstrap(
         raise HTTPException(409, "Claim this occurrence before bootstrap")
     settings = get_settings()
     response.headers["Cache-Control"] = "no-store"
+    display_name = recording.guest_name or settings.assistant_name
     common = {
         "provider": recording.provider,
         "meeting_id": str(recording.id),
@@ -794,6 +820,7 @@ def bootstrap(
         "meeting_url": recording.meeting_url,
         "deadline": min(recording.ends_at, attempt.credential_expires_at - timedelta(seconds=30)),
         "lobby_timeout_seconds": settings.lobby_timeout_seconds,
+        "empty_room_timeout_seconds": settings.empty_room_timeout_seconds,
     }
     if recording.provider == "google_meet":
         if not settings.enable_google_meet:
@@ -801,7 +828,7 @@ def bootstrap(
         return {
             **common,
             "meet": {
-                "display_name": settings.assistant_name,
+                "display_name": display_name,
                 "locale": settings.meet_locale,
                 "auth_mode": "account" if settings.meet_storage_state_secret else "guest",
             },
@@ -810,10 +837,10 @@ def bootstrap(
         if not settings.enable_teams:
             raise HTTPException(503, "teams_not_configured")
         return {**common, "teams": {
-            "display_name": settings.assistant_name, "locale": settings.teams_locale,
+            "display_name": display_name, "locale": settings.teams_locale,
         }}
     if settings.enable_webex_browser:
-        return {**common, "webex_browser": {"display_name": settings.assistant_name}}
+        return {**common, "webex_browser": {"display_name": display_name}}
     issued_request_started = datetime.now(UTC)
     try:
         guest = guest_token(
@@ -821,7 +848,7 @@ def bootstrap(
             if settings.webex_service_token
             else None,
             f"wortlaut:{recording.id}",
-            settings.assistant_name,
+            display_name,
         )
         guest_deadline = issued_request_started + timedelta(seconds=guest["expires_in"] - 30)
         if guest_deadline <= datetime.now(UTC):
@@ -862,6 +889,7 @@ def worker_status(
             and {
                 "drained": None,
                 "audio_clock": AudioClockEvidence().model_dump(),
+                "data_channels": [],
                 **attempt.diagnostics,
             }
             == body.model_dump(mode="json", exclude={"participation"})
@@ -879,6 +907,7 @@ def worker_status(
     elif not recording.cancelled_at:
         recording.participation_reason = body.reason or None
     db.commit()
+    record_worker_status_telemetry(recording, attempt, body)
     return {
         "accepted": True,
         "stop_requested": recording.cancelled_at is not None

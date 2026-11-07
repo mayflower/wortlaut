@@ -7,3 +7,4 @@ resources:
   - controller-rbac.yaml
   - rustfs.yaml
   - asr.yaml
+  - grafana-dashboard.yaml

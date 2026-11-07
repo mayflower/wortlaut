@@ -150,7 +150,9 @@ def entry_json(entry, recording=None):
     }
 
 
-def import_event(db, calendar, event, authenticated, mail_text, *, instant=False):
+def import_event(
+    db, calendar, event, authenticated, mail_text, *, instant=False, subject=None
+):
     settings = get_settings()
     uid = str(event.get("UID", ""))
     organizer = str(event.get("ORGANIZER", ""))
@@ -309,6 +311,7 @@ def import_event(db, calendar, event, authenticated, mail_text, *, instant=False
         raise ValueError("calendar_end_invalid")
     link = meeting_link(event, mail_text)
     provider, link = normalize_meeting_url(link)
+    title = " ".join(str(event.get("SUMMARY", "")).split())[:200] or subject or None
     entry.status = "accepted"
     db.flush()
     if recording:
@@ -325,6 +328,7 @@ def import_event(db, calendar, event, authenticated, mail_text, *, instant=False
         else:
             recording.starts_at, recording.ends_at, recording.meeting_url = starts, ends, link
             recording.provider = provider
+            recording.title = title
             recording.calendar_conflict = False
     else:
         recording = Recording(
@@ -334,6 +338,7 @@ def import_event(db, calendar, event, authenticated, mail_text, *, instant=False
             request_digest=digest,
             meeting_url=link,
             provider=provider,
+            title=title,
             starts_at=starts,
             ends_at=ends,
         )
@@ -439,6 +444,7 @@ def import_mail(db, raw):
         message = BytesParser(policy=policy.default).parsebytes(raw)
         if message.defects:
             raise ValueError("mime_invalid")
+        subject = " ".join(str(message.get("Subject", "")).split())[:200] or None
         parts = list(message.walk())
         mail_text = "\n".join(
             str(part.get_content())
@@ -468,7 +474,13 @@ def import_mail(db, raw):
             try:
                 with db.begin_nested():
                     result = import_event(
-                        db, calendar, event, authenticated, mail_text, instant=instant
+                        db,
+                        calendar,
+                        event,
+                        authenticated,
+                        mail_text,
+                        instant=instant,
+                        subject=subject,
                     )
                 results.append(result)
             except (ValueError, KeyError, TypeError, UnicodeError):

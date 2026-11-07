@@ -113,6 +113,7 @@ def expand_series(db, entry, now):
     for key, event in desired.items():
         starts, ends = utc(event.decoded("DTSTART")), utc(event.decoded("DTEND"))
         provider, link = normalize_meeting_url(meeting_link(event, ""))
+        title = " ".join(str(event.get("SUMMARY", "")).split())[:200] or None
         recording = existing.get(key)
         if key in conflicted:
             if recording:
@@ -129,6 +130,7 @@ def expand_series(db, entry, now):
                     request_digest=identifier,
                     meeting_url=link,
                     provider=provider,
+                    title=title,
                     starts_at=starts,
                     ends_at=ends,
                 )
@@ -151,6 +153,7 @@ def expand_series(db, entry, now):
             # future occurrence can reuse its original row safely.
             recording.starts_at, recording.ends_at, recording.meeting_url = starts, ends, link
             recording.provider = provider
+            recording.title = title
             recording.calendar_conflict = False
             if recording.cancelled_at and ends > now:
                 recording.cancelled_at = recording.audio_closed_at = None

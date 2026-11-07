@@ -39,6 +39,8 @@ class Recording(Base):
     request_digest: Mapped[str] = mapped_column(String(64))
     meeting_url: Mapped[str] = mapped_column(String(2048))
     provider: Mapped[str] = mapped_column(String(32), default="webex", server_default="webex")
+    title: Mapped[str | None] = mapped_column(String(200))
+    guest_name: Mapped[str | None] = mapped_column(String(120))
     starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     participation: Mapped[str] = mapped_column(String(32), default="scheduled")

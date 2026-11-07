@@ -99,6 +99,8 @@ def export_data(db: Session, recording: Recording):
     return {
         "recording_id": str(recording.id),
         "provider": recording.provider,
+        "title": recording.title,
+        "guest_name": recording.guest_name,
         "processing": recording.processing,
         "processing_error": recording.processing_error,
         "participation": recording.participation,
@@ -157,8 +159,70 @@ def export_data(db: Session, recording: Recording):
             "streams": qualities,
         },
         "source_labels": source_labels,
+        "sources_summary": _build_sources_summary(
+            attempts, streams, qualities, segments, source_labels
+        ),
         "segments": segments,
     }
+
+
+def _build_sources_summary(attempts, streams, qualities, segments, source_labels):
+    receiver_by_id = {}
+    for attempt in attempts:
+        for rcv in attempt.diagnostics.get("receiver_sources", []):
+            if rcv.get("provider_source_id"):
+                receiver_by_id[rcv["provider_source_id"]] = rcv
+    source_ids = list(
+        dict.fromkeys(
+            [
+                s.contract["provider_source_id"]
+                for s in streams
+                if s.contract.get("provider_source_id")
+            ]
+            + [seg["provider_source_id"] for seg in segments if seg.get("provider_source_id")]
+            + list(receiver_by_id.keys())
+        )
+    )
+    summary = []
+    for sid in source_ids:
+        src_segs = [seg for seg in segments if seg.get("provider_source_id") == sid]
+        src_quals = [q for q in qualities if q.get("provider_source_id") == sid]
+        rcv = receiver_by_id.get(sid, {})
+        sig_id = rcv.get("signaled_participant_id") or next(
+            (
+                q.get("participant_id") or q.get("speaker_id")
+                for q in src_quals
+                if q.get("participant_id") or q.get("speaker_id")
+            ),
+            None,
+        )
+        part_name = next(
+            (q.get("participant_name") for q in src_quals if q.get("participant_name")),
+            None,
+        )
+        summary.append(
+            {
+                "provider_source_id": sid,
+                "manual_speaker_name": source_labels.get(sid),
+                "participant_name": part_name,
+                "signaled_participant_id": sig_id,
+                "csi": rcv.get("csi"),
+                "source_kind": rcv.get("source_kind")
+                or (src_quals[0].get("source_kind") if src_quals else "speaker"),
+                "segment_count": len(src_segs),
+                "speech_seconds": round(
+                    sum(max(0.0, seg["end"] - seg["start"]) for seg in src_segs), 2
+                ),
+                "accepted_seconds": round(
+                    sum(q.get("accepted_samples", 0) for q in src_quals) / RATE, 2
+                ),
+                "first_start": src_segs[0]["start"] if src_segs else None,
+                "sample_text": (
+                    " ".join(src_segs[0]["text"].split())[:140] if src_segs else None
+                ),
+            }
+        )
+    return summary
 
 
 def render_export(data, format):

@@ -302,6 +302,16 @@ UI_HTML = """<!DOCTYPE html>
             placeholder="https://meet.google.com/... oder https://teams.microsoft.com/meet/...">
         </div>
         <div class="field">
+          <label for="meeting-title">Titel (optional)</label>
+          <input id="meeting-title" type="text" maxlength="200"
+            placeholder="z. B. Daily Standup">
+        </div>
+        <div class="field">
+          <label for="guest-name">Bot-Name (optional)</label>
+          <input id="guest-name" type="text" maxlength="120"
+            placeholder="wortlaut">
+        </div>
+        <div class="field">
           <label for="join-mode">Modus</label>
           <select id="join-mode">
             <option value="live">Sofort beitreten (Live)</option>
@@ -344,6 +354,12 @@ UI_HTML = """<!DOCTYPE html>
         <div id="recordings-list" class="recording-list">
           <div class="muted">Bitte API-Token eingeben und verbinden.</div>
         </div>
+        <details id="calendar-details">
+          <summary>Kalender- &amp; Mail-Einladungen (<span id="calendar-count">0</span>)</summary>
+          <div id="calendar-list" class="muted" style="margin-top:8px">
+            Keine Kalendereinträge geladen.
+          </div>
+        </details>
       </section>
 
       <section class="card" id="detail-panel">
@@ -367,6 +383,7 @@ UI_HTML = """<!DOCTYPE html>
     };
 
     let selectedId = null;
+    let selectedSourceFilter = "";
     let token = localStorage.getItem("wortlaut_api_token") || "";
     const tokenInput = document.getElementById("api-token");
     tokenInput.value = token;
@@ -437,6 +454,8 @@ UI_HTML = """<!DOCTYPE html>
       feedback.innerHTML = "";
       try {
         const url = document.getElementById("meeting-url").value.trim();
+        const title = document.getElementById("meeting-title").value.trim() || null;
+        const guestName = document.getElementById("guest-name").value.trim() || null;
         const mode = document.getElementById("join-mode").value;
         let startsAt, endsAt;
         if (mode === "live") {
@@ -452,13 +471,17 @@ UI_HTML = """<!DOCTYPE html>
           endsAt = new Date(end).toISOString();
         }
         const key = "ui-" + (crypto.randomUUID ? crypto.randomUUID() : Date.now());
+        const payload = { meeting_url: url, starts_at: startsAt, ends_at: endsAt };
+        if (title) payload.title = title;
+        if (guestName) payload.guest_name = guestName;
         const res = await api("/v1/recordings", {
           method: "POST",
           headers: { "Idempotency-Key": key },
-          body: JSON.stringify({ meeting_url: url, starts_at: startsAt, ends_at: endsAt })
+          body: JSON.stringify(payload)
         });
         const created = await res.json();
         document.getElementById("meeting-url").value = "";
+        document.getElementById("meeting-title").value = "";
         selectedId = created.id;
         feedback.innerHTML = `<div class="alert ok">Aufnahme <code>${esc(created.id)}</code> `
           + `(${esc(created.provider)}) angelegt.</div>`;
@@ -499,11 +522,13 @@ UI_HTML = """<!DOCTYPE html>
                 <span class="badge provider-${esc(item.provider)}">${esc(item.provider)}</span>
                 <span class="badge state-${esc(item.participation)}">${esc(partLabel)}</span>
               </div>
-              <div style="font-size:0.84rem;font-weight:600">
+              <div style="font-size:0.86rem;font-weight:600">
+                ${item.title ? esc(item.title) + " · " : ""}
                 ${esc(new Date(item.starts_at).toLocaleString("de-DE"))}
               </div>
               <div class="muted">
                 ID: ${esc(item.id.slice(0, 8))}… · ASR: ${esc(item.processing)} · Audio: ${seconds}s
+                ${item.guest_name ? ` · Bot: ${esc(item.guest_name)}` : ""}
               </div>
               ${reasonHint
                 ? `<div class="muted" style="color:#fca5a5">Grund: ${esc(reasonHint)}</div>`
@@ -514,11 +539,39 @@ UI_HTML = """<!DOCTYPE html>
         container.querySelectorAll(".rec-item").forEach((el) => {
           el.addEventListener("click", () => {
             selectedId = el.getAttribute("data-id");
+            selectedSourceFilter = "";
             refreshAll();
           });
         });
       } catch (err) {
         container.innerHTML = `<div class="alert err">${esc(err.message)}</div>`;
+      }
+    }
+
+    async function loadCalendar() {
+      const calEl = document.getElementById("calendar-list");
+      const countEl = document.getElementById("calendar-count");
+      if (!token || !calEl) return;
+      try {
+        const res = await api("/v1/calendar");
+        const data = await res.json();
+        const events = data.events || [];
+        countEl.textContent = String(events.length);
+        if (!events.length) {
+          calEl.innerHTML = "Noch keine Kalender- oder Sofort-Einladungen importiert.";
+          return;
+        }
+        calEl.innerHTML = events.slice(0, 15).map((ev) => `
+          <div style="padding:6px 0;border-bottom:1px solid var(--border);font-size:0.78rem">
+            <strong>${esc(ev.status)}</strong>
+            ${ev.provider ? ` · <span class="badge provider-${esc(ev.provider)}">`
+              + `${esc(ev.provider)}</span>` : ""}
+            · ${esc(ev.organizer || "")}
+            ${ev.reason ? ` <span style="color:#fca5a5">(${esc(ev.reason)})</span>` : ""}
+          </div>
+        `).join("");
+      } catch {
+        calEl.innerHTML = "Kalenderstatus konnte nicht geladen werden.";
       }
     }
 
@@ -562,19 +615,13 @@ UI_HTML = """<!DOCTYPE html>
         const canRetryMail = rec.delivery
           && ["failed", "delivery_unknown"].includes(rec.delivery.status);
 
-        const sourceIds = new Set();
-        (trans.quality?.streams || []).forEach((s) => {
-          if (s.provider_source_id) sourceIds.add(s.provider_source_id);
-        });
-        (trans.segments || []).forEach((s) => {
-          if (s.provider_source_id) sourceIds.add(s.provider_source_id);
-        });
-        (lastAttempt?.diagnostics?.receiver_sources || []).forEach((r) => {
-          if (r.provider_source_id) sourceIds.add(r.provider_source_id);
-        });
+        const sourceSummary = trans.sources_summary || [];
         const sourceLabels = trans.source_labels || {};
 
         const segments = (trans.segments || []).filter((s) => {
+          if (selectedSourceFilter && s.provider_source_id !== selectedSourceFilter) {
+            return false;
+          }
           if (!currentSearch.trim()) return true;
           const q = currentSearch.toLowerCase();
           return (s.text || "").toLowerCase().includes(q)
@@ -593,9 +640,12 @@ UI_HTML = """<!DOCTYPE html>
           <div class="toolbar">
             <div>
               <span class="badge provider-${esc(rec.provider)}">${esc(rec.provider)}</span>
-              <strong style="margin-left:6px">${esc(rec.id)}</strong>
+              <strong style="margin-left:6px">
+                ${rec.title ? esc(rec.title) + " · " : ""}${esc(rec.id)}
+              </strong>
               <div class="muted" style="margin-top:4px">
                 Zeitraum: ${esc(startStr)} – ${esc(endStr)}
+                ${rec.guest_name ? ` · Bot-Name: <strong>${esc(rec.guest_name)}</strong>` : ""}
               </div>
             </div>
             <div style="display:flex;gap:6px;flex-wrap:wrap">
@@ -629,17 +679,51 @@ UI_HTML = """<!DOCTYPE html>
             <span>Mail-Versand: <strong>${esc(rec.delivery?.status ?? "pending")}</strong></span>
           </div>
 
-          ${sourceIds.size ? `
+          ${sourceSummary.length ? `
             <div style="margin-top:14px">
-              <h3>Audio-Quellen &amp; Sprecher-Zuordnung</h3>
-              ${[...sourceIds].map((sid) => `
-                <div class="source-row">
-                  <code>${esc(sid)}</code>
-                  <input class="source-label-input" data-source-id="${esc(sid)}"
-                    type="text" placeholder="Sprechername zuordnen (z. B. Max Mustermann)"
-                    value="${esc(sourceLabels[sid] || "")}" style="flex:1 1 220px">
-                </div>
-              `).join("")}
+              <div class="list-header">
+                <h3 style="margin:0">Audio-Quellen &amp; Sprecher-Zuordnung</h3>
+                ${selectedSourceFilter ? `
+                  <button id="clear-source-filter-btn" style="font-size:0.75rem;padding:4px 8px">
+                    Filter aufheben (${esc(selectedSourceFilter)})
+                  </button>
+                ` : ""}
+              </div>
+              ${sourceSummary.map((src) => {
+                const sid = src.provider_source_id;
+                const isFiltered = selectedSourceFilter === sid;
+                return `
+                  <div class="source-row"
+                    style="background:var(--panel-alt);padding:8px;border-radius:6px">
+                    <div style="flex:1 1 240px">
+                      <div>
+                        <code>${esc(sid)}</code>
+                        <button class="filter-source-btn" data-filter-source="${esc(sid)}"
+                          style="margin-left:6px;font-size:0.72rem;padding:2px 6px">
+                          ${isFiltered ? "Gefiltert" : "Filtern"}
+                        </button>
+                      </div>
+                      <div class="muted" style="margin-top:2px">
+                        ${src.segment_count} Segmente · ${src.speech_seconds}s Sprache
+                        (${src.accepted_seconds}s Audio)
+                        ${src.signaled_participant_id
+                          ? ` · Teilnehmer-ID: <strong>${esc(src.signaled_participant_id)}</strong>`
+                          : ""}
+                        ${src.csi != null ? ` · CSI: ${esc(src.csi)}` : ""}
+                      </div>
+                      ${src.sample_text ? `
+                        <div class="muted" style="font-style:italic;margin-top:2px">
+                          „${esc(src.sample_text)}“
+                        </div>
+                      ` : ""}
+                    </div>
+                    <input class="source-label-input" data-source-id="${esc(sid)}"
+                      type="text" placeholder="Sprechername zuordnen (z. B. Max Mustermann)"
+                      value="${esc(sourceLabels[sid] || src.participant_name || "")}"
+                      style="flex:1 1 220px">
+                  </div>
+                `;
+              }).join("")}
               <button id="save-sources-btn" class="primary">Sprechernamen speichern</button>
             </div>
           ` : ""}
@@ -715,6 +799,22 @@ UI_HTML = """<!DOCTYPE html>
         if (newSearch) {
           newSearch.addEventListener("input", () => loadDetail());
         }
+
+        panel.querySelectorAll(".filter-source-btn").forEach((btn) => {
+          btn.addEventListener("click", () => {
+            const target = btn.getAttribute("data-filter-source");
+            selectedSourceFilter = selectedSourceFilter === target ? "" : target;
+            loadDetail();
+          });
+        });
+
+        const clearFilterBtn = document.getElementById("clear-source-filter-btn");
+        if (clearFilterBtn) {
+          clearFilterBtn.addEventListener("click", () => {
+            selectedSourceFilter = "";
+            loadDetail();
+          });
+        }
       } catch (err) {
         panel.innerHTML = `<div class="alert err">${esc(err.message)}</div>`;
       }
@@ -723,6 +823,7 @@ UI_HTML = """<!DOCTYPE html>
     async function refreshAll() {
       await checkHealth();
       await loadList();
+      await loadCalendar();
       await loadDetail();
     }
 

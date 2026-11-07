@@ -56,8 +56,10 @@ class Settings(BaseSettings):
     max_active_meetings: int = Field(default=2, ge=1)
     join_lead_seconds: int = Field(default=60, ge=0)
     lobby_timeout_seconds: int = Field(default=600, ge=1)
+    empty_room_timeout_seconds: int = Field(default=300, ge=5, le=7200)
     late_start_tolerance_seconds: int = Field(default=300, ge=0)
     heartbeat_timeout_seconds: int = Field(default=45, ge=10)
+    otlp_endpoint: str | None = None
     worker_cpu_request: str = "250m"
     worker_cpu_limit: str = "2"
     worker_memory_request: str = "512Mi"

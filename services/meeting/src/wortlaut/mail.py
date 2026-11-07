@@ -38,6 +38,9 @@ FAILURE_REASONS = {
     "meeting_not_found": "Besprechung wurde beim Provider nicht gefunden",
     "missed": "Terminzeitfenster war vor dem Start bereits abgelaufen",
     "removed": "Bot wurde aus der Besprechung entfernt",
+    "room_empty": (
+        "Meeting-Raum war für 5 Minuten leer oder ohne Audioaktivität (automatisch verlassen)"
+    ),
     "worker_failed": "Worker-Prozess wurde unerwartet beendet",
     "worker_startup_failed": "Browser-Start im Worker fehlgeschlagen",
 }
@@ -78,12 +81,15 @@ def build_message(db, recording, delivery):
     quality = data["quality"]
     reason = effective_participation_reason(data)
     explanation = FAILURE_REASONS.get(reason) if reason else None
+    title_line = f"Titel: {recording.title}\n" if recording.title else ""
     if quality["no_audio_received"]:
         message["Subject"] = (
             f"wortlaut: Aufnahme {recording.id} fehlgeschlagen ({reason or 'no_audio_received'})"
         )
         body = (
-            f"wortlaut – {recording.provider}\nTermin: {period['start']} bis {period['end']}\n"
+            f"wortlaut – {recording.provider}\n"
+            + title_line
+            + f"Termin: {period['start']} bis {period['end']}\n"
             f"Teilnahme: {data['participation']}; "
             f"Grund: {reason or 'unbekannt'}\n"
             f"Hinweis: {explanation or 'Es wurde kein Audio im Meeting empfangen.'}\n"
@@ -92,7 +98,11 @@ def build_message(db, recording, delivery):
         )
         message.set_content(body)
         return message
-    message["Subject"] = f"wortlaut: Aufnahme {recording.id}"
+    message["Subject"] = (
+        f"wortlaut: {recording.title} (Aufnahme {recording.id})"
+        if recording.title
+        else f"wortlaut: Aufnahme {recording.id}"
+    )
     attribution = "unklar" if quality["attribution_unknown"] else "keine ungebundenen Samples"
     drain = "unvollständig" if quality["incomplete_drain"] else "kein bekannter Drain-Fehler"
     clock = (
@@ -104,7 +114,9 @@ def build_message(db, recording, delivery):
         "ASR-Ausfälle" if quality["failed_asr_ranges"] else "keiner"
     )
     body = (
-        f"wortlaut – {recording.provider}\nTermin: {period['start']} bis {period['end']}\n"
+        f"wortlaut – {recording.provider}\n"
+        + title_line
+        + f"Termin: {period['start']} bis {period['end']}\n"
         f"Letztes bekanntes Audio: {data['last_known_audio_utc'] or 'unbekannt'}\n"
         f"Teilnahme: {data['participation']}; "
         f"Grund: {reason or 'unbekannt'}\n"
