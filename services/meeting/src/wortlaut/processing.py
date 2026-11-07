@@ -466,7 +466,7 @@ def segmentation_pass(engine):
                 | (AudioStream.scan_retry_at <= datetime.now(UTC)),
             )
             .order_by(AudioStream.last_scanned_at.asc().nullsfirst(), AudioStream.id)
-            .limit(16)
+            .limit(64)
         ).all()
     for identifier in identifiers:
         # One source per transaction: storage failure never rolls back other meetings.
@@ -504,3 +504,4 @@ def segmentation_pass(engine):
                 )
             stream.last_scanned_at = datetime.now(UTC)
             db.commit()
+    return len(identifiers) == 64

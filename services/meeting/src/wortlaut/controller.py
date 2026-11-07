@@ -495,7 +495,7 @@ def controller_pass(engine, apis=None):
             # Their expired/cancelled meetings still receive a terminal state.
             .where(*due, Recording.provider.in_(enabled) | expired)
             .order_by(Recording.starts_at)
-            .limit(16)
+            .limit(max(16, settings.max_active_meetings * 2))
         ).all()
         db.commit()
     for identifier in candidates:

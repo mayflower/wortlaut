@@ -8,7 +8,12 @@ from wortlaut.settings import get_settings
 
 @lru_cache
 def get_engine():
-    return create_engine(get_settings().database_url.get_secret_value(), pool_pre_ping=True)
+    return create_engine(
+        get_settings().database_url.get_secret_value(),
+        pool_pre_ping=True,
+        pool_size=20,
+        max_overflow=30,
+    )
 
 
 def session():

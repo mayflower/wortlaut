@@ -53,7 +53,7 @@ class Settings(BaseSettings):
     namespace: str = "wortlaut-dev"
     api_url: str = "https://wortlaut-dev.data.mayflower.zone/"
     worker_image: str = "wortlaut-worker:dev"
-    max_active_meetings: int = Field(default=2, ge=1)
+    max_active_meetings: int = Field(default=15, ge=1)
     join_lead_seconds: int = Field(default=60, ge=0)
     lobby_timeout_seconds: int = Field(default=600, ge=1)
     empty_room_timeout_seconds: int = Field(default=300, ge=5, le=7200)
@@ -73,9 +73,9 @@ class Settings(BaseSettings):
     s3_secret_key: SecretStr | None = None
     s3_create_bucket: bool = False
     max_pending_samples_per_attempt: int = Field(default=16000 * 60 * 120, ge=1)
-    max_pending_samples_total: int = Field(default=16000 * 60 * 240, ge=1)
-    max_stored_audio_bytes: int = Field(default=2 * 1024**3, ge=1)
-    max_open_asr_jobs: int = Field(default=2048, ge=1)
+    max_pending_samples_total: int = Field(default=16000 * 60 * 1800, ge=1)
+    max_stored_audio_bytes: int = Field(default=8 * 1024**3, ge=1)
+    max_open_asr_jobs: int = Field(default=8192, ge=1)
     audio_retention_hours: int = Field(default=24, ge=0)
     failed_audio_retention_hours: int = Field(default=24, ge=0)
     processing_max_age_hours: int = Field(default=72, ge=1)

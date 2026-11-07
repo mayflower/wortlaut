@@ -90,7 +90,7 @@ export function getInstanceInfo(): InstanceInfo {
         allowedDomains: [],
       },
       limits: {
-        maxActiveMeetings: 2,
+        maxActiveMeetings: 15,
         lobbyTimeoutSeconds: 600,
         emptyRoomTimeoutSeconds: 300,
       },
