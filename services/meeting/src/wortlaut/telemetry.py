@@ -125,7 +125,7 @@ def emit_span(
                 endpoint,
                 json=payload,
                 headers={"Content-Type": "application/json"},
-                timeout=2.0,
+                timeout=0.5,
             )
         except Exception:
             logger.debug("otlp_export_failed", exc_info=False)

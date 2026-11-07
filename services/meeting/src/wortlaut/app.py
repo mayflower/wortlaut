@@ -425,12 +425,73 @@ def calendar_status(db: Db):
     return {"events": result}
 
 
+@app.get("/metrics", dependencies=[Depends(api_auth)])
+def prometheus_metrics(db: Db):
+    rec_rows = db.execute(
+        select(
+            Recording.provider,
+            Recording.participation,
+            Recording.processing,
+            func.count(),
+        ).group_by(Recording.provider, Recording.participation, Recording.processing)
+    ).all()
+    active_attempts = (
+        db.scalar(select(func.count(Attempt.id)).where(Attempt.ended_at.is_(None))) or 0
+    )
+    asr_rows = db.execute(select(AsrJob.status, func.count()).group_by(AsrJob.status)).all()
+    stored_samples, stored_bytes = db.execute(
+        select(
+            func.coalesce(func.sum(AudioChunk.sample_count), 0),
+            func.coalesce(func.sum(AudioChunk.object_size), 0),
+        ).where(AudioChunk.deleted_at.is_(None))
+    ).one()
+    lines = [
+        "# HELP wortlaut_recordings_total Total recordings by provider and state.",
+        "# TYPE wortlaut_recordings_total gauge",
+    ]
+    for prov, part, proc, count in rec_rows:
+        lines.append(
+            f'wortlaut_recordings_total{{provider="{prov}",participation="{part}",'
+            f'processing="{proc}"}} {count}'
+        )
+    lines.extend(
+        [
+            "# HELP wortlaut_active_attempts Currently active worker attempts.",
+            "# TYPE wortlaut_active_attempts gauge",
+            f"wortlaut_active_attempts {active_attempts}",
+            "# HELP wortlaut_asr_jobs_total Total ASR jobs by status.",
+            "# TYPE wortlaut_asr_jobs_total gauge",
+        ]
+    )
+    for status, count in asr_rows:
+        lines.append(f'wortlaut_asr_jobs_total{{status="{status}"}} {count}')
+    lines.extend(
+        [
+            "# HELP wortlaut_stored_audio_samples Active stored audio samples.",
+            "# TYPE wortlaut_stored_audio_samples gauge",
+            f"wortlaut_stored_audio_samples {stored_samples}",
+            "# HELP wortlaut_stored_audio_bytes Active stored S3 audio bytes.",
+            "# TYPE wortlaut_stored_audio_bytes gauge",
+            f"wortlaut_stored_audio_bytes {stored_bytes}",
+        ]
+    )
+    return Response(
+        "\n".join(lines) + "\n",
+        media_type="text/plain; version=0.0.4; charset=utf-8",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 @app.get("/v1/recordings", dependencies=[Depends(api_auth)])
 def list_recordings(
     db: Db,
     limit: Annotated[int, Query(ge=1, le=100)] = 25,
     cursor: Annotated[str | None, Query(max_length=200)] = None,
     provider: Provider | None = None,
+    participation: Annotated[str | None, Query(max_length=32)] = None,
+    processing: Annotated[str | None, Query(max_length=32)] = None,
+    q: Annotated[str | None, Query(max_length=200)] = None,
+    order: Literal["asc", "desc"] = "asc",
     starts_from: datetime | None = None,
     starts_before: datetime | None = None,
 ):
@@ -442,6 +503,13 @@ def list_recordings(
     query = select(Recording, Delivery).outerjoin(Delivery)
     if provider:
         query = query.where(Recording.provider == provider)
+    if participation:
+        query = query.where(Recording.participation == participation)
+    if processing:
+        query = query.where(Recording.processing == processing)
+    if q and q.strip():
+        needle = f"%{q.strip()}%"
+        query = query.where(Recording.title.ilike(needle))
     if starts_from:
         query = query.where(Recording.starts_at >= starts_from)
     if starts_before:
@@ -454,8 +522,20 @@ def list_recordings(
                 raise ValueError("Timezone missing")
         except (ValueError, TypeError, KeyError, UnicodeError):
             raise HTTPException(400, "Invalid recording cursor") from None
-        query = query.where(tuple_(Recording.starts_at, Recording.id) > tuple_(moment, identifier))
-    rows = db.execute(query.order_by(Recording.starts_at, Recording.id).limit(limit + 1)).all()
+        if order == "desc":
+            query = query.where(
+                tuple_(Recording.starts_at, Recording.id) < tuple_(moment, identifier)
+            )
+        else:
+            query = query.where(
+                tuple_(Recording.starts_at, Recording.id) > tuple_(moment, identifier)
+            )
+    sort_cols = (
+        (Recording.starts_at.desc(), Recording.id.desc())
+        if order == "desc"
+        else (Recording.starts_at, Recording.id)
+    )
+    rows = db.execute(query.order_by(*sort_cols).limit(limit + 1)).all()
     page, identifiers = rows[:limit], [r.id for r, _ in rows[:limit]]
     # Read page-wide aggregates rather than full chunk/participant histories.
     audio = {
@@ -742,9 +822,49 @@ def cancel_recording(recording_id: uuid.UUID, db: Db):
     return recording_json(recording)
 
 
-@app.get("/v1/recordings/{recording_id}/transcript", dependencies=[Depends(api_auth)])
-def get_transcript(recording_id: uuid.UUID, db: Db):
+@app.post("/v1/recordings/{recording_id}/rejoin", dependencies=[Depends(api_auth)])
+def rejoin_recording(recording_id: uuid.UUID, db: Db):
+    recording = db.scalar(select(Recording).where(Recording.id == recording_id).with_for_update())
+    if recording is None:
+        raise HTTPException(404, "Recording not found")
+    if recording.metadata_deleted_at or recording.transcript_deleted_at:
+        raise HTTPException(410, "Recording retention expired")
+    if recording.participation != "ended":
+        raise HTTPException(409, "Recording is still active")
+    if recording.active_attempt_id is not None:
+        active = db.get(Attempt, recording.active_attempt_id)
+        if active and active.ended_at is None:
+            raise HTTPException(409, "Active attempt has not terminated yet")
+    if capacity_reached(db):
+        raise HTTPException(503, "audio_capacity_limit")
+    now = datetime.now(UTC)
+    if recording.ends_at <= now + timedelta(minutes=5):
+        recording.ends_at = now + timedelta(minutes=60)
+    recording.active_attempt_id = None
+    recording.cancelled_at = None
+    recording.audio_closed_at = None
+    recording.participation = "scheduled"
+    recording.participation_reason = None
+    recording.processing = "pending"
+    recording.processing_error = None
+    recording.processing_finished_at = None
+    db.commit()
+    return recording_json(recording)
+
+
+@app.get("/v1/recordings/{recording_id}/transcript")
+def get_transcript(
+    recording_id: uuid.UUID,
+    db: Db,
+    authorization: Annotated[str | None, Header()] = None,
+):
+    token = bearer_value(authorization)
     recording = db.get(Recording, recording_id)
+    reader = export_reader_token(recording) if recording else None
+    if not secrets.compare_digest(
+        token.encode(), get_settings().api_token.get_secret_value().encode()
+    ) and (reader is None or not secrets.compare_digest(token.encode(), reader.encode())):
+        raise HTTPException(401, "Invalid credential")
     if recording is None:
         raise HTTPException(404, "Recording not found")
     if recording.transcript_deleted_at:

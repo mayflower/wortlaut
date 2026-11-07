@@ -264,6 +264,16 @@ def test_dkim_invitation_authentication(client, database, signed_invite):
     assert imported(client, b"Authentication-Results: forged; dkim=pass\r\n" + valid)[
         "recording_id"
     ] == result["recording_id"]
+    # Explicit organizer_permissions allow a trusted sender to forward external invitations.
+    settings = get_settings()
+    settings.organizer_permissions = {"owner@mayflower.de": ["*"]}
+    try:
+        forwarded = signed_invite(raw=mail(
+            uid="forwarded-ext", sender="owner@mayflower.de", organizer="customer@external.org"
+        ))
+        assert imported(client, forwarded)["status"] == "accepted"
+    finally:
+        settings.organizer_permissions = {}
 
 
 def test_dkim_dns_outage_does_not_consume_invitation(database, monkeypatch, signed_invite):
@@ -291,9 +301,10 @@ def test_instant_invitations_plain_html_identity_and_replay(client, database, si
     from email.utils import format_datetime
 
     def notice(text=None, html=False, age=0, from_address="meetings-noreply@google.com",
-               domain=b"google.com", headers=None):
+               domain=b"google.com", headers=None, subject="Ad-hoc Projekt-Sync"):
         message = EmailMessage()
         message["From"] = from_address
+        message["Subject"] = subject
         message["Date"] = format_datetime(datetime.now(UTC) - timedelta(hours=age))
         message["Message-ID"] = f"<{uuid.uuid4()}@notifications.google.com>"
         message.set_content(text or (
@@ -328,10 +339,13 @@ def test_instant_invitations_plain_html_identity_and_replay(client, database, si
     with Session(database) as db:
         recording = db.get(Recording, uuid.UUID(result["recording_id"]))
         assert recording.provider == "google_meet"
+        assert recording.title == "Ad-hoc Projekt-Sync"
         assert recording.meeting_url == "https://meet.google.com/abc-defg-hij"
         assert recording.starts_at >= received
         assert timedelta(minutes=104) < recording.ends_at - recording.starts_at < timedelta(hours=2)
         assert db.get(CalendarEntry, recording.calendar_entry_id).organizer == "owner@mayflower.de"
+    calendar_rows = client.get("/v1/calendar", headers=API).json()["events"]
+    assert any(row.get("title") == "Ad-hoc Projekt-Sync" for row in calendar_rows)
     assert imported(client, notice(
         '<p>owner@mayflower.de is inviting you to an ongoing video call</p>'
         '<a href="https://meet.google.com/abc-defg-hij?hs=151">Join</a>', html=True,

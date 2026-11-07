@@ -919,3 +919,76 @@ def test_bind_control_backfills_unattributed_prefix_on_single_speaker_stream(cli
     assert transcript["segments"][1]["speaker_label"] == "Alice Visual"
     assert transcript["sources_summary"][0]["participant_name"] == "Alice Visual"
     assert transcript["sources_summary"][0]["signaled_participant_id"] == "devices/alice-1"
+
+
+def test_persona_workflows_rejoin_desc_filters_reader_token_and_metrics(client, database):
+    from wortlaut.exports import export_reader_token
+
+    now = datetime.now(UTC)
+    first = create(
+        client,
+        key="persona-1",
+        body={
+            "provider": "teams",
+            "meeting_url": "https://teams.microsoft.com/meet/111111111?p=one",
+            "title": "Kunden-Kickoff Alpha",
+            "starts_at": (now - timedelta(minutes=10)).isoformat(),
+            "ends_at": (now + timedelta(minutes=20)).isoformat(),
+        },
+    )
+    second = create(
+        client,
+        key="persona-2",
+        body={
+            "provider": "google_meet",
+            "meeting_url": "https://meet.google.com/abc-defg-hij",
+            "title": "Architektur Review Beta",
+            "starts_at": now.isoformat(),
+            "ends_at": (now + timedelta(minutes=30)).isoformat(),
+        },
+    )
+
+    desc_list = client.get("/v1/recordings?order=desc", headers=API).json()["items"]
+    assert [item["id"] for item in desc_list[:2]] == [second, first]
+
+    filtered = client.get("/v1/recordings?q=Architektur", headers=API).json()["items"]
+    assert [item["id"] for item in filtered] == [second]
+
+    attempt, creds = prepare(client, first)
+    client.post(f"/v1/attempts/{attempt}/claim", headers=creds, json={"worker_id": "w1"})
+    client.post(
+        f"/v1/attempts/{attempt}/status",
+        headers={**creds, "X-Worker-ID": "w1"},
+        json={"participation": "ended", "reason": "lobby_timeout"},
+    )
+    ended_state = client.get(f"/v1/recordings/{first}", headers=API).json()
+    assert ended_state["participation"] == "ended"
+    assert ended_state["participation_reason"] == "lobby_timeout"
+
+    rejoined = client.post(f"/v1/recordings/{first}/rejoin", headers=API)
+    assert rejoined.status_code == 200
+    assert rejoined.json()["participation"] == "scheduled"
+    assert rejoined.json()["participation_reason"] is None
+    assert rejoined.json()["active_attempt_id"] is None
+
+    attempt2, _ = prepare(client, first)
+    assert attempt2 != attempt
+
+    with Session(database) as db:
+        rec_row = db.get(Recording, uuid.UUID(second))
+        rec_row.processing = "completed"
+        rec_row.processing_finished_at = now
+        rec_row.export_reader_nonce = uuid.uuid4()
+        db.commit()
+        reader_tok = export_reader_token(rec_row)
+
+    trans_res = client.get(
+        f"/v1/recordings/{second}/transcript",
+        headers={"Authorization": f"Bearer {reader_tok}"},
+    )
+    assert trans_res.status_code == 200
+
+    metrics_res = client.get("/metrics", headers=API)
+    assert metrics_res.status_code == 200
+    assert "wortlaut_recordings_total" in metrics_res.text
+    assert "wortlaut_active_attempts 1" in metrics_res.text

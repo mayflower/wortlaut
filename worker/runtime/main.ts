@@ -69,6 +69,7 @@ async function run(api: string, credential: string) {
   let lobbySince: number | undefined;
   let emptySince: number | undefined;
   let lastActiveSamples = 0;
+  let maxDomParticipants = 0;
   const stopped = new Promise<void>((resolve) => { signalStop = resolve; });
   async function stop(reason: string) {
     return stopping ??= (async () => {
@@ -130,6 +131,8 @@ async function run(api: string, credential: string) {
         }
       } else { lobbySince = undefined; }
       if (state.participation === 'capturing') {
+        const currentDom = state.participant_sources?.dom_participants ?? 0;
+        if (currentDom > maxDomParticipants) maxDomParticipants = currentDom;
         const activeSamples = typeof state.active_audio_samples === 'number'
           ? state.active_audio_samples
           : (state.streams > 0 ? state.audio_samples : 0);
@@ -138,7 +141,10 @@ async function run(api: string, credential: string) {
           emptySince = undefined;
         } else {
           emptySince ??= performance.now();
-          const emptyTimeoutSeconds = bootstrap.empty_room_timeout_seconds ?? 300;
+          const configuredTimeout = bootstrap.empty_room_timeout_seconds ?? 300;
+          const emptyTimeoutSeconds = (maxDomParticipants >= 2 && currentDom <= 1)
+            ? Math.min(configuredTimeout, 60)
+            : configuredTimeout;
           if (performance.now() - emptySince >= emptyTimeoutSeconds * 1000) {
             await stop('room_empty');
             return;

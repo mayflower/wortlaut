@@ -130,16 +130,21 @@ def meeting_link(event, mail_text):
 
 def entry_json(entry, recording=None):
     provider = recording.provider if recording else None
-    if provider is None and entry.original:
+    title = recording.title if recording else None
+    if entry.original and (provider is None or title is None):
         try:
             event = Calendar.from_ical(entry.original).walk("VEVENT")[0]
-            provider, _ = normalize_meeting_url(meeting_link(event, ""))
+            if title is None:
+                title = " ".join(str(event.get("SUMMARY", "")).split())[:200] or None
+            if provider is None:
+                provider, _ = normalize_meeting_url(meeting_link(event, ""))
         except (ValueError, KeyError, IndexError, TypeError):
             pass  # A cancellation or an ambiguous invitation need not have a target.
     return {
         "id": str(entry.id),
         "uid": entry.uid,
         "organizer": entry.organizer,
+        "title": title,
         "recurrence_key": entry.recurrence_key,
         "sequence": entry.sequence,
         "dtstamp": entry.dtstamp.isoformat(),
@@ -159,10 +164,11 @@ def import_event(
     if not organizer.lower().startswith("mailto:"):
         raise ValueError("organizer_invalid")
     organizer = organizer[7:].lower()
+    permitted = settings.organizer_permissions.get(authenticated, [])
     allowed = (
-        organizer == authenticated
+        organizer == authenticated or organizer in permitted or "*" in permitted
         if settings.mail_sender_auth == "dkim"
-        else organizer in settings.organizer_permissions.get(authenticated, [])
+        else organizer in permitted or "*" in permitted
     )
     if not allowed:
         raise ValueError("organizer_not_allowed")
@@ -366,7 +372,7 @@ class InvitationHTML(HTMLParser):
             self.links.extend(value for key, value in attrs if key == "href" and value)
 
 
-def instant_calendar(message, authenticated):
+def instant_calendar(message, authenticated, *, subject=None):
     settings = get_settings()
     if settings.mail_sender_auth != "dkim":
         raise ValueError("instant_requires_dkim")
@@ -429,6 +435,8 @@ def instant_calendar(message, authenticated):
     event.add("DTEND", ends)
     event.add("ORGANIZER", "mailto:" + authenticated)
     event.add("URL", urls.pop())
+    if subject:
+        event.add("SUMMARY", subject)
     calendar = Calendar()
     calendar.add("VERSION", "2.0")
     calendar.add("PRODID", "-//wortlaut instant invitations//EN")
@@ -459,7 +467,7 @@ def import_mail(db, raw):
         instant = not calendars
         authenticated = sender(message, raw, instant=instant)
         if instant:
-            calendar, authenticated = instant_calendar(message, authenticated)
+            calendar, authenticated = instant_calendar(message, authenticated, subject=subject)
             calendars = [calendar]
         if not any(c.walk("VEVENT") for c in calendars):
             raise ValueError("calendar_missing")

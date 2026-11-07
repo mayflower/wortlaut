@@ -94,6 +94,25 @@ data:
               "expr": "{namespace=~\"$namespace\"} |= \"wortlaut.worker.status\" |= \"wortlaut.http_signaling_frames\""
             }
           ]
+        },
+        {
+          "id": 5,
+          "title": "Active Worker Attempts & Pending ASR Jobs (Prometheus)",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 24, "x": 0, "y": 32 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "wortlaut_active_attempts{namespace=~\"$namespace\"}",
+              "legendFormat": "Active Attempts"
+            },
+            {
+              "refId": "B",
+              "expr": "wortlaut_asr_jobs_total{namespace=~\"$namespace\"}",
+              "legendFormat": "ASR Jobs ({{status}})"
+            }
+          ]
         }
       ]
     }

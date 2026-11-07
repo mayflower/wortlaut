@@ -342,14 +342,26 @@ UI_HTML = """<!DOCTYPE html>
 
     <div class="grid">
       <section class="card">
-        <div class="list-header">
+        <div class="list-header" style="flex-wrap:wrap;gap:6px">
           <h2 style="margin:0">Aufnahmen</h2>
-          <select id="provider-filter">
-            <option value="">Alle Provider</option>
-            <option value="google_meet">Google Meet</option>
-            <option value="teams">Microsoft Teams</option>
-            <option value="webex">Webex</option>
-          </select>
+          <div style="display:flex;gap:6px;flex-wrap:wrap">
+            <select id="provider-filter">
+              <option value="">Alle Provider</option>
+              <option value="google_meet">Google Meet</option>
+              <option value="teams">Microsoft Teams</option>
+              <option value="webex">Webex</option>
+            </select>
+            <select id="participation-filter">
+              <option value="">Alle Status</option>
+              <option value="capturing">Zeichnet auf</option>
+              <option value="waiting_admission">Im Warteraum</option>
+              <option value="joining">Tritt bei</option>
+              <option value="scheduled">Geplant</option>
+              <option value="ended">Beendet</option>
+            </select>
+          </div>
+          <input id="title-search" type="search" placeholder="Titel filtern…"
+            style="width:100%;margin-top:4px">
         </div>
         <div id="recordings-list" class="recording-list">
           <div class="muted">Bitte API-Token eingeben und verbinden.</div>
@@ -447,6 +459,8 @@ UI_HTML = """<!DOCTYPE html>
 
     document.getElementById("refresh-btn").addEventListener("click", () => refreshAll());
     document.getElementById("provider-filter").addEventListener("change", () => loadList());
+    document.getElementById("participation-filter").addEventListener("change", () => loadList());
+    document.getElementById("title-search").addEventListener("input", () => loadList());
 
     document.getElementById("dispatch-form").addEventListener("submit", async (e) => {
       e.preventDefault();
@@ -499,11 +513,15 @@ UI_HTML = """<!DOCTYPE html>
       }
       try {
         const provider = document.getElementById("provider-filter").value;
-        const query = new URLSearchParams({ limit: "50" });
+        const participation = document.getElementById("participation-filter").value;
+        const titleSearch = document.getElementById("title-search").value.trim();
+        const query = new URLSearchParams({ limit: "50", order: "desc" });
         if (provider) query.set("provider", provider);
+        if (participation) query.set("participation", participation);
+        if (titleSearch) query.set("q", titleSearch);
         const res = await api("/v1/recordings?" + query.toString());
         const data = await res.json();
-        const items = (data.items || []).slice().reverse();
+        const items = data.items || [];
         if (!items.length) {
           container.innerHTML = `<div class="muted">Noch keine Aufnahmen vorhanden.</div>`;
           return;
@@ -566,6 +584,7 @@ UI_HTML = """<!DOCTYPE html>
             <strong>${esc(ev.status)}</strong>
             ${ev.provider ? ` · <span class="badge provider-${esc(ev.provider)}">`
               + `${esc(ev.provider)}</span>` : ""}
+            ${ev.title ? ` · <strong>${esc(ev.title)}</strong>` : ""}
             · ${esc(ev.organizer || "")}
             ${ev.reason ? ` <span style="color:#fca5a5">(${esc(ev.reason)})</span>` : ""}
           </div>
@@ -611,6 +630,7 @@ UI_HTML = """<!DOCTYPE html>
         const reason = rec.participation_reason || lastAttempt?.end_reason || "";
         const explanation = FAILURE_REASONS[reason] || "";
         const canCancel = rec.participation !== "ended" && !rec.cancelled_at;
+        const canRejoin = rec.participation === "ended";
         const canRetryMail = rec.delivery
           && ["failed", "delivery_unknown"].includes(rec.delivery.status);
 
@@ -655,6 +675,9 @@ UI_HTML = """<!DOCTYPE html>
               <button data-export="vtt">WebVTT Export</button>
               <button data-export="json">JSON Export</button>
               ${canRetryMail ? `<button id="retry-mail-btn">Mail erneut senden</button>` : ""}
+              ${canRejoin
+                ? `<button id="rejoin-rec-btn" class="primary">Erneut beitreten</button>`
+                : ""}
               ${canCancel
                 ? `<button id="cancel-rec-btn" class="danger">Aufnahme beenden</button>`
                 : ""}
@@ -758,11 +781,16 @@ UI_HTML = """<!DOCTYPE html>
           ` : ""}
 
           <div style="margin-top:16px">
-            <div class="list-header">
+            <div class="list-header" style="flex-wrap:wrap;gap:6px">
               <h3 style="margin:0">Transkript (${ (trans.segments || []).length } Segmente)</h3>
-              <input id="segment-search" type="search"
-                placeholder="Transkript durchsuchen…" value="${esc(currentSearch)}"
-                style="width:240px">
+              <div style="display:flex;gap:6px;align-items:center">
+                <button id="copy-transcript-btn" style="font-size:0.78rem;padding:4px 8px">
+                  Transkript kopieren
+                </button>
+                <input id="segment-search" type="search"
+                  placeholder="Transkript durchsuchen…" value="${esc(currentSearch)}"
+                  style="width:220px">
+              </div>
             </div>
             <div class="segments">
               ${segments.length ? segments.map((seg) => `
@@ -804,6 +832,28 @@ UI_HTML = """<!DOCTYPE html>
           cancelBtn.addEventListener("click", async () => {
             await api(`/v1/recordings/${rec.id}/cancel`, { method: "POST" });
             refreshAll();
+          });
+        }
+
+        const rejoinBtn = document.getElementById("rejoin-rec-btn");
+        if (rejoinBtn) {
+          rejoinBtn.addEventListener("click", async () => {
+            await api(`/v1/recordings/${rec.id}/rejoin`, { method: "POST" });
+            refreshAll();
+          });
+        }
+
+        const copyBtn = document.getElementById("copy-transcript-btn");
+        if (copyBtn) {
+          copyBtn.addEventListener("click", async () => {
+            const text = segments.map((s) =>
+              `[${fmtTime(s.start)} – ${fmtTime(s.end)}] ${s.speaker_label}: ${s.text}`
+            ).join("\n");
+            if (navigator.clipboard && text) {
+              await navigator.clipboard.writeText(text).catch(() => {});
+              copyBtn.textContent = "Kopiert!";
+              setTimeout(() => { copyBtn.textContent = "Transkript kopieren"; }, 1500);
+            }
           });
         }
 
