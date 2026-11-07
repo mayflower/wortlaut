@@ -407,9 +407,11 @@ def test_audio_clock_interruption_is_persisted_and_visible_without_inventing_sam
         )
 
 
-def test_web_ui_and_manual_source_labels_update_transcript_and_exports(
+def test_web_ui_live_status_and_browser_participant_names_in_exports(
     client, database, storage
 ):
+    from sqlalchemy import select
+    from sqlalchemy.orm import Session
     from test_ingest import authenticate, begin, source
     from test_processing import send_pcm
 
@@ -424,34 +426,35 @@ def test_web_ui_and_manual_source_labels_update_transcript_and_exports(
         assert "Bot in ein Meeting schicken" in ui.text
 
     attempt, credential, identity = source(client)
-    unbound = {
+    bound = {
         **identity,
         "provider_source_id": "teams:fixture:receiver:1",
-        "speaker_id": None,
-        "attribution_unknown": True,
+        "speaker_id": "participant-alice",
+        "participant_id": "participant-alice",
+        "attribution_unknown": False,
     }
     with client.websocket_connect(f"/v1/attempts/{attempt}/audio") as socket:
         authenticate(socket, credential)
-        socket.send_json(begin(unbound))
+        socket.send_json(begin(bound))
         assert socket.receive_json()["type"] == "ack"
-        send_pcm(socket, unbound, b"\0\0" * 16000, 0, 0)
+        send_pcm(socket, bound, b"\0\0" * 16000, 0, 0)
         socket.send_json(
             {
                 "type": "end",
-                "id": begin(unbound)["id"] + "/end",
-                "stream_id": unbound["stream_id"],
-                "epoch": unbound["epoch"],
+                "id": begin(bound)["id"] + "/end",
+                "stream_id": bound["stream_id"],
+                "epoch": bound["epoch"],
                 "final_sample": 16000,
                 "last_sequence": 0,
             }
         )
         assert socket.receive_json()["type"] == "ack"
 
-    recording = unbound["meeting_id"]
+    recording = bound["meeting_id"]
     with Session(database) as db:
         stream = db.scalar(select(AudioStream))
         job = AsrJob(
-            id="manual-label-job",
+            id="browser-label-job",
             stream_id=stream.id,
             start_sample=0,
             end_sample=16000,
@@ -469,9 +472,10 @@ def test_web_ui_and_manual_source_labels_update_transcript_and_exports(
                 "stream_id": str(stream.stream_id),
                 "epoch": str(stream.epoch),
                 "source_kind": "speaker",
-                "speaker_id": None,
+                "speaker_id": "participant-alice",
+                "participant_id": "participant-alice",
                 "provider_source_id": "teams:fixture:receiver:1",
-                "attribution_unknown": True,
+                "attribution_unknown": False,
                 "session_utc_origin": stream.contract["session_utc_origin"],
                 "start": 0.0,
                 "end": 1.0,
@@ -480,38 +484,113 @@ def test_web_ui_and_manual_source_labels_update_transcript_and_exports(
             },
         )
 
-    # Live transcript endpoint works even before recording ends.
-    live_transcript = client.get(f"/v1/recordings/{recording}/transcript", headers=API)
-    assert live_transcript.status_code == 200
-    assert (
-        live_transcript.json()["segments"][0]["speaker_label"]
-        == "Quelle teams:fixture:receiver:1 (Zuordnung unklar)"
+    # Worker reports browser-resolved visual DOM participant_name during capturing.
+    client.post(
+        f"/v1/attempts/{attempt}/status",
+        headers={"Authorization": "Bearer " + credential, "X-Worker-ID": "fixture-worker"},
+        json={
+            "participation": "capturing",
+            "streams": 1,
+            "audio_samples": 16000,
+            "active_audio_samples": 16000,
+            "receiver_sources": [
+                {
+                    "provider_source_id": "teams:fixture:receiver:1",
+                    "source_kind": "speaker",
+                    "capture_path": "rtc_receiver",
+                    "track_id": "track-1",
+                    "csi": 4201,
+                    "signaled_participant_id": "participant-alice",
+                    "participant_name": "Alice Example",
+                    "ssrc": [],
+                    "csrc": [],
+                }
+            ],
+            "participant_sources": {
+                "available": True,
+                "total": 1,
+                "truncated": False,
+                "sources": [
+                    {
+                        "participant_id": "participant-alice",
+                        "participant_name": "Alice Example",
+                        "audio_csis": [4201],
+                        "share_audio_csis": [],
+                    }
+                ],
+            },
+            "sdp": {
+                "descriptions": 2,
+                "audio_sections": 1,
+                "video_sections": 1,
+                "ssrc_count": 2,
+                "cname_count": 1,
+                "msid_count": 1,
+            },
+        },
     )
 
-    patch = client.patch(
-        f"/v1/recordings/{recording}/sources",
-        headers=API,
-        json={"labels": {"teams:fixture:receiver:1": "Max Mustermann"}},
-    )
-    assert patch.status_code == 200
-    assert patch.json() == {"source_labels": {"teams:fixture:receiver:1": "Max Mustermann"}}
+    rec_detail = client.get(f"/v1/recordings/{recording}", headers=API).json()
+    assert rec_detail["live_status"]["is_active"] is True
+    assert rec_detail["live_status"]["active_streams"] == 1
+    assert rec_detail["live_status"]["bound_receivers"] == 1
+    assert rec_detail["live_status"]["dom_or_signaled_participants"] == 1
+    assert rec_detail["live_status"]["active_audio_seconds"] == 1.0
+    assert rec_detail["live_status"]["sdp_descriptions"] == 2
+
+    # Live transcript endpoint works before recording ends and uses browser participant_name.
+    live_transcript = client.get(f"/v1/recordings/{recording}/transcript", headers=API)
+    assert live_transcript.status_code == 200
+    assert live_transcript.json()["segments"][0]["speaker_label"] == "Alice Example"
 
     client.post(
         f"/v1/attempts/{attempt}/status",
         headers={"Authorization": "Bearer " + credential, "X-Worker-ID": "fixture-worker"},
-        json={"participation": "ended", "reason": "normal"},
+        json={
+            "participation": "ended",
+            "reason": "normal",
+            "streams": 1,
+            "audio_samples": 16000,
+            "active_audio_samples": 16000,
+            "receiver_sources": [
+                {
+                    "provider_source_id": "teams:fixture:receiver:1",
+                    "source_kind": "speaker",
+                    "capture_path": "rtc_receiver",
+                    "track_id": "track-1",
+                    "csi": 4201,
+                    "signaled_participant_id": "participant-alice",
+                    "participant_name": "Alice Example",
+                    "ssrc": [],
+                    "csrc": [],
+                }
+            ],
+            "participant_sources": {
+                "available": True,
+                "total": 1,
+                "truncated": False,
+                "sources": [
+                    {
+                        "participant_id": "participant-alice",
+                        "participant_name": "Alice Example",
+                        "audio_csis": [4201],
+                        "share_audio_csis": [],
+                    }
+                ],
+            },
+        },
     )
     segmentation_pass(database)
     finalize_processing(database)
 
     txt = client.get(f"/v1/recordings/{recording}/exports/txt", headers=API).text
-    assert "Max Mustermann: Guten Tag zusammen." in txt
+    assert "Alice Example: Guten Tag zusammen." in txt
     exported = client.get(f"/v1/recordings/{recording}/exports/json", headers=API).json()
-    assert exported["source_labels"] == {"teams:fixture:receiver:1": "Max Mustermann"}
-    assert exported["segments"][0]["speaker_label"] == "Max Mustermann"
-    assert exported["quality"]["attribution_unknown"] is True
+    assert exported["segments"][0]["speaker_label"] == "Alice Example"
+    assert exported["quality"]["attribution_unknown"] is False
     assert exported["sources_summary"][0]["provider_source_id"] == "teams:fixture:receiver:1"
-    assert exported["sources_summary"][0]["manual_speaker_name"] == "Max Mustermann"
+    assert exported["sources_summary"][0]["participant_name"] == "Alice Example"
+    assert exported["sources_summary"][0]["signaled_participant_id"] == "participant-alice"
     assert exported["sources_summary"][0]["segment_count"] == 1
     assert exported["sources_summary"][0]["speech_seconds"] == 1.0
     assert exported["sources_summary"][0]["sample_text"] == "Guten Tag zusammen."

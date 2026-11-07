@@ -24,7 +24,14 @@ from fastapi import (
 )
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import AwareDatetime, BaseModel, Field, ValidationError, model_validator
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    Field,
+    ValidationError,
+    model_serializer,
+    model_validator,
+)
 from sqlalchemy import func, select, text, tuple_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -158,13 +165,6 @@ class ClaimRequest(BaseModel):
     worker_id: str = Field(min_length=1, max_length=128)
 
 
-class SourceLabelsRequest(BaseModel):
-    labels: dict[
-        Annotated[str, Field(min_length=1, max_length=256)],
-        Annotated[str, Field(max_length=200)],
-    ] = Field(max_length=64)
-
-
 class RtpSourceEvidence(BaseModel):
     source: int = Field(ge=0, le=2**32 - 1)
     timestamp: float = Field(ge=0, allow_inf_nan=False)
@@ -201,16 +201,32 @@ class ReceiverEvidence(BaseModel):
     track_id: str | None = Field(default=None, max_length=256)
     csi: int | None = Field(default=None, ge=0, le=2**32 - 1)
     signaled_participant_id: str | None = Field(default=None, max_length=256)
+    participant_name: str | None = Field(default=None, max_length=200)
     source_state: str | None = Field(default=None, max_length=64)
     ssrc: list[RtpSourceEvidence] = Field(default_factory=list, max_length=64)
     csrc: list[RtpSourceEvidence] = Field(default_factory=list, max_length=64)
     encoded_transform: EncodedTransformEvidence | None = None
 
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler):
+        data = handler(self)
+        if data.get("participant_name") is None:
+            data.pop("participant_name", None)
+        return data
+
 
 class ParticipantSourceEvidence(BaseModel):
     participant_id: str = Field(min_length=1, max_length=256)
+    participant_name: str | None = Field(default=None, max_length=200)
     audio_csis: list[Annotated[int, Field(ge=0, le=2**32 - 1)]] = Field(max_length=64)
     share_audio_csis: list[Annotated[int, Field(ge=0, le=2**32 - 1)]] = Field(max_length=64)
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler):
+        data = handler(self)
+        if data.get("participant_name") is None:
+            data.pop("participant_name", None)
+        return data
 
 
 class ParticipantEvidence(BaseModel):
@@ -253,6 +269,21 @@ class DataChannelEvidence(BaseModel):
     json_keys: list[Annotated[str, Field(min_length=1, max_length=64)]] = Field(
         default_factory=list, max_length=32
     )
+    wire_formats: list[Annotated[str, Field(min_length=1, max_length=32)]] = Field(
+        default_factory=list, max_length=16
+    )
+    protobuf_fields: list[Annotated[str, Field(min_length=1, max_length=32)]] = Field(
+        default_factory=list, max_length=32
+    )
+
+
+class SdpEvidence(BaseModel):
+    descriptions: int = Field(default=0, ge=0)
+    audio_sections: int = Field(default=0, ge=0)
+    video_sections: int = Field(default=0, ge=0)
+    ssrc_count: int = Field(default=0, ge=0)
+    cname_count: int = Field(default=0, ge=0)
+    msid_count: int = Field(default=0, ge=0)
 
 
 class WorkerStatus(BaseModel):
@@ -263,10 +294,12 @@ class WorkerStatus(BaseModel):
     configured_speaker_slots: int | None = Field(default=None, ge=0, le=64)
     configured_share_slots: int | None = Field(default=None, ge=0, le=64)
     audio_samples: int = Field(default=0, ge=0)
+    active_audio_samples: int = Field(default=0, ge=0)
     drained: bool | None = None
     receiver_sources: list[ReceiverEvidence] = Field(default_factory=list, max_length=64)
     participant_sources: ParticipantEvidence = Field(default_factory=ParticipantEvidence)
     data_channels: list[DataChannelEvidence] = Field(default_factory=list, max_length=32)
+    sdp: SdpEvidence = Field(default_factory=SdpEvidence)
     audio_clock: AudioClockEvidence = Field(default_factory=AudioClockEvidence)
 
 
@@ -622,6 +655,26 @@ def get_recording(recording_id: uuid.UUID, db: Db):
         if ages
         else None,
     }
+    latest_attempt = attempts[-1] if attempts else None
+    diag = latest_attempt.diagnostics if latest_attempt and latest_attempt.diagnostics else {}
+    receivers = diag.get("receiver_sources", [])
+    result["live_status"] = {
+        "is_active": recording.participation
+        in ("starting", "joining", "waiting_admission", "capturing")
+        or recording.processing not in ("completed", "failed"),
+        "participation": recording.participation,
+        "processing": recording.processing,
+        "active_streams": diag.get("streams", 0),
+        "audio_seconds": round(samples / RATE, 1),
+        "active_audio_seconds": round(diag.get("active_audio_samples", 0) / RATE, 1),
+        "bound_receivers": sum(1 for r in receivers if r.get("signaled_participant_id")),
+        "total_receivers": len(receivers),
+        "dom_or_signaled_participants": diag.get("participant_sources", {}).get("total", 0),
+        "data_channel_count": len(diag.get("data_channels", [])),
+        "sdp_descriptions": diag.get("sdp", {}).get("descriptions", 0),
+        "last_heartbeat_at": latest_attempt.last_heartbeat_at if latest_attempt else None,
+        "last_audio_activity": last_audio,
+    }
     return result
 
 
@@ -681,39 +734,6 @@ def get_transcript(recording_id: uuid.UUID, db: Db):
     if recording.transcript_deleted_at:
         raise HTTPException(410, "Transcript retention expired")
     return export_data(db, recording)
-
-
-@app.patch("/v1/recordings/{recording_id}/sources", dependencies=[Depends(api_auth)])
-def update_source_labels(recording_id: uuid.UUID, body: SourceLabelsRequest, db: Db):
-    recording = db.scalar(select(Recording).where(Recording.id == recording_id).with_for_update())
-    if recording is None:
-        raise HTTPException(404, "Recording not found")
-    if recording.transcript_deleted_at is not None:
-        raise HTTPException(410, "Transcript retention expired")
-    attempts = db.scalars(select(Attempt).where(Attempt.recording_id == recording.id)).all()
-    streams = db.scalars(
-        select(AudioStream)
-        .where(AudioStream.attempt_id.in_([a.id for a in attempts]))
-        .with_for_update()
-    ).all()
-    for stream in streams:
-        source_id = stream.contract.get("provider_source_id")
-        if source_id in body.labels:
-            cleaned = " ".join(body.labels[source_id].split())
-            updated = dict(stream.contract)
-            if cleaned:
-                updated["manual_speaker_name"] = cleaned
-            else:
-                updated.pop("manual_speaker_name", None)
-            stream.contract = updated
-    db.commit()
-    return {
-        "source_labels": {
-            s.contract["provider_source_id"]: s.contract["manual_speaker_name"]
-            for s in streams
-            if s.contract.get("provider_source_id") and s.contract.get("manual_speaker_name")
-        }
-    }
 
 
 @app.get("/v1/recordings/{recording_id}/exports/{format}")
@@ -890,6 +910,8 @@ def worker_status(
                 "drained": None,
                 "audio_clock": AudioClockEvidence().model_dump(),
                 "data_channels": [],
+                "active_audio_samples": 0,
+                "sdp": SdpEvidence().model_dump(),
                 **attempt.diagnostics,
             }
             == body.model_dump(mode="json", exclude={"participation"})

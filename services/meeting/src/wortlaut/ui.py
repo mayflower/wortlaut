@@ -597,10 +597,9 @@ UI_HTML = """<!DOCTYPE html>
       if (!token || !selectedId) return;
       const searchInput = document.getElementById("segment-search");
       const currentSearch = searchInput ? searchInput.value : "";
-      const activeInput = document.activeElement;
-      if (activeInput?.classList?.contains("source-label-input")) {
-        return; // Eingabe in den Sprecherfeldern nicht durch Auto-Refresh überschreiben
-      }
+      const searchFocused = document.activeElement === searchInput;
+      const prevSegmentsEl = panel.querySelector(".segments");
+      const prevScrollTop = prevSegmentsEl ? prevSegmentsEl.scrollTop : 0;
       try {
         const [recRes, transRes] = await Promise.all([
           api(`/v1/recordings/${selectedId}`),
@@ -616,7 +615,7 @@ UI_HTML = """<!DOCTYPE html>
           && ["failed", "delivery_unknown"].includes(rec.delivery.status);
 
         const sourceSummary = trans.sources_summary || [];
-        const sourceLabels = trans.source_labels || {};
+        const live = rec.live_status || {};
 
         const segments = (trans.segments || []).filter((s) => {
           if (selectedSourceFilter && s.provider_source_id !== selectedSourceFilter) {
@@ -635,6 +634,9 @@ UI_HTML = """<!DOCTYPE html>
         const sampleSec = Math.round(sampleCount / 16000);
         const asrCounts = `${rec.asr?.pending ?? 0} / ${rec.asr?.completed ?? 0} / `
           + `${rec.asr?.failed ?? 0}`;
+        const hbStr = live.last_heartbeat_at
+          ? new Date(live.last_heartbeat_at).toLocaleTimeString("de-DE")
+          : "–";
 
         panel.innerHTML = `
           <div class="toolbar">
@@ -659,6 +661,29 @@ UI_HTML = """<!DOCTYPE html>
             </div>
           </div>
 
+          ${live.is_active ? `
+            <div class="alert ok" id="live-status-banner"
+              style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+              <div>
+                <strong>LIVE-STATUS (${esc(partText)}):</strong>
+                Streams: <strong>${esc(live.active_streams ?? 0)}</strong> ·
+                Gebundene Receiver:
+                <strong>${esc(live.bound_receivers ?? 0)}/`
+                + `${esc(live.total_receivers ?? 0)}</strong> ·
+                Erkannte Teilnehmer:
+                <strong>${esc(live.dom_or_signaled_participants ?? 0)}</strong> ·
+                Hörbares Audio:
+                <strong>${esc(live.active_audio_seconds ?? 0)}s</strong>
+                (${esc(live.audio_seconds ?? 0)}s gesamt)
+              </div>
+              <div class="muted">
+                SDP: ${esc(live.sdp_descriptions ?? 0)} ·
+                DataChannels: ${esc(live.data_channel_count ?? 0)} ·
+                Heartbeat: ${esc(hbStr)}
+              </div>
+            </div>
+          ` : ""}
+
           ${rec.participation === "waiting_admission" ? `
             <div class="alert warn">
               <strong>Warteraum aktiv:</strong>
@@ -682,7 +707,7 @@ UI_HTML = """<!DOCTYPE html>
           ${sourceSummary.length ? `
             <div style="margin-top:14px">
               <div class="list-header">
-                <h3 style="margin:0">Audio-Quellen &amp; Sprecher-Zuordnung</h3>
+                <h3 style="margin:0">Audio-Quellen &amp; Browser-Teilnehmerbindung</h3>
                 ${selectedSourceFilter ? `
                   <button id="clear-source-filter-btn" style="font-size:0.75rem;padding:4px 8px">
                     Filter aufheben (${esc(selectedSourceFilter)})
@@ -692,14 +717,21 @@ UI_HTML = """<!DOCTYPE html>
               ${sourceSummary.map((src) => {
                 const sid = src.provider_source_id;
                 const isFiltered = selectedSourceFilter === sid;
+                const boundBadge = src.participant_name
+                  ? `<span class="badge state-capturing">${esc(src.participant_name)}</span>`
+                  : src.signaled_participant_id
+                    ? `<span class="badge state-joining">Sprecher `
+                      + `${esc(src.signaled_participant_id)}</span>`
+                    : `<span class="badge state-waiting_admission">Zuordnung unklar</span>`;
                 return `
                   <div class="source-row"
                     style="background:var(--panel-alt);padding:8px;border-radius:6px">
                     <div style="flex:1 1 240px">
-                      <div>
+                      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
                         <code>${esc(sid)}</code>
+                        ${boundBadge}
                         <button class="filter-source-btn" data-filter-source="${esc(sid)}"
-                          style="margin-left:6px;font-size:0.72rem;padding:2px 6px">
+                          style="font-size:0.72rem;padding:2px 6px">
                           ${isFiltered ? "Gefiltert" : "Filtern"}
                         </button>
                       </div>
@@ -717,14 +749,9 @@ UI_HTML = """<!DOCTYPE html>
                         </div>
                       ` : ""}
                     </div>
-                    <input class="source-label-input" data-source-id="${esc(sid)}"
-                      type="text" placeholder="Sprechername zuordnen (z. B. Max Mustermann)"
-                      value="${esc(sourceLabels[sid] || src.participant_name || "")}"
-                      style="flex:1 1 220px">
                   </div>
                 `;
               }).join("")}
-              <button id="save-sources-btn" class="primary">Sprechernamen speichern</button>
             </div>
           ` : ""}
 
@@ -751,12 +778,18 @@ UI_HTML = """<!DOCTYPE html>
           <details>
             <summary>WebRTC-Receiver &amp; Worker-Diagnose anzeigen</summary>
             <pre>${esc(JSON.stringify({
+              live_status: rec.live_status,
               attempts: rec.attempts,
               audio_streams: rec.audio,
               quality: trans.quality
             }, null, 2))}</pre>
           </details>
         `;
+
+        const nextSegmentsEl = panel.querySelector(".segments");
+        if (nextSegmentsEl && prevScrollTop > 0) {
+          nextSegmentsEl.scrollTop = prevScrollTop;
+        }
 
         panel.querySelectorAll("[data-export]").forEach((btn) => {
           btn.addEventListener("click", () => {
@@ -780,24 +813,13 @@ UI_HTML = """<!DOCTYPE html>
           });
         }
 
-        const saveSourcesBtn = document.getElementById("save-sources-btn");
-        if (saveSourcesBtn) {
-          saveSourcesBtn.addEventListener("click", async () => {
-            const labels = {};
-            panel.querySelectorAll(".source-label-input").forEach((inp) => {
-              labels[inp.getAttribute("data-source-id")] = inp.value.trim();
-            });
-            await api(`/v1/recordings/${rec.id}/sources`, {
-              method: "PATCH",
-              body: JSON.stringify({ labels })
-            });
-            refreshAll();
-          });
-        }
-
         const newSearch = document.getElementById("segment-search");
         if (newSearch) {
           newSearch.addEventListener("input", () => loadDetail());
+          if (searchFocused) {
+            newSearch.focus();
+            newSearch.setSelectionRange(currentSearch.length, currentSearch.length);
+          }
         }
 
         panel.querySelectorAll(".filter-source-btn").forEach((btn) => {

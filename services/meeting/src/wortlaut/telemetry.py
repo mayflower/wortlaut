@@ -136,11 +136,16 @@ def record_worker_status_telemetry(recording, attempt, body) -> dict[str, Any]:
     receivers = body.receiver_sources or []
     participants = body.participant_sources
     data_channels = getattr(body, "data_channels", None) or []
+    sdp = getattr(body, "sdp", None)
     bound_receivers = sum(1 for r in receivers if r.signaled_participant_id)
     ssrc_total = sum(len(r.ssrc) for r in receivers)
     csrc_total = sum(len(r.csrc) for r in receivers)
     labels = sorted({dc.label for dc in data_channels if dc.label})
     json_keys = sorted({key for dc in data_channels for key in dc.json_keys})
+    wire_formats = sorted({wf for dc in data_channels for wf in getattr(dc, "wire_formats", [])})
+    protobuf_fields = sorted(
+        {pf for dc in data_channels for pf in getattr(dc, "protobuf_fields", [])}
+    )
 
     events: list[dict[str, Any]] = []
     for r in receivers[:32]:
@@ -154,6 +159,7 @@ def record_worker_status_telemetry(recording, attempt, body) -> dict[str, Any]:
                     "webrtc.track_id": r.track_id or "",
                     "webrtc.csi": r.csi,
                     "webrtc.signaled_participant_id": r.signaled_participant_id or "",
+                    "webrtc.has_participant_name": bool(getattr(r, "participant_name", None)),
                     "webrtc.ssrc_count": len(r.ssrc),
                     "webrtc.csrc_count": len(r.csrc),
                     "webrtc.encoded_transform_state": (
@@ -173,6 +179,8 @@ def record_worker_status_telemetry(recording, attempt, body) -> dict[str, Any]:
                     "webrtc.binary_frames": dc.binary_frames,
                     "webrtc.json_frames": dc.json_frames,
                     "webrtc.json_keys": ",".join(dc.json_keys),
+                    "webrtc.wire_formats": ",".join(getattr(dc, "wire_formats", [])),
+                    "webrtc.protobuf_fields": ",".join(getattr(dc, "protobuf_fields", [])),
                 },
             }
         )
@@ -187,6 +195,7 @@ def record_worker_status_telemetry(recording, attempt, body) -> dict[str, Any]:
         "wortlaut.capability": body.capability,
         "wortlaut.streams": body.streams,
         "wortlaut.audio_samples": body.audio_samples,
+        "wortlaut.active_audio_samples": getattr(body, "active_audio_samples", 0),
         "wortlaut.receiver_count": len(receivers),
         "wortlaut.bound_receiver_count": bound_receivers,
         "wortlaut.rtp_ssrc_count": ssrc_total,
@@ -196,6 +205,12 @@ def record_worker_status_telemetry(recording, attempt, body) -> dict[str, Any]:
         "wortlaut.data_channel_count": len(data_channels),
         "wortlaut.data_channel_labels": ",".join(labels),
         "wortlaut.data_channel_json_keys": ",".join(json_keys),
+        "wortlaut.data_channel_wire_formats": ",".join(wire_formats),
+        "wortlaut.data_channel_protobuf_fields": ",".join(protobuf_fields),
+        "wortlaut.sdp_descriptions": sdp.descriptions if sdp else 0,
+        "wortlaut.sdp_ssrc_count": sdp.ssrc_count if sdp else 0,
+        "wortlaut.sdp_cname_count": sdp.cname_count if sdp else 0,
+        "wortlaut.sdp_msid_count": sdp.msid_count if sdp else 0,
     }
     is_error = bool(
         body.participation == "ended"

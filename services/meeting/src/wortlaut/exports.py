@@ -38,14 +38,16 @@ def timestamp(seconds: float):
     return f"{hours:02}:{minutes:02}:{seconds:02}.{fraction:03}"
 
 
-def speaker_label(segment, custom_labels: dict[str, str] | None = None):
-    if custom_labels and segment.get("provider_source_id") in custom_labels:
-        return custom_labels[segment["provider_source_id"]]
+def speaker_label(segment, participant_names: dict[str, str] | None = None):
     if segment["source_kind"] == "share_audio":
         return "Freigabe-Audio"
     if segment["attribution_unknown"]:
         return f"Quelle {segment['provider_source_id']} (Zuordnung unklar)"
-    return segment.get("participant_name") or f"Sprecher {segment['speaker_id']}"
+    pid = segment.get("participant_id") or segment.get("speaker_id")
+    resolved_name = segment.get("participant_name") or (
+        participant_names.get(pid) if participant_names and pid else None
+    )
+    return resolved_name or f"Sprecher {segment['speaker_id']}"
 
 
 def export_data(db: Session, recording: Recording):
@@ -53,11 +55,18 @@ def export_data(db: Session, recording: Recording):
     streams = db.scalars(
         select(AudioStream).where(AudioStream.attempt_id.in_([a.id for a in attempts]))
     ).all()
-    source_labels = {
-        s.contract["provider_source_id"]: s.contract["manual_speaker_name"]
-        for s in streams
-        if s.contract.get("provider_source_id") and s.contract.get("manual_speaker_name")
-    }
+    participant_names: dict[str, str] = {}
+    for attempt in attempts:
+        for p in attempt.diagnostics.get("participant_sources", {}).get("sources", []):
+            if p.get("participant_id") and p.get("participant_name"):
+                participant_names[p["participant_id"]] = p["participant_name"]
+        for rcv in attempt.diagnostics.get("receiver_sources", []):
+            if rcv.get("signaled_participant_id") and rcv.get("participant_name"):
+                participant_names[rcv["signaled_participant_id"]] = rcv["participant_name"]
+    for s in streams:
+        pid = s.contract.get("participant_id") or s.contract.get("speaker_id")
+        if pid and s.contract.get("participant_name"):
+            participant_names[pid] = s.contract["participant_name"]
     segments = [
         dict(s.result)
         for s in db.scalars(
@@ -66,6 +75,10 @@ def export_data(db: Session, recording: Recording):
             .where(AsrJob.stream_id.in_([s.id for s in streams]))
         ).all()
     ]
+    for seg in segments:
+        pid = seg.get("participant_id") or seg.get("speaker_id")
+        if pid and seg.get("participant_name"):
+            participant_names[pid] = seg["participant_name"]
     anchors = [datetime.fromisoformat(s.contract["session_utc_origin"]) for s in streams]
     origin = min(anchors) if anchors else recording.starts_at
     for segment in segments:
@@ -76,7 +89,11 @@ def export_data(db: Session, recording: Recording):
             {**word, "start": word["start"] + delta, "end": word["end"] + delta}
             for word in segment["words"]
         ]
-        segment["speaker_label"] = speaker_label(segment, source_labels)
+        pid = segment.get("participant_id") or segment.get("speaker_id")
+        if not segment.get("attribution_unknown") and not segment.get("participant_name") and pid:
+            if pid in participant_names:
+                segment["participant_name"] = participant_names[pid]
+        segment["speaker_label"] = speaker_label(segment, participant_names)
     segments.sort(key=lambda s: (s["start"], s["stream_id"], s["id"]))
     qualities = [
         {
@@ -158,15 +175,14 @@ def export_data(db: Session, recording: Recording):
             "participant_identity_requirement": "required",
             "streams": qualities,
         },
-        "source_labels": source_labels,
         "sources_summary": _build_sources_summary(
-            attempts, streams, qualities, segments, source_labels
+            attempts, streams, qualities, segments, participant_names
         ),
         "segments": segments,
     }
 
 
-def _build_sources_summary(attempts, streams, qualities, segments, source_labels):
+def _build_sources_summary(attempts, streams, qualities, segments, participant_names):
     receiver_by_id = {}
     for attempt in attempts:
         for rcv in attempt.diagnostics.get("receiver_sources", []):
@@ -187,23 +203,46 @@ def _build_sources_summary(attempts, streams, qualities, segments, source_labels
     for sid in source_ids:
         src_segs = [seg for seg in segments if seg.get("provider_source_id") == sid]
         src_quals = [q for q in qualities if q.get("provider_source_id") == sid]
+        src_streams = [s for s in streams if s.contract.get("provider_source_id") == sid]
         rcv = receiver_by_id.get(sid, {})
-        sig_id = rcv.get("signaled_participant_id") or next(
-            (
-                q.get("participant_id") or q.get("speaker_id")
-                for q in src_quals
-                if q.get("participant_id") or q.get("speaker_id")
-            ),
-            None,
+        sig_id = (
+            rcv.get("signaled_participant_id")
+            or next(
+                (
+                    s.contract.get("participant_id") or s.contract.get("speaker_id")
+                    for s in src_streams
+                    if s.contract.get("participant_id") or s.contract.get("speaker_id")
+                ),
+                None,
+            )
+            or next(
+                (
+                    seg.get("participant_id") or seg.get("speaker_id")
+                    for seg in src_segs
+                    if seg.get("participant_id") or seg.get("speaker_id")
+                ),
+                None,
+            )
         )
-        part_name = next(
-            (q.get("participant_name") for q in src_quals if q.get("participant_name")),
-            None,
+        part_name = (
+            rcv.get("participant_name")
+            or (participant_names.get(sig_id) if sig_id else None)
+            or next(
+                (
+                    s.contract.get("participant_name")
+                    for s in src_streams
+                    if s.contract.get("participant_name")
+                ),
+                None,
+            )
+            or next(
+                (seg.get("participant_name") for seg in src_segs if seg.get("participant_name")),
+                None,
+            )
         )
         summary.append(
             {
                 "provider_source_id": sid,
-                "manual_speaker_name": source_labels.get(sid),
                 "participant_name": part_name,
                 "signaled_participant_id": sig_id,
                 "csi": rcv.get("csi"),
