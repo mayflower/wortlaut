@@ -20,6 +20,7 @@ export class TeamsBrowser {
   private stopping?: Promise<void>;
   private reason = '';
   private joined = false;
+  private rosterOpened = false;
   private drained: boolean | null = null;
 
   constructor(private readonly page: Page, private readonly bootstrap: TeamsBootstrap,
@@ -143,7 +144,18 @@ export class TeamsBrowser {
     let participation = 'joining';
     if (waiting.test(text)) participation = 'waiting_admission';
     else if (trusted && this.joined && !await this.page.getByRole('button', {name: joinLabel}).isVisible()
-      && await this.page.getByRole('button', {name: leaveLabel}).first().isVisible()) participation = 'capturing';
+      && await this.page.getByRole('button', {name: leaveLabel}).first().isVisible()) {
+      participation = 'capturing';
+      if (!this.rosterOpened) {
+        this.rosterOpened = true;
+        const toggle = this.page.getByRole('button', {
+          name: /^(?:People|Participants|Show participants|Teilnehmer|Personen|Teilnehmer anzeigen)(?:\b|\s|$)/i,
+        }).and(this.page.locator('[aria-expanded="false"], [aria-pressed="false"]')).first();
+        if (await toggle.isVisible().catch(() => false)) {
+          await toggle.click({timeout: 2000}).catch(() => {});
+        }
+      }
+    }
     return {...state, participation: this.stopping ? 'ended' : participation,
       reason: this.reason, stopped: Boolean(this.stopping || this.reason), drained: this.drained,
       capability: 'unverified', streams: state?.streams ?? 0, audio_samples: state?.audio_samples ?? 0,

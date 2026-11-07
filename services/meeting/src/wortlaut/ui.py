@@ -669,9 +669,11 @@ UI_HTML = """<!DOCTYPE html>
                 Streams: <strong>${esc(live.active_streams ?? 0)}</strong> ·
                 Gebundene Receiver:
                 <strong>${esc(live.bound_receivers ?? 0)}/`
-                + `${esc(live.total_receivers ?? 0)}</strong> ·
+                + `${esc(live.total_receivers ?? 0)}</strong>
+                (mit Namen: <strong>${esc(live.bound_named_receivers ?? 0)}</strong>) ·
                 Erkannte Teilnehmer:
-                <strong>${esc(live.dom_or_signaled_participants ?? 0)}</strong> ·
+                <strong>${esc(live.dom_or_signaled_participants ?? 0)}</strong>
+                (DOM: <strong>${esc(live.dom_participants ?? 0)}</strong>) ·
                 Hörbares Audio:
                 <strong>${esc(live.active_audio_seconds ?? 0)}s</strong>
                 (${esc(live.audio_seconds ?? 0)}s gesamt)

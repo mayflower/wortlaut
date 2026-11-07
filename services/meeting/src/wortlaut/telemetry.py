@@ -138,6 +138,25 @@ def record_worker_status_telemetry(recording, attempt, body) -> dict[str, Any]:
     data_channels = getattr(body, "data_channels", None) or []
     sdp = getattr(body, "sdp", None)
     bound_receivers = sum(1 for r in receivers if r.signaled_participant_id)
+    bound_named_receivers = sum(
+        1
+        for r in receivers
+        if r.signaled_participant_id and getattr(r, "participant_name", None)
+    )
+    named_participants = sum(
+        1 for p in (participants.sources or []) if getattr(p, "participant_name", None)
+    )
+    dom_participants = getattr(participants, "dom_participants", None) or 0
+    http_signaling_frames = sum(
+        dc.text_frames + dc.binary_frames
+        for dc in data_channels
+        if dc.label.startswith("http:")
+    )
+    ws_signaling_frames = sum(
+        dc.text_frames + dc.binary_frames
+        for dc in data_channels
+        if dc.label == "ws:signaling"
+    )
     ssrc_total = sum(len(r.ssrc) for r in receivers)
     csrc_total = sum(len(r.csrc) for r in receivers)
     labels = sorted({dc.label for dc in data_channels if dc.label})
@@ -198,11 +217,16 @@ def record_worker_status_telemetry(recording, attempt, body) -> dict[str, Any]:
         "wortlaut.active_audio_samples": getattr(body, "active_audio_samples", 0),
         "wortlaut.receiver_count": len(receivers),
         "wortlaut.bound_receiver_count": bound_receivers,
+        "wortlaut.bound_named_receiver_count": bound_named_receivers,
         "wortlaut.rtp_ssrc_count": ssrc_total,
         "wortlaut.rtp_csrc_count": csrc_total,
         "wortlaut.participant_sources_available": participants.available,
         "wortlaut.participant_count": participants.total,
+        "wortlaut.named_participant_count": named_participants,
+        "wortlaut.dom_participant_count": dom_participants,
         "wortlaut.data_channel_count": len(data_channels),
+        "wortlaut.http_signaling_frames": http_signaling_frames,
+        "wortlaut.ws_signaling_frames": ws_signaling_frames,
         "wortlaut.data_channel_labels": ",".join(labels),
         "wortlaut.data_channel_json_keys": ",".join(json_keys),
         "wortlaut.data_channel_wire_formats": ",".join(wire_formats),

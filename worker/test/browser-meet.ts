@@ -519,29 +519,50 @@ try {
     const join = german ? 'Jetzt teilnehmen' : 'Join now';
     const lobby = german ? 'Sie sind im Wartebereich' : "Someone will let you in shortly";
     const leave = german ? 'Verlassen' : 'Leave';
-    await page.route('https://teams.microsoft.com/**', route => route.fulfill({
-      contentType: 'text/html', body: `<label>${german ? 'Ihr Name' : 'Your name'}<input></label>
-      <label><input type="radio" name="audio" value="computer">${german ? 'Computeraudio' : 'Computer audio'}</label>
-      <button id="join">${join}</button><p id="waiting"></p>
-      <script>
-      let clicks = 0;
-      document.querySelector('#join').onclick = () => {
-        if (++clicks === 1) {
-          const modal = document.createElement('button');
-          modal.textContent = '${german ? 'Ohne Audio oder Video fortfahren' : 'Continue without audio or video'}';
-          modal.onclick = () => modal.remove();
-          document.body.append(modal);
-        } else {
-          document.querySelector('#join').remove();
-          document.querySelector('#waiting').textContent = '${lobby}';
-          const leave = document.createElement('button');
-          leave.textContent = '${leave}';
-          leave.onclick = () => leave.remove();
-          document.body.append(leave);
-        }
-      };
-      </script>`,
-    }));
+    await page.route('https://teams.microsoft.com/**', route => {
+      if (route.request().url().endsWith('/roster-sync')) {
+        return route.fulfill({
+          contentType: 'application/json',
+          body: `)]}'\n{"participants":[{"participant_id":"bob-session","csi":1002}]}`,
+        });
+      }
+      return route.fulfill({
+        contentType: 'text/html', body: `<label>${german ? 'Ihr Name' : 'Your name'}<input></label>
+        <label><input type="radio" name="audio" value="computer">${german ? 'Computeraudio' : 'Computer audio'}</label>
+        <button id="join">${join}</button><p id="waiting"></p>
+        <script>
+        let clicks = 0;
+        document.querySelector('#join').onclick = () => {
+          if (++clicks === 1) {
+            const modal = document.createElement('button');
+            modal.textContent = '${german ? 'Ohne Audio oder Video fortfahren' : 'Continue without audio or video'}';
+            modal.onclick = () => modal.remove();
+            document.body.append(modal);
+          } else {
+            document.querySelector('#join').remove();
+            document.querySelector('#waiting').textContent = '${lobby}';
+            const leave = document.createElement('button');
+            leave.textContent = '${leave}';
+            leave.onclick = () => leave.remove();
+            document.body.append(leave);
+            const people = document.createElement('button');
+            people.textContent = '${german ? 'Teilnehmer' : 'People'}';
+            people.setAttribute('aria-expanded', 'false');
+            people.onclick = () => {
+              people.setAttribute('aria-expanded', 'true');
+              const bobItem = document.createElement('div');
+              bobItem.setAttribute('role', 'listitem');
+              bobItem.setAttribute('data-participant-id', 'bob-session');
+              bobItem.setAttribute('aria-label', 'Bob Example');
+              document.body.append(bobItem);
+              void fetch('https://teams.microsoft.com/roster-sync');
+            };
+            document.body.append(people);
+          }
+        };
+        </script>`,
+      });
+    });
     const teamsAttemptId = randomUUID();
     const beforeTeams = frames.length;
     const teams = new TeamsBrowser(page, {...bootstrap, provider: 'teams', attempt_id: teamsAttemptId, meeting_url: url,
@@ -624,12 +645,16 @@ try {
     assert.equal(state.capability, 'unverified');
     assert.equal(state.reason, '');
     assert.equal(state.participant_sources.available, true);
-    assert.equal(state.participant_sources.total, 1);
-    assert.equal(state.participant_sources.sources[0]?.participant_id, 'alice-session');
-    assert.equal(state.participant_sources.sources[0]?.participant_name, 'Alice Example');
+    assert.equal(state.participant_sources.total, 2);
+    assert.equal(state.participant_sources.dom_participants, 2);
+    const aliceSource = state.participant_sources.sources.find((s) => s.participant_id === 'alice-session');
+    const bobSource = state.participant_sources.sources.find((s) => s.participant_id === 'bob-session');
+    assert.equal(aliceSource?.participant_name, 'Alice Example');
+    assert.equal(bobSource?.participant_name, 'Bob Example');
     assert.equal((state.receiver_sources[0] as any)?.signaled_participant_id, 'alice-session');
     assert.equal((state.receiver_sources[0] as any)?.participant_name, 'Alice Example');
     assert.ok(state.sdp.descriptions >= 1);
+    assert.ok(state.data_channels.some((dc) => dc.label === 'http:fetch' && dc.json_frames >= 1));
     assert.ok(state.data_channels.some((dc) => dc.label === 'roster' && dc.json_frames >= 1 &&
       dc.binary_frames >= 1 &&
       dc.wire_formats.includes('json') && dc.wire_formats.includes('protobuf') &&

@@ -58,6 +58,42 @@ data:
               "expr": "{namespace=~\"$namespace\"} |= \"wortlaut.worker.status\""
             }
           ]
+        },
+        {
+          "id": 3,
+          "title": "Browser Participant Name & Receiver Binding Resolution (Loki)",
+          "type": "logs",
+          "gridPos": { "h": 10, "w": 12, "x": 0, "y": 22 },
+          "datasource": { "type": "loki", "uid": "loki" },
+          "options": {
+            "showTime": true,
+            "wrapLogMessage": true,
+            "enableLogDetails": true
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "{namespace=~\"$namespace\"} |= \"wortlaut.worker.status\" |= \"wortlaut.bound_named_receiver_count\""
+            }
+          ]
+        },
+        {
+          "id": 4,
+          "title": "WebRTC SDP & HTTP/WS/DataChannel Signaling Activity (Loki)",
+          "type": "logs",
+          "gridPos": { "h": 10, "w": 12, "x": 12, "y": 22 },
+          "datasource": { "type": "loki", "uid": "loki" },
+          "options": {
+            "showTime": true,
+            "wrapLogMessage": true,
+            "enableLogDetails": true
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "{namespace=~\"$namespace\"} |= \"wortlaut.worker.status\" |= \"wortlaut.http_signaling_frames\""
+            }
+          ]
         }
       ]
     }

@@ -1,4 +1,5 @@
 import hashlib
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 
@@ -6,7 +7,14 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from wortlaut.models import Attempt, Recording
+from wortlaut.models import (
+    AsrJob,
+    Attempt,
+    AudioControl,
+    AudioStream,
+    Recording,
+    TranscriptSegment,
+)
 
 API = {"Authorization": "Bearer fixture-api-token"}
 
@@ -697,3 +705,219 @@ def test_recording_title_guest_name_empty_room_timeout_and_otlp_telemetry(
         "stringValue": "audio_csis,participant_id,participants"
     }
     get_settings.cache_clear()
+
+
+def test_bind_control_backfills_unattributed_prefix_on_single_speaker_stream(client, database):
+    now = datetime.now(UTC)
+    response = client.post(
+        "/v1/recordings",
+        headers={**API, "Idempotency-Key": "bind-backfill-key"},
+        json={
+            "provider": "google_meet",
+            "meeting_url": "https://meet.google.com/abc-defg-hij",
+            "starts_at": now.isoformat(),
+            "ends_at": (now + timedelta(minutes=30)).isoformat(),
+        },
+    )
+    assert response.status_code == 200
+    rec_id = response.json()["id"]
+    attempt_id, headers = prepare(client, rec_id)
+    client.post(f"/v1/attempts/{attempt_id}/claim", headers=headers, json={"worker_id": "owner"})
+    owner = {**headers, "X-Worker-ID": "owner"}
+
+    stream_uuid = uuid.uuid4()
+    epoch_uuid = uuid.uuid4()
+    source_id = f"google_meet:{rec_id}:receiver:1"
+    origin_iso = "2026-04-16T08:00:05+00:00"
+
+    with Session(database) as db:
+        stream_row = AudioStream(
+            attempt_id=uuid.UUID(attempt_id),
+            stream_id=stream_uuid,
+            epoch=epoch_uuid,
+            final_sample=32000,
+            last_sequence=1,
+            scan_sample=32000,
+            scan_complete=True,
+            contract={
+                "type": "begin",
+                "id": f"{attempt_id}/begin-1",
+                "meeting_id": rec_id,
+                "attempt_id": attempt_id,
+                "stream_id": str(stream_uuid),
+                "epoch": str(epoch_uuid),
+                "provider_source_id": source_id,
+                "source_kind": "speaker",
+                "speaker_id": None,
+                "attribution_unknown": True,
+                "sample_rate": 16000,
+                "channels": 1,
+                "format": "s16le",
+                "session_utc_origin": origin_iso,
+                "session_monotonic_origin_ms": 100.0,
+                "monotonic_origin_ms": 100.0,
+            },
+        )
+        db.add(stream_row)
+        db.flush()
+        db.add(
+            AudioControl(
+                id=f"{attempt_id}/bind-1",
+                stream_id=stream_row.id,
+                kind="bind",
+                sequence=None,
+                start_sample=8000,
+                contract={
+                    "type": "bind",
+                    "id": f"{attempt_id}/bind-1",
+                    "stream_id": str(stream_uuid),
+                    "epoch": str(epoch_uuid),
+                    "start_sample": 8000,
+                    "provider_source_id": source_id,
+                    "source_kind": "speaker",
+                    "speaker_id": "devices/alice-1",
+                    "participant_id": "devices/alice-1",
+                    "participant_name": "Alice Visual",
+                    "attribution_unknown": False,
+                },
+            )
+        )
+        job1 = AsrJob(
+            id=f"{attempt_id}-job-1",
+            stream_id=stream_row.id,
+            start_sample=0,
+            end_sample=8000,
+            core_start=0,
+            core_end=8000,
+            binding={
+                "provider_source_id": source_id,
+                "source_kind": "speaker",
+                "speaker_id": None,
+                "attribution_unknown": True,
+            },
+            status="completed",
+        )
+        job2 = AsrJob(
+            id=f"{attempt_id}-job-2",
+            stream_id=stream_row.id,
+            start_sample=8000,
+            end_sample=32000,
+            core_start=8000,
+            core_end=32000,
+            binding={
+                "provider_source_id": source_id,
+                "source_kind": "speaker",
+                "speaker_id": "devices/alice-1",
+                "participant_id": "devices/alice-1",
+                "participant_name": "Alice Visual",
+                "attribution_unknown": False,
+            },
+            status="completed",
+        )
+        db.add_all([job1, job2])
+        db.flush()
+        db.add_all(
+            [
+                TranscriptSegment(
+                    id=job1.id,
+                    result={
+                        "id": job1.id,
+                        "stream_id": str(stream_uuid),
+                        "epoch": str(epoch_uuid),
+                        "provider_source_id": source_id,
+                        "source_kind": "speaker",
+                        "speaker_id": None,
+                        "attribution_unknown": True,
+                        "session_utc_origin": origin_iso,
+                        "start": 0.0,
+                        "end": 0.5,
+                        "text": "Hallo zusammen",
+                        "words": [{"word": "Hallo", "start": 0.0, "end": 0.25}],
+                    },
+                ),
+                TranscriptSegment(
+                    id=job2.id,
+                    result={
+                        "id": job2.id,
+                        "stream_id": str(stream_uuid),
+                        "epoch": str(epoch_uuid),
+                        "provider_source_id": source_id,
+                        "source_kind": "speaker",
+                        "speaker_id": "devices/alice-1",
+                        "participant_id": "devices/alice-1",
+                        "participant_name": "Alice Visual",
+                        "attribution_unknown": False,
+                        "session_utc_origin": origin_iso,
+                        "start": 0.5,
+                        "end": 2.0,
+                        "text": "hier spricht Alice.",
+                        "words": [{"word": "Alice.", "start": 1.0, "end": 2.0}],
+                    },
+                ),
+            ]
+        )
+        db.commit()
+
+    client.post(
+        f"/v1/attempts/{attempt_id}/status",
+        headers=owner,
+        json={
+            "participation": "capturing",
+            "streams": 1,
+            "audio_samples": 32000,
+            "active_audio_samples": 24000,
+            "receiver_sources": [
+                {
+                    "provider_source_id": source_id,
+                    "source_kind": "speaker",
+                    "capture_path": "rtc_receiver",
+                    "track_id": "track-alice",
+                    "csi": 5551,
+                    "signaled_participant_id": "devices/alice-1",
+                    "participant_name": "Alice Visual",
+                    "ssrc": [{"source": 5551, "timestamp": 1.0, "rtp_timestamp": 160}],
+                    "csrc": [],
+                }
+            ],
+            "participant_sources": {
+                "available": True,
+                "total": 1,
+                "truncated": False,
+                "dom_participants": 1,
+                "sources": [
+                    {
+                        "participant_id": "devices/alice-1",
+                        "participant_name": "Alice Visual",
+                        "audio_csis": [5551],
+                        "share_audio_csis": [],
+                    }
+                ],
+            },
+            "data_channels": [
+                {
+                    "label": "http:fetch",
+                    "ready_state": "open",
+                    "text_frames": 2,
+                    "binary_frames": 0,
+                    "json_frames": 2,
+                    "json_keys": ["participants"],
+                    "wire_formats": ["utf8", "json"],
+                }
+            ],
+        },
+    )
+
+    detail = client.get(f"/v1/recordings/{rec_id}", headers=API).json()
+    assert detail["live_status"]["bound_named_receivers"] == 1
+    assert detail["live_status"]["named_participants"] == 1
+    assert detail["live_status"]["dom_participants"] == 1
+
+    transcript = client.get(f"/v1/recordings/{rec_id}/transcript", headers=API).json()
+    assert len(transcript["segments"]) == 2
+    assert transcript["segments"][0]["attribution_unknown"] is False
+    assert transcript["segments"][0]["participant_id"] == "devices/alice-1"
+    assert transcript["segments"][0]["participant_name"] == "Alice Visual"
+    assert transcript["segments"][0]["speaker_label"] == "Alice Visual"
+    assert transcript["segments"][1]["speaker_label"] == "Alice Visual"
+    assert transcript["sources_summary"][0]["participant_name"] == "Alice Visual"
+    assert transcript["sources_summary"][0]["signaled_participant_id"] == "devices/alice-1"

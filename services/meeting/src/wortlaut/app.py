@@ -233,7 +233,15 @@ class ParticipantEvidence(BaseModel):
     available: bool = False
     total: int = Field(default=0, ge=0)
     truncated: bool = False
+    dom_participants: int | None = Field(default=None, ge=0)
     sources: list[ParticipantSourceEvidence] = Field(default_factory=list, max_length=256)
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler):
+        data = handler(self)
+        if data.get("dom_participants") is None:
+            data.pop("dom_participants", None)
+        return data
 
 
 class ClockInterruption(BaseModel):
@@ -658,6 +666,7 @@ def get_recording(recording_id: uuid.UUID, db: Db):
     latest_attempt = attempts[-1] if attempts else None
     diag = latest_attempt.diagnostics if latest_attempt and latest_attempt.diagnostics else {}
     receivers = diag.get("receiver_sources", [])
+    part_sources = diag.get("participant_sources", {})
     result["live_status"] = {
         "is_active": recording.participation
         in ("starting", "joining", "waiting_admission", "capturing")
@@ -668,8 +677,15 @@ def get_recording(recording_id: uuid.UUID, db: Db):
         "audio_seconds": round(samples / RATE, 1),
         "active_audio_seconds": round(diag.get("active_audio_samples", 0) / RATE, 1),
         "bound_receivers": sum(1 for r in receivers if r.get("signaled_participant_id")),
+        "bound_named_receivers": sum(
+            1 for r in receivers if r.get("signaled_participant_id") and r.get("participant_name")
+        ),
         "total_receivers": len(receivers),
-        "dom_or_signaled_participants": diag.get("participant_sources", {}).get("total", 0),
+        "dom_or_signaled_participants": part_sources.get("total", 0),
+        "named_participants": sum(
+            1 for p in part_sources.get("sources", []) if p.get("participant_name")
+        ),
+        "dom_participants": part_sources.get("dom_participants") or 0,
         "data_channel_count": len(diag.get("data_channels", [])),
         "sdp_descriptions": diag.get("sdp", {}).get("descriptions", 0),
         "last_heartbeat_at": latest_attempt.last_heartbeat_at if latest_attempt else None,

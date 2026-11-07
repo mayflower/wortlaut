@@ -31,6 +31,7 @@ type ParticipantSourcesState = {
   available: boolean;
   total: number;
   truncated: boolean;
+  dom_participants?: number;
   sources: {participant_id: string; participant_name?: string | null; audio_csis: number[]; share_audio_csis: number[]}[];
 };
 
@@ -182,6 +183,10 @@ function install(config: MeetCaptureConfig) {
       const val = el.getAttribute(attr)?.trim();
       if (val && val.length <= 200 && val !== 'fixture') return val;
     }
+    if (el.getAttribute('role') === 'listitem') {
+      const aria = el.getAttribute('aria-label')?.trim();
+      if (aria && aria.length >= 2 && aria.length <= 120 && aria !== 'fixture') return aria;
+    }
     const sub = el.querySelector(
       '[data-participant-name], [data-self-name], [data-display-name], ' +
       '[data-tid="roster-person-name"], [data-tid="video-tile-name"], ' +
@@ -213,7 +218,8 @@ function install(config: MeetCaptureConfig) {
     let updated = false;
     const nodes = document.querySelectorAll(
       '[data-participant-id], [data-requested-participant-id], [data-member-id], ' +
-      '[data-cid], [data-endpoint-id], [data-user-id], [data-tid*="roster"], [data-tid*="video-tile"]'
+      '[data-cid], [data-endpoint-id], [data-user-id], [data-tid*="roster"], [data-tid*="video-tile"], ' +
+      '[role="listitem"][data-participant-id], [role="listitem"][data-member-id], [role="listitem"][data-cid]'
     );
     for (const el of Array.from(nodes).slice(0, 256)) {
       const rawId = (
@@ -388,7 +394,7 @@ function install(config: MeetCaptureConfig) {
   }
 
   function parseJsonText(text: string, stat: ReturnType<typeof getChannelStat>): boolean {
-    const trimmed = text.trim();
+    const trimmed = text.replace(/^\)\]\}'\s*/, '').trim();
     if (!trimmed || trimmed.length > 65536 || (trimmed[0] !== '{' && trimmed[0] !== '[')) return false;
     let parsed: unknown;
     try { parsed = JSON.parse(trimmed); } catch { return false; }
@@ -876,6 +882,7 @@ function install(config: MeetCaptureConfig) {
         available: participants.size > 0,
         total: totalParticipants,
         truncated: totalParticipants > 256,
+        ...(domNames.size > 0 ? {dom_participants: domNames.size} : {}),
         sources: [...participants.values()].slice(0, 256).map((p) => ({
           participant_id: p.participant_id,
           ...(p.participant_name ? {participant_name: p.participant_name} : {}),

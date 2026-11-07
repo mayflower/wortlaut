@@ -150,6 +150,70 @@ export async function installMeetCapture(page: Page, bootstrap: Pick<MeetBootstr
       });
       return pc;
     }});
+    if (typeof window.fetch === 'function') {
+      window.fetch = new Proxy(window.fetch, {apply(fn, thisArg, fetchArgs) {
+        const reqUrl = typeof fetchArgs[0] === 'string'
+          ? fetchArgs[0]
+          : (fetchArgs[0] as Request)?.url ?? '';
+        const result = Reflect.apply(fn, thisArg, fetchArgs) as Promise<Response>;
+        result.then((res) => {
+          const ct = res.headers?.get('content-type') ?? '';
+          if (/json|protobuf|octet-stream|text\/plain/i.test(ct) ||
+              /sync|roster|participant|locus|meeting|space/i.test(reqUrl)) {
+            res.clone().arrayBuffer().then((buf) => {
+              if (buf.byteLength > 0 && buf.byteLength <= 65536) {
+                const wrapped = {__wortlautChannel: 'http:fetch', readyState: 'open', data: buf};
+                if (dataMessages.length < 256) dataMessages.push(wrapped);
+                window.wortlautMeetReceivers.onDataMessage?.(wrapped);
+              }
+            }).catch(() => {});
+          }
+        }).catch(() => {});
+        return result;
+      }});
+    }
+    if (typeof window.WebSocket === 'function') {
+      window.WebSocket = new Proxy(window.WebSocket, {construct(target, wsArgs, newTarget) {
+        const ws = Reflect.construct(target, wsArgs, newTarget) as WebSocket;
+        ws.addEventListener('message', (event) => {
+          const d = event.data;
+          if ((typeof d === 'string' && d.length > 0 && d.length <= 65536) ||
+              ((d instanceof ArrayBuffer || ArrayBuffer.isView(d)) &&
+                d.byteLength > 0 && d.byteLength <= 65536)) {
+            const wrapped = {__wortlautChannel: 'ws:signaling', readyState: 'open', data: d};
+            if (dataMessages.length < 256) dataMessages.push(wrapped);
+            window.wortlautMeetReceivers.onDataMessage?.(wrapped);
+          }
+        });
+        return ws;
+      }});
+    }
+    if (typeof XMLHttpRequest === 'function') {
+      XMLHttpRequest.prototype.send = new Proxy(XMLHttpRequest.prototype.send, {
+        apply(fn, thisArg: XMLHttpRequest, xhrArgs) {
+          thisArg.addEventListener('load', () => {
+            try {
+              const rt = thisArg.responseType;
+              if (rt === '' || rt === 'text') {
+                const txt = thisArg.responseText;
+                if (typeof txt === 'string' && txt.length > 0 && txt.length <= 65536) {
+                  const wrapped = {__wortlautChannel: 'http:xhr', readyState: 'open', data: txt};
+                  if (dataMessages.length < 256) dataMessages.push(wrapped);
+                  window.wortlautMeetReceivers.onDataMessage?.(wrapped);
+                }
+              } else if (rt === 'arraybuffer' && thisArg.response instanceof ArrayBuffer &&
+                  thisArg.response.byteLength > 0 && thisArg.response.byteLength <= 65536) {
+                const wrapped = {__wortlautChannel: 'http:xhr',
+                  readyState: 'open', data: thisArg.response};
+                if (dataMessages.length < 256) dataMessages.push(wrapped);
+                window.wortlautMeetReceivers.onDataMessage?.(wrapped);
+              }
+            } catch {}
+          });
+          return Reflect.apply(fn, thisArg, xhrArgs);
+        },
+      });
+    }
   }, config);
   return async () => {
     const url = new URL(page.url());
@@ -215,6 +279,7 @@ export class MeetBrowser {
   private readonly transport: AudioTransport;
   private drained = false;
   private joinSent = false;
+  private rosterOpened = false;
   private initialize?: () => Promise<void>;
 
   constructor(private readonly page: Page, private readonly bootstrap: MeetBootstrap,
@@ -320,6 +385,15 @@ export class MeetBrowser {
           await visible(this.page.getByRole('button', {name: actions.leave})) &&
           await this.page.locator('[data-self-name], [data-participant-id]').count()) {
         this.participation = 'capturing';
+        if (!this.rosterOpened) {
+          this.rosterOpened = true;
+          const toggle = this.page.getByRole('button', {
+            name: /^(?:People|Participants|Show everyone|Alle anzeigen|Teilnehmer|Personen)(?:\b|\s|$)/i,
+          }).and(this.page.locator('[aria-expanded="false"], [aria-pressed="false"]')).first();
+          if (await visible(toggle)) {
+            await this.input.click(toggle).catch(() => {});
+          }
+        }
       }
     }
     return {capability: 'unverified', participation: this.stopping ? 'ended' : this.participation,

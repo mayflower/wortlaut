@@ -15,6 +15,7 @@ export class WebexBrowser {
   private stopping?: Promise<void>;
   private reason = '';
   private joined = false;
+  private rosterOpened = false;
   private drained: boolean | null = null;
 
   constructor(private readonly page: Page, private readonly bootstrap: WebexBrowserBootstrap,
@@ -90,7 +91,18 @@ export class WebexBrowser {
       participation = 'waiting_admission';
     } else if (this.joined && frame && await frame.getByRole('button', {
       name: /^(Leave meeting|Leave|Meeting verlassen|Verlassen)(?:\s|$)/i,
-    }).first().isVisible()) participation = 'capturing';
+    }).first().isVisible()) {
+      participation = 'capturing';
+      if (!this.rosterOpened) {
+        this.rosterOpened = true;
+        const toggle = frame.getByRole('button', {
+          name: /^(?:Participants|Show participants|People|Teilnehmer|Teilnehmer anzeigen|Personen)(?:\b|\s|$)/i,
+        }).and(frame.locator('[aria-expanded="false"], [aria-pressed="false"]')).first();
+        if (await toggle.isVisible().catch(() => false)) {
+          await this.click(toggle).catch(() => {});
+        }
+      }
+    }
     if (/meeting (?:has )?ended|Meeting.*beendet/i.test(text)) this.reason = 'meeting_ended';
     if (/host.*denied|not allowed to join|Beitritt.*abgelehnt/i.test(text)) this.reason = 'admission_denied';
     return {...state, capability: 'unverified', participation: this.stopping ? 'ended' : participation,

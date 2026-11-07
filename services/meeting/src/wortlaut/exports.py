@@ -6,7 +6,7 @@ from html import escape
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from wortlaut.models import AsrJob, Attempt, AudioStream, Recording, TranscriptSegment
+from wortlaut.models import AsrJob, Attempt, AudioControl, AudioStream, Recording, TranscriptSegment
 from wortlaut.processing import RATE, stream_quality
 from wortlaut.settings import get_settings
 
@@ -67,6 +67,22 @@ def export_data(db: Session, recording: Recording):
         pid = s.contract.get("participant_id") or s.contract.get("speaker_id")
         if pid and s.contract.get("participant_name"):
             participant_names[pid] = s.contract["participant_name"]
+    bind_controls = (
+        db.scalars(
+            select(AudioControl)
+            .where(
+                AudioControl.stream_id.in_([s.id for s in streams]),
+                AudioControl.kind == "bind",
+            )
+            .order_by(AudioControl.start_sample)
+        ).all()
+        if streams
+        else []
+    )
+    for ctrl in bind_controls:
+        pid = ctrl.contract.get("participant_id") or ctrl.contract.get("speaker_id")
+        if pid and ctrl.contract.get("participant_name"):
+            participant_names[pid] = ctrl.contract["participant_name"]
     segments = [
         dict(s.result)
         for s in db.scalars(
@@ -79,6 +95,47 @@ def export_data(db: Session, recording: Recording):
         pid = seg.get("participant_id") or seg.get("speaker_id")
         if pid and seg.get("participant_name"):
             participant_names[pid] = seg["participant_name"]
+    unambiguous_stream_bindings: dict[tuple[str, str], tuple[str, str | None, str]] = {}
+    for s in streams:
+        key = (str(s.stream_id), str(s.epoch))
+        observed: set[tuple[str, str | None, str]] = set()
+        if not s.contract.get("attribution_unknown"):
+            pid = s.contract.get("participant_id") or s.contract.get("speaker_id")
+            if pid:
+                observed.add(
+                    (
+                        pid,
+                        s.contract.get("speaker_id") or pid,
+                        s.contract.get("source_kind", "speaker"),
+                    )
+                )
+        for ctrl in bind_controls:
+            if ctrl.stream_id == s.id and not ctrl.contract.get("attribution_unknown"):
+                pid = ctrl.contract.get("participant_id") or ctrl.contract.get("speaker_id")
+                if pid:
+                    observed.add(
+                        (
+                            pid,
+                            ctrl.contract.get("speaker_id") or pid,
+                            ctrl.contract.get("source_kind", "speaker"),
+                        )
+                    )
+        for seg in segments:
+            if (
+                (seg.get("stream_id"), seg.get("epoch")) == key
+                and not seg.get("attribution_unknown")
+            ):
+                pid = seg.get("participant_id") or seg.get("speaker_id")
+                if pid:
+                    observed.add(
+                        (
+                            pid,
+                            seg.get("speaker_id") or pid,
+                            seg.get("source_kind", "speaker"),
+                        )
+                    )
+        if len(observed) == 1:
+            unambiguous_stream_bindings[key] = next(iter(observed))
     anchors = [datetime.fromisoformat(s.contract["session_utc_origin"]) for s in streams]
     origin = min(anchors) if anchors else recording.starts_at
     for segment in segments:
@@ -89,6 +146,13 @@ def export_data(db: Session, recording: Recording):
             {**word, "start": word["start"] + delta, "end": word["end"] + delta}
             for word in segment["words"]
         ]
+        stream_key = (segment.get("stream_id"), segment.get("epoch"))
+        if segment.get("attribution_unknown") and stream_key in unambiguous_stream_bindings:
+            resolved_pid, resolved_spk, resolved_kind = unambiguous_stream_bindings[stream_key]
+            segment["attribution_unknown"] = False
+            segment["participant_id"] = resolved_pid
+            segment["speaker_id"] = resolved_spk if resolved_kind == "speaker" else None
+            segment["source_kind"] = resolved_kind
         pid = segment.get("participant_id") or segment.get("speaker_id")
         if not segment.get("attribution_unknown") and not segment.get("participant_name") and pid:
             if pid in participant_names:
@@ -176,13 +240,15 @@ def export_data(db: Session, recording: Recording):
             "streams": qualities,
         },
         "sources_summary": _build_sources_summary(
-            attempts, streams, qualities, segments, participant_names
+            attempts, streams, qualities, segments, participant_names, bind_controls
         ),
         "segments": segments,
     }
 
 
-def _build_sources_summary(attempts, streams, qualities, segments, participant_names):
+def _build_sources_summary(
+    attempts, streams, qualities, segments, participant_names, bind_controls=()
+):
     receiver_by_id = {}
     for attempt in attempts:
         for rcv in attempt.diagnostics.get("receiver_sources", []):
@@ -195,6 +261,11 @@ def _build_sources_summary(attempts, streams, qualities, segments, participant_n
                 for s in streams
                 if s.contract.get("provider_source_id")
             ]
+            + [
+                c.contract["provider_source_id"]
+                for c in bind_controls
+                if c.contract.get("provider_source_id")
+            ]
             + [seg["provider_source_id"] for seg in segments if seg.get("provider_source_id")]
             + list(receiver_by_id.keys())
         )
@@ -204,6 +275,12 @@ def _build_sources_summary(attempts, streams, qualities, segments, participant_n
         src_segs = [seg for seg in segments if seg.get("provider_source_id") == sid]
         src_quals = [q for q in qualities if q.get("provider_source_id") == sid]
         src_streams = [s for s in streams if s.contract.get("provider_source_id") == sid]
+        src_stream_ids = {s.id for s in src_streams}
+        src_binds = [
+            c
+            for c in bind_controls
+            if c.contract.get("provider_source_id") == sid or c.stream_id in src_stream_ids
+        ]
         rcv = receiver_by_id.get(sid, {})
         sig_id = (
             rcv.get("signaled_participant_id")
@@ -212,6 +289,14 @@ def _build_sources_summary(attempts, streams, qualities, segments, participant_n
                     s.contract.get("participant_id") or s.contract.get("speaker_id")
                     for s in src_streams
                     if s.contract.get("participant_id") or s.contract.get("speaker_id")
+                ),
+                None,
+            )
+            or next(
+                (
+                    c.contract.get("participant_id") or c.contract.get("speaker_id")
+                    for c in src_binds
+                    if c.contract.get("participant_id") or c.contract.get("speaker_id")
                 ),
                 None,
             )
@@ -232,6 +317,14 @@ def _build_sources_summary(attempts, streams, qualities, segments, participant_n
                     s.contract.get("participant_name")
                     for s in src_streams
                     if s.contract.get("participant_name")
+                ),
+                None,
+            )
+            or next(
+                (
+                    c.contract.get("participant_name")
+                    for c in src_binds
+                    if c.contract.get("participant_name")
                 ),
                 None,
             )
