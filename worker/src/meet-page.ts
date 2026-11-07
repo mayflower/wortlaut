@@ -20,6 +20,8 @@ declare global {
       dataChannels?: Set<RTCDataChannel>;
       dataMessages?: unknown[];
       onDataMessage?: (data: unknown) => void;
+      remoteDescriptions?: string[];
+      onRemoteDescription?: (sdp: string) => void;
       observe?: (receiver: RTCRtpReceiver, pc: RTCPeerConnection) => void};
     wortlautMeet: {stop: () => Promise<boolean>; inspect: () => MeetCaptureState & {audio_clock: AudioClock}};
   }
@@ -29,7 +31,7 @@ type ParticipantSourcesState = {
   available: boolean;
   total: number;
   truncated: boolean;
-  sources: {participant_id: string; audio_csis: number[]; share_audio_csis: number[]}[];
+  sources: {participant_id: string; participant_name?: string | null; audio_csis: number[]; share_audio_csis: number[]}[];
 };
 
 type DataChannelState = {
@@ -39,13 +41,25 @@ type DataChannelState = {
   binary_frames: number;
   json_frames: number;
   json_keys: string[];
+  wire_formats: string[];
+  protobuf_fields: string[];
+};
+
+type SdpState = {
+  descriptions: number;
+  audio_sections: number;
+  video_sections: number;
+  ssrc_count: number;
+  cname_count: number;
+  msid_count: number;
 };
 
 type MeetCaptureState = {streams: number; audio_samples: number; active_audio_samples: number;
   reason: string; capture_ready: boolean; stopped: boolean; drained: boolean;
   receiver_sources: Record<string, unknown>[];
   participant_sources: ParticipantSourcesState;
-  data_channels: DataChannelState[]};
+  data_channels: DataChannelState[];
+  sdp: SdpState};
 
 type EncodedEvidence = {state: 'unsupported' | 'failed' | 'waiting_frames' | 'observing' |
   'metadata_unavailable' | 'provider_transform' | 'provider_reserved' | 'replaced' | 'stopped';
@@ -66,7 +80,8 @@ function install(config: MeetCaptureConfig) {
   const state: MeetCaptureState = {streams: 0, audio_samples: 0, active_audio_samples: 0,
     reason: '', stopped: false, capture_ready: false, drained: false, receiver_sources: [],
     participant_sources: {available: false, total: 0, truncated: false, sources: []},
-    data_channels: []};
+    data_channels: [],
+    sdp: {descriptions: 0, audio_sections: 0, video_sections: 0, ssrc_count: 0, cname_count: 0, msid_count: 0}};
   // The pinned modules travel in this local bundle. Blob URLs never resolve
   // to Google or a CDN and are subject to the page's actual CSP.
   const modules = [resamplerSource, pcmSource].map((source) =>
@@ -78,6 +93,15 @@ function install(config: MeetCaptureConfig) {
     audio_csis: Set<number>; share_audio_csis: Set<number>;
     track_ids: Set<string>; stream_ids: Set<string>;
   }>();
+  const domNames = new Map<string, string>();
+  const sdpCnames = new Map<string, {
+    audio_ssrcs: Set<number>; video_ssrcs: Set<number>;
+    stream_ids: Set<string>; track_ids: Set<string>;
+  }>();
+  const sdpStats = {
+    descriptions: 0, audio_sections: 0, video_sections: 0,
+    ssrcs: new Set<number>(), cnames: new Set<string>(), msids: new Set<string>(),
+  };
   let totalParticipants = 0;
 
   function validCsi(value: unknown): value is number {
@@ -102,12 +126,17 @@ function install(config: MeetCaptureConfig) {
       ...(Array.isArray(node.shareAudioCsis) ? node.shareAudioCsis : []),
       ...(Array.isArray(node.shareSsrcs) ? node.shareSsrcs : []),
     ].filter(validCsi);
-    const trackRaw = [node.track_id, node.trackId, node.audioTrackId]
-      .filter((v): v is string => typeof v === 'string' && v.length > 0 && v.length <= 256);
-    const streamRaw = [node.stream_id, node.streamId, node.msid]
-      .filter((v): v is string => typeof v === 'string' && v.length > 0 && v.length <= 256);
+    const trackRaw = [
+      node.track_id, node.trackId, node.audioTrackId,
+      ...(Array.isArray(node.track_ids) ? node.track_ids : []),
+    ].filter((v): v is string => typeof v === 'string' && v.length > 0 && v.length <= 256);
+    const streamRaw = [
+      node.stream_id, node.streamId, node.msid,
+      ...(Array.isArray(node.stream_ids) ? node.stream_ids : []),
+    ].filter((v): v is string => typeof v === 'string' && v.length > 0 && v.length <= 256);
     if (!audioRaw.length && !shareRaw.length && !trackRaw.length && !streamRaw.length) return false;
     let entry = participants.get(id);
+    let changed = false;
     if (!entry) {
       totalParticipants++;
       if (participants.size >= 256) return false;
@@ -115,21 +144,235 @@ function install(config: MeetCaptureConfig) {
         audio_csis: new Set(), share_audio_csis: new Set(),
         track_ids: new Set(), stream_ids: new Set()};
       participants.set(id, entry);
+      changed = true;
     }
-    const rawName = node.participant_name ?? node.participantName ?? node.displayName;
+    const rawName = node.participant_name ?? node.participantName ?? node.displayName ?? domNames.get(id);
     if (typeof rawName === 'string' && rawName.trim() && rawName.trim().length <= 200) {
-      entry.participant_name = rawName.trim();
+      const cleaned = rawName.trim();
+      if (entry.participant_name !== cleaned) {
+        entry.participant_name = cleaned;
+        changed = true;
+      }
     }
-    for (const csi of audioRaw) if (entry.audio_csis.size < 64) entry.audio_csis.add(csi);
-    for (const csi of shareRaw) if (entry.share_audio_csis.size < 64) entry.share_audio_csis.add(csi);
-    for (const tid of trackRaw) if (entry.track_ids.size < 64) entry.track_ids.add(tid);
-    for (const sid of streamRaw) if (entry.stream_ids.size < 64) entry.stream_ids.add(sid);
-    return true;
+    for (const csi of audioRaw) {
+      if (entry.audio_csis.size < 64 && !entry.audio_csis.has(csi)) {
+        entry.audio_csis.add(csi); changed = true;
+      }
+    }
+    for (const csi of shareRaw) {
+      if (entry.share_audio_csis.size < 64 && !entry.share_audio_csis.has(csi)) {
+        entry.share_audio_csis.add(csi); changed = true;
+      }
+    }
+    for (const tid of trackRaw) {
+      if (entry.track_ids.size < 64 && !entry.track_ids.has(tid)) {
+        entry.track_ids.add(tid); changed = true;
+      }
+    }
+    for (const sid of streamRaw) {
+      if (entry.stream_ids.size < 64 && !entry.stream_ids.has(sid)) {
+        entry.stream_ids.add(sid); changed = true;
+      }
+    }
+    return changed;
+  }
+
+  function extractDomParticipantName(el: Element): string | null {
+    for (const attr of ['data-participant-name', 'data-self-name', 'data-display-name']) {
+      const val = el.getAttribute(attr)?.trim();
+      if (val && val.length <= 200 && val !== 'fixture') return val;
+    }
+    const sub = el.querySelector(
+      '[data-participant-name], [data-self-name], [data-display-name], ' +
+      '[data-tid="roster-person-name"], [data-tid="video-tile-name"], ' +
+      '[class*="participant-name"], [class*="participantName"], [class*="displayName"], [class*="nameplate"]'
+    );
+    if (sub) {
+      const attrVal = (sub.getAttribute('data-participant-name') ||
+        sub.getAttribute('data-self-name') ||
+        sub.getAttribute('data-display-name') ||
+        sub.textContent || '').trim();
+      if (attrVal && attrVal.length <= 200 && attrVal !== 'fixture') return attrVal;
+    }
+    for (const child of Array.from(el.querySelectorAll('span, div, p')).slice(0, 16)) {
+      if (child.children.length > 0 || child.closest('button')) continue;
+      const txt = (child.textContent || '').trim();
+      if (txt && txt.length >= 2 && txt.length <= 120 && txt !== 'fixture') return txt;
+    }
+    return null;
+  }
+
+  function parseAttrCsi(raw: string | null): number | null {
+    if (!raw || !/^\d+$/.test(raw.trim())) return null;
+    const num = Number(raw.trim());
+    return validCsi(num) ? num : null;
+  }
+
+  function scanDomParticipants(): boolean {
+    if (!document.body) return false;
+    let updated = false;
+    const nodes = document.querySelectorAll(
+      '[data-participant-id], [data-requested-participant-id], [data-member-id], ' +
+      '[data-cid], [data-endpoint-id], [data-user-id], [data-tid*="roster"], [data-tid*="video-tile"]'
+    );
+    for (const el of Array.from(nodes).slice(0, 256)) {
+      const rawId = (
+        el.getAttribute('data-participant-id') ??
+        el.getAttribute('data-requested-participant-id') ??
+        el.getAttribute('data-member-id') ??
+        el.getAttribute('data-cid') ??
+        el.getAttribute('data-endpoint-id') ??
+        el.getAttribute('data-user-id') ?? ''
+      ).trim();
+      const name = extractDomParticipantName(el);
+      if (rawId && rawId.length <= 200 && name) {
+        if (domNames.size < 256 || domNames.has(rawId)) domNames.set(rawId, name);
+        const existing = participants.get(rawId);
+        if (existing && existing.participant_name !== name) {
+          existing.participant_name = name;
+          updated = true;
+        }
+      }
+      const csis: number[] = [];
+      const streamIds: string[] = [];
+      const trackIds: string[] = [];
+      for (const node of [el, ...Array.from(el.querySelectorAll('[data-ssrc], [data-csi], [data-csrc], [data-stream-id], [data-msid], [data-track-id], [data-audio-track-id]')).slice(0, 16)]) {
+        for (const attr of ['data-ssrc', 'data-csi', 'data-csrc']) {
+          const parsed = parseAttrCsi(node.getAttribute(attr));
+          if (parsed !== null) csis.push(parsed);
+        }
+        for (const attr of ['data-stream-id', 'data-msid']) {
+          const val = node.getAttribute(attr)?.trim();
+          if (val && val.length <= 256) streamIds.push(val);
+        }
+        for (const attr of ['data-track-id', 'data-audio-track-id']) {
+          const val = node.getAttribute(attr)?.trim();
+          if (val && val.length <= 256) trackIds.push(val);
+        }
+      }
+      for (const media of Array.from(el.querySelectorAll('audio, video')).slice(0, 8)) {
+        const src = (media as HTMLMediaElement).srcObject;
+        if (src instanceof MediaStream) {
+          if (src.id) streamIds.push(src.id);
+          for (const t of src.getTracks()) if (t.id) trackIds.push(t.id);
+          for (const group of sdpCnames.values()) {
+            const sharesStream = src.id && group.stream_ids.has(src.id);
+            const sharesTrack = src.getTracks().some((t) => group.track_ids.has(t.id));
+            if (sharesStream || sharesTrack) {
+              csis.push(...group.audio_ssrcs);
+              streamIds.push(...group.stream_ids);
+              trackIds.push(...group.track_ids);
+            }
+          }
+        }
+      }
+      if (rawId && sdpCnames.has(rawId)) {
+        const group = sdpCnames.get(rawId)!;
+        csis.push(...group.audio_ssrcs);
+        streamIds.push(...group.stream_ids);
+        trackIds.push(...group.track_ids);
+      }
+      const effectiveId = rawId || (name && (streamIds.length || trackIds.length || csis.length)
+        ? `dom:${streamIds[0] ?? trackIds[0] ?? csis[0]}`
+        : '');
+      if (effectiveId && (csis.length || streamIds.length || trackIds.length)) {
+        if (ingestParticipantRecord({
+          participant_id: effectiveId,
+          participant_name: name ?? domNames.get(effectiveId) ?? null,
+          audio_csis: csis,
+          stream_ids: streamIds,
+          track_ids: trackIds,
+        })) updated = true;
+      }
+    }
+    return updated;
+  }
+
+  function onRemoteDescription(sdp: string) {
+    if (typeof sdp !== 'string' || !sdp || sdp.length > 524288) return;
+    sdpStats.descriptions++;
+    let currentMedia: 'audio' | 'video' | 'other' = 'other';
+    const ssrcCname = new Map<number, string>();
+    const ssrcMsid = new Map<number, {streamId: string; trackId?: string}>();
+    let sectionMsid: {streamId: string; trackId?: string} | null = null;
+    for (const rawLine of sdp.split(/\r?\n/)) {
+      const line = rawLine.trim();
+      if (line.startsWith('m=audio ')) {
+        currentMedia = 'audio'; sdpStats.audio_sections++; sectionMsid = null;
+      } else if (line.startsWith('m=video ')) {
+        currentMedia = 'video'; sdpStats.video_sections++; sectionMsid = null;
+      } else if (line.startsWith('m=')) {
+        currentMedia = 'other'; sectionMsid = null;
+      } else if (line.startsWith('a=msid:')) {
+        const parts = line.slice(7).trim().split(/\s+/);
+        if (parts[0] && parts[0] !== '-' && parts[0].length <= 256) {
+          sectionMsid = {streamId: parts[0], trackId: parts[1]};
+          if (sdpStats.msids.size < 256) sdpStats.msids.add(parts[0]);
+        }
+      } else if (line.startsWith('a=ssrc:')) {
+        const match = /^a=ssrc:(\d+)\s+([a-zA-Z0-9_-]+):(.*)$/.exec(line);
+        if (!match) continue;
+        const ssrc = Number(match[1]);
+        const attr = match[2].toLowerCase();
+        const val = match[3].trim();
+        if (!validCsi(ssrc)) continue;
+        if (sdpStats.ssrcs.size < 256) sdpStats.ssrcs.add(ssrc);
+        if (attr === 'cname' && val && val.length <= 256) {
+          if (sdpStats.cnames.size < 256) sdpStats.cnames.add(val);
+          ssrcCname.set(ssrc, val);
+          let group = sdpCnames.get(val);
+          if (!group && sdpCnames.size < 256) {
+            group = {audio_ssrcs: new Set(), video_ssrcs: new Set(), stream_ids: new Set(), track_ids: new Set()};
+            sdpCnames.set(val, group);
+          }
+          if (group) {
+            if (currentMedia === 'audio' && group.audio_ssrcs.size < 64) group.audio_ssrcs.add(ssrc);
+            if (currentMedia === 'video' && group.video_ssrcs.size < 64) group.video_ssrcs.add(ssrc);
+            if (sectionMsid) {
+              if (group.stream_ids.size < 64) group.stream_ids.add(sectionMsid.streamId);
+              if (sectionMsid.trackId && group.track_ids.size < 64) group.track_ids.add(sectionMsid.trackId);
+            }
+          }
+        } else if (attr === 'msid' && val) {
+          const parts = val.split(/\s+/);
+          if (parts[0] && parts[0] !== '-' && parts[0].length <= 256) {
+            ssrcMsid.set(ssrc, {streamId: parts[0], trackId: parts[1]});
+            if (sdpStats.msids.size < 256) sdpStats.msids.add(parts[0]);
+          }
+        }
+      }
+    }
+    for (const [ssrc, msid] of ssrcMsid) {
+      const cname = ssrcCname.get(ssrc);
+      const group = cname ? sdpCnames.get(cname) : undefined;
+      if (group) {
+        if (group.stream_ids.size < 64) group.stream_ids.add(msid.streamId);
+        if (msid.trackId && group.track_ids.size < 64) group.track_ids.add(msid.trackId);
+      }
+    }
+    let updated = scanDomParticipants();
+    for (const [cname, group] of sdpCnames) {
+      if (!group.audio_ssrcs.size && !group.stream_ids.size && !group.track_ids.size) continue;
+      const matchedId = (domNames.has(cname) || participants.has(cname))
+        ? cname
+        : [...group.stream_ids].find((sid) => domNames.has(sid) || participants.has(sid));
+      if (matchedId) {
+        if (ingestParticipantRecord({
+          participant_id: matchedId,
+          participant_name: domNames.get(matchedId) ?? null,
+          audio_csis: [...group.audio_ssrcs],
+          stream_ids: [...group.stream_ids],
+          track_ids: [...group.track_ids],
+        })) updated = true;
+      }
+    }
+    if (updated) void inspectReceivers();
   }
 
   const channelStats = new Map<string, {
     ready_state: string; text_frames: number; binary_frames: number;
     json_frames: number; json_keys: Set<string>;
+    wire_formats: Set<string>; protobuf_fields: Set<string>;
   }>();
 
   function getChannelStat(label: string, readyState = 'open') {
@@ -137,44 +380,23 @@ function install(config: MeetCaptureConfig) {
     let stat = channelStats.get(clean);
     if (!stat && channelStats.size < 32) {
       stat = {ready_state: readyState, text_frames: 0, binary_frames: 0,
-        json_frames: 0, json_keys: new Set()};
+        json_frames: 0, json_keys: new Set(), wire_formats: new Set(), protobuf_fields: new Set()};
       channelStats.set(clean, stat);
     }
     if (stat) stat.ready_state = readyState;
     return stat;
   }
 
-  function onDataMessage(input: unknown) {
-    let raw = input;
-    let label = 'default';
-    let readyState = 'open';
-    if (input && typeof input === 'object' && !(input instanceof ArrayBuffer) &&
-        !ArrayBuffer.isView(input) && '__wortlautChannel' in (input as Record<string, unknown>)) {
-      const env = input as {__wortlautChannel: string; readyState?: string; data: unknown};
-      label = env.__wortlautChannel || 'default';
-      readyState = env.readyState || 'open';
-      raw = env.data;
-    }
-    const stat = getChannelStat(label, readyState);
-    let text = '';
-    if (typeof raw === 'string') {
-      if (stat) stat.text_frames++;
-      text = raw;
-    } else if (raw instanceof ArrayBuffer && raw.byteLength <= 65536) {
-      if (stat) stat.binary_frames++;
-      text = new TextDecoder().decode(raw);
-    } else if (ArrayBuffer.isView(raw) && raw.byteLength <= 65536) {
-      if (stat) stat.binary_frames++;
-      text = new TextDecoder().decode(raw);
-    } else if (raw instanceof ArrayBuffer || ArrayBuffer.isView(raw)) {
-      if (stat) stat.binary_frames++;
-      return;
-    }
-    text = text.trim();
-    if (!text || text.length > 65536 || (text[0] !== '{' && text[0] !== '[')) return;
+  function parseJsonText(text: string, stat: ReturnType<typeof getChannelStat>): boolean {
+    const trimmed = text.trim();
+    if (!trimmed || trimmed.length > 65536 || (trimmed[0] !== '{' && trimmed[0] !== '[')) return false;
     let parsed: unknown;
-    try { parsed = JSON.parse(text); } catch { return; }
-    if (stat) stat.json_frames++;
+    try { parsed = JSON.parse(trimmed); } catch { return false; }
+    if (stat) {
+      stat.json_frames++;
+      if (stat.wire_formats.size < 16) stat.wire_formats.add('json');
+    }
+    scanDomParticipants();
     const queue: unknown[] = [parsed];
     let updated = false, visited = 0;
     while (queue.length && visited < 512) {
@@ -197,7 +419,164 @@ function install(config: MeetCaptureConfig) {
         }
       }
     }
-    if (updated) void inspectReceivers();
+    return updated;
+  }
+
+  function parseProtobufPayload(bytes: Uint8Array, stat: ReturnType<typeof getChannelStat>, depth = 0): boolean {
+    if (depth > 4 || bytes.byteLength < 2 || bytes.byteLength > 65536) return false;
+    let offset = 0, tags = 0, updated = false;
+    const strings: string[] = [];
+    const ints: number[] = [];
+    const readVarint = (): number | null => {
+      let result = 0, shift = 0;
+      while (offset < bytes.byteLength && shift < 64) {
+        const b = bytes[offset++];
+        result += (b & 0x7f) * (2 ** shift);
+        if ((b & 0x80) === 0) return result;
+        shift += 7;
+      }
+      return null;
+    };
+    while (offset < bytes.byteLength && tags < 128) {
+      const tag = readVarint();
+      if (tag === null || tag <= 0) return false;
+      const fieldNo = Math.floor(tag / 8);
+      const wireType = tag & 7;
+      if (fieldNo < 1 || fieldNo > 536870911) return false;
+      tags++;
+      if (depth === 0 && stat) {
+        if (stat.wire_formats.size < 16) stat.wire_formats.add('protobuf');
+        const sig = `${fieldNo}:${wireType}`;
+        if (stat.protobuf_fields.size < 32) stat.protobuf_fields.add(sig);
+      }
+      if (wireType === 0) {
+        const val = readVarint();
+        if (val === null) return false;
+        if (validCsi(val) && val > 0 && ints.length < 32) ints.push(val);
+      } else if (wireType === 1) {
+        if (offset + 8 > bytes.byteLength) return false;
+        offset += 8;
+      } else if (wireType === 5) {
+        if (offset + 4 > bytes.byteLength) return false;
+        const val = new DataView(bytes.buffer, bytes.byteOffset + offset, 4).getUint32(0, true);
+        offset += 4;
+        if (validCsi(val) && val > 0 && ints.length < 32) ints.push(val);
+      } else if (wireType === 2) {
+        const len = readVarint();
+        if (len === null || len < 0 || offset + len > bytes.byteLength) return false;
+        const slice = bytes.subarray(offset, offset + len);
+        offset += len;
+        if (len > 0 && len <= 4096) {
+          const decoded = new TextDecoder('utf-8', {fatal: false}).decode(slice);
+          if (decoded && (decoded[0] === '{' || decoded[0] === '[')) {
+            if (parseJsonText(decoded, stat)) updated = true;
+            continue;
+          }
+          if (len <= 200 && /^[\x20-\x7e\u00a0-\uffff]+$/.test(decoded)) {
+            strings.push(decoded.trim());
+          }
+          if (depth < 4 && len >= 2 && parseProtobufPayload(slice, stat, depth + 1)) {
+            updated = true;
+          }
+        }
+      } else {
+        return false;
+      }
+    }
+    if (strings.length > 0 && ints.length > 0) {
+      scanDomParticipants();
+      const matchedId = strings.find((s) =>
+        domNames.has(s) || participants.has(s) || /^(?:spaces\/[^/\s]+\/)?devices\/[^/\s]+$/.test(s));
+      if (matchedId) {
+        const candidateName = domNames.get(matchedId) ??
+          strings.find((s) => s !== matchedId && s.length >= 2 && s.length <= 120) ?? null;
+        if (ingestParticipantRecord({
+          participant_id: matchedId,
+          participant_name: candidateName,
+          audio_csis: ints,
+        })) updated = true;
+      }
+    }
+    return updated;
+  }
+
+  async function decompressPayload(bytes: Uint8Array, format: 'gzip' | 'deflate'): Promise<Uint8Array | null> {
+    if (typeof DecompressionStream !== 'function') return null;
+    try {
+      const ds = new DecompressionStream(format);
+      const writer = ds.writable.getWriter();
+      void writer.write(new Uint8Array(bytes)).catch(() => {});
+      void writer.close().catch(() => {});
+      const reader = ds.readable.getReader();
+      const chunks: Uint8Array[] = [];
+      let total = 0;
+      while (total <= 65536) {
+        const {done, value} = await reader.read();
+        if (done || !value) break;
+        chunks.push(value);
+        total += value.byteLength;
+      }
+      if (!total || total > 65536) return null;
+      const out = new Uint8Array(total);
+      let pos = 0;
+      for (const c of chunks) { out.set(c, pos); pos += c.byteLength; }
+      return out;
+    } catch { return null; }
+  }
+
+  function processPayloadBytes(bytes: Uint8Array, stat: ReturnType<typeof getChannelStat>) {
+    if (bytes.byteLength > 65536) return;
+    const text = new TextDecoder().decode(bytes);
+    if (parseJsonText(text, stat)) {
+      void inspectReceivers();
+      return;
+    }
+    if (parseProtobufPayload(bytes, stat, 0)) {
+      void inspectReceivers();
+    }
+  }
+
+  function onDataMessage(input: unknown) {
+    let raw = input;
+    let label = 'default';
+    let readyState = 'open';
+    if (input && typeof input === 'object' && !(input instanceof ArrayBuffer) &&
+        !ArrayBuffer.isView(input) && '__wortlautChannel' in (input as Record<string, unknown>)) {
+      const env = input as {__wortlautChannel: string; readyState?: string; data: unknown};
+      label = env.__wortlautChannel || 'default';
+      readyState = env.readyState || 'open';
+      raw = env.data;
+    }
+    const stat = getChannelStat(label, readyState);
+    if (typeof raw === 'string') {
+      if (stat) {
+        stat.text_frames++;
+        if (stat.wire_formats.size < 16) stat.wire_formats.add('utf8');
+      }
+      if (parseJsonText(raw, stat)) void inspectReceivers();
+      return;
+    }
+    let bytes: Uint8Array | null = null;
+    if (raw instanceof ArrayBuffer) {
+      if (stat) stat.binary_frames++;
+      if (raw.byteLength <= 65536) bytes = new Uint8Array(raw);
+    } else if (ArrayBuffer.isView(raw)) {
+      if (stat) stat.binary_frames++;
+      if (raw.byteLength <= 65536) bytes = new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength);
+    }
+    if (!bytes || !bytes.byteLength) return;
+    if (bytes.byteLength >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b) {
+      if (stat && stat.wire_formats.size < 16) stat.wire_formats.add('gzip');
+      void decompressPayload(bytes, 'gzip').then((out) => { if (out) processPayloadBytes(out, stat); });
+      return;
+    }
+    if (bytes.byteLength >= 2 && bytes[0] === 0x78 &&
+        (bytes[1] === 0x01 || bytes[1] === 0x5e || bytes[1] === 0x9c || bytes[1] === 0xda)) {
+      if (stat && stat.wire_formats.size < 16) stat.wire_formats.add('zlib');
+      void decompressPayload(bytes, 'deflate').then((out) => { if (out) processPayloadBytes(out, stat); });
+      return;
+    }
+    processPayloadBytes(bytes, stat);
   }
   const observations = new Map<RTCRtpReceiver, EncodedObservation>();
   let observer: Worker | undefined;
@@ -398,6 +777,7 @@ function install(config: MeetCaptureConfig) {
       if (state.reason) return;
       while (inspectAgain && !stopping) {
         inspectAgain = false;
+        scanDomParticipants();
         const live = new Set<RTCRtpReceiver>();
         for (const pc of connections) {
           if (pc.connectionState === 'closed') { connections.delete(pc); continue; }
@@ -467,6 +847,8 @@ function install(config: MeetCaptureConfig) {
       .finally(() => { inspecting = undefined; }));
   }
 
+  for (const sdp of window.wortlautMeetReceivers.remoteDescriptions?.splice(0) ?? []) onRemoteDescription(sdp);
+  window.wortlautMeetReceivers.onRemoteDescription = onRemoteDescription;
   for (const queued of window.wortlautMeetReceivers.dataMessages?.splice(0) ?? []) onDataMessage(queued);
   window.wortlautMeetReceivers.onDataMessage = onDataMessage;
   const interval = setInterval(() => { void inspectReceivers(); }, 500);
@@ -477,6 +859,7 @@ function install(config: MeetCaptureConfig) {
     return {provider_source_id: id, source_kind: match.source_kind,
       capture_path: 'rtc_receiver',
       track_id: receiver.track.id, csi: match.csi, signaled_participant_id: match.signaled_participant_id,
+      ...(match.participant_name ? {participant_name: match.participant_name} : {}),
       source_state: receiver.track.readyState,
       encoded_transform: observations.get(receiver)?.evidence,
       ssrc: receiver.getSynchronizationSources().slice(0, 64).map(source),
@@ -484,6 +867,7 @@ function install(config: MeetCaptureConfig) {
   };
   window.wortlautMeet = {
     inspect: () => {
+      scanDomParticipants();
       for (const dc of window.wortlautMeetReceivers.dataChannels ?? []) {
         getChannelStat(dc.label || 'default', dc.readyState || 'open');
       }
@@ -494,6 +878,7 @@ function install(config: MeetCaptureConfig) {
         truncated: totalParticipants > 256,
         sources: [...participants.values()].slice(0, 256).map((p) => ({
           participant_id: p.participant_id,
+          ...(p.participant_name ? {participant_name: p.participant_name} : {}),
           audio_csis: [...p.audio_csis].slice(0, 64),
           share_audio_csis: [...p.share_audio_csis].slice(0, 64),
         })),
@@ -505,7 +890,17 @@ function install(config: MeetCaptureConfig) {
         binary_frames: s.binary_frames,
         json_frames: s.json_frames,
         json_keys: [...s.json_keys].slice(0, 32),
+        wire_formats: [...s.wire_formats].slice(0, 16),
+        protobuf_fields: [...s.protobuf_fields].slice(0, 32),
       }));
+      state.sdp = {
+        descriptions: sdpStats.descriptions,
+        audio_sections: sdpStats.audio_sections,
+        video_sections: sdpStats.video_sections,
+        ssrc_count: sdpStats.ssrcs.size,
+        cname_count: sdpStats.cnames.size,
+        msid_count: sdpStats.msids.size,
+      };
       return {...state, audio_clock: capture.inspectClock()};
     },
     stop: () => stopping ??= (async () => {
@@ -516,6 +911,7 @@ function install(config: MeetCaptureConfig) {
       await bridge;
       window.wortlautMeetReceivers.observe = undefined;
       window.wortlautMeetReceivers.onDataMessage = undefined;
+      window.wortlautMeetReceivers.onRemoteDescription = undefined;
       for (const [receiver, entry] of observations) {
         if (entry.transform && receiver.transform === entry.transform) {
           receiver.transform = null;

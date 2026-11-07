@@ -577,16 +577,31 @@ try {
       await producer.resume();
       Object.assign(window, {
         sendTeamsRoster() {
+          const domTile = document.createElement('div');
+          domTile.setAttribute('data-participant-id', 'alice-session');
+          const nameSpan = document.createElement('span');
+          nameSpan.setAttribute('data-tid', 'roster-person-name');
+          nameSpan.textContent = 'Alice Example';
+          domTile.appendChild(nameSpan);
+          document.body.appendChild(domTile);
           const trackId = receiver.getReceivers()[0]?.track?.id;
           const ssrc = receiver.getReceivers()[0]?.getSynchronizationSources()?.[0]?.source ?? 1001;
           roster.send(JSON.stringify({
             participants: [{
               participant_id: 'alice-session',
-              participant_name: 'Alice Example',
               audio_csis: [ssrc],
               track_id: trackId,
             }],
           }));
+          // Also send a binary Protobuf frame (field 1 string 'alice-session', field 2 fixed32 ssrc)
+          const idBytes = new TextEncoder().encode('alice-session');
+          const pb = new Uint8Array(2 + idBytes.length + 5);
+          pb[0] = (1 << 3) | 2;
+          pb[1] = idBytes.length;
+          pb.set(idBytes, 2);
+          pb[2 + idBytes.length] = (2 << 3) | 5;
+          new DataView(pb.buffer).setUint32(3 + idBytes.length, ssrc, true);
+          roster.send(pb.buffer);
         },
         async finishTeamsProducer() {
           roster.close(); oscillator.stop(); sender.close(); receiver.close(); await producer.close();
@@ -611,8 +626,14 @@ try {
     assert.equal(state.participant_sources.available, true);
     assert.equal(state.participant_sources.total, 1);
     assert.equal(state.participant_sources.sources[0]?.participant_id, 'alice-session');
+    assert.equal(state.participant_sources.sources[0]?.participant_name, 'Alice Example');
     assert.equal((state.receiver_sources[0] as any)?.signaled_participant_id, 'alice-session');
+    assert.equal((state.receiver_sources[0] as any)?.participant_name, 'Alice Example');
+    assert.ok(state.sdp.descriptions >= 1);
     assert.ok(state.data_channels.some((dc) => dc.label === 'roster' && dc.json_frames >= 1 &&
+      dc.binary_frames >= 1 &&
+      dc.wire_formats.includes('json') && dc.wire_formats.includes('protobuf') &&
+      dc.protobuf_fields.includes('1:2') && dc.protobuf_fields.includes('2:5') &&
       dc.json_keys.includes('participants') && dc.json_keys.includes('participant_id')));
     await teams.stop('normal');
     assert.equal((await teams.inspect()).drained, true);

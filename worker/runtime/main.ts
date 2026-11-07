@@ -111,9 +111,11 @@ async function run(api: string, credential: string) {
       const state = meet ? await meet.inspect() : await page.evaluate(() => (window as any).wortlaut.inspectReceivers());
       diagnostics = {capability: state.capability, streams: state.streams,
         configured_speaker_slots: state.configured_speaker_slots, configured_share_slots: state.configured_share_slots,
-        audio_samples: state.audio_samples, receiver_sources: state.receiver_sources,
+        audio_samples: state.audio_samples, active_audio_samples: state.active_audio_samples ?? 0,
+        receiver_sources: state.receiver_sources,
         participant_sources: state.participant_sources,
         data_channels: state.data_channels ?? [],
+        sdp: state.sdp ?? {descriptions: 0, audio_sections: 0, video_sections: 0, ssrc_count: 0, cname_count: 0, msid_count: 0},
         audio_clock: state.audio_clock,
         drained: state.stopped ? state.drained : null};
       if (state.stopped || state.participation === 'ended') {
@@ -200,9 +202,11 @@ async function run(api: string, credential: string) {
       const state = meet ? await meet.inspect() : await page.evaluate(() => (window as any).wortlaut.state);
       diagnostics = {capability: state.capability, streams: state.streams,
         configured_speaker_slots: state.configured_speaker_slots, configured_share_slots: state.configured_share_slots,
-        audio_samples: state.audio_samples, receiver_sources: state.receiver_sources,
+        audio_samples: state.audio_samples, active_audio_samples: state.active_audio_samples ?? 0,
+        receiver_sources: state.receiver_sources,
         participant_sources: state.participant_sources,
         data_channels: state.data_channels ?? [],
+        sdp: state.sdp ?? {descriptions: 0, audio_sections: 0, video_sections: 0, ssrc_count: 0, cname_count: 0, msid_count: 0},
         audio_clock: state.audio_clock, drained: state.drained};
     } catch { /* preserve last known diagnostics */ }
     // An SDK event alone is not proof of process termination. Report ended only

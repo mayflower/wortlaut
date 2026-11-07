@@ -104,12 +104,22 @@ export async function installMeetCapture(page: Page, bootstrap: Pick<MeetBootstr
     const receiverStreams = new WeakMap<RTCRtpReceiver, string[]>();
     const dataChannels = new Set<RTCDataChannel>();
     const dataMessages: unknown[] = [];
-    window.wortlautMeetReceivers = {connections, received, encodedReserved, receiverStreams, dataChannels, dataMessages};
+    const remoteDescriptions: string[] = [];
+    window.wortlautMeetReceivers = {connections, received, encodedReserved, receiverStreams,
+      dataChannels, dataMessages, remoteDescriptions};
     const Native = window.RTCPeerConnection;
     window.RTCPeerConnection = new Proxy(Native, {construct(target, args, newTarget) {
       const pc = Reflect.construct(target, args, newTarget) as RTCPeerConnection;
       connections.add(pc);
       if (args[0]?.encodedInsertableStreams === true) encodedReserved.add(pc);
+      pc.setRemoteDescription = new Proxy(pc.setRemoteDescription, {apply(fn, thisArg, sdpArgs) {
+        const sdp = sdpArgs[0]?.sdp;
+        if (typeof sdp === 'string' && sdp.length <= 524288) {
+          if (remoteDescriptions.length < 64) remoteDescriptions.push(sdp);
+          window.wortlautMeetReceivers.onRemoteDescription?.(sdp);
+        }
+        return Reflect.apply(fn, thisArg, sdpArgs);
+      }});
       pc.createDataChannel = new Proxy(pc.createDataChannel, {apply(fn, thisArg, channelArgs) {
         const channel = Reflect.apply(fn, thisArg, channelArgs) as RTCDataChannel;
         dataChannels.add(channel);
@@ -322,7 +332,8 @@ export class MeetBrowser {
       receiver_sources: state?.receiver_sources ?? [],
       audio_clock: state?.audio_clock,
       participant_sources: state?.participant_sources ?? {available: false, total: 0, truncated: false, sources: []},
-      data_channels: state?.data_channels ?? []};
+      data_channels: state?.data_channels ?? [],
+      sdp: state?.sdp ?? {descriptions: 0, audio_sections: 0, video_sections: 0, ssrc_count: 0, cname_count: 0, msid_count: 0}};
   }
 
   stop(reason: string) {

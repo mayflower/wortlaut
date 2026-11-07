@@ -100,7 +100,8 @@ export class WebexBrowser {
       receiver_sources: state?.receiver_sources ?? [], configured_speaker_slots: null,
       configured_share_slots: null,
       participant_sources: state?.participant_sources ?? {available: false, total: 0, truncated: false, sources: []},
-      data_channels: state?.data_channels ?? []};
+      data_channels: state?.data_channels ?? [],
+      sdp: state?.sdp ?? {descriptions: 0, audio_sections: 0, video_sections: 0, ssrc_count: 0, cname_count: 0, msid_count: 0}};
   }
 
   stop(reason: string) {
