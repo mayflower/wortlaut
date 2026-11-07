@@ -614,7 +614,6 @@ try {
               track_id: trackId,
             }],
           }));
-          // Also send a binary Protobuf frame (field 1 string 'alice-session', field 2 fixed32 ssrc)
           const idBytes = new TextEncoder().encode('alice-session');
           const pb = new Uint8Array(2 + idBytes.length + 5);
           pb[0] = (1 << 3) | 2;

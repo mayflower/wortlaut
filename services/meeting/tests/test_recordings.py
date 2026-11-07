@@ -492,7 +492,6 @@ def test_web_ui_live_status_and_browser_participant_names_in_exports(
             },
         )
 
-    # Worker reports browser-resolved visual DOM participant_name during capturing.
     client.post(
         f"/v1/attempts/{attempt}/status",
         headers={"Authorization": "Bearer " + credential, "X-Worker-ID": "fixture-worker"},
@@ -546,7 +545,6 @@ def test_web_ui_live_status_and_browser_participant_names_in_exports(
     assert rec_detail["live_status"]["active_audio_seconds"] == 1.0
     assert rec_detail["live_status"]["sdp_descriptions"] == 2
 
-    # Live transcript endpoint works before recording ends and uses browser participant_name.
     live_transcript = client.get(f"/v1/recordings/{recording}/transcript", headers=API)
     assert live_transcript.status_code == 200
     assert live_transcript.json()["segments"][0]["speaker_label"] == "Alice Example"
