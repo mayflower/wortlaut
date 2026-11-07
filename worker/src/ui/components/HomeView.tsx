@@ -3,14 +3,17 @@ import {
   AlertTriangle,
   ArrowRight,
   Calendar,
+  Check,
   ChevronDown,
   ChevronUp,
   Clock,
+  Copy,
   FileText,
+  Mail,
   Mic,
   Play,
-  Radio,
-  Sparkles,
+  ShieldCheck,
+  Tag,
   Video,
 } from 'lucide-react';
 import {
@@ -19,6 +22,7 @@ import {
   formatDurationHuman,
   formatRecordingTitle,
   getFailureReasons,
+  getInstanceInfo,
 } from '../api';
 import type { CalendarEvent, RecordingSummary } from '../types';
 import { Button, ProviderBadge, StatusBadge } from './ui/primitives';
@@ -44,9 +48,10 @@ export function HomeView({
   onOpenIcsImport,
   onCreatedRecording,
 }: HomeViewProps) {
+  const instance = getInstanceInfo();
   const [meetingUrl, setMeetingUrl] = useState('');
-  const [showAdvanced, setShowAdvanced] = useState(false);
   const [title, setTitle] = useState('');
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [guestName, setGuestName] = useState('');
   const [joinMode, setJoinMode] = useState<'live' | 'scheduled'>('live');
   const [durationMin, setDurationMin] = useState('60');
@@ -54,6 +59,7 @@ export function HomeView({
   const [endsAt, setEndsAt] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [copiedMail, setCopiedMail] = useState(false);
 
   const detectedProvider = detectProviderFromUrl(meetingUrl);
   const failureReasons = getFailureReasons();
@@ -75,6 +81,13 @@ export function HomeView({
   const recentCompleted = recordings
     .filter((r) => r.participation === 'ended')
     .slice(0, 8);
+
+  const handleCopyBotMail = async () => {
+    if (!instance.botEmail || !navigator.clipboard) return;
+    await navigator.clipboard.writeText(instance.botEmail).catch(() => {});
+    setCopiedMail(true);
+    setTimeout(() => setCopiedMail(false), 1800);
+  };
 
   const handleQuickStart = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -114,25 +127,33 @@ export function HomeView({
   };
 
   return (
-    <div className="mx-auto max-w-5xl space-y-8 p-6 lg:p-8">
-      {/* Hero Quick-Join Card (like Otter / Fireflies top bar) */}
-      <section className="rounded-2xl border border-slate-800 bg-gradient-to-b from-slate-900 to-slate-900/70 p-6 shadow-xl">
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+    <div className="mx-auto max-w-5xl space-y-7">
+      {/* Hero Quick-Join Card (Otter / Fireflies style) */}
+      <section className="rounded-2xl border border-slate-800 bg-gradient-to-b from-slate-900 to-slate-900/75 p-6 shadow-xl">
+        <div className="mb-4 flex flex-wrap items-start justify-between gap-2">
           <div>
             <h1 className="text-lg font-bold text-white">
-              Bot in ein Meeting schicken
+              Meeting jetzt aufzeichnen oder einplanen
             </h1>
             <p className="text-xs text-slate-400">
-              Meeting-Link einfügen, um sofort live mitzuschreiben oder einen
-              Termin vorab einzuplanen.
+              Fügen Sie einen Google Meet-, Microsoft Teams- oder Webex-Link
+              ein. Der Assistent tritt stummgeschaltet als{' '}
+              <strong className="text-slate-200">
+                „{guestName.trim() || instance.assistantName}“
+              </strong>{' '}
+              bei und erfasst Sprecher getrennt.
             </p>
           </div>
           {detectedProvider && <ProviderBadge provider={detectedProvider} />}
         </div>
 
-        <form id="dispatch-form" onSubmit={handleQuickStart} className="space-y-3">
-          <div className="flex flex-col gap-2.5 sm:flex-row">
-            <div className="relative flex-1">
+        <form
+          id="dispatch-form"
+          onSubmit={handleQuickStart}
+          className="space-y-3"
+        >
+          <div className="grid grid-cols-1 gap-2.5 lg:grid-cols-[1fr_240px_auto]">
+            <div className="relative">
               <Video className="pointer-events-none absolute left-3.5 top-3 h-4 w-4 text-slate-400" />
               <input
                 id="meeting-url"
@@ -140,16 +161,30 @@ export function HomeView({
                 required
                 value={meetingUrl}
                 onChange={(e) => setMeetingUrl(e.target.value)}
-                placeholder="Meeting-Link einfügen (Google Meet, Microsoft Teams oder Webex)…"
+                placeholder="Meeting-Link einfügen (https://meet.google.com/… oder Teams / Webex)…"
                 className="w-full rounded-xl border border-slate-700 bg-slate-950 pl-10 pr-4 py-2.5 text-sm text-white placeholder-slate-500 focus:border-sky-500 focus:outline-none"
               />
             </div>
+
+            <div className="relative">
+              <Tag className="pointer-events-none absolute left-3.5 top-3 h-4 w-4 text-slate-500" />
+              <input
+                id="meeting-title"
+                type="text"
+                maxLength={200}
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                placeholder="Titel (optional, z. B. Weekly)"
+                className="w-full rounded-xl border border-slate-700 bg-slate-950 pl-10 pr-3 py-2.5 text-sm text-white placeholder-slate-500 focus:border-sky-500 focus:outline-none"
+              />
+            </div>
+
             <Button
               type="submit"
               variant="primary"
               size="lg"
               disabled={submitting}
-              className="rounded-xl px-6 py-2.5 font-semibold shrink-0"
+              className="rounded-xl px-6 py-2.5 font-semibold shrink-0 justify-center"
             >
               <Play className="h-4 w-4 fill-current" />
               <span>
@@ -174,7 +209,8 @@ export function HomeView({
                 <ChevronDown className="h-3.5 w-3.5" />
               )}
               <span>
-                Optionen: Meeting-Titel, Bot-Name oder späteren Zeitpunkt planen
+                Erweitert: Bot-Anzeigename, Aufnahmedauer oder späteren Termin
+                planen
               </span>
             </button>
 
@@ -184,36 +220,18 @@ export function HomeView({
               className="inline-flex items-center gap-1.5 text-xs font-medium text-sky-400 hover:text-sky-300 cursor-pointer"
             >
               <Calendar className="h-3.5 w-3.5" />
-              <span>Oder .ics-Kalendereinladung hochladen →</span>
+              <span>Kalendereinladung (.ics / .eml) hochladen →</span>
             </button>
           </div>
 
           {showAdvanced && (
-            <div className="mt-3 grid grid-cols-1 gap-3 rounded-xl border border-slate-800/90 bg-slate-950/60 p-4 sm:grid-cols-2 lg:grid-cols-4">
-              <div className="space-y-1">
-                <label
-                  htmlFor="meeting-title"
-                  className="block text-[11px] font-semibold uppercase tracking-wider text-slate-400"
-                >
-                  Titel (optional)
-                </label>
-                <input
-                  id="meeting-title"
-                  type="text"
-                  maxLength={200}
-                  value={title}
-                  onChange={(e) => setTitle(e.target.value)}
-                  placeholder="z. B. Kunden-Workshop"
-                  className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:border-sky-500 focus:outline-none"
-                />
-              </div>
-
+            <div className="mt-2 grid grid-cols-1 gap-3 rounded-xl border border-slate-800/90 bg-slate-950/60 p-4 sm:grid-cols-3">
               <div className="space-y-1">
                 <label
                   htmlFor="guest-name"
                   className="block text-[11px] font-semibold uppercase tracking-wider text-slate-400"
                 >
-                  Bot-Name (optional)
+                  Bot-Name im Meeting
                 </label>
                 <input
                   id="guest-name"
@@ -221,7 +239,7 @@ export function HomeView({
                   maxLength={120}
                   value={guestName}
                   onChange={(e) => setGuestName(e.target.value)}
-                  placeholder="wortlaut"
+                  placeholder={instance.assistantName}
                   className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:border-sky-500 focus:outline-none"
                 />
               </div>
@@ -231,7 +249,7 @@ export function HomeView({
                   htmlFor="join-mode"
                   className="block text-[11px] font-semibold uppercase tracking-wider text-slate-400"
                 >
-                  Zeitpunkt
+                  Start-Modus
                 </label>
                 <select
                   id="join-mode"
@@ -252,7 +270,7 @@ export function HomeView({
                     htmlFor="duration-min"
                     className="block text-[11px] font-semibold uppercase tracking-wider text-slate-400"
                   >
-                    Max. Dauer
+                    Maximale Aufnahmedauer
                   </label>
                   <select
                     id="duration-min"
@@ -309,6 +327,55 @@ export function HomeView({
             </div>
           )}
         </form>
+
+        {/* Subtle First-Time Guidance Strip: Calendar Invite & Privacy */}
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-800/80 pt-3.5 text-xs text-slate-400">
+          {instance.botEmail ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <Mail className="h-3.5 w-3.5 text-sky-400" />
+              <span>
+                Tipp für Serientermine: Laden Sie einfach{' '}
+                <code className="rounded bg-slate-950 px-1.5 py-0.5 font-mono text-slate-200">
+                  {instance.botEmail}
+                </code>{' '}
+                direkt in Ihrem Kalender ein.
+              </span>
+              <button
+                type="button"
+                onClick={handleCopyBotMail}
+                className="inline-flex items-center gap-1 rounded border border-slate-700 bg-slate-950 px-2 py-0.5 text-[11px] font-medium text-sky-300 hover:border-sky-500 cursor-pointer"
+              >
+                {copiedMail ? (
+                  <>
+                    <Check className="h-3 w-3 text-emerald-400" />
+                    <span>Kopiert</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="h-3 w-3" />
+                    <span>Adresse kopieren</span>
+                  </>
+                )}
+              </button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2">
+              <Calendar className="h-3.5 w-3.5 text-sky-400" />
+              <span>
+                Termine vorab planen? Laden Sie eine <code>.ics</code>-Datei
+                hoch oder nutzen Sie den Modus „Für später planen“.
+              </span>
+            </div>
+          )}
+
+          <div className="flex items-center gap-1.5 text-[11px] text-slate-500">
+            <ShieldCheck className="h-3.5 w-3.5 text-emerald-400" />
+            <span>
+              100 % lokal (Parakeet-GPU) · Roh-Audio wird nach{' '}
+              {instance.retention.audioHours}h gelöscht
+            </span>
+          </div>
+        </div>
       </section>
 
       {/* Active / Live Meetings Section */}
@@ -327,6 +394,7 @@ export function HomeView({
               const audioSec = Math.round(
                 (rec.quality?.durable_sample_count || 0) / 16000
               );
+              const botDisplay = rec.guest_name || instance.assistantName;
               return (
                 <div
                   key={rec.id}
@@ -348,14 +416,15 @@ export function HomeView({
                       <div className="flex items-center gap-1.5 text-xs font-medium text-amber-300">
                         <AlertTriangle className="h-3.5 w-3.5" />
                         <span>
-                          Bot wartet im Warteraum – bitte jetzt im Meeting
-                          zulassen!
+                          Bot „{botDisplay}“ wartet im Warteraum – bitte jetzt
+                          im Meeting zulassen!
                         </span>
                       </div>
                     ) : (
                       <div className="text-xs text-slate-400">
-                        Erfasstes Audio: {formatDurationHuman(audioSec)} ·
-                        Klicken für Live-Transkript
+                        Bot „{botDisplay}“ im Raum · Erfasstes Audio:{' '}
+                        {formatDurationHuman(audioSec)} · Klicken für
+                        Live-Transkript
                       </div>
                     )}
                   </div>
@@ -377,7 +446,9 @@ export function HomeView({
           <div className="flex items-center justify-between">
             <h2 className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-slate-400">
               <Clock className="h-3.5 w-3.5 text-sky-400" />
-              <span>Anstehende geplante Termine ({scheduledRecordings.length})</span>
+              <span>
+                Anstehende geplante Termine ({scheduledRecordings.length})
+              </span>
             </h2>
             {calendarEvents.length > 0 && (
               <button
@@ -415,7 +486,7 @@ export function HomeView({
         </section>
       )}
 
-      {/* Recent Recordings List (like Otter / Fireflies Recent Conversations) */}
+      {/* Recent Recordings List */}
       <section className="space-y-3">
         <div className="flex items-center justify-between">
           <h2 className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-slate-400">
@@ -449,8 +520,7 @@ export function HomeView({
               const reason = rec.participation_reason;
               const isNormalEnd =
                 !reason || reason === 'normal' || reason === 'room_empty';
-              const hasError =
-                rec.processing === 'failed' || !isNormalEnd;
+              const hasError = rec.processing === 'failed' || !isNormalEnd;
               const reasonHint =
                 reason && failureReasons[reason]
                   ? failureReasons[reason]

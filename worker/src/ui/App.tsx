@@ -210,6 +210,20 @@ export function App() {
     setActionError(null);
   };
 
+  const handleTriggerNewRecording = () => {
+    if (activeNav === 'home' && !selectedId) {
+      const urlInput = document.getElementById(
+        'meeting-url'
+      ) as HTMLInputElement | null;
+      if (urlInput) {
+        urlInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        urlInput.focus();
+        return;
+      }
+    }
+    setNewRecordingOpen(true);
+  };
+
   const rec = detailQuery.data;
   const trans = transcriptQuery.data;
 
@@ -278,7 +292,7 @@ export function App() {
         livePoll={livePoll}
         onToggleLivePoll={setLivePoll}
         onManualRefresh={handleManualRefresh}
-        onOpenNewRecording={() => setNewRecordingOpen(true)}
+        onOpenNewRecording={handleTriggerNewRecording}
         onOpenAuthDialog={() => setAuthDialogOpen(true)}
       />
 
@@ -310,8 +324,8 @@ export function App() {
         />
       )}
 
-      {/* Main Content Area (offset by 240px left sidebar on desktop) */}
-      <div className="lg:pl-60">
+      {/* Main Content Area (offset by 240px left sidebar on desktop for operators) */}
+      <div className={authMode.kind === 'reader' ? '' : 'lg:pl-60'}>
         <main className="mx-auto max-w-6xl p-4 sm:p-6 lg:p-8">
           {authMode.kind === 'unauthenticated' ? (
             <div className="mx-auto max-w-xl py-20 text-center space-y-4">

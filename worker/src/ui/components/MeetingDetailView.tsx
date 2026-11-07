@@ -10,6 +10,7 @@ import {
   FileText,
   RotateCcw,
   Settings2,
+  ShieldCheck,
   Square,
   Subtitles,
   Users,
@@ -17,6 +18,7 @@ import {
 import {
   formatDurationHuman,
   formatRecordingTitle,
+  getInstanceInfo,
 } from '../api';
 import type { RecordingDetail, TranscriptExport } from '../types';
 import { DiagnosticsTab } from './DiagnosticsTab';
@@ -62,6 +64,7 @@ export function MeetingDetailView({
   const [selectedSourceFilter, setSelectedSourceFilter] = useState<string>('');
   const [showTechDetails, setShowTechDetails] = useState<boolean>(false);
   const [copiedId, setCopiedId] = useState<boolean>(false);
+  const instance = getInstanceInfo();
 
   const canCancel =
     isOperator &&
@@ -161,15 +164,20 @@ export function MeetingDetailView({
           <button
             type="button"
             onClick={handleCopyId}
-            title={`Aufnahme-ID kopieren: ${recording.id}`}
-            className="inline-flex items-center gap-1 rounded border border-slate-800 bg-slate-900 px-2 py-0.5 font-mono text-[11px] text-slate-400 hover:text-slate-200 cursor-pointer"
+            title={`Vollständige Aufnahme-ID für API kopieren: ${recording.id}`}
+            className="inline-flex items-center gap-1.5 rounded border border-slate-800 bg-slate-900 px-2.5 py-0.5 font-mono text-[11px] text-slate-400 hover:border-slate-700 hover:text-slate-200 cursor-pointer"
           >
             {copiedId ? (
-              <Check className="h-3 w-3 text-emerald-400" />
+              <>
+                <Check className="h-3 w-3 text-emerald-400" />
+                <span className="font-sans text-emerald-300">ID kopiert</span>
+              </>
             ) : (
-              <Copy className="h-3 w-3" />
+              <>
+                <Copy className="h-3 w-3" />
+                <span>Aufnahme-ID: {recording.id.slice(0, 8)}…</span>
+              </>
             )}
-            <span>ID: {recording.id.slice(0, 8)}</span>
           </button>
         </div>
 
@@ -361,22 +369,49 @@ export function MeetingDetailView({
             </div>
           </div>
 
+          {/* Privacy & Retention Card (for Dr. Thomas & Compliance) */}
+          <div className="rounded-2xl border border-slate-800/80 bg-slate-900/60 p-4 space-y-2 text-xs">
+            <div className="flex items-center gap-1.5 font-bold uppercase tracking-wider text-emerald-400">
+              <ShieldCheck className="h-3.5 w-3.5" />
+              <span>Datenschutz &amp; Aufbewahrung</span>
+            </div>
+            <ul className="space-y-1 text-[11px] text-slate-400">
+              <li>
+                • <strong className="text-slate-300">Sprecherbindung:</strong>{' '}
+                Nachgewiesene Provider-Sitzung (keine Stimmprofile/Voiceprints)
+              </li>
+              <li>
+                • <strong className="text-slate-300">Roh-Audio:</strong>{' '}
+                {recording.audio_deleted_at
+                  ? `Gelöscht am ${new Date(recording.audio_deleted_at).toLocaleString('de-DE')}`
+                  : `Automatische Löschung nach ${instance.retention.audioHours} Std.`}
+              </li>
+              <li>
+                • <strong className="text-slate-300">Transkript:</strong>{' '}
+                Automatische Löschung nach {instance.retention.transcriptDays}{' '}
+                Tagen
+              </li>
+            </ul>
+          </div>
+
           {/* Subtle Operator Technical Disclosure Toggle */}
-          <button
-            type="button"
-            onClick={() => setShowTechDetails((v) => !v)}
-            className="flex w-full items-center justify-between rounded-xl border border-slate-800/70 bg-slate-950/40 px-4 py-2.5 text-xs text-slate-400 hover:text-slate-200 cursor-pointer"
-          >
-            <span className="inline-flex items-center gap-2">
-              <Settings2 className="h-3.5 w-3.5 text-slate-500" />
-              <span>Technische Diagnose &amp; WebRTC-Quellen</span>
-            </span>
-            {showTechDetails ? (
-              <ChevronUp className="h-3.5 w-3.5" />
-            ) : (
-              <ChevronDown className="h-3.5 w-3.5" />
-            )}
-          </button>
+          {isOperator && (
+            <button
+              type="button"
+              onClick={() => setShowTechDetails((v) => !v)}
+              className="flex w-full items-center justify-between rounded-xl border border-slate-800/70 bg-slate-950/40 px-4 py-2.5 text-xs text-slate-400 hover:text-slate-200 cursor-pointer"
+            >
+              <span className="inline-flex items-center gap-2">
+                <Settings2 className="h-3.5 w-3.5 text-slate-500" />
+                <span>Technische Diagnose &amp; WebRTC-Quellen</span>
+              </span>
+              {showTechDetails ? (
+                <ChevronUp className="h-3.5 w-3.5" />
+              ) : (
+                <ChevronDown className="h-3.5 w-3.5" />
+              )}
+            </button>
+          )}
         </aside>
       </div>
 

@@ -1,6 +1,7 @@
 import type {
   AuthMode,
   CalendarEvent,
+  InstanceInfo,
   Provider,
   RecordingDetail,
   RecordingSummary,
@@ -55,6 +56,36 @@ export function saveTokenToStorage(token: string): void {
 
 export function getFailureReasons(): Record<string, string> {
   return window.__WORTLAUT_BOOT__?.failureReasons || {};
+}
+
+export function getInstanceInfo(): InstanceInfo {
+  return (
+    window.__WORTLAUT_BOOT__?.instance || {
+      assistantName: 'wortlaut',
+      botEmail: null,
+      providers: {
+        google_meet: true,
+        google_meet_auth_session: false,
+        teams: true,
+        webex: false,
+      },
+      mail: {
+        imapEnabled: false,
+        smtpEnabled: false,
+        senderAuth: 'gateway',
+        allowedDomains: [],
+      },
+      limits: {
+        maxActiveMeetings: 2,
+        lobbyTimeoutSeconds: 600,
+        emptyRoomTimeoutSeconds: 300,
+      },
+      retention: {
+        audioHours: 24,
+        transcriptDays: 30,
+      },
+    }
+  );
 }
 
 export const PARTICIPATION_LABELS: Record<string, string> = {

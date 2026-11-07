@@ -6,11 +6,18 @@ import {
   CheckCircle2,
   Cpu,
   KeyRound,
+  Mail,
   RefreshCw,
   Server,
   ShieldCheck,
+  Video,
+  XCircle,
 } from 'lucide-react';
-import { formatRecordingTitle, getFailureReasons } from '../api';
+import {
+  formatRecordingTitle,
+  getFailureReasons,
+  getInstanceInfo,
+} from '../api';
 import type { AuthMode, RecordingSummary } from '../types';
 import { Button, ProviderBadge, StatusBadge, cn } from './ui/primitives';
 
@@ -36,6 +43,7 @@ export function SystemView({
   onSelectRecording,
 }: SystemViewProps) {
   const failureReasons = getFailureReasons();
+  const instance = getInstanceInfo();
 
   const activeJobs = recordings.filter(
     (r) =>
@@ -57,7 +65,9 @@ export function SystemView({
     const abnormal = Boolean(
       reason && reason !== 'normal' && reason !== 'room_empty'
     );
-    return r.processing === 'failed' || (r.participation === 'ended' && abnormal);
+    return (
+      r.processing === 'failed' || (r.participation === 'ended' && abnormal)
+    );
   });
 
   return (
@@ -68,8 +78,8 @@ export function SystemView({
             System &amp; Diagnose
           </h1>
           <p className="text-xs text-slate-400">
-            Plattformstatus, aktive Kubernetes-Worker, Parakeet-ASR-Queue und
-            Aufzeichnungen mit Handlungsbedarf.
+            Plattformstatus, konfigurierte Konferenz-Provider, Kapazitätsgrenzen
+            und Aufzeichnungen mit Handlungsbedarf.
           </p>
         </div>
 
@@ -97,7 +107,7 @@ export function SystemView({
 
           <Button variant="secondary" size="sm" onClick={onOpenAuthDialog}>
             <KeyRound className="h-3.5 w-3.5" />
-            <span>Token verwalten</span>
+            <span>Zugangsschlüssel verwalten</span>
           </Button>
         </div>
       </div>
@@ -121,7 +131,7 @@ export function SystemView({
             </span>
           </div>
           <p className="text-[11px] text-slate-500">
-            Meeting-Dienst, PostgreSQL und S3-Speicher
+            PostgreSQL, S3-Speicher &amp; Prometheus <code>/metrics</code>
           </p>
         </div>
 
@@ -131,10 +141,13 @@ export function SystemView({
             <Activity className="h-4 w-4 text-emerald-400" />
           </div>
           <div className="text-xl font-bold text-white">
-            {activeJobs.length}
+            {activeJobs.length}{' '}
+            <span className="text-sm font-normal text-slate-400">
+              / {instance.limits.maxActiveMeetings} max.
+            </span>
           </div>
           <p className="text-[11px] text-slate-500">
-            Laufende Playwright/WebRTC-Worker-Jobs
+            Kurzlebige Playwright/WebRTC-Kubernetes-Jobs
           </p>
         </div>
 
@@ -151,19 +164,137 @@ export function SystemView({
 
         <div className="rounded-xl border border-slate-800 bg-slate-900/75 p-4 space-y-1.5">
           <div className="flex items-center justify-between text-xs text-slate-400">
-            <span>Sitzungs-Authentifizierung</span>
+            <span>Aufbewahrungsfristen</span>
             <ShieldCheck className="h-4 w-4 text-sky-400" />
           </div>
           <div className="text-base font-bold text-white">
-            {authMode.kind === 'operator'
-              ? 'Operator-Vollzugriff'
-              : authMode.kind === 'reader'
-                ? 'Lese-Token'
-                : 'Nicht verbunden'}
+            {instance.retention.audioHours}h Audio ·{' '}
+            {instance.retention.transcriptDays}d Text
           </div>
           <p className="text-[11px] text-slate-500">
-            Prometheus-Metriken unter <code>/metrics</code>
+            Bot-Standardname: „{instance.assistantName}“
           </p>
+        </div>
+      </div>
+
+      {/* Configured Providers & Mail Readiness */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <div className="rounded-xl border border-slate-800 bg-slate-900/75 p-5 space-y-3">
+          <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-slate-400">
+            <Video className="h-4 w-4 text-sky-400" />
+            <span>Konfigurierte Konferenz-Provider</span>
+          </div>
+          <div className="divide-y divide-slate-800/80 rounded-lg border border-slate-800 bg-slate-950/60">
+            <div className="flex items-center justify-between px-4 py-3 text-xs">
+              <div>
+                <div className="font-semibold text-white">Google Meet</div>
+                <div className="text-[11px] text-slate-400">
+                  Playwright/Chromium WebRTC ·{' '}
+                  {instance.providers.google_meet_auth_session
+                    ? 'Gespeicherte Google-Session aktiv'
+                    : 'Gast-Modus (ohne Login-Session)'}
+                </div>
+              </div>
+              <span
+                className={cn(
+                  'inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-semibold border',
+                  instance.providers.google_meet
+                    ? 'border-emerald-800 bg-emerald-950 text-emerald-300'
+                    : 'border-slate-700 bg-slate-900 text-slate-400'
+                )}
+              >
+                {instance.providers.google_meet ? (
+                  <CheckCircle2 className="h-3 w-3" />
+                ) : (
+                  <XCircle className="h-3 w-3" />
+                )}
+                {instance.providers.google_meet ? 'Aktiviert' : 'Deaktiviert'}
+              </span>
+            </div>
+
+            <div className="flex items-center justify-between px-4 py-3 text-xs">
+              <div>
+                <div className="font-semibold text-white">Microsoft Teams</div>
+                <div className="text-[11px] text-slate-400">
+                  Playwright/Chromium Web-Client · Gast-Beitritt
+                </div>
+              </div>
+              <span
+                className={cn(
+                  'inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-semibold border',
+                  instance.providers.teams
+                    ? 'border-emerald-800 bg-emerald-950 text-emerald-300'
+                    : 'border-slate-700 bg-slate-900 text-slate-400'
+                )}
+              >
+                {instance.providers.teams ? (
+                  <CheckCircle2 className="h-3 w-3" />
+                ) : (
+                  <XCircle className="h-3 w-3" />
+                )}
+                {instance.providers.teams ? 'Aktiviert' : 'Deaktiviert'}
+              </span>
+            </div>
+
+            <div className="flex items-center justify-between px-4 py-3 text-xs">
+              <div>
+                <div className="font-semibold text-white">Cisco Webex</div>
+                <div className="text-[11px] text-slate-400">
+                  Browser-SDK / Service-Token
+                </div>
+              </div>
+              <span
+                className={cn(
+                  'inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-semibold border',
+                  instance.providers.webex
+                    ? 'border-emerald-800 bg-emerald-950 text-emerald-300'
+                    : 'border-slate-700 bg-slate-900 text-slate-400'
+                )}
+              >
+                {instance.providers.webex ? (
+                  <CheckCircle2 className="h-3 w-3" />
+                ) : (
+                  <XCircle className="h-3 w-3" />
+                )}
+                {instance.providers.webex
+                  ? 'Aktiviert'
+                  : 'Kein Zugang hinterlegt'}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-slate-800 bg-slate-900/75 p-5 space-y-3">
+          <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-slate-400">
+            <Mail className="h-4 w-4 text-emerald-400" />
+            <span>Kalender-Postfach &amp; E-Mail-Versand</span>
+          </div>
+          <div className="divide-y divide-slate-800/80 rounded-lg border border-slate-800 bg-slate-950/60 text-xs">
+            <div className="flex items-center justify-between px-4 py-3">
+              <span className="text-slate-300">Bot-Einladungsadresse</span>
+              <code className="font-mono text-slate-100">
+                {instance.botEmail || 'Nicht konfiguriert'}
+              </code>
+            </div>
+            <div className="flex items-center justify-between px-4 py-3">
+              <span className="text-slate-300">
+                IMAP-Kalenderempfang / SMTP-Ergebnisversand
+              </span>
+              <span className="font-medium text-slate-200">
+                IMAP: {instance.mail.imapEnabled ? 'Aktiv' : 'Aus'} · SMTP:{' '}
+                {instance.mail.smtpEnabled ? 'Aktiv' : 'Aus'}
+              </span>
+            </div>
+            <div className="flex items-center justify-between px-4 py-3">
+              <span className="text-slate-300">
+                Warteraum-Timeout / Leerer-Raum-Timeout
+              </span>
+              <span className="font-medium text-slate-200">
+                {Math.round(instance.limits.lobbyTimeoutSeconds / 60)} Min. /{' '}
+                {Math.round(instance.limits.emptyRoomTimeoutSeconds / 60)} Min.
+              </span>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -173,8 +304,8 @@ export function SystemView({
           <div className="flex items-center gap-2">
             <AlertTriangle className="h-4 w-4 text-amber-400" />
             <h2 className="text-sm font-bold text-white">
-              Aufzeichnungen mit Hinweis oder Abbruch ({problemRecordings.length}
-              )
+              Aufzeichnungen mit Hinweis oder Abbruch (
+              {problemRecordings.length})
             </h2>
           </div>
         </div>

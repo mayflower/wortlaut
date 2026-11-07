@@ -43,6 +43,35 @@ export function HeaderBar({
   onOpenNewRecording,
   onOpenAuthDialog,
 }: HeaderBarProps) {
+  // Clean, distraction-free top bar for single-recording Reader Links (Mara / Dr. Thomas)
+  if (authMode.kind === 'reader') {
+    return (
+      <header className="sticky top-0 z-30 flex items-center justify-between border-b border-slate-800/90 bg-slate-950/95 px-6 py-3 backdrop-blur-sm">
+        <div className="flex items-center gap-3">
+          <span
+            id="health-dot"
+            className={cn(
+              'h-2.5 w-2.5 rounded-full',
+              healthy ? 'bg-emerald-400' : 'bg-red-500'
+            )}
+          />
+          <span className="text-base font-bold tracking-tight text-white">
+            wortlaut
+          </span>
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-sky-800/70 bg-sky-950/60 px-2.5 py-0.5 text-[11px] font-medium text-sky-300">
+            <ShieldCheck className="h-3 w-3 text-sky-400" />
+            <span>Freigegebenes Transkript</span>
+          </span>
+        </div>
+
+        <Button variant="outline" size="sm" onClick={onOpenAuthDialog}>
+          <KeyRound className="h-3.5 w-3.5 text-sky-400" />
+          <span>Zugang wechseln</span>
+        </Button>
+      </header>
+    );
+  }
+
   const navItems: Array<{
     id: NavSection;
     label: string;
@@ -129,57 +158,47 @@ export function HeaderBar({
           aria-label="Hauptnavigation"
           className="flex-1 space-y-1 px-3 py-3"
         >
-          {authMode.kind === 'operator' ? (
-            navItems.map((item) => {
-              const active = activeNav === item.id;
-              return (
-                <button
-                  key={item.id}
-                  type="button"
-                  onClick={() => onChangeNav(item.id)}
-                  className={cn(
-                    'flex w-full items-center justify-between rounded-lg px-3 py-2 text-xs font-medium transition-colors cursor-pointer',
-                    active
-                      ? 'bg-sky-950/80 text-sky-300 border border-sky-800/60 font-semibold'
-                      : 'text-slate-400 hover:bg-slate-900 hover:text-slate-200 border border-transparent'
-                  )}
-                >
-                  <span className="flex items-center gap-2.5">
-                    {item.icon}
-                    <span>{item.label}</span>
-                  </span>
-
-                  {item.badge !== undefined && (
-                    <span
-                      id={
-                        item.id === 'calendar' ? 'calendar-count' : undefined
-                      }
-                      className={cn(
-                        'rounded-full px-2 py-0.5 text-[10px] font-semibold',
-                        item.badgeLive
-                          ? 'bg-emerald-950 text-emerald-300 border border-emerald-700/60'
-                          : active
-                            ? 'bg-sky-900/80 text-sky-200'
-                            : 'bg-slate-900 text-slate-400'
-                      )}
-                    >
-                      {item.badge}
+          {authMode.kind === 'operator'
+            ? navItems.map((item) => {
+                const active = activeNav === item.id;
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => onChangeNav(item.id)}
+                    className={cn(
+                      'flex w-full items-center justify-between rounded-lg px-3 py-2 text-xs font-medium transition-colors cursor-pointer',
+                      active
+                        ? 'bg-sky-950/80 text-sky-300 border border-sky-800/60 font-semibold'
+                        : 'text-slate-400 hover:bg-slate-900 hover:text-slate-200 border border-transparent'
+                    )}
+                  >
+                    <span className="flex items-center gap-2.5">
+                      {item.icon}
+                      <span>{item.label}</span>
                     </span>
-                  )}
-                </button>
-              );
-            })
-          ) : authMode.kind === 'reader' ? (
-            <div className="rounded-lg border border-sky-800/60 bg-sky-950/40 p-3 text-xs text-sky-200 space-y-1">
-              <div className="flex items-center gap-1.5 font-semibold">
-                <ShieldCheck className="h-4 w-4 text-sky-400" />
-                <span>Lese-Freigabe</span>
-              </div>
-              <p className="text-[11px] text-slate-400">
-                Aufnahme-ID: {authMode.recordingId.slice(0, 8)}…
-              </p>
-            </div>
-          ) : null}
+
+                    {item.badge !== undefined && (
+                      <span
+                        id={
+                          item.id === 'calendar' ? 'calendar-count' : undefined
+                        }
+                        className={cn(
+                          'rounded-full px-2 py-0.5 text-[10px] font-semibold',
+                          item.badgeLive
+                            ? 'bg-emerald-950 text-emerald-300 border border-emerald-700/60'
+                            : active
+                              ? 'bg-sky-900/80 text-sky-200'
+                              : 'bg-slate-900 text-slate-400'
+                        )}
+                      >
+                        {item.badge}
+                      </span>
+                    )}
+                  </button>
+                );
+              })
+            : null}
         </nav>
 
         {/* Sidebar Footer: Live Polling + Token */}
@@ -217,10 +236,8 @@ export function HeaderBar({
               <KeyRound className="h-3.5 w-3.5 shrink-0 text-sky-400" />
               <span className="truncate font-medium">
                 {authMode.kind === 'operator'
-                  ? 'Operator verbunden'
-                  : authMode.kind === 'reader'
-                    ? 'Lese-Token aktiv'
-                    : 'Token eingeben'}
+                  ? 'Team-Zugang aktiv'
+                  : 'Mit Schlüssel verbinden'}
               </span>
             </span>
             <span className="text-[10px] text-slate-500">Ändern</span>

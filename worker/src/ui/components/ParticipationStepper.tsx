@@ -9,7 +9,11 @@ import {
   Sparkles,
   Users,
 } from 'lucide-react';
-import { formatDurationHuman, getFailureReasons } from '../api';
+import {
+  formatDurationHuman,
+  getFailureReasons,
+  getInstanceInfo,
+} from '../api';
 import type { RecordingDetail } from '../types';
 import { Button, cn } from './ui/primitives';
 
@@ -35,6 +39,8 @@ export function ParticipationStepper({
   rejoining,
 }: ParticipationStepperProps) {
   const failureReasons = getFailureReasons();
+  const instance = getInstanceInfo();
+  const botName = recording.guest_name || instance.assistantName;
   const lastAttempt =
     recording.attempts && recording.attempts.length > 0
       ? recording.attempts[recording.attempts.length - 1]
@@ -119,6 +125,22 @@ export function ParticipationStepper({
         })}
       </div>
 
+      {(recording.participation === 'starting' ||
+        recording.participation === 'preparing' ||
+        recording.participation === 'joining') && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-sky-800/80 bg-sky-950/50 px-4 py-3 text-xs text-sky-100">
+          <div className="flex items-center gap-2.5">
+            <Loader2 className="h-4 w-4 shrink-0 text-sky-400 animate-spin" />
+            <div>
+              <strong>Bot tritt dem Meeting bei:</strong> Erscheint in wenigen
+              Sekunden stummgeschaltet als <strong>„{botName}“</strong> im
+              Meeting. Falls ein Warteraum aktiv ist, lassen Sie ihn dort bitte
+              als Gast zu.
+            </div>
+          </div>
+        </div>
+      )}
+
       {recording.participation === 'waiting_admission' && (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-600/80 bg-amber-950/60 px-4 py-3 text-xs text-amber-100">
           <div className="flex items-center gap-2.5">
@@ -126,8 +148,7 @@ export function ParticipationStepper({
             <div>
               <strong>Warteraum aktiv:</strong> Der Bot wartet im
               Meeting-Warteraum auf Einlass durch den Host. Bitte lassen Sie{' '}
-              <strong>{recording.guest_name || 'wortlaut'}</strong> jetzt im
-              Meeting-Fenster zu.
+              <strong>„{botName}“</strong> jetzt im Meeting-Fenster zu.
             </div>
           </div>
         </div>

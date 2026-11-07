@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { KeyRound, ShieldCheck, Terminal, Trash2 } from 'lucide-react';
+import { Eye, EyeOff, KeyRound, MailCheck, ShieldCheck, Trash2, Users } from 'lucide-react';
 import {
   Button,
   Dialog,
@@ -25,6 +25,7 @@ export function AuthGateDialog({
   onSaveToken,
 }: AuthGateDialogProps) {
   const [value, setValue] = useState(currentToken);
+  const [showPlain, setShowPlain] = useState(false);
 
   useEffect(() => {
     setValue(currentToken);
@@ -40,15 +41,16 @@ export function AuthGateDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-w-lg">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2 text-lg font-semibold text-white">
+          <DialogTitle className="flex items-center gap-2 text-lg font-bold text-white">
             <KeyRound className="h-5 w-5 text-sky-400" />
-            <span>Zugang konfigurieren</span>
+            <span>Mit wortlaut verbinden</span>
           </DialogTitle>
           <DialogDescription className="text-xs text-slate-400">
-            Geben Sie Ihren Operator-Bearer-Token oder einen aufnahmegebundenen
-            Lese-Token ein.
+            wortlaut läuft selbstgehostet in Ihrer Infrastruktur. Melden Sie
+            sich mit Ihrem Team-Zugangsschlüssel oder einem Lese-Token aus einer
+            Transkript-E-Mail an.
           </DialogDescription>
         </DialogHeader>
 
@@ -58,24 +60,29 @@ export function AuthGateDialog({
           </div>
         )}
 
-        <div className="mb-4 space-y-2.5 rounded-lg border border-slate-800 bg-slate-950/70 p-3.5 text-xs text-slate-300">
-          <div className="flex items-start gap-2.5">
-            <Terminal className="mt-0.5 h-4 w-4 shrink-0 text-sky-400" />
-            <div>
-              <strong className="text-slate-100">Operator-Token:</strong> Voller
-              Zugriff auf alle Aufnahmen, Ad-hoc-Meeting-Starts, Kalender-Importe
-              und Diagnose-Daten.
+        <div className="mb-4 grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+          <div className="rounded-xl border border-slate-800 bg-slate-950/80 p-3 text-xs space-y-1.5">
+            <div className="flex items-center gap-2 font-semibold text-sky-300">
+              <Users className="h-4 w-4 shrink-0 text-sky-400" />
+              <span>1. Team- / Operator-Schlüssel</span>
             </div>
+            <p className="text-[11px] leading-relaxed text-slate-400">
+              Für neue Meeting-Aufnahmen, Kalender-Einladungen und alle
+              Transkripte. Erhältlich bei Ihrem Plattform-Team (Kubernetes-Secret{' '}
+              <code className="text-slate-300">wortlaut-runtime</code>).
+            </p>
           </div>
-          <div className="flex items-start gap-2.5">
-            <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" />
-            <div>
-              <strong className="text-slate-100">
-                Lese-Token (<code>wortlaut-read-…</code>):
-              </strong>{' '}
-              Direkter Lese- und Export-Zugriff auf genau eine freigegebene
-              Besprechung.
+
+          <div className="rounded-xl border border-slate-800 bg-slate-950/80 p-3 text-xs space-y-1.5">
+            <div className="flex items-center gap-2 font-semibold text-emerald-300">
+              <MailCheck className="h-4 w-4 shrink-0 text-emerald-400" />
+              <span>2. Einzel-Transkript lesen</span>
             </div>
+            <p className="text-[11px] leading-relaxed text-slate-400">
+              Öffnen Sie direkt den Link aus Ihrer Ergebnis-E-Mail oder fügen
+              Sie einen Lese-Token (<code className="text-slate-300">wortlaut-read-…</code>)
+              für genau eine Besprechung ein.
+            </p>
           </div>
         </div>
 
@@ -85,17 +92,37 @@ export function AuthGateDialog({
               htmlFor="api-token"
               className="block text-xs font-semibold uppercase tracking-wider text-slate-400"
             >
-              Bearer Token
+              Zugangsschlüssel (Team-Token oder Lese-Token)
             </label>
-            <input
-              id="api-token"
-              type="password"
-              value={value}
-              onChange={(e) => setValue(e.target.value)}
-              placeholder="WORTLAUT_API_TOKEN oder wortlaut-read-..."
-              autoFocus
-              className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-sky-500 focus:outline-none"
-            />
+            <div className="relative">
+              <input
+                id="api-token"
+                type={showPlain ? 'text' : 'password'}
+                value={value}
+                onChange={(e) => setValue(e.target.value)}
+                placeholder="Schlüssel hier einfügen…"
+                autoFocus
+                className="w-full rounded-lg border border-slate-700 bg-slate-950 pl-3 pr-10 py-2.5 text-sm text-white placeholder-slate-500 focus:border-sky-500 focus:outline-none"
+              />
+              <button
+                type="button"
+                onClick={() => setShowPlain((v) => !v)}
+                title={showPlain ? 'Schlüssel verbergen' : 'Schlüssel anzeigen'}
+                className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-200 cursor-pointer"
+              >
+                {showPlain ? (
+                  <EyeOff className="h-4 w-4" />
+                ) : (
+                  <Eye className="h-4 w-4" />
+                )}
+              </button>
+            </div>
+            <p className="flex items-center gap-1.5 text-[11px] text-slate-500">
+              <ShieldCheck className="h-3.5 w-3.5 text-slate-400" />
+              <span>
+                Wird ausschließlich lokal in Ihrem Browser gespeichert.
+              </span>
+            </p>
           </div>
 
           <div className="flex items-center justify-between gap-2 pt-1">
@@ -110,7 +137,7 @@ export function AuthGateDialog({
                 }}
               >
                 <Trash2 className="h-3.5 w-3.5" />
-                <span>Token löschen</span>
+                <span>Abmelden / Löschen</span>
               </Button>
             ) : (
               <div />
@@ -127,7 +154,7 @@ export function AuthGateDialog({
                 </Button>
               )}
               <Button type="submit" variant="primary" size="md" id="save-token">
-                Verbinden
+                Jetzt verbinden
               </Button>
             </div>
           </div>

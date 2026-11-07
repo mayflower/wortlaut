@@ -191,10 +191,37 @@ export type AuthMode =
   | { kind: 'operator'; token: string }
   | { kind: 'reader'; token: string; recordingId: string };
 
+export interface InstanceInfo {
+  assistantName: string;
+  botEmail: string | null;
+  providers: {
+    google_meet: boolean;
+    google_meet_auth_session: boolean;
+    teams: boolean;
+    webex: boolean;
+  };
+  mail: {
+    imapEnabled: boolean;
+    smtpEnabled: boolean;
+    senderAuth: string;
+    allowedDomains: string[];
+  };
+  limits: {
+    maxActiveMeetings: number;
+    lobbyTimeoutSeconds: number;
+    emptyRoomTimeoutSeconds: number;
+  };
+  retention: {
+    audioHours: number;
+    transcriptDays: number;
+  };
+}
+
 declare global {
   interface Window {
     __WORTLAUT_BOOT__?: {
       failureReasons?: Record<string, string>;
+      instance?: InstanceInfo;
     };
   }
 }
