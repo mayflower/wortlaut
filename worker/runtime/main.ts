@@ -41,7 +41,7 @@ async function run(api: string, credential: string) {
     throw new Error('Provider page requires trusted HTTPS and a valid deadline');
   }
   if (isMeet && (pageUrl.hostname !== 'meet.google.com' || pageUrl.port ||
-      !/^\/[a-z]{3}-[a-z]{4}-[a-z]{3}$/.test(pageUrl.pathname))) throw new Error('Invalid Meet URL');
+      !/^\/(?:meet\/)?[a-z]{3}-[a-z]{4}-[a-z]{3}$/.test(pageUrl.pathname))) throw new Error('Invalid Meet URL');
   if (isTeams && !isTeamsMeeting(pageUrl)) throw new Error('Invalid Teams URL');
   // No ignoreHTTPSErrors, device capture, foreign page selectors or disabled sandbox.
   const browser = await launchBrowser(bootstrap.provider, isMeet ? bootstrap.meet.locale : isTeams ? bootstrap.teams.locale : undefined, isWebexBrowser);

@@ -48,6 +48,9 @@ export class Chunker {
     this.flush();
     this.binding = {...binding};
   }
+  rebindCurrentBuffer(binding: Binding) {
+    this.binding = {...binding};
+  }
   gap(startSample: number, sampleCount: number) {
     if (startSample !== this.finalSample || !Number.isSafeInteger(sampleCount) ||
         sampleCount < 1 || sampleCount > 16000 * 5) throw new Error('Invalid capture gap');
@@ -65,6 +68,7 @@ export class Chunker {
     this.length = 0;
     this.emit(metadata, pcm);
   }
+  get startSample() { return this.sample; }
   get finalSample() { return this.sample + this.length / 2; }
   get lastSequence() { return this.sequence - 1; }
 }

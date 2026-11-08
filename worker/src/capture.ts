@@ -25,9 +25,14 @@ export class AudioCapture {
   private paused?: {interval?: AudioClock['interruptions'][number]};
   private resumeTimer?: ReturnType<typeof setTimeout>;
   private modules!: Promise<void>;
+  private useWorkerFallback = false;
   private closed = false;
 
-  constructor(private readonly worklets: {resampler: string; pcm: string}) {}
+  constructor(private readonly worklets: {
+    resampler: string;
+    pcm: string;
+    createWorker?: (sampleRate: number) => Worker;
+  }) {}
 
   async initialize() {
     await this.context.resume();
@@ -36,8 +41,13 @@ export class AudioCapture {
     this.clockAnchor = {...this.anchor};
     this.context.addEventListener('statechange', this.onClockState);
     this.modules = (async () => {
-      await this.context.audioWorklet.addModule(this.worklets.resampler);
-      await this.context.audioWorklet.addModule(this.worklets.pcm);
+      try {
+        await this.context.audioWorklet.addModule(this.worklets.resampler);
+        await this.context.audioWorklet.addModule(this.worklets.pcm);
+      } catch (err) {
+        if (!this.worklets.createWorker) throw err;
+        this.useWorkerFallback = true;
+      }
     })();
     await this.modules;
   }
@@ -127,14 +137,64 @@ export class AudioCapture {
     finally { if (this.captures.get(track) === pending) this.captures.delete(track); }
   }
 
+  private createCaptureNode(): {
+    audioNode: AudioNode;
+    port: {
+      onmessage: ((event: MessageEvent) => void) | null;
+      postMessage: (message: unknown) => void;
+      close: () => void;
+    };
+    disableCapturing: () => void;
+  } {
+    if (!this.useWorkerFallback) {
+      const workletNode = new AudioWorkletNode(this.context, 'wortlaut-pcm', {
+        numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1],
+      });
+      return {
+        audioNode: workletNode,
+        port: workletNode.port,
+        disableCapturing: () => {
+          workletNode.parameters.get('capturing')!.setValueAtTime(0, this.context.currentTime);
+        },
+      };
+    }
+    const scriptNode = this.context.createScriptProcessor(1024, 1, 1);
+    const worker = this.worklets.createWorker!(this.context.sampleRate);
+    let capturing = 1;
+    scriptNode.onaudioprocess = (event) => {
+      if (capturing === 0) return;
+      const input = event.inputBuffer.getChannelData(0);
+      const copy = new Float32Array(input.length);
+      copy.set(input);
+      worker.postMessage(
+        {
+          type: '__process',
+          samples: copy,
+          capturing,
+          currentFrame: Math.round(this.context.currentTime * this.context.sampleRate),
+        },
+        [copy.buffer],
+      );
+    };
+    const port = {
+      get onmessage() { return worker.onmessage; },
+      set onmessage(fn: ((event: MessageEvent) => void) | null) { worker.onmessage = fn; },
+      postMessage: (message: unknown) => { worker.postMessage(message); },
+      close: () => { scriptNode.onaudioprocess = null; worker.terminate(); },
+    };
+    return {
+      audioNode: scriptNode,
+      port,
+      disableCapturing: () => { capturing = 0; },
+    };
+  }
+
   private async create(track: MediaStreamTrack, meetingId: string, attemptId: string,
                        binding: Binding, sink: CaptureSink): Promise<Handle> {
     await this.modules;
     const streamId = crypto.randomUUID();
     const epoch = crypto.randomUUID();
-    const node = new AudioWorkletNode(this.context, 'wortlaut-pcm', {
-      numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1],
-    });
+    const {audioNode, port, disableCapturing} = this.createCaptureNode();
     const source = this.context.createMediaStreamSource(new MediaStream([track]));
     const clockAnchor = {...this.clockAnchor};
     let chunker: Chunker | undefined;
@@ -152,6 +212,17 @@ export class AudioCapture {
     const applyPendingBind = () => {
       if (!pendingBinding || !chunker || stopping) return;
       flushGap();
+      if (currentBinding.attribution_unknown && !pendingBinding.attribution_unknown &&
+          chunker.startSample >= 1 && lastBoundSample === 0) {
+        const sample = chunker.startSample;
+        currentBinding = {...pendingBinding};
+        pendingBinding = undefined;
+        lastBoundSample = sample;
+        chunker.rebindCurrentBuffer(currentBinding);
+        sink.bind?.({type: 'bind', id: `${attemptId}/${streamId}/${epoch}/${sample}/bind`,
+          stream_id: streamId, epoch, start_sample: sample, ...currentBinding});
+        return;
+      }
       chunker.flush();
       const sample = chunker.finalSample;
       if (sample <= lastBoundSample) return;
@@ -167,7 +238,7 @@ export class AudioCapture {
     let ready!: () => void;
     let failed!: (error: Error) => void;
     const initialized = new Promise<void>((resolve, reject) => { ready = resolve; failed = reject; });
-    node.port.onmessage = ({data}) => {
+    port.onmessage = ({data}) => {
       if (data.type === 'ready') { ready(); return; }
       if (data.type === 'error') {
         sink.error(data.reason); failed(new Error(data.reason)); ended(); return;
@@ -223,18 +294,18 @@ export class AudioCapture {
       },
       restart: () => this.create(track, meetingId, attemptId, pendingBinding ?? currentBinding, sink),
       suspend: () => {
-        node.parameters.get('capturing')!.setValueAtTime(0, this.context.currentTime);
-        node.port.postMessage({type: 'stop'});
+        disableCapturing();
+        port.postMessage({type: 'stop'});
       },
       stop: () => stopping ??= (async () => {
       track.removeEventListener('ended', onEnded);
-      node.port.postMessage({type: 'stop'});
+      port.postMessage({type: 'stop'});
       let timer: ReturnType<typeof setTimeout> | undefined;
       await Promise.race([done, new Promise<void>((resolve) => {
         timer = setTimeout(() => { sink.error('capture_stop_timeout'); resolve(); }, 3000);
       })]);
       clearTimeout(timer);
-      source.disconnect(); node.disconnect(); node.port.close();
+      source.disconnect(); audioNode.disconnect(); port.close();
     })()};
     const onEnded = () => { void handle.stop(); };
     track.addEventListener('ended', onEnded, {once: true});
@@ -244,13 +315,13 @@ export class AudioCapture {
     }, 5000);
     try { await initialized; }
     catch (error) {
-      source.disconnect(); node.disconnect(); node.port.close();
+      source.disconnect(); audioNode.disconnect(); port.close();
       track.removeEventListener('ended', onEnded);
       throw error;
     } finally { clearTimeout(timer); }
-    source.connect(node);
+    source.connect(audioNode);
     // Output is silence. Capture input is this single track, never the common destination.
-    node.connect(this.context.destination);
+    audioNode.connect(this.context.destination);
     return handle;
   }
 

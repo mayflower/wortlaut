@@ -19,7 +19,9 @@ declare global {
       receiverStreams?: WeakMap<RTCRtpReceiver, string[]>;
       dataChannels?: Set<RTCDataChannel>;
       dataMessages?: unknown[];
+      dataSends?: {channel: RTCDataChannel; data: unknown}[];
       onDataMessage?: (data: unknown) => void;
+      transformDataSend?: (channel: RTCDataChannel, data: unknown) => unknown;
       remoteDescriptions?: string[];
       onRemoteDescription?: (sdp: string) => void;
       observe?: (receiver: RTCRtpReceiver, pc: RTCPeerConnection) => void};
@@ -72,10 +74,11 @@ type EncodedObservation = {id: number; pc: RTCPeerConnection; transform?: RTCRtp
 // credentials, provider login cookies, API URL or direct backend connection.
 const config = window.wortlautMeetConfig;
 if (config.provider === 'webex'
-  ? location.origin === 'https://web.webex.com' && location.pathname === '/meeting'
+  ? location.origin === 'https://web.webex.com' && /^\/(?:meeting|guest-join-meeting)$/.test(location.pathname) &&
+    !location.search.includes('preload=true')
   : config.provider === 'teams' ? window === window.top && isTeamsOrigin(new URL(location.href))
   : window === window.top && location.origin === 'https://meet.google.com' &&
-    location.pathname === new URL(config.meeting_url).pathname) install(config);
+    location.pathname.replace(/^\/meet\//, '/') === new URL(config.meeting_url).pathname.replace(/^\/meet\//, '/')) install(config);
 
 function install(config: MeetCaptureConfig) {
   const state: MeetCaptureState = {streams: 0, audio_samples: 0, active_audio_samples: 0,
@@ -83,11 +86,79 @@ function install(config: MeetCaptureConfig) {
     participant_sources: {available: false, total: 0, truncated: false, sources: []},
     data_channels: [],
     sdp: {descriptions: 0, audio_sections: 0, video_sections: 0, ssrc_count: 0, cname_count: 0, msid_count: 0}};
+  let trustedPolicy: {createScriptURL: (url: string) => unknown} | undefined;
+  function toWorkerScriptUrl(url: string): string {
+    const tt = (window as unknown as {
+      trustedTypes?: {
+        createPolicy?: (
+          name: string,
+          rules: {createScriptURL: (s: string) => string},
+        ) => {createScriptURL: (s: string) => unknown};
+      };
+    }).trustedTypes;
+    if (!tt?.createPolicy) return url;
+    if (!trustedPolicy) {
+      for (const name of [
+        '@msstream/azuremediaplayer#worker-noop',
+        '@msstream/azuremediaplayer#noop',
+        'dompurify',
+        'default',
+      ]) {
+        try {
+          trustedPolicy = tt.createPolicy(name, {createScriptURL: (s: string) => s});
+          break;
+        } catch {
+          // try next allowed policy name
+        }
+      }
+    }
+    return (trustedPolicy ? trustedPolicy.createScriptURL(url) : url) as string;
+  }
+
   // The pinned modules travel in this local bundle. Blob URLs never resolve
   // to Google or a CDN and are subject to the page's actual CSP.
   const modules = [resamplerSource, pcmSource].map((source) =>
     URL.createObjectURL(new Blob([source], {type: 'application/javascript'})));
-  const capture = new AudioCapture({resampler: modules[0], pcm: modules[1]});
+  const capture = new AudioCapture({
+    resampler: modules[0],
+    pcm: modules[1],
+    createWorker: (sampleRate: number) => {
+      const patchedResampler = resamplerSource
+        .replace('"AudioWorkletGlobalScope"===globalThis.constructor.name', 'true')
+        .replace(/export\{[^}]+\};?\s*$/, '');
+      const shim = `
+        globalThis.sampleRate = ${Number(sampleRate) || 48000};
+        globalThis.currentFrame = 0;
+        let instance = null;
+        globalThis.AudioWorkletProcessor = class {
+          constructor() {
+            this.port = {
+              postMessage: (msg, transfer) => self.postMessage(msg, transfer || []),
+              onmessage: null,
+            };
+          }
+        };
+        globalThis.registerProcessor = (_name, cls) => { instance = new cls(); };
+        self.onmessage = (event) => {
+          const data = event.data;
+          if (data && data.type === '__process') {
+            const ch = data.samples;
+            const len = ch ? ch.length : 128;
+            if (typeof data.currentFrame === 'number') globalThis.currentFrame = data.currentFrame;
+            instance?.process(ch ? [[ch]] : [[]], [[new Float32Array(len)]], {capturing: [data.capturing]});
+            globalThis.currentFrame += len;
+            return;
+          }
+          instance?.port?.onmessage?.(event);
+        };
+      `;
+      const blobUrl = URL.createObjectURL(
+        new Blob([shim, '\n', patchedResampler, '\n', pcmSource], {type: 'application/javascript'}),
+      );
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
+      return new Worker(toWorkerScriptUrl(blobUrl));
+    },
+  });
   const {connections, received, encodedReserved, receiverStreams} = window.wortlautMeetReceivers;
   const participants = new Map<string, {
     participant_id: string; participant_name: string | null;
@@ -109,15 +180,266 @@ function install(config: MeetCaptureConfig) {
     return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 0xffffffff;
   }
 
+  let webexSelfParticipantId: string | null = null;
+  const webexSelfCsis = new Set<number>();
+  const webexParticipantOwnedCsis = new Map<string, Set<number>>();
+  const webexParticipantDeviceCsis = new Map<string, Set<number>>();
+  const webexSsrcToParticipant = new Map<number, string>();
+  let webexCurrentActiveSpeakerCsis: number[] = [];
+  let webexLastActiveSpeakerAt = 0;
+
+  function findWebexParticipantByCsi(csi: number): string | null {
+    for (const [pid, set] of webexParticipantOwnedCsis) {
+      if (set.has(csi)) return pid;
+    }
+    const masked = (csi & 0xfffffffe) >>> 0;
+    for (const [pid, set] of webexParticipantOwnedCsis) {
+      for (const pCsi of set) {
+        if (((pCsi & 0xfffffffe) >>> 0) === masked) return pid;
+      }
+    }
+    for (const [pid, set] of webexParticipantDeviceCsis) {
+      if (set.has(csi)) return pid;
+      for (const pCsi of set) {
+        if (((pCsi & 0xfffffffe) >>> 0) === masked) return pid;
+      }
+    }
+    return null;
+  }
+
+  function ingestWebexSelf(selfNode: Record<string, unknown>) {
+    if (typeof selfNode.id === 'string' && selfNode.id.trim()) {
+      webexSelfParticipantId = selfNode.id.trim();
+      participants.delete(webexSelfParticipantId);
+      webexParticipantOwnedCsis.delete(webexSelfParticipantId);
+      webexParticipantDeviceCsis.delete(webexSelfParticipantId);
+    }
+    const status = selfNode.status && typeof selfNode.status === 'object'
+      ? (selfNode.status as Record<string, unknown>) : undefined;
+    if (Array.isArray(status?.csis)) {
+      for (const c of status.csis) if (validCsi(c)) webexSelfCsis.add(c);
+    }
+    if (Array.isArray(selfNode.devices)) {
+      for (const dev of selfNode.devices.slice(0, 16)) {
+        if (!dev || typeof dev !== 'object') continue;
+        const devRec = dev as Record<string, unknown>;
+        if (Array.isArray(devRec.csis)) {
+          for (const c of devRec.csis) if (validCsi(c)) webexSelfCsis.add(c);
+        }
+        if (Array.isArray(devRec.mediaSessions)) {
+          for (const ms of devRec.mediaSessions.slice(0, 16)) {
+            if (ms && typeof ms !== 'object' && validCsi((ms as Record<string, unknown>).csi)) {
+              webexSelfCsis.add((ms as Record<string, unknown>).csi as number);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  function updateWebexActiveSpeakerBindings(): boolean {
+    if (config.provider !== 'webex') return false;
+    let changed = false;
+    for (const [ssrc, pid] of webexSsrcToParticipant) {
+      if (!participants.has(pid) || pid === webexSelfParticipantId) {
+        webexSsrcToParticipant.delete(ssrc);
+        changed = true;
+      }
+    }
+    const activePids: string[] = [];
+    if (webexCurrentActiveSpeakerCsis.length > 0 && performance.now() - webexLastActiveSpeakerAt <= 3000) {
+      for (const csi of webexCurrentActiveSpeakerCsis) {
+        const pid = findWebexParticipantByCsi(csi);
+        if (pid && pid !== webexSelfParticipantId && !activePids.includes(pid)) {
+          activePids.push(pid);
+        }
+      }
+    }
+    if (activePids.length > 0) {
+      const shareCsis = new Set<number>();
+      for (const p of participants.values()) {
+        for (const sc of p.share_audio_csis) shareCsis.add(sc);
+      }
+      const candidates: {ssrc: number; ts: number}[] = [];
+      let maxTs = -Infinity;
+      for (const pc of connections) {
+        if (pc.connectionState === 'closed') continue;
+        for (const receiver of pc.getReceivers()) {
+          if (!received.has(receiver) || receiver.track?.kind !== 'audio' || receiver.track.readyState !== 'live') {
+            continue;
+          }
+          for (const item of receiver.getSynchronizationSources()) {
+            if (!validCsi(item.source) || shareCsis.has(item.source)) continue;
+            const ts = typeof item.timestamp === 'number' && Number.isFinite(item.timestamp) ? item.timestamp : 0;
+            if (ts > maxTs) maxTs = ts;
+            candidates.push({ssrc: item.source, ts});
+          }
+        }
+      }
+      const liveSsrcs = [...new Set(
+        candidates
+          .filter((c) => !Number.isFinite(maxTs) || maxTs <= 0 || maxTs - c.ts <= 600)
+          .map((c) => c.ssrc),
+      )];
+      if (liveSsrcs.length === 1 && activePids.length >= 1) {
+        const ssrc = liveSsrcs[0];
+        const pid = activePids[0];
+        if (webexSsrcToParticipant.get(ssrc) !== pid) {
+          webexSsrcToParticipant.set(ssrc, pid);
+          changed = true;
+        }
+      } else if (liveSsrcs.length > 1) {
+        const usedPids = new Set<string>();
+        for (const ssrc of liveSsrcs) {
+          const cur = webexSsrcToParticipant.get(ssrc);
+          if (cur && activePids.includes(cur) && !usedPids.has(cur)) {
+            usedPids.add(cur);
+          }
+        }
+        for (const ssrc of liveSsrcs) {
+          const cur = webexSsrcToParticipant.get(ssrc);
+          if (cur && activePids.includes(cur) && usedPids.has(cur)) continue;
+          const nextPid = activePids.find((p) => !usedPids.has(p)) ?? activePids[0];
+          if (nextPid && webexSsrcToParticipant.get(ssrc) !== nextPid) {
+            webexSsrcToParticipant.set(ssrc, nextPid);
+            usedPids.add(nextPid);
+            changed = true;
+          }
+        }
+      }
+    }
+    for (const [ssrc, ownerId] of webexSsrcToParticipant) {
+      for (const [pid, entry] of participants) {
+        if (pid === ownerId) {
+          if (entry.audio_csis.size < 64 && !entry.audio_csis.has(ssrc)) {
+            entry.audio_csis.add(ssrc);
+            changed = true;
+          }
+        } else if (entry.audio_csis.delete(ssrc)) {
+          changed = true;
+        }
+      }
+    }
+    return changed;
+  }
+
   function ingestParticipantRecord(node: Record<string, unknown>) {
-    const rawId = node.participant_id ?? node.participantId ?? node.endpointId;
+    const details = node.details && typeof node.details === 'object'
+      ? (node.details as Record<string, unknown>) : undefined;
+    const person = node.person && typeof node.person === 'object'
+      ? (node.person as Record<string, unknown>) : undefined;
+    const isWebexParticipant = config.provider === 'webex' && Boolean(
+      person || Array.isArray(node.devices) ||
+      (typeof node.url === 'string' && node.url.includes('/locus/'))
+    );
+    const rawId = node.participant_id ?? node.participantId ?? node.endpointId ?? details?.id ??
+      (isWebexParticipant ? node.id : undefined);
     if (typeof rawId !== 'string' || !rawId.trim() || rawId.length > 200) return false;
     const id = rawId.trim();
+    if (isWebexParticipant && id === webexSelfParticipantId) return false;
+    const rawName = node.participant_name ?? node.participantName ?? node.displayName ??
+      details?.displayName ?? person?.name ?? person?.displayName ?? person?.primaryDisplayString ??
+      domNames.get(id);
+    const cleanedName = typeof rawName === 'string' && rawName.trim() && rawName.trim().length <= 200
+      ? rawName.trim() : null;
+    if (cleanedName && (domNames.size < 256 || domNames.has(id))) {
+      domNames.set(id, cleanedName);
+    }
+    const teamsAudioCsis: number[] = [];
+    const teamsShareCsis: number[] = [];
+    if (node.endpoints && typeof node.endpoints === 'object') {
+      for (const ep of Object.values(node.endpoints as Record<string, unknown>).slice(0, 16)) {
+        if (!ep || typeof ep !== 'object') continue;
+        const epRec = ep as Record<string, unknown>;
+        const mod = epRec.call;
+        if (!mod || typeof mod !== 'object') continue;
+        const streams = (mod as Record<string, unknown>).mediaStreams;
+        if (!Array.isArray(streams)) continue;
+        for (const ms of streams.slice(0, 16)) {
+          if (!ms || typeof ms !== 'object') continue;
+          const msRec = ms as Record<string, unknown>;
+          const sid = typeof msRec.sourceId === 'string' && /^\d+$/.test(msRec.sourceId)
+            ? Number(msRec.sourceId) : msRec.sourceId;
+          if (!validCsi(sid)) continue;
+          if (msRec.type === 'audio') teamsAudioCsis.push(sid);
+          else if (msRec.type === 'applicationsharing-audio' || msRec.type === 'sharing-audio') {
+            teamsShareCsis.push(sid);
+          }
+        }
+      }
+    }
+    const webexAudioCsis: number[] = [];
+    const webexShareCsis: number[] = [];
+    const webexDeviceFallbackCsis: number[] = [];
+    if (isWebexParticipant) {
+      if (node.state === 'LEFT' || node.state === 'REMOVED') {
+        webexParticipantOwnedCsis.delete(id);
+        webexParticipantDeviceCsis.delete(id);
+        updateWebexActiveSpeakerBindings();
+      }
+      const status = node.status && typeof node.status === 'object'
+        ? (node.status as Record<string, unknown>) : undefined;
+      if (Array.isArray(status?.csis)) {
+        for (const c of status.csis) {
+          if (validCsi(c) && !webexSelfCsis.has(c)) webexDeviceFallbackCsis.push(c);
+        }
+      }
+      if (Array.isArray(node.devices)) {
+        for (const dev of node.devices.slice(0, 16)) {
+          if (!dev || typeof dev !== 'object') continue;
+          const devRec = dev as Record<string, unknown>;
+          if (Array.isArray(devRec.csis)) {
+            for (const c of devRec.csis) {
+              if (validCsi(c) && !webexSelfCsis.has(c)) webexDeviceFallbackCsis.push(c);
+            }
+          }
+          if (!Array.isArray(devRec.mediaSessions)) continue;
+          for (const ms of devRec.mediaSessions.slice(0, 16)) {
+            if (!ms || typeof ms !== 'object') continue;
+            const msRec = ms as Record<string, unknown>;
+            const csi = msRec.csi;
+            if (!validCsi(csi)) continue;
+            if (msRec.mediaType === 'audio') {
+              if (msRec.mediaContent === 'slides') {
+                webexShareCsis.push(csi);
+              } else {
+                webexAudioCsis.push(csi);
+              }
+            }
+          }
+        }
+      }
+      if (node.state !== 'LEFT' && node.state !== 'REMOVED') {
+        if (webexAudioCsis.length || webexShareCsis.length) {
+          let owned = webexParticipantOwnedCsis.get(id);
+          if (!owned && webexParticipantOwnedCsis.size < 256) {
+            owned = new Set<number>();
+            webexParticipantOwnedCsis.set(id, owned);
+          }
+          if (owned) {
+            for (const c of webexAudioCsis) if (owned.size < 64) owned.add(c);
+            for (const c of webexShareCsis) if (owned.size < 64) owned.add(c);
+          }
+        }
+        if (webexDeviceFallbackCsis.length) {
+          let devSet = webexParticipantDeviceCsis.get(id);
+          if (!devSet && webexParticipantDeviceCsis.size < 256) {
+            devSet = new Set<number>();
+            webexParticipantDeviceCsis.set(id, devSet);
+          }
+          if (devSet) {
+            for (const c of webexDeviceFallbackCsis) if (devSet.size < 64) devSet.add(c);
+          }
+        }
+      }
+    }
     const audioRaw = [
       ...(Array.isArray(node.audio_csis) ? node.audio_csis : []),
       ...(Array.isArray(node.audioCsis) ? node.audioCsis : []),
       ...(Array.isArray(node.ssrcs) ? node.ssrcs : []),
       ...(Array.isArray(node.csrcs) ? node.csrcs : []),
+      ...teamsAudioCsis,
+      ...webexAudioCsis,
       ...(validCsi(node.csi) ? [node.csi] : []),
       ...(validCsi(node.csrc) ? [node.csrc] : []),
       ...(validCsi(node.ssrc) ? [node.ssrc] : []),
@@ -126,6 +448,8 @@ function install(config: MeetCaptureConfig) {
       ...(Array.isArray(node.share_audio_csis) ? node.share_audio_csis : []),
       ...(Array.isArray(node.shareAudioCsis) ? node.shareAudioCsis : []),
       ...(Array.isArray(node.shareSsrcs) ? node.shareSsrcs : []),
+      ...teamsShareCsis,
+      ...webexShareCsis,
     ].filter(validCsi);
     const trackRaw = [
       node.track_id, node.trackId, node.audioTrackId,
@@ -135,8 +459,14 @@ function install(config: MeetCaptureConfig) {
       node.stream_id, node.streamId, node.msid,
       ...(Array.isArray(node.stream_ids) ? node.stream_ids : []),
     ].filter((v): v is string => typeof v === 'string' && v.length > 0 && v.length <= 256);
-    if (!audioRaw.length && !shareRaw.length && !trackRaw.length && !streamRaw.length) return false;
     let entry = participants.get(id);
+    if (!audioRaw.length && !shareRaw.length && !trackRaw.length && !streamRaw.length) {
+      if (entry && cleanedName && entry.participant_name !== cleanedName) {
+        entry.participant_name = cleanedName;
+        return true;
+      }
+      return false;
+    }
     let changed = false;
     if (!entry) {
       totalParticipants++;
@@ -147,13 +477,9 @@ function install(config: MeetCaptureConfig) {
       participants.set(id, entry);
       changed = true;
     }
-    const rawName = node.participant_name ?? node.participantName ?? node.displayName ?? domNames.get(id);
-    if (typeof rawName === 'string' && rawName.trim() && rawName.trim().length <= 200) {
-      const cleaned = rawName.trim();
-      if (entry.participant_name !== cleaned) {
-        entry.participant_name = cleaned;
-        changed = true;
-      }
+    if (cleanedName && entry.participant_name !== cleanedName) {
+      entry.participant_name = cleanedName;
+      changed = true;
     }
     for (const csi of audioRaw) {
       if (entry.audio_csis.size < 64 && !entry.audio_csis.has(csi)) {
@@ -199,10 +525,16 @@ function install(config: MeetCaptureConfig) {
         sub.textContent || '').trim();
       if (attrVal && attrVal.length <= 200 && attrVal !== 'fixture') return attrVal;
     }
-    for (const child of Array.from(el.querySelectorAll('span, div, p')).slice(0, 16)) {
-      if (child.children.length > 0 || child.closest('button')) continue;
+    for (const child of Array.from(el.querySelectorAll('span, div, p')).slice(0, 64)) {
+      if (child.children.length > 0 || child.closest('button') || child.closest('[aria-hidden="true"]')) continue;
+      const cls = child.className || '';
+      if (typeof cls === 'string' && /material-icons|google-symbols/i.test(cls)) continue;
       const txt = (child.textContent || '').trim();
-      if (txt && txt.length >= 2 && txt.length <= 120 && txt !== 'fixture') return txt;
+      if (txt && txt.length >= 2 && txt.length <= 120 && txt !== 'fixture' &&
+          !/^\d{1,2}:\d{2}(?::\d{2})?$/.test(txt) &&
+          !/^(devices|mic|mic_off|more_vert|keep|push_pin|frame_person|visual_effects|volume_up|volume_off)$/i.test(txt)) {
+        return txt;
+      }
     }
     return null;
   }
@@ -218,15 +550,14 @@ function install(config: MeetCaptureConfig) {
     let updated = false;
     const nodes = document.querySelectorAll(
       '[data-participant-id], [data-requested-participant-id], [data-member-id], ' +
-      '[data-cid], [data-endpoint-id], [data-user-id], [data-tid*="roster"], [data-tid*="video-tile"], ' +
-      '[role="listitem"][data-participant-id], [role="listitem"][data-member-id], [role="listitem"][data-cid]'
+      '[data-endpoint-id], [data-user-id], [data-tid*="roster"], [data-tid*="video-tile"], ' +
+      '[role="listitem"][data-participant-id], [role="listitem"][data-member-id]'
     );
     for (const el of Array.from(nodes).slice(0, 256)) {
       const rawId = (
         el.getAttribute('data-participant-id') ??
         el.getAttribute('data-requested-participant-id') ??
         el.getAttribute('data-member-id') ??
-        el.getAttribute('data-cid') ??
         el.getAttribute('data-endpoint-id') ??
         el.getAttribute('data-user-id') ?? ''
       ).trim();
@@ -394,8 +725,12 @@ function install(config: MeetCaptureConfig) {
   }
 
   function parseJsonText(text: string, stat: ReturnType<typeof getChannelStat>): boolean {
-    const trimmed = text.replace(/^\)\]\}'\s*/, '').trim();
-    if (!trimmed || trimmed.length > 65536 || (trimmed[0] !== '{' && trimmed[0] !== '[')) return false;
+    let trimmed = text.replace(/^\)\]\}'\s*/, '').replace(/^\d+:+/, '').trim();
+    if (trimmed.startsWith('POST ') || trimmed.startsWith('HTTP/')) {
+      const bodyIdx = trimmed.indexOf('\r\n\r\n');
+      if (bodyIdx !== -1) trimmed = trimmed.slice(bodyIdx + 4).trim();
+    }
+    if (!trimmed || trimmed.length > 262144 || (trimmed[0] !== '{' && trimmed[0] !== '[')) return false;
     let parsed: unknown;
     try { parsed = JSON.parse(trimmed); } catch { return false; }
     if (stat) {
@@ -405,7 +740,7 @@ function install(config: MeetCaptureConfig) {
     scanDomParticipants();
     const queue: unknown[] = [parsed];
     let updated = false, visited = 0;
-    while (queue.length && visited < 512) {
+    while (queue.length && visited < 2048) {
       const current = queue.shift();
       visited++;
       if (Array.isArray(current)) {
@@ -419,17 +754,91 @@ function install(config: MeetCaptureConfig) {
             }
           }
         }
+        if (config.provider === 'webex') {
+          if (record.self && typeof record.self === 'object' && !Array.isArray(record.self)) {
+            ingestWebexSelf(record.self as Record<string, unknown>);
+          }
+          if (record.msgType === 'multistream' && record.payload && typeof record.payload === 'object') {
+            const outer = record.payload as Record<string, unknown>;
+            if (outer.mediaFamily === 'AUDIO' && (outer.mediaContent === 'MAIN' || outer.mediaContent === 'SLIDES') &&
+                outer.payload && typeof outer.payload === 'object') {
+              const inner = outer.payload as Record<string, unknown>;
+              const innerPayload = inner.payload && typeof inner.payload === 'object'
+                ? (inner.payload as Record<string, unknown>) : undefined;
+              if (inner.msgType === 'mediaRequest' && Array.isArray(innerPayload?.requests)) {
+                for (const req of innerPayload.requests) {
+                  if (!req || typeof req !== 'object') continue;
+                  const pInfo = (req as Record<string, unknown>).policySpecificInfo;
+                  const selfCsi = pInfo && typeof pInfo === 'object'
+                    ? (pInfo as Record<string, unknown>).csi : undefined;
+                  if (validCsi(selfCsi)) webexSelfCsis.add(selfCsi);
+                }
+              } else if (inner.msgType === 'mediaRequestStatus' && Array.isArray(innerPayload?.streamStates)) {
+                for (const st of innerPayload.streamStates) {
+                  if (!st || typeof st !== 'object') continue;
+                  const stRec = st as Record<string, unknown>;
+                  const idObj = stRec.id && typeof stRec.id === 'object'
+                    ? (stRec.id as Record<string, unknown>) : undefined;
+                  const slotSsrc = idObj?.ssrc;
+                  const stCsi = stRec.csi;
+                  if (validCsi(slotSsrc) && validCsi(stCsi)) {
+                    const pid = findWebexParticipantByCsi(stCsi);
+                    if (pid && pid !== webexSelfParticipantId) {
+                      webexSsrcToParticipant.set(slotSsrc, pid);
+                      updated = true;
+                    }
+                  }
+                }
+                if (updateWebexActiveSpeakerBindings()) updated = true;
+              } else if (inner.msgType === 'activeSpeakerNotification' && Array.isArray(innerPayload?.csis)) {
+                const csis = innerPayload.csis.filter((c): c is number => validCsi(c) && !webexSelfCsis.has(c));
+                if (csis.length > 0) {
+                  webexCurrentActiveSpeakerCsis = csis;
+                  webexLastActiveSpeakerAt = performance.now();
+                  if (updateWebexActiveSpeakerBindings()) updated = true;
+                  else updated = true;
+                }
+              }
+            }
+          }
+        }
         if (ingestParticipantRecord(record)) updated = true;
-        for (const key of ['participants', 'sources', 'roster', 'members', 'endpoints', 'data', 'payload']) {
-          if (record[key] && typeof record[key] === 'object') queue.push(record[key]);
+        for (const b64Key of ['message', 'body'] as const) {
+          const b64Val = record[b64Key];
+          if (typeof b64Val === 'string' && b64Val.startsWith('H4sI') && b64Val.length <= 262144) {
+            try {
+              const bin = atob(b64Val);
+              const gz = new Uint8Array(bin.length);
+              for (let i = 0; i < bin.length; i++) gz[i] = bin.charCodeAt(i);
+              if (stat && stat.wire_formats.size < 16) stat.wire_formats.add('gzip');
+              void decompressPayload(gz, 'gzip').then((out) => { if (out) processPayloadBytes(out, stat); });
+            } catch { /* ignore invalid base64 */ }
+          } else if (typeof b64Val === 'string' && (b64Val.startsWith('{') || b64Val.startsWith('['))) {
+            if (parseJsonText(b64Val, stat)) updated = true;
+          }
+        }
+        for (const key of ['participants', 'participant', 'locus', 'sources', 'roster', 'members', 'endpoints', 'data', 'payload', 'mediaNegotiation']) {
+          const child = record[key];
+          if (child && typeof child === 'object') {
+            queue.push(child);
+            if (!Array.isArray(child) && (key === 'participants' || key === 'members' || key === 'sources')) {
+              for (const [mapKey, item] of Object.entries(child as Record<string, unknown>).slice(0, 256)) {
+                if (item && typeof item === 'object' && !Array.isArray(item)) {
+                  const itemRec = item as Record<string, unknown>;
+                  queue.push(itemRec.participant_id ? itemRec : {participant_id: mapKey, ...itemRec});
+                }
+              }
+            }
+          }
         }
       }
     }
+    if (updated && config.provider === 'webex') updateWebexActiveSpeakerBindings();
     return updated;
   }
 
   function parseProtobufPayload(bytes: Uint8Array, stat: ReturnType<typeof getChannelStat>, depth = 0): boolean {
-    if (depth > 4 || bytes.byteLength < 2 || bytes.byteLength > 65536) return false;
+    if (depth > 8 || bytes.byteLength < 2 || bytes.byteLength > 65536) return false;
     let offset = 0, tags = 0, updated = false;
     const strings: string[] = [];
     const ints: number[] = [];
@@ -445,10 +854,10 @@ function install(config: MeetCaptureConfig) {
     };
     while (offset < bytes.byteLength && tags < 128) {
       const tag = readVarint();
-      if (tag === null || tag <= 0) return false;
+      if (tag === null || tag <= 0) break;
       const fieldNo = Math.floor(tag / 8);
       const wireType = tag & 7;
-      if (fieldNo < 1 || fieldNo > 536870911) return false;
+      if (fieldNo < 1 || fieldNo > 536870911) break;
       tags++;
       if (depth === 0 && stat) {
         if (stat.wire_formats.size < 16) stat.wire_formats.add('protobuf');
@@ -457,19 +866,19 @@ function install(config: MeetCaptureConfig) {
       }
       if (wireType === 0) {
         const val = readVarint();
-        if (val === null) return false;
-        if (validCsi(val) && val > 0 && ints.length < 32) ints.push(val);
+        if (val === null) break;
+        if (validCsi(val) && val >= 100 && ints.length < 32) ints.push(val);
       } else if (wireType === 1) {
-        if (offset + 8 > bytes.byteLength) return false;
+        if (offset + 8 > bytes.byteLength) break;
         offset += 8;
       } else if (wireType === 5) {
-        if (offset + 4 > bytes.byteLength) return false;
+        if (offset + 4 > bytes.byteLength) break;
         const val = new DataView(bytes.buffer, bytes.byteOffset + offset, 4).getUint32(0, true);
         offset += 4;
         if (validCsi(val) && val > 0 && ints.length < 32) ints.push(val);
       } else if (wireType === 2) {
         const len = readVarint();
-        if (len === null || len < 0 || offset + len > bytes.byteLength) return false;
+        if (len === null || len < 0 || offset + len > bytes.byteLength) break;
         const slice = bytes.subarray(offset, offset + len);
         offset += len;
         if (len > 0 && len <= 4096) {
@@ -479,28 +888,51 @@ function install(config: MeetCaptureConfig) {
             continue;
           }
           if (len <= 200 && /^[\x20-\x7e\u00a0-\uffff]+$/.test(decoded)) {
-            strings.push(decoded.trim());
+            const trimmed = decoded.trim();
+            if (/^\d{3,10}$/.test(trimmed)) {
+              const num = Number(trimmed);
+              if (validCsi(num) && num >= 100 && ints.length < 32) ints.push(num);
+            } else if (trimmed) {
+              strings.push(trimmed);
+            }
           }
-          if (depth < 4 && len >= 2 && parseProtobufPayload(slice, stat, depth + 1)) {
+          if (depth < 8 && len >= 2 && parseProtobufPayload(slice, stat, depth + 1)) {
             updated = true;
           }
         }
       } else {
-        return false;
+        break;
       }
     }
-    if (strings.length > 0 && ints.length > 0) {
+    if (strings.length > 0) {
       scanDomParticipants();
       const matchedId = strings.find((s) =>
         domNames.has(s) || participants.has(s) || /^(?:spaces\/[^/\s]+\/)?devices\/[^/\s]+$/.test(s));
       if (matchedId) {
-        const candidateName = domNames.get(matchedId) ??
-          strings.find((s) => s !== matchedId && s.length >= 2 && s.length <= 120) ?? null;
-        if (ingestParticipantRecord({
-          participant_id: matchedId,
-          participant_name: candidateName,
-          audio_csis: ints,
-        })) updated = true;
+        const protoName = strings.find((s) =>
+          s !== matchedId &&
+          s.length >= 2 &&
+          s.length <= 120 &&
+          !/^\d+$/.test(s) &&
+          !/https?:\/\/|googleusercontent\.com/i.test(s) &&
+          !/^(?:spaces\/|devices\/|FID$)/i.test(s) &&
+          !/^[A-Za-z0-9+/=_-]{24,}$/.test(s)) ?? null;
+        if (protoName) {
+          if (domNames.size < 256 || domNames.has(matchedId)) domNames.set(matchedId, protoName);
+          const existing = participants.get(matchedId);
+          if (existing && existing.participant_name !== protoName) {
+            existing.participant_name = protoName;
+            updated = true;
+          }
+        }
+        if (ints.length > 0) {
+          const candidateName = domNames.get(matchedId) ?? protoName;
+          if (ingestParticipantRecord({
+            participant_id: matchedId,
+            participant_name: candidateName,
+            audio_csis: ints,
+          })) updated = true;
+        }
       }
     }
     return updated;
@@ -516,13 +948,13 @@ function install(config: MeetCaptureConfig) {
       const reader = ds.readable.getReader();
       const chunks: Uint8Array[] = [];
       let total = 0;
-      while (total <= 65536) {
+      while (total <= 262144) {
         const {done, value} = await reader.read();
         if (done || !value) break;
         chunks.push(value);
         total += value.byteLength;
       }
-      if (!total || total > 65536) return null;
+      if (!total || total > 262144) return null;
       const out = new Uint8Array(total);
       let pos = 0;
       for (const c of chunks) { out.set(c, pos); pos += c.byteLength; }
@@ -531,7 +963,7 @@ function install(config: MeetCaptureConfig) {
   }
 
   function processPayloadBytes(bytes: Uint8Array, stat: ReturnType<typeof getChannelStat>) {
-    if (bytes.byteLength > 65536) return;
+    if (bytes.byteLength > 262144) return;
     const text = new TextDecoder().decode(bytes);
     if (parseJsonText(text, stat)) {
       void inspectReceivers();
@@ -565,10 +997,10 @@ function install(config: MeetCaptureConfig) {
     let bytes: Uint8Array | null = null;
     if (raw instanceof ArrayBuffer) {
       if (stat) stat.binary_frames++;
-      if (raw.byteLength <= 65536) bytes = new Uint8Array(raw);
+      if (raw.byteLength <= 262144) bytes = new Uint8Array(raw);
     } else if (ArrayBuffer.isView(raw)) {
       if (stat) stat.binary_frames++;
-      if (raw.byteLength <= 65536) bytes = new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength);
+      if (raw.byteLength <= 262144) bytes = new Uint8Array(raw.buffer, raw.byteOffset, raw.byteLength);
     }
     if (!bytes || !bytes.byteLength) return;
     if (bytes.byteLength >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b) {
@@ -620,7 +1052,7 @@ function install(config: MeetCaptureConfig) {
     if (typeof RTCRtpScriptTransform !== 'function' || !('transform' in RTCRtpReceiver.prototype)) return;
     const url = URL.createObjectURL(new Blob([encodedObserverSource], {type: 'application/javascript'}));
     try {
-      observer = new Worker(url);
+      observer = new Worker(toWorkerScriptUrl(url));
       await new Promise<void>((resolve) => {
         const timer = setTimeout(() => { observerState = 'failed'; observer?.terminate(); resolve(); }, 2000);
         observer!.onerror = (event) => {
@@ -709,6 +1141,21 @@ function install(config: MeetCaptureConfig) {
       }
     }, error: (reason) => { state.reason = reason; }};
 
+  function recentRtpSources(items: RTCRtpContributingSource[]): number[] {
+    if (!items.length) return [];
+    let maxTs = -Infinity;
+    for (const item of items) {
+      if (typeof item.timestamp === 'number' && Number.isFinite(item.timestamp) && item.timestamp > maxTs) {
+        maxTs = item.timestamp;
+      }
+    }
+    const filtered = Number.isFinite(maxTs)
+      ? items.filter((item) =>
+          typeof item.timestamp !== 'number' || !Number.isFinite(item.timestamp) || maxTs - item.timestamp <= 750)
+      : items;
+    return filtered.map((item) => item.source);
+  }
+
   function resolveReceiver(receiver: RTCRtpReceiver): {
     csi: number | null; signaled_participant_id: string | null;
     participant_name: string | null; source_kind: 'speaker' | 'share_audio'; bound: boolean;
@@ -718,11 +1165,11 @@ function install(config: MeetCaptureConfig) {
     }
     const lastFrame = observations.get(receiver)?.evidence.last_frame;
     const csrcs = [...new Set([
-      ...receiver.getContributingSources().map((s) => s.source),
+      ...recentRtpSources(receiver.getContributingSources()),
       ...(Array.isArray(lastFrame?.contributing_sources) ? (lastFrame.contributing_sources as number[]) : []),
     ].filter(validCsi))];
     const ssrcs = [...new Set([
-      ...receiver.getSynchronizationSources().map((s) => s.source),
+      ...recentRtpSources(receiver.getSynchronizationSources()),
       ...(validCsi(lastFrame?.synchronization_source) ? [lastFrame.synchronization_source] : []),
     ].filter(validCsi))];
 
@@ -819,6 +1266,9 @@ function install(config: MeetCaptureConfig) {
             else source.track = undefined;
           }
         }
+        if (config.provider === 'webex') {
+          updateWebexActiveSpeakerBindings();
+        }
         for (const receiver of live) {
           let source = sources.get(receiver);
           if (!source) {
@@ -857,7 +1307,9 @@ function install(config: MeetCaptureConfig) {
   window.wortlautMeetReceivers.onRemoteDescription = onRemoteDescription;
   for (const queued of window.wortlautMeetReceivers.dataMessages?.splice(0) ?? []) onDataMessage(queued);
   window.wortlautMeetReceivers.onDataMessage = onDataMessage;
-  const interval = setInterval(() => { void inspectReceivers(); }, 500);
+  const interval = setInterval(() => {
+    void inspectReceivers();
+  }, 250);
   const evidence = (receiver: RTCRtpReceiver, id: string) => {
     const source = (item: RTCRtpContributingSource) => ({source: item.source,
       timestamp: item.timestamp, rtp_timestamp: item.rtpTimestamp});
@@ -918,6 +1370,7 @@ function install(config: MeetCaptureConfig) {
       await bridge;
       window.wortlautMeetReceivers.observe = undefined;
       window.wortlautMeetReceivers.onDataMessage = undefined;
+      window.wortlautMeetReceivers.transformDataSend = undefined;
       window.wortlautMeetReceivers.onRemoteDescription = undefined;
       for (const [receiver, entry] of observations) {
         if (entry.transform && receiver.transform === entry.transform) {

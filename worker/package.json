@@ -10,6 +10,7 @@
     "start": "node dist-worker/runtime/main.js",
     "test:audio": "node --import tsx test/browser-audio.ts",
     "test:meet": "node --import tsx test/browser-meet.ts",
+    "test:live": "node --import tsx test/live-provider-e2e.ts",
     "test:receiver": "uv run --directory ../services/meeting python ../../worker/test/receiver.py"
   },
   "dependencies": {

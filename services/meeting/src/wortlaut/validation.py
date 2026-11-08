@@ -17,13 +17,14 @@ def normalize_meeting_url(url: str) -> tuple[Provider, str]:
             or parts.username is not None
             or parts.password is not None
             or parts.port not in (None, 443)
-            or not re.fullmatch(r"/[a-z]{3}-[a-z]{4}-[a-z]{3}/?", parts.path)
+            or not re.fullmatch(r"/(?:meet/)?[a-z]{3}-[a-z]{4}-[a-z]{3}/?", parts.path)
         ):
             raise ValueError("Meeting URL must be an HTTPS Google Meet meeting code")
         # Only this validated destination is navigated. Query/fragment cannot
         # redirect the browser and never change the recording's identity.
+        code = parts.path.strip("/").removeprefix("meet/")
         return "google_meet", urlunsplit(
-            ("https", "meet.google.com", parts.path.rstrip("/"), "", "")
+            ("https", "meet.google.com", f"/{code}", "", "")
         )
     if parts.hostname in ("teams.microsoft.com", "teams.live.com", "teams.cloud.microsoft"):
         if (

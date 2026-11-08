@@ -176,7 +176,12 @@ def test_unknown_acceptance_requires_explicit_retry_and_large_export_reader_is_s
         assert response.content == client.get(endpoint, headers=API).content
     other = create(client, key="reader-other")
     assert client.get(f"/v1/recordings/{other}/exports/json", headers=access).status_code == 401
-    assert client.get(f"/v1/recordings/{recording}", headers=access).status_code == 401
+    assert client.get(f"/v1/recordings/{other}", headers=access).status_code == 401
+    assert client.get("/v1/recordings", headers=access).status_code == 401
+    scoped = client.get(f"/v1/recordings/{recording}", headers=access)
+    assert scoped.status_code == 200
+    assert "accepted_recipients" not in (scoped.json().get("delivery") or {})
+    assert "diagnostics" not in scoped.json()["attempts"][0]
     for endpoint in (
         f"/v1/recordings/{recording}/cancel",
         f"/v1/recordings/{recording}/attempts",

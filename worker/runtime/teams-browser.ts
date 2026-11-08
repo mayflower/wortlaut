@@ -20,6 +20,7 @@ export class TeamsBrowser {
   private stopping?: Promise<void>;
   private reason = '';
   private joined = false;
+  private browserClicked = false;
   private rosterOpened = false;
   private drained: boolean | null = null;
 
@@ -60,7 +61,7 @@ export class TeamsBrowser {
         ? '#microphone-button, [data-tid="toggle-mute"]'
         : '#video-button, [data-tid="toggle-video"]');
       const offAction = this.page.getByRole('button', {name: kind === 'microphone'
-        ? /^(Mute|Turn off microphone|Mikrofon ausschalten|Stummschalten)(?: \(.*\))?$/i
+        ? /^(Mute|Turn off microphone|Mikrofon ausschalten|Mikrofon stummschalten|Stummschalten)(?: \(.*\))?$/i
         : /^(Turn off camera|Turn camera off|Turn off video|Turn video off|Kamera ausschalten)(?: \(.*\))?$/i});
       if (await offAction.first().isVisible()) await offAction.first().click();
       else if (await control.first().isVisible()) {
@@ -91,7 +92,8 @@ export class TeamsBrowser {
       }).or(this.page.getByRole('link', {
         name: browserLabel,
       }));
-      if (await browser.first().isVisible()) {
+      if (!this.browserClicked && !this.page.url().includes('lightExperience=true') && await browser.first().isVisible()) {
+        this.browserClicked = true;
         await browser.first().click();
         continue;
       }
@@ -103,7 +105,9 @@ export class TeamsBrowser {
         await this.initialize?.();
         await name.first().fill(this.bootstrap.teams.display_name);
         const computer = this.page.getByRole('radio', {name: /^(Computer audio|Computeraudio)(?:\s|$)/i});
-        if (await computer.isVisible()) await computer.check();
+        if (await computer.isVisible() && !(await computer.isChecked().catch(() => true))) {
+          await computer.check({force: true, timeout: 2000}).catch(() => {});
+        }
         const speakerOn = this.page.getByRole('button', {
           name: /^(Turn speaker on|Speaker is off|Lautsprecher einschalten)(?:\s|$)/i,
         });

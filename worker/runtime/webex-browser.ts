@@ -26,8 +26,10 @@ export class WebexBrowser {
   }
 
   private frame(): Frame | undefined {
-    return this.page.frames().find(frame =>
-      /^https:\/\/web\.webex\.com\/meeting(?:[?#]|$)/.test(frame.url()));
+    const frames = this.page.frames().filter(frame =>
+      /^https:\/\/web\.webex\.com\/(?:meeting|guest-join-meeting)(?:[?#]|$)/.test(frame.url()) &&
+      !frame.url().includes('preload=true'));
+    return frames[frames.length - 1];
   }
 
   private async click(button: Locator) {
@@ -52,7 +54,20 @@ export class WebexBrowser {
 
   async join() {
     const until = Date.now() + 60000;
-    while (!this.frame() && Date.now() < until && !this.stopping) {
+    while (Date.now() < until && !this.stopping) {
+      const candidate = this.frame();
+      if (candidate && await candidate.getByRole('textbox', {name: /^(Name|Your name|Ihr Name)$/i}).isVisible().catch(() => false)) {
+        break;
+      }
+      const joinBrowser = this.page.locator('#broadcom-center-right, #push_download_join_by_browser')
+        .or(this.page.getByRole('button', {
+          name: /^(Join from (?:this|your) browser|Join from browser|Über diesen Browser beitreten|Im Browser beitreten)$/i,
+        }));
+      if (await joinBrowser.first().isVisible().catch(() => false)) {
+        await joinBrowser.first().evaluate(el => (el as HTMLElement).click()).catch(() => {});
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        continue;
+      }
       await new Promise(resolve => setTimeout(resolve, 250));
     }
     if (this.stopping) return;
@@ -62,7 +77,8 @@ export class WebexBrowser {
     await name.waitFor({state: 'visible', timeout: 60000});
     await this.initialize?.();
     for (const label of [/^(Reject|Ablehnen)$/i,
-      /^(Continue without microphone and camera|Ohne Mikrofon und Kamera fortfahren)$/i]) {
+      /^(Continue without microphone and camera|Ohne Mikrofon und Kamera fortfahren)$/i,
+      /^(Continue without microphone|Ohne Mikrofon fortfahren)$/i]) {
       const button = frame.getByRole('button', {name: label});
       if (await button.isVisible()) {
         await this.click(button);
@@ -71,12 +87,12 @@ export class WebexBrowser {
     }
     await name.fill(this.bootstrap.webex_browser.display_name);
     // Both send controls must visibly be off before requesting admission.
-    await frame.getByRole('button', {name: /^Microphone is currently muted|^Mikrofon.*stummgeschaltet/i})
+    await frame.getByRole('button', {name: /^(?:Your )?microphone is currently muted|^(?:Ihr )?Mikrofon.*stummgeschaltet/i})
       .waitFor({state: 'visible', timeout: 10000});
-    await frame.getByRole('button', {name: /^Sending video is currently disabled|^Video.*deaktiviert/i})
+    await frame.getByRole('button', {name: /^Sending video is currently disabled|^(?:Senden von )?Video.*deaktiviert/i})
       .waitFor({state: 'visible', timeout: 10000});
     if (this.stopping) return;
-    const join = frame.getByRole('button', {name: /^(Join meeting|Meeting beitreten)(?:\s|$)/i});
+    const join = frame.getByRole('button', {name: /^(?:Join meeting(?:\s|$)|Meeting\b.*beitreten)/i});
     await this.click(join);
     this.joined = true;
   }
@@ -87,17 +103,17 @@ export class WebexBrowser {
     if (state?.reason) this.reason = state.reason;
     const text = await frame?.locator('body').ariaSnapshot().catch(() => '') ?? '';
     let participation = 'joining';
-    if (/waiting for (?:the )?host|host.*(?:let you in|admit)|wait.*lobby|Warten.*Gastgeber/i.test(text)) {
+    if (/waiting for (?:the )?host|host.*(?:let you in|admit)|wait.*lobby|in the lobby|Lobby des Meetings|bis der Host Sie einlässt|Warten.*(?:Gastgeber|Host)/i.test(text)) {
       participation = 'waiting_admission';
-    } else if (this.joined && frame && await frame.getByRole('button', {
-      name: /^(Leave meeting|Leave|Meeting verlassen|Verlassen)(?:\s|$)/i,
+    } else if (!/Verbindung wird hergestellt|Connecting/i.test(text) && this.joined && frame && await frame.getByRole('button', {
+      name: /^(Leave meeting|Leave|Meeting verlassen|Meeting verlassen oder Meeting für alle beenden|Verlassen)(?:\s|$)/i,
     }).first().isVisible()) {
       participation = 'capturing';
       if (!this.rosterOpened) {
         this.rosterOpened = true;
         const toggle = frame.getByRole('button', {
-          name: /^(?:Participants|Show participants|People|Teilnehmer|Teilnehmer anzeigen|Personen)(?:\b|\s|$)/i,
-        }).and(frame.locator('[aria-expanded="false"], [aria-pressed="false"]')).first();
+          name: /^(?:Participants|Show participants|Open participants|People|Teilnehmer|Teilnehmer anzeigen|Teilnehmerbereich öffnen|Personen)(?:\b|\s|$)/i,
+        }).and(frame.locator(':not([aria-expanded="true"]):not([aria-pressed="true"])')).first();
         if (await toggle.isVisible().catch(() => false)) {
           await this.click(toggle).catch(() => {});
         }
@@ -122,8 +138,16 @@ export class WebexBrowser {
       const frame = this.frame();
       const ended = await frame?.evaluate(() => window.wortlautMeet?.stop()).catch(() => false);
       this.drained = await this.transport.drain() && ended === true;
-      const leave = frame?.getByRole('button', {name: /^(Leave meeting|Leave|Meeting verlassen|Verlassen)(?:\s|$)/i}).first();
-      if (leave && await leave.isVisible()) await this.click(leave).catch(() => {});
+      const leave = frame?.getByRole('button', {
+        name: /^(Leave meeting|Leave|Meeting verlassen|Meeting verlassen oder Meeting für alle beenden|Verlassen)(?:\s|$)/i,
+      }).first();
+      if (leave && await leave.isVisible()) {
+        await this.click(leave).catch(() => {});
+        const confirmLeave = frame?.getByRole('button', {name: /^(Leave meeting|Meeting verlassen)$/i}).first();
+        if (confirmLeave && await confirmLeave.isVisible().catch(() => false)) {
+          await this.click(confirmLeave).catch(() => {});
+        }
+      }
     })();
   }
 }

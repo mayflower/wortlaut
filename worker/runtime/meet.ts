@@ -26,9 +26,11 @@ export async function installMeetCapture(page: Page, bootstrap: Pick<MeetBootstr
   await page.exposeBinding('wortlautMeetBridge', (source, raw: MeetBridgeMessage) => {
     const url = new URL(source.frame.url());
     if (source.page !== page || source.frame !== captureFrame ||
-        (provider === 'webex' ? url.origin !== 'https://web.webex.com' || url.pathname !== '/meeting'
+        (provider === 'webex' ? url.origin !== 'https://web.webex.com' || !/^\/(?:meeting|guest-join-meeting)$/.test(url.pathname) ||
+          url.search.includes('preload=true')
           : provider === 'teams' ? !isTeamsOrigin(url)
-          : url.origin !== 'https://meet.google.com' || url.pathname !== new URL(bootstrap.meeting_url).pathname) ||
+          : url.origin !== 'https://meet.google.com' ||
+            url.pathname.replace(/^\/meet\//, '/') !== new URL(bootstrap.meeting_url).pathname.replace(/^\/meet\//, '/')) ||
         !raw || raw.attempt_id !== bootstrap.attempt_id || !['control', 'chunk'].includes(raw.type)) {
       throw new MeetError('browser_bridge_rejected');
     }
@@ -94,51 +96,75 @@ export async function installMeetCapture(page: Page, bootstrap: Pick<MeetBootstr
   // bundle is loaded once in the main Meet document, before clicking join.
   await page.addInitScript((config: MeetCaptureConfig) => {
     if (config.provider === 'webex'
-      ? location.origin !== 'https://web.webex.com' || location.pathname !== '/meeting'
+      ? location.origin !== 'https://web.webex.com' || !/^\/(?:meeting|guest-join-meeting)$/.test(location.pathname)
       : config.provider === 'teams' ? window !== window.top || !config.teams_origins?.includes(location.origin)
       : window !== window.top || location.origin !== 'https://meet.google.com' ||
-        location.pathname !== new URL(config.meeting_url).pathname) return;
+        location.pathname.replace(/^\/meet\//, '/') !== new URL(config.meeting_url).pathname.replace(/^\/meet\//, '/')) return;
     window.wortlautMeetConfig = config;
     const connections = new Set<RTCPeerConnection>(), received = new WeakSet<RTCRtpReceiver>();
     const encodedReserved = new WeakSet<RTCPeerConnection>();
     const receiverStreams = new WeakMap<RTCRtpReceiver, string[]>();
     const dataChannels = new Set<RTCDataChannel>();
+    const hookedChannels = new WeakSet<RTCDataChannel>();
     const dataMessages: unknown[] = [];
+    const dataSends: {channel: RTCDataChannel; data: unknown}[] = [];
     const remoteDescriptions: string[] = [];
+    const pushDataMessage = (wrapped: unknown) => {
+      if (window.wortlautMeetReceivers.onDataMessage) {
+        window.wortlautMeetReceivers.onDataMessage(wrapped);
+      } else if (dataMessages.length < 256) {
+        dataMessages.push(wrapped);
+      }
+    };
+    const attachDataChannel = (channel: RTCDataChannel) => {
+      dataChannels.add(channel);
+      if (hookedChannels.has(channel)) return;
+      hookedChannels.add(channel);
+      channel.addEventListener('message', (event) => {
+        pushDataMessage({__wortlautChannel: channel.label || 'default',
+          readyState: channel.readyState || 'open', data: event.data});
+      });
+      if (typeof channel.send === 'function') {
+        channel.send = new Proxy(channel.send, {apply(sendFn, sendThis, sendArgs) {
+          let payload = sendArgs[0];
+          if (window.wortlautMeetReceivers.transformDataSend) {
+            payload = window.wortlautMeetReceivers.transformDataSend(channel, payload);
+          } else if (dataSends.length < 64) {
+            dataSends.push({channel, data: payload});
+          }
+          return Reflect.apply(sendFn, sendThis, [payload, ...sendArgs.slice(1)]);
+        }});
+      }
+    };
     window.wortlautMeetReceivers = {connections, received, encodedReserved, receiverStreams,
-      dataChannels, dataMessages, remoteDescriptions};
+      dataChannels, dataMessages, dataSends, remoteDescriptions};
     const Native = window.RTCPeerConnection;
     window.RTCPeerConnection = new Proxy(Native, {construct(target, args, newTarget) {
       const pc = Reflect.construct(target, args, newTarget) as RTCPeerConnection;
       connections.add(pc);
       if (args[0]?.encodedInsertableStreams === true) encodedReserved.add(pc);
-      pc.setRemoteDescription = new Proxy(pc.setRemoteDescription, {apply(fn, thisArg, sdpArgs) {
-        const sdp = sdpArgs[0]?.sdp;
-        if (typeof sdp === 'string' && sdp.length <= 524288) {
+      let lastRemoteSdp = '';
+      const recordRemoteSdp = (sdp: unknown) => {
+        if (typeof sdp === 'string' && sdp.length > 0 && sdp.length <= 524288 && sdp !== lastRemoteSdp) {
+          lastRemoteSdp = sdp;
           if (remoteDescriptions.length < 64) remoteDescriptions.push(sdp);
           window.wortlautMeetReceivers.onRemoteDescription?.(sdp);
         }
+      };
+      pc.setRemoteDescription = new Proxy(pc.setRemoteDescription, {apply(fn, thisArg, sdpArgs) {
+        recordRemoteSdp(sdpArgs[0]?.sdp);
         return Reflect.apply(fn, thisArg, sdpArgs);
       }});
+      pc.addEventListener('signalingstatechange', () => {
+        recordRemoteSdp(pc.remoteDescription?.sdp);
+      });
       pc.createDataChannel = new Proxy(pc.createDataChannel, {apply(fn, thisArg, channelArgs) {
         const channel = Reflect.apply(fn, thisArg, channelArgs) as RTCDataChannel;
-        dataChannels.add(channel);
-        channel.addEventListener('message', (event) => {
-          const wrapped = {__wortlautChannel: channel.label || 'default',
-            readyState: channel.readyState || 'open', data: event.data};
-          if (dataMessages.length < 256) dataMessages.push(wrapped);
-          window.wortlautMeetReceivers.onDataMessage?.(wrapped);
-        });
+        attachDataChannel(channel);
         return channel;
       }});
       pc.addEventListener('datachannel', (event) => {
-        dataChannels.add(event.channel);
-        event.channel.addEventListener('message', (msg) => {
-          const wrapped = {__wortlautChannel: event.channel.label || 'default',
-            readyState: event.channel.readyState || 'open', data: msg.data};
-          if (dataMessages.length < 256) dataMessages.push(wrapped);
-          window.wortlautMeetReceivers.onDataMessage?.(wrapped);
-        });
+        attachDataChannel(event.channel);
       });
       pc.addEventListener('track', (event) => {
         received.add(event.receiver);
@@ -150,7 +176,7 @@ export async function installMeetCapture(page: Page, bootstrap: Pick<MeetBootstr
       });
       return pc;
     }});
-    if (typeof window.fetch === 'function') {
+    if (config.provider !== 'google_meet' && typeof window.fetch === 'function') {
       window.fetch = new Proxy(window.fetch, {apply(fn, thisArg, fetchArgs) {
         const reqUrl = typeof fetchArgs[0] === 'string'
           ? fetchArgs[0]
@@ -161,10 +187,8 @@ export async function installMeetCapture(page: Page, bootstrap: Pick<MeetBootstr
           if (/json|protobuf|octet-stream|text\/plain/i.test(ct) ||
               /sync|roster|participant|locus|meeting|space/i.test(reqUrl)) {
             res.clone().arrayBuffer().then((buf) => {
-              if (buf.byteLength > 0 && buf.byteLength <= 65536) {
-                const wrapped = {__wortlautChannel: 'http:fetch', readyState: 'open', data: buf};
-                if (dataMessages.length < 256) dataMessages.push(wrapped);
-                window.wortlautMeetReceivers.onDataMessage?.(wrapped);
+              if (buf.byteLength > 0 && buf.byteLength <= 262144) {
+                pushDataMessage({__wortlautChannel: 'http:fetch', readyState: 'open', data: buf});
               }
             }).catch(() => {});
           }
@@ -172,23 +196,21 @@ export async function installMeetCapture(page: Page, bootstrap: Pick<MeetBootstr
         return result;
       }});
     }
-    if (typeof window.WebSocket === 'function') {
+    if (config.provider !== 'google_meet' && typeof window.WebSocket === 'function') {
       window.WebSocket = new Proxy(window.WebSocket, {construct(target, wsArgs, newTarget) {
         const ws = Reflect.construct(target, wsArgs, newTarget) as WebSocket;
         ws.addEventListener('message', (event) => {
           const d = event.data;
-          if ((typeof d === 'string' && d.length > 0 && d.length <= 65536) ||
+          if ((typeof d === 'string' && d.length > 0 && d.length <= 262144) ||
               ((d instanceof ArrayBuffer || ArrayBuffer.isView(d)) &&
-                d.byteLength > 0 && d.byteLength <= 65536)) {
-            const wrapped = {__wortlautChannel: 'ws:signaling', readyState: 'open', data: d};
-            if (dataMessages.length < 256) dataMessages.push(wrapped);
-            window.wortlautMeetReceivers.onDataMessage?.(wrapped);
+                d.byteLength > 0 && d.byteLength <= 262144)) {
+            pushDataMessage({__wortlautChannel: 'ws:signaling', readyState: 'open', data: d});
           }
         });
         return ws;
       }});
     }
-    if (typeof XMLHttpRequest === 'function') {
+    if (config.provider !== 'google_meet' && typeof XMLHttpRequest === 'function') {
       XMLHttpRequest.prototype.send = new Proxy(XMLHttpRequest.prototype.send, {
         apply(fn, thisArg: XMLHttpRequest, xhrArgs) {
           thisArg.addEventListener('load', () => {
@@ -196,17 +218,18 @@ export async function installMeetCapture(page: Page, bootstrap: Pick<MeetBootstr
               const rt = thisArg.responseType;
               if (rt === '' || rt === 'text') {
                 const txt = thisArg.responseText;
-                if (typeof txt === 'string' && txt.length > 0 && txt.length <= 65536) {
-                  const wrapped = {__wortlautChannel: 'http:xhr', readyState: 'open', data: txt};
-                  if (dataMessages.length < 256) dataMessages.push(wrapped);
-                  window.wortlautMeetReceivers.onDataMessage?.(wrapped);
+                if (typeof txt === 'string' && txt.length > 0 && txt.length <= 262144) {
+                  pushDataMessage({__wortlautChannel: 'http:xhr', readyState: 'open', data: txt});
+                }
+              } else if (rt === 'json' && thisArg.response && typeof thisArg.response === 'object') {
+                const txt = JSON.stringify(thisArg.response);
+                if (txt.length > 0 && txt.length <= 262144) {
+                  pushDataMessage({__wortlautChannel: 'http:xhr', readyState: 'open', data: txt});
                 }
               } else if (rt === 'arraybuffer' && thisArg.response instanceof ArrayBuffer &&
-                  thisArg.response.byteLength > 0 && thisArg.response.byteLength <= 65536) {
-                const wrapped = {__wortlautChannel: 'http:xhr',
-                  readyState: 'open', data: thisArg.response};
-                if (dataMessages.length < 256) dataMessages.push(wrapped);
-                window.wortlautMeetReceivers.onDataMessage?.(wrapped);
+                  thisArg.response.byteLength > 0 && thisArg.response.byteLength <= 262144) {
+                pushDataMessage({__wortlautChannel: 'http:xhr',
+                  readyState: 'open', data: thisArg.response});
               }
             } catch {}
           });
@@ -220,11 +243,16 @@ export async function installMeetCapture(page: Page, bootstrap: Pick<MeetBootstr
     if (url.origin === 'https://accounts.google.com') throw new MeetError('auth_session_missing');
     if (provider === 'webex') {
       if (url.origin !== new URL(bootstrap.meeting_url).origin) throw new MeetError('unexpected_browser_origin');
-      captureFrame = page.frames().find(frame =>
-        /^https:\/\/web\.webex\.com\/meeting(?:[?#]|$)/.test(frame.url()));
+      const frames = page.frames().filter(frame =>
+        /^https:\/\/web\.webex\.com\/(?:meeting|guest-join-meeting)(?:[?#]|$)/.test(frame.url()) &&
+        !frame.url().includes('preload=true'));
+      captureFrame = frames[frames.length - 1];
     } else if (provider === 'teams') {
       if (!isTeamsOrigin(url)) throw new MeetError('unexpected_browser_origin');
-    } else if (url.href !== bootstrap.meeting_url) throw new MeetError('unexpected_browser_origin');
+    } else if (url.origin !== 'https://meet.google.com' ||
+        url.pathname.replace(/^\/meet\//, '/') !== new URL(bootstrap.meeting_url).pathname.replace(/^\/meet\//, '/')) {
+      throw new MeetError('unexpected_browser_origin');
+    }
     if (!captureFrame) throw new MeetError('webex_frame_missing');
     await captureFrame.evaluate(bundle);
     await captureFrame.waitForFunction(() => window.wortlautMeet?.inspect().capture_ready ||
@@ -240,12 +268,13 @@ export async function installMeetCapture(page: Page, bootstrap: Pick<MeetBootstr
 // Camera aktivieren was also observed in the German Meet prejoin UI.
 // Only exact English/German actions are used; no broad structural button click.
 const actions = {
-  join: /^(Ask to join|Join now|Teilnahme erbitten|Um Teilnahme bitten|Jetzt teilnehmen)$/i,
+  join: /^(?:Ask to join|Join now|Teilnahme erbitten|Um Teilnahme bitten|Jetzt teilnehmen|(?:add_to_queue\s*)?(?:Join here too|Auch von hier teilnehmen))$/i,
+  withoutMedia: /^(Continue without (?:microphone and camera|camera|microphone)|Ohne (?:Mikrofon und Kamera|Kamera|Mikrofon) fortfahren)$/i,
   leave: /^(Leave call|Leave meeting|Anruf verlassen|Besprechung verlassen)(?: \(.*\))?$/i,
   micOff: /^(Turn off microphone|Mikrofon ausschalten|Mikrofon deaktivieren)(?: \(.*\))?$/i,
-  micOn: /^(Turn on microphone|Mikrofon einschalten|Mikrofon aktivieren)(?: \(.*\))?$/i,
+  micOn: /^(Turn on microphone|Show more info(?: about the microphone problem)?|Mikrofon einschalten|Mikrofon aktivieren|Weitere Informationen(?: zum Mikrofonproblem)? anzeigen)(?: \(.*\))?$/i,
   cameraOff: /^(Turn off camera|Kamera ausschalten|Kamera deaktivieren)(?: \(.*\))?$/i,
-  cameraOn: /^(Turn on camera|Kamera einschalten|Kamera aktivieren)(?: \(.*\))?$/i,
+  cameraOn: /^(Turn on camera|Show more info(?: about the camera problem)?|Kamera einschalten|Kamera aktivieren|Weitere Informationen(?: zum Kameraproblem)? anzeigen)(?: \(.*\))?$/i,
 };
 const waiting = /Please wait until a meeting host brings you into the call|Asking to be let in|You[’']ll join the call when someone lets you|Waiting for the host|waiting room|Um Teilnahme gebeten|Warten.*(?:Zulassung|Gastgeber)|Sobald.*(?:zugelassen|teilnehmen)/i;
 const denied = /You (?:can[’']t|cannot) join this video call|denied your request|request to join was denied|not allowed to join|weren[’']t allowed|Anfrage.*abgelehnt|Teilnahme.*(?:abgelehnt|nicht gestattet)|Sie können nicht an diesem Videoanruf teilnehmen/i;
@@ -255,7 +284,8 @@ const ended = /^(?:This )?(?:meeting|call) (?:has )?ended\.?$|Besprechung.*beend
 // Meet can replace the accessible name with a device-state description.
 function joinButton(page: Page) {
   return page.getByRole('button', {name: actions.join})
-    .or(page.getByRole('button').filter({hasText: actions.join}));
+    .or(page.getByRole('button').filter({hasText: actions.join}))
+    .or(page.getByRole('menuitem').filter({hasText: actions.join}));
 }
 
 async function visible(locator: Locator) { return locator.first().isVisible(); }
@@ -286,7 +316,7 @@ export class MeetBrowser {
     api: string, credential: string, workerId: string,
     private readonly assets?: URL,
     private readonly input: MeetInput = {click: locator => locator.click({timeout: 5000}),
-      fill: (locator, text) => locator.fill(text)}) {
+      fill: (locator, text) => locator.fill(text, {timeout: 5000})}) {
     const ingest = new URL(`/v1/attempts/${bootstrap.attempt_id}/audio`, api);
     if (!['https:', 'http:'].includes(ingest.protocol)) throw new MeetError('invalid_ingest_url');
     ingest.protocol = ingest.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -315,11 +345,38 @@ export class MeetBrowser {
     return true;
   }
 
+  private async dismissWithoutMedia() {
+    let dismissed = false;
+    for (let step = 0; step < 2; step++) {
+      const button = this.page.getByRole('button', {name: actions.withoutMedia});
+      if (!await visible(button)) break;
+      await this.input.click(button.first());
+      await button.first().waitFor({state: 'hidden', timeout: 5000}).catch(() => {});
+      dismissed = true;
+    }
+    return dismissed;
+  }
+
   async join() {
     await this.initialize?.();
     const button = joinButton(this.page);
-    await button.first().waitFor({state: 'visible', timeout: 30000})
-      .catch(() => { throw new MeetError('join_button_missing'); });
+    const joinDeadline = Date.now() + 30000;
+    let otherWaysClicked = false;
+    while (!await visible(button)) {
+      if (this.stopping) return;
+      await this.dismissWithoutMedia()
+        .catch(() => { throw new MeetError('join_click_failed'); });
+      if (await visible(button)) break;
+      const switchHere = this.page.getByRole('button', {name: /^(Switch here|Auf dieses Gerät wechseln)$/i})
+        .or(this.page.getByRole('button').filter({hasText: /^(Switch here|Auf dieses Gerät wechseln)$/i}));
+      const otherWays = this.page.getByRole('button', {name: /^(Other ways to join|Weitere Möglichkeiten zur Teilnahme)$/i});
+      if (!otherWaysClicked && await visible(switchHere) && await visible(otherWays)) {
+        otherWaysClicked = true;
+        await this.input.click(otherWays.first()).catch(() => {});
+      }
+      if (Date.now() >= joinDeadline) throw new MeetError('join_button_missing');
+      await this.page.waitForTimeout(250);
+    }
     if (this.stopping) return;
     const name = this.page.locator('input[type="text"]:not([aria-hidden="true"])');
     if (await visible(name)) {
@@ -327,10 +384,11 @@ export class MeetBrowser {
       if (await name.count() !== 1) throw new MeetError('join_control_ambiguous');
       try {
         await this.dismissSigninTip();
+        await this.dismissWithoutMedia();
         try { await this.input.fill(name, this.bootstrap.meet.display_name); }
         catch (error) {
-          // Meet may display this coachmark after the prejoin controls appear.
-          if (!await this.dismissSigninTip()) throw error;
+          // Meet may display this coachmark or permission dialog after the prejoin controls appear.
+          if (!await this.dismissSigninTip() && !await this.dismissWithoutMedia()) throw error;
           await this.input.fill(name, this.bootstrap.meet.display_name);
         }
       } catch { throw new MeetError('guest_name_input_failed'); }
@@ -341,23 +399,38 @@ export class MeetBrowser {
       [actions.micOff, actions.micOn, 'microphone_state_unconfirmed', 'microphone', 'audioinput'],
       [actions.cameraOff, actions.cameraOn, 'camera_state_unconfirmed', 'camera', 'videoinput'],
     ] as const) {
-      // With no device, Meet can show an off action that only opens a missing-
-      // device warning. Confirm Chromium denies capture before skipping it.
-      const unavailable = await this.page.evaluate(async ({permission, kind}) => {
-        const status = await navigator.permissions.query({name: permission as PermissionName});
-        return status.state === 'denied' &&
-          !(await navigator.mediaDevices.enumerateDevices()).some(device => device.kind === kind);
-      }, {permission, kind}).catch(() => false);
-      if (unavailable) continue;
+      await this.dismissWithoutMedia()
+        .catch(() => { throw new MeetError('join_click_failed'); });
       const turnOff = this.page.getByRole('button', {name: off});
-      if (await visible(turnOff)) await this.input.click(turnOff)
-        .catch(() => { throw new MeetError(reason); });
+      if (await visible(turnOff)) {
+        // With no device, Meet can show an off action that only opens a missing-
+        // device warning. Confirm Chromium denies capture before skipping it.
+        const unavailable = await this.page.evaluate(async ({permission, kind}) => {
+          const status = await navigator.permissions.query({name: permission as PermissionName});
+          return status.state === 'denied' &&
+            !(await navigator.mediaDevices.enumerateDevices()).some(device => device.kind === kind);
+        }, {permission, kind}).catch(() => false);
+        if (unavailable) continue;
+        await this.input.click(turnOff)
+          .catch(() => { throw new MeetError(reason); });
+      }
+      await this.dismissWithoutMedia()
+        .catch(() => { throw new MeetError('join_click_failed'); });
       // Refuse to join with an unconfirmed sending state. Browser permissions
       // are empty as well; no fake microphone/camera is supplied in production.
       await this.page.getByRole('button', {name: on}).first().waitFor({state: 'visible', timeout: 10000})
         .catch(() => { throw new MeetError(reason); });
     }
     if (this.stopping) return;
+    await this.dismissWithoutMedia()
+      .catch(() => { throw new MeetError('join_click_failed'); });
+    if (!await visible(button)) {
+      const otherWays = this.page.getByRole('button', {name: /^(Other ways to join|Weitere Möglichkeiten zur Teilnahme)$/i});
+      if (await visible(otherWays)) {
+        await this.input.click(otherWays.first()).catch(() => {});
+        await button.first().waitFor({state: 'visible', timeout: 5000}).catch(() => {});
+      }
+    }
     if (await button.count() !== 1) throw new MeetError('join_control_ambiguous');
     await this.input.click(button).catch(() => { throw new MeetError('join_click_failed'); });
     this.joinSent = true;
