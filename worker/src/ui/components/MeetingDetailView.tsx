@@ -55,6 +55,7 @@ export interface MeetingDetailViewProps {
   onRefresh: () => void;
   onDeleted: () => void;
   onBackToOverview?: () => void;
+  onNavigateHome?: () => void;
 }
 
 export function MeetingDetailView({
@@ -65,6 +66,7 @@ export function MeetingDetailView({
   onRefresh,
   onDeleted,
   onBackToOverview,
+  onNavigateHome,
 }: MeetingDetailViewProps) {
   const [activeTab, setActiveTab] = useState<
     'transcript' | 'sources' | 'diagnostics'
@@ -282,11 +284,18 @@ export function MeetingDetailView({
         header={
           <LayoutHeader hasDivider paddingBlockEnd={0}>
             <VStack gap={2}>
-              {isOperator && onBackToOverview && (
+              {isOperator && (onBackToOverview || onNavigateHome) && (
                 <Breadcrumbs variant="supporting" label="Pfadnavigation">
-                  <BreadcrumbItem onClick={onBackToOverview}>
-                    Aufnahmen
-                  </BreadcrumbItem>
+                  {onNavigateHome && (
+                    <BreadcrumbItem onClick={onNavigateHome}>
+                      Startseite
+                    </BreadcrumbItem>
+                  )}
+                  {onBackToOverview && (
+                    <BreadcrumbItem onClick={onBackToOverview}>
+                      Aufnahmen
+                    </BreadcrumbItem>
+                  )}
                   <BreadcrumbItem isCurrent>
                     {formatRecordingTitle(recording)}
                   </BreadcrumbItem>

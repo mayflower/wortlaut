@@ -323,7 +323,7 @@ export function App() {
         label: 'Neues Meeting per Link aufzeichnen…',
         auxiliaryData: {
           group: 'Aktionen',
-          keywords: ['start', 'bot', 'link', 'meet', 'teams', 'webex'],
+          keywords: ['start', 'bot', 'link', 'meet', 'teams', 'webex', 'zoom'],
           action: () => handleOpenNewModal('link'),
         },
       },
@@ -337,14 +337,26 @@ export function App() {
         },
       },
       {
+        id: 'nav:home',
+        label: 'Zur Startseite wechseln',
+        auxiliaryData: {
+          group: 'Navigation',
+          keywords: ['startseite', 'home', 'übersicht', 'willkommen'],
+          action: () => {
+            setSelectedId(null);
+            setActiveNav('home');
+          },
+        },
+      },
+      {
         id: 'nav:meetings',
         label: 'Zu Aufnahmen wechseln',
         auxiliaryData: {
           group: 'Navigation',
-          keywords: ['aufnahmen', 'meetings', 'übersicht', 'home'],
+          keywords: ['aufnahmen', 'meetings', 'archiv', 'protokolle'],
           action: () => {
             setSelectedId(null);
-            setActiveNav('home');
+            setActiveNav('meetings');
           },
         },
       },
@@ -468,10 +480,9 @@ export function App() {
           hasSavedAccount={hasSavedAccount}
           onReturnToAccount={handleReturnToAccount}
           activeNav={activeNav}
+          hasSelectedRecording={Boolean(selectedId)}
           onChangeNav={(nav) => {
-            if (nav !== 'meetings') {
-              setSelectedId(null);
-            }
+            setSelectedId(null);
             setActiveNav(nav);
           }}
           recordingsCount={rawRecordings.length}
@@ -502,6 +513,10 @@ export function App() {
           }
           onSelectRecording={handleOpenRecording}
           onOpenImportModal={() => handleOpenNewModal('ics')}
+          onNavigateHome={() => {
+            setSelectedId(null);
+            setActiveNav('home');
+          }}
         />
       ) : activeNav === 'system' ? (
         <SystemView
@@ -513,6 +528,10 @@ export function App() {
           onManualRefresh={handleManualRefresh}
           onOpenAuthDialog={() => setAuthDialogOpen(true)}
           onSelectRecording={handleOpenRecording}
+          onNavigateHome={() => {
+            setSelectedId(null);
+            setActiveNav('home');
+          }}
         />
       ) : selectedId ? (
         <MeetingDetailView
@@ -521,7 +540,14 @@ export function App() {
           transcript={transcriptQuery.data || null}
           isLoading={detailQuery.isLoading || transcriptQuery.isLoading}
           onRefresh={handleManualRefresh}
-          onBackToOverview={() => setSelectedId(null)}
+          onBackToOverview={() => {
+            setSelectedId(null);
+            setActiveNav('meetings');
+          }}
+          onNavigateHome={() => {
+            setSelectedId(null);
+            setActiveNav('home');
+          }}
           onDeleted={() => {
             setSelectedId(null);
             handleManualRefresh();
@@ -529,6 +555,12 @@ export function App() {
         />
       ) : (
         <RecordingSidebar
+          mode={activeNav === 'meetings' ? 'meetings' : 'home'}
+          userName={
+            authMode.kind === 'operator'
+              ? authMode.user?.name || authMode.user?.email || null
+              : null
+          }
           token={token}
           recordings={filteredRecordings}
           totalRecordingsCount={rawRecordings.length}
@@ -544,6 +576,14 @@ export function App() {
           onTitleSearchChange={setTitleSearch}
           onOpenNewRecording={() => handleOpenNewModal('link')}
           onOpenIcsImport={() => handleOpenNewModal('ics')}
+          onNavigateHome={() => {
+            setSelectedId(null);
+            setActiveNav('home');
+          }}
+          onNavigateMeetings={() => {
+            setSelectedId(null);
+            setActiveNav('meetings');
+          }}
           onNavigateCalendar={() => {
             setSelectedId(null);
             setActiveNav('calendar');

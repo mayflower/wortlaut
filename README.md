@@ -1,26 +1,27 @@
 # wortlaut
 
-Self-hosted meeting transcription for Google Meet, Webex, and Microsoft Teams. wortlaut joins as a browser participant, captures incoming WebRTC audio sources per receiver before mixing, transcribes them with a local Parakeet model, and produces TXT, WebVTT, Markdown (`.md`), and JSON exports.
+Self-hosted meeting transcription for Google Meet, Webex, Microsoft Teams, and Zoom. wortlaut joins as a browser participant, captures incoming WebRTC audio sources per receiver before mixing, transcribes them with a local Parakeet model, and produces TXT, WebVTT, Markdown (`.md`), and JSON exports.
 
-Meetings can be scheduled through the HTTP API, the integrated Web-UI (`/` and `/ui`), or email invitations. Meet, Webex, and Teams run side by side, with a provider selected for each recording. They share storage, transcription, and capacity limits.
+Meetings can be scheduled through the HTTP API, the integrated Web-UI (`/` and `/ui`), OAuth2 calendar synchronization (`calendar_oauth.py`), or email invitations. Meet, Webex, Teams, and Zoom run side by side, with a provider selected for each recording. They share storage, transcription, and capacity limits.
 
 ## Current status
 
-wortlaut is under active development. Browser participation, per-receiver WebRTC audio capture, and local Parakeet transcription work across Google Meet, Webex, and Microsoft Teams. Participant names are resolved from the browser DOM, SDP, and signaling channels when unambiguously matched to a receiver source.
+wortlaut is under active development. Browser participation, per-receiver WebRTC audio capture, and local Parakeet transcription work across Google Meet, Webex, Microsoft Teams, and Zoom. Participant names are resolved from the browser DOM, SDP, and signaling channels when unambiguously matched to a receiver source.
 
 | Provider | Available path | Current status & limits |
 | --- | --- | --- |
 | Google Meet | Chromium web client ([capture.ts](worker/src/meet/capture.ts)); guest or saved browser session | Per-receiver WebRTC audio capture and participant binding verified live |
-| Webex | Chromium guest join ([webex-browser.ts](worker/src/webex-browser.ts)); separate SDK path also available | Browser join, multistream `AUDIO-MAIN` receiver capture, and `activeSpeakerNotification` DataChannel attribution verified live. SDK path needs separate live validation |
-| Microsoft Teams | Chromium guest join with English/German controls ([teams-browser.ts](worker/src/teams-browser.ts)) | Per-receiver WebRTC audio capture and CSI participant rebinding verified live |
+| Webex | Chromium guest join ([webex-browser.ts](worker/runtime/webex-browser.ts)); separate SDK path also available | Browser join, multistream `AUDIO-MAIN` receiver capture, and `activeSpeakerNotification` DataChannel attribution verified live. SDK path needs separate live validation |
+| Microsoft Teams | Chromium guest join with English/German controls ([teams-browser.ts](worker/runtime/teams-browser.ts)) | Per-receiver WebRTC audio capture and CSI participant rebinding verified live |
+| Zoom | Chromium web client ([zoom-browser.ts](worker/runtime/zoom-browser.ts), [zoom-url.ts](worker/src/zoom-url.ts)); guest or saved browser session | Anonymous browser join, waiting room admission, DOM roster inspection, and `RTCRtpReceiver` Opus audio capture verified live (`attribution_unknown: true` when Zoom's web client does not expose per-participant SSRC signaling) |
 
 Unbound sources are explicitly marked `speaker_id: null` and `attribution_unknown: true` when transcribed speech cannot be attributed to a verified participant session; source coverage remains `unknown` unless complete signaling coverage is proven.
 
-The intended model is transcription per incoming source with a verified provider participant identity. Speaker diarization, voiceprints, and active-speaker name guesses are not substitutes for that binding. Meet uses the browser only: no Google Meet REST, Media, or Calendar API.
+The intended model is transcription per incoming source with a verified provider participant identity. Speaker diarization, voiceprints, and active-speaker name guesses are not substitutes for that binding. Meet uses the browser only for conference participation and audio capture (no Google Meet REST or Media API); for calendar event discovery, OAuth2 read-only calendar synchronization (Google Calendar `calendar.readonly` and Microsoft Graph `Calendars.Read` in [calendar_oauth.py](services/meeting/src/wortlaut/calendar_oauth.py)) is supported alongside IMAP/`.ics` invitations.
 
 ## Architecture
 
-- **Meeting service** ([app.py](services/meeting/src/wortlaut/app.py), [models.py](services/meeting/src/wortlaut/models.py)) — Python/FastAPI, integrated Web-UI ([ui.py](services/meeting/src/wortlaut/ui.py) serving `/` and `/ui`), Dex OIDC authentication ([oidc.py](services/meeting/src/wortlaut/oidc.py)), PostgreSQL-backed scheduling, Kubernetes worker management, audio ingest, exports ([exports.py](services/meeting/src/wortlaut/exports.py)), and email processing ([mail.py](services/meeting/src/wortlaut/mail.py)) in one service.
+- **Meeting service** ([app.py](services/meeting/src/wortlaut/app.py), [models.py](services/meeting/src/wortlaut/models.py)) — Python/FastAPI, integrated Web-UI ([ui.py](services/meeting/src/wortlaut/ui.py) serving `/` and `/ui`), Dex OIDC authentication ([oidc.py](services/meeting/src/wortlaut/oidc.py)), calendar & OAuth2 sync ([calendar.py](services/meeting/src/wortlaut/calendar.py), [calendar_oauth.py](services/meeting/src/wortlaut/calendar_oauth.py)), PostgreSQL-backed scheduling, Kubernetes worker management ([controller.py](services/meeting/src/wortlaut/controller.py)), audio ingest, exports ([exports.py](services/meeting/src/wortlaut/exports.py)), and email processing ([mail.py](services/meeting/src/wortlaut/mail.py)) in one service.
 - **Worker** ([worker](worker)) — TypeScript, Playwright, and sandboxed Chromium; one short-lived Kubernetes Job per meeting. Browser workers use a virtual display under Linux. The alternative Webex SDK path uses a hosted HTTPS page.
 - **ASR service** ([services/asr](services/asr)) — a shared local Parakeet model for speech recognition.
 - **Storage** — PostgreSQL for state and transcripts, S3-compatible storage for audio.
@@ -88,9 +89,18 @@ WORTLAUT_ENABLE_TEAMS=true
 WORTLAUT_TEAMS_LOCALE=en-US
 ```
 
-Use `provider: "teams"` with the full invitation URL, including its query parameters. Teams supports API scheduling and iCalendar invitations, with the same capacity limits as Meet and Webex.
+Use `provider: "teams"` with the full invitation URL, including its query parameters. Teams supports API scheduling, OAuth2 calendar sync, and iCalendar invitations, with the same capacity limits as Meet, Webex, and Zoom.
 
-The browser worker handles English/German join controls and the admission lobby, captures incoming WebRTC receiver tracks, and streams them to ASR. Browser fixtures pass; a live Teams test is still required.
+The browser worker handles English/German join controls and the admission lobby, captures incoming WebRTC receiver tracks, and streams them to ASR. Browser fixtures and live CSI participant rebinding have been verified.
+
+**Zoom browser guest — `.dev/zoom.env`:**
+
+```dotenv
+WORTLAUT_ENABLE_ZOOM=true
+WORTLAUT_ZOOM_LOCALE=en-US
+```
+
+Use `provider: "zoom"` with a `https://*.zoom.us/j/<id>?pwd=...` or `https://app.zoom.us/wc/<id>/join?pwd=...` invitation URL (normalized automatically to the Zoom web client `/wc/<id>/join`). To use an authorized saved browser session when a meeting requires Zoom sign-in, place its Playwright storage state in `.dev/zoom-storage-state.json` and set `WORTLAUT_ZOOM_STORAGE_STATE_SECRET=wortlaut-zoom-browser`.
 
 After changing provider or mail configuration in a running environment:
 
@@ -111,7 +121,7 @@ wortlaut supports three credential types ([oidc.py](services/meeting/src/wortlau
 Set `MEETING_URL` to a real meeting you are authorized to record, and `STARTS_AT` / `ENDS_AT` to ISO 8601 timestamps including a timezone.
 
 ```sh
-# Requires jq. Use provider=webex for a Webex URL or provider=teams for Teams.
+# Requires jq. Use provider=webex for Webex, provider=teams for Teams, or provider=zoom for Zoom.
 IDEMPOTENCY_KEY=$(uuidgen) # Keep this value for retries of this request.
 jq -n --arg url "$MEETING_URL" --arg start "$STARTS_AT" --arg end "$ENDS_AT" \
   '{provider:"google_meet", meeting_url:$url, starts_at:$start, ends_at:$end}' |
@@ -160,7 +170,7 @@ WORTLAUT_SMTP_FROM=bot@example.org
 
 Defaults are IMAP over TLS on port 993 and SMTP with STARTTLS on port 587. DKIM mode verifies signatures against DNS and requires an allowed sender domain; the visible From address alone is insufficient. Calendar organizers must match the authenticated sender.
 
-Supported invitations include iCalendar messages and immediate email invitations containing a meeting link in text or HTML for Google Meet, Webex, and Microsoft Teams. Signed Google Meet notifications are supported with the inviter checked against the same domain allowlist. Immediate invitations default to 120 minutes from the signed sending time (`WORTLAUT_INSTANT_INVITE_MINUTES`). Duplicate messages do not create duplicate recordings.
+Supported invitations include iCalendar messages and immediate email invitations containing a meeting link in text or HTML for Google Meet, Webex, Microsoft Teams, and Zoom. Signed Google Meet notifications are supported with the inviter checked against the same domain allowlist. Immediate invitations default to 120 minutes from the signed sending time (`WORTLAUT_INSTANT_INVITE_MINUTES`). Duplicate messages do not create duplicate recordings. In addition to email invitations, users can connect Google Calendar (`calendar.readonly`) or Microsoft 365 Calendar (`Calendars.Read`) via OAuth2 PKCE in the Web-UI (`POST /v1/calendar/oauth/exchange`, `POST /v1/calendar/oauth/connections/{id}/sync`, `PATCH /v1/calendar/oauth/connections/{id}`, `DELETE /v1/calendar/oauth/connections/{id}`, `POST /v1/calendar/oauth/events/{id}/toggle`).
 
 Alternatively, `WORTLAUT_MAIL_SENDER_AUTH=gateway` uses `WORTLAUT_TRUSTED_SENDER_HEADER` and `WORTLAUT_ORGANIZER_PERMISSIONS`. This requires a trusted mail gateway that strips incoming copies of the configured header and sets it after authenticating the sender. Ordinary mailboxes must not rely on a sender-supplied header.
 

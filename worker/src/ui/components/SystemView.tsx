@@ -6,6 +6,7 @@ import {
   KeyRound,
 } from 'lucide-react';
 import { Layout, LayoutContent, LayoutHeader } from '@astryxdesign/core/Layout';
+import { Breadcrumbs, BreadcrumbItem } from '@astryxdesign/core/Breadcrumbs';
 import { Heading } from '@astryxdesign/core/Heading';
 import { Text } from '@astryxdesign/core/Text';
 import { HStack } from '@astryxdesign/core/HStack';
@@ -42,6 +43,7 @@ export interface SystemViewProps {
   onManualRefresh: () => void;
   onOpenAuthDialog: () => void;
   onSelectRecording: (id: string) => void;
+  onNavigateHome?: () => void;
 }
 
 type ProblemRow = RecordingSummary & Record<string, unknown>;
@@ -51,6 +53,7 @@ export function SystemView({
   recordings,
   onOpenAuthDialog,
   onSelectRecording,
+  onNavigateHome,
 }: SystemViewProps) {
   const failureReasons = getFailureReasons();
   const instance = getInstanceInfo();
@@ -149,9 +152,18 @@ export function SystemView({
       height="fill"
       header={
         <LayoutHeader hasDivider>
-          <HStack justify="between" vAlign="center" wrap="wrap" gap={3}>
-            <VStack gap={0.5}>
-              <Heading level={1}>Hilfe &amp; Systemstatus</Heading>
+          <VStack gap={2}>
+            {onNavigateHome && (
+              <Breadcrumbs variant="supporting" label="Pfadnavigation">
+                <BreadcrumbItem onClick={onNavigateHome}>
+                  Startseite
+                </BreadcrumbItem>
+                <BreadcrumbItem isCurrent>System &amp; Hilfe</BreadcrumbItem>
+              </Breadcrumbs>
+            )}
+            <HStack justify="between" vAlign="center" wrap="wrap" gap={3}>
+              <VStack gap={0.5}>
+                <Heading level={1}>Hilfe &amp; Systemstatus</Heading>
               <Text type="supporting" color="secondary">
                 Ablauf einer Aufzeichnung, Datenschutzgarantien, konfigurierte
                 Konferenz-Provider und Systembereitschaft.
@@ -185,6 +197,7 @@ export function SystemView({
               />
             </HStack>
           </HStack>
+          </VStack>
         </LayoutHeader>
       }
       content={

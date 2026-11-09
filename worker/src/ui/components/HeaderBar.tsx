@@ -1,11 +1,12 @@
 import React from 'react';
 import {
+  AudioLines,
   Calendar,
   CalendarPlus,
+  FileText,
   HelpCircle,
   Home,
   KeyRound,
-  LayoutDashboard,
   Moon,
   RefreshCw,
   Search,
@@ -42,6 +43,7 @@ export interface HeaderBarProps {
   hasSavedAccount?: boolean;
   onReturnToAccount?: () => void;
   activeNav: NavSection;
+  hasSelectedRecording?: boolean;
   onChangeNav: (nav: NavSection) => void;
   recordingsCount: number;
   activeLiveCount: number;
@@ -83,18 +85,34 @@ export function ReaderTopBar({
       className="border-b border-[var(--color-border)] bg-[var(--color-background-surface)]"
     >
       <HStack gap={2} vAlign="center" wrap="wrap">
-        <HStack gap={1.5} vAlign="center">
-          <span id="health-dot">
-            <StatusDot
-              variant={healthy ? 'success' : 'error'}
-              label="wortlaut"
-              tooltip={healthy ? 'System bereit' : 'System nicht erreichbar'}
-            />
+        <a
+          id="brand-home-link"
+          href="#view=home"
+          onClick={(e) => {
+            if (authMode.kind === 'reader' && hasSavedAccount && onReturnToAccount) {
+              e.preventDefault();
+              onReturnToAccount();
+            }
+          }}
+          title="Zur wortlaut Startseite"
+          className="group flex items-center gap-2.5 rounded-lg px-1.5 py-1 no-underline transition-colors hover:bg-[var(--color-background-muted)] focus:outline-none"
+        >
+          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--color-background-accent-subtle,#2563eb1a)] text-[var(--color-text-accent,#3b82f6)] ring-1 ring-[var(--color-border)] transition-transform group-hover:scale-105">
+            <AudioLines className="h-4 w-4" />
           </span>
-          <Text type="body" weight="bold">
-            wortlaut
-          </Text>
-        </HStack>
+          <HStack gap={1.5} vAlign="center">
+            <Text type="body" weight="bold">
+              wortlaut
+            </Text>
+            <span id="health-dot">
+              <StatusDot
+                variant={healthy ? 'success' : 'error'}
+                label=""
+                tooltip={healthy ? 'System bereit' : 'System nicht erreichbar'}
+              />
+            </span>
+          </HStack>
+        </a>
         {authMode.kind === 'reader' ? (
           <Token
             size="sm"
@@ -104,7 +122,7 @@ export function ReaderTopBar({
           />
         ) : (
           <Text type="supporting" color="secondary">
-            Google Meet · Microsoft Teams · Cisco Webex
+            Google Meet · Microsoft Teams · Cisco Webex · Zoom
           </Text>
         )}
       </HStack>
@@ -156,6 +174,7 @@ export function HeaderBar({
   healthy,
   authMode,
   activeNav,
+  hasSelectedRecording = false,
   onChangeNav,
   recordingsCount,
   activeLiveCount,
@@ -169,36 +188,48 @@ export function HeaderBar({
   onOpenCommandPalette,
 }: HeaderBarProps) {
   const { mode, setMode } = useThemeMode();
-  const isMeetingsActive = activeNav === 'home' || activeNav === 'meetings';
+  const isHomeSelected = activeNav === 'home' && !hasSelectedRecording;
+  const isMeetingsSelected = activeNav === 'meetings' || hasSelectedRecording;
 
   return (
     <SideNav
       collapsible={{ defaultIsCollapsed: false, hasButton: true }}
       header={
-        <SideNavHeading
-          heading="wortlaut"
-          subheading="Meet · Teams · Webex"
-          headerEndContent={
-            <span id="health-dot">
-              <StatusDot
-                variant={healthy ? 'success' : 'error'}
-                label=""
-                tooltip={healthy ? 'System bereit' : 'System nicht erreichbar'}
-              />
-            </span>
-          }
-        />
+        <div
+          id="brand-home-link"
+          onClick={() => onChangeNav('home')}
+        >
+          <SideNavHeading
+            icon={
+              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-[var(--color-background-accent-subtle,#2563eb1a)] text-[var(--color-text-accent,#3b82f6)] ring-1 ring-[var(--color-border)]">
+                <AudioLines className="h-4 w-4" />
+              </span>
+            }
+            heading="wortlaut"
+            headingHref="#view=home"
+            subheading="Meet · Teams · Webex · Zoom"
+            headerEndContent={
+              <span id="health-dot">
+                <StatusDot
+                  variant={healthy ? 'success' : 'error'}
+                  label=""
+                  tooltip={healthy ? 'System bereit' : 'System nicht erreichbar'}
+                />
+              </span>
+            }
+          />
+        </div>
       }
       topContent={
         authMode.kind === 'operator' ? (
           <VStack gap={1.5} paddingInline={2} paddingBlockEnd={1}>
             <span id="open-dispatch-modal-btn" className="contents">
               <Button
-                variant="secondary"
+                variant="primary"
                 size="sm"
                 width="fill"
                 icon={<CalendarPlus className="h-3.5 w-3.5" />}
-                label="Meeting planen / .ics"
+                label="Neue Aufnahme"
                 onClick={onOpenNewRecording}
               />
             </span>
@@ -297,10 +328,16 @@ export function HeaderBar({
       {authMode.kind === 'operator' && (
         <SideNavSection title="Navigation" isHeaderHidden>
           <SideNavItem
-            label="Übersicht & Aufnahmen"
-            icon={<LayoutDashboard className="h-4 w-4" />}
-            isSelected={isMeetingsActive}
+            label="Startseite"
+            icon={<Home className="h-4 w-4" />}
+            isSelected={isHomeSelected}
             onClick={() => onChangeNav('home')}
+          />
+          <SideNavItem
+            label="Aufnahmen"
+            icon={<FileText className="h-4 w-4" />}
+            isSelected={isMeetingsSelected}
+            onClick={() => onChangeNav('meetings')}
             endContent={
               <HStack gap={1} vAlign="center">
                 {activeLiveCount > 0 && (
@@ -315,7 +352,7 @@ export function HeaderBar({
             }
           />
           <SideNavItem
-            label="Kalender-Automatik"
+            label="Kalender"
             icon={<Calendar className="h-4 w-4" />}
             isSelected={activeNav === 'calendar'}
             onClick={() => onChangeNav('calendar')}
@@ -335,7 +372,7 @@ export function HeaderBar({
             }
           />
           <SideNavItem
-            label="Hilfe & Systemstatus"
+            label="System & Hilfe"
             icon={<HelpCircle className="h-4 w-4" />}
             isSelected={activeNav === 'system'}
             onClick={() => onChangeNav('system')}

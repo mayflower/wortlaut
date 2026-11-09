@@ -18,6 +18,7 @@ import {
   X,
 } from 'lucide-react';
 import { Layout, LayoutContent, LayoutHeader } from '@astryxdesign/core/Layout';
+import { Breadcrumbs, BreadcrumbItem } from '@astryxdesign/core/Breadcrumbs';
 import { Heading } from '@astryxdesign/core/Heading';
 import { Text } from '@astryxdesign/core/Text';
 import { HStack } from '@astryxdesign/core/HStack';
@@ -66,6 +67,8 @@ export type QuickStatusFilter =
   | 'failed';
 
 export interface RecordingSidebarProps {
+  mode?: 'home' | 'meetings';
+  userName?: string | null;
   token?: string;
   recordings: RecordingSummary[];
   totalRecordingsCount?: number;
@@ -81,6 +84,8 @@ export interface RecordingSidebarProps {
   onTitleSearchChange: (q: string) => void;
   onOpenNewRecording: () => void;
   onOpenIcsImport?: () => void;
+  onNavigateHome?: () => void;
+  onNavigateMeetings?: () => void;
   onNavigateCalendar?: () => void;
   onRefreshCalendar?: () => void;
   onCreatedRecording?: (id: string) => void;
@@ -144,6 +149,8 @@ function formatUpcomingSlot(
 }
 
 export function RecordingSidebar({
+  mode = 'home',
+  userName,
   token = '',
   recordings,
   totalRecordingsCount,
@@ -158,6 +165,8 @@ export function RecordingSidebar({
   onTitleSearchChange,
   onOpenNewRecording,
   onOpenIcsImport,
+  onNavigateHome,
+  onNavigateMeetings,
   onNavigateCalendar,
   onRefreshCalendar,
   onCreatedRecording,
@@ -194,11 +203,12 @@ export function RecordingSidebar({
       : recordings.length;
 
   const hasConnectedCalendar = calendarConnections.length > 0;
-  const isFirstTimeOrUnconfigured =
-    totalCount === 0 || !hasConnectedCalendar;
-  const showOnboardingGuide =
-    totalCount === 0 || (!guideDismissed && isFirstTimeOrUnconfigured);
-  const showFilterToolbar = totalCount >= 3 || hasActiveFilter;
+  const isHomeView = mode === 'home';
+  const showOnboardingGuide = isHomeView && (totalCount === 0 || !guideDismissed);
+  const showFilterToolbar = !isHomeView || totalCount >= 3 || hasActiveFilter;
+  const firstName = userName ? userName.trim().split(/\s+/)[0] : null;
+  const displayedRecordings =
+    isHomeView && !hasActiveFilter ? recordings.slice(0, 5) : recordings;
 
   const lobbyRecordings = recordings.filter(
     (r) => r.participation === 'waiting_admission'
@@ -552,29 +562,55 @@ export function RecordingSidebar({
       header={
         <LayoutHeader hasDivider>
           <VStack gap={3}>
+            {!isHomeView && onNavigateHome && (
+              <Breadcrumbs variant="supporting" label="Pfadnavigation">
+                <BreadcrumbItem onClick={onNavigateHome}>
+                  Startseite
+                </BreadcrumbItem>
+                <BreadcrumbItem isCurrent>Aufnahmen</BreadcrumbItem>
+              </Breadcrumbs>
+            )}
+
             <HStack justify="between" vAlign="center" wrap="wrap" gap={2}>
-              <VStack gap={0.5}>
-                <Heading level={1}>Übersicht &amp; Aufnahmen</Heading>
+              <VStack gap={0.5} id="welcome-intro">
+                <Heading level={1}>
+                  {isHomeView
+                    ? firstName
+                      ? `Willkommen bei wortlaut, ${firstName}`
+                      : 'Willkommen bei wortlaut'
+                    : 'Aufnahmen'}
+                </Heading>
                 <Text type="supporting" color="secondary">
-                  Lassen Sie geplante Kalendertermine automatisch protokollieren
-                  oder holen Sie den Bot „{instance.assistantName}“ spontan per
-                  Link in ein laufendes Meeting.
+                  {isHomeView
+                    ? `Ihr selbstgehosteter Meeting-Assistent für Google Meet, Microsoft Teams, Cisco Webex und Zoom. „${instance.assistantName}“ erfasst jede Teilnehmerspur getrennt im Browser und erstellt Ihr Wortprotokoll lokal auf eigener GPU — ohne Cloud-Weitergabe.`
+                    : 'Alle aufgezeichneten, laufenden und geplanten Besprechungen durchsuchen, filtern und exportieren.'}
                 </Text>
               </VStack>
 
-              {!showOnboardingGuide && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  icon={<HelpCircle className="h-3.5 w-3.5" />}
-                  label="Kurzanleitung einblenden"
-                  onClick={() => handleToggleGuide(false)}
-                />
-              )}
+              <HStack gap={2} vAlign="center" wrap="wrap">
+                {isHomeView && !showOnboardingGuide && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    icon={<HelpCircle className="h-3.5 w-3.5" />}
+                    label="Kurzanleitung einblenden"
+                    onClick={() => handleToggleGuide(false)}
+                  />
+                )}
+                {!isHomeView && (
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    icon={<Plus className="h-3.5 w-3.5" />}
+                    label="Neue Aufnahme"
+                    onClick={onOpenNewRecording}
+                  />
+                )}
+              </HStack>
             </HStack>
 
-            {/* Primary Action: Inline Ad-hoc Join Bar + 3-Step Mental Model */}
-            {token && (
+            {/* Primary Action on Startseite: Inline Ad-hoc Join Bar + 3-Step Mental Model */}
+            {token && isHomeView && (
               <form id="dispatch-form" onSubmit={handleQuickStart}>
                 <VStack gap={2}>
                   <HStack gap={2} vAlign="center" wrap="wrap">
@@ -809,8 +845,9 @@ export function RecordingSidebar({
                             </HStack>
                             <Text type="supporting" color="secondary">
                               Kopieren Sie den Link Ihres laufenden Google Meet-,
-                              Teams- oder Webex-Meetings oben in die Leiste. Der
-                              Bot tritt als Gast „{instance.assistantName}“ bei —{' '}
+                              Teams-, Webex- oder Zoom-Meetings oben in die
+                              Leiste. Der Bot tritt als Gast „
+                              {instance.assistantName}“ bei —{' '}
                               <strong>
                                 bitte im Konferenzfenster aus dem Warteraum
                                 zulassen
@@ -893,7 +930,7 @@ export function RecordingSidebar({
             )}
 
             {/* 2. Upcoming Calendar Meetings right on the Start View */}
-            {upcomingSyncedEvents.length > 0 && (
+            {isHomeView && upcomingSyncedEvents.length > 0 && (
               <div id="upcoming-calendar-section">
                 <Section variant="section">
                   <VStack gap={3}>
@@ -932,25 +969,38 @@ export function RecordingSidebar({
               </div>
             )}
 
-            {/* 3. Recordings Archive with Progressive Filter Disclosure */}
+            {/* 3. Recordings Archive / Recent Preview */}
             <VStack gap={3}>
               <HStack justify="between" vAlign="center" wrap="wrap" gap={2}>
                 <HStack gap={2} vAlign="center">
                   <Heading level={3}>
-                    Aufgezeichnete &amp; geplante Besprechungen
+                    {isHomeView && !hasActiveFilter
+                      ? 'Letzte Aufnahmen & geplante Besprechungen'
+                      : 'Aufgezeichnete & geplante Besprechungen'}
                   </Heading>
                   <Token size="sm" color="gray" label={String(recordings.length)} />
                 </HStack>
 
-                {!hasConnectedCalendar && onNavigateCalendar && totalCount > 0 && (
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    icon={<Calendar className="h-3.5 w-3.5" />}
-                    label="Kalender-Automatik einrichten"
-                    onClick={onNavigateCalendar}
-                  />
-                )}
+                <HStack gap={2} vAlign="center" wrap="wrap">
+                  {!hasConnectedCalendar && onNavigateCalendar && totalCount > 0 && (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      icon={<Calendar className="h-3.5 w-3.5" />}
+                      label="Kalender verbinden"
+                      onClick={onNavigateCalendar}
+                    />
+                  )}
+                  {isHomeView && onNavigateMeetings && recordings.length > 0 && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      label={`Alle Aufnahmen durchsuchen (${totalCount})`}
+                      endContent={<ArrowRight className="h-3.5 w-3.5" />}
+                      onClick={onNavigateMeetings}
+                    />
+                  )}
+                </HStack>
               </HStack>
 
               {/* Filter & Search Toolbar (only shown when >= 3 recordings or when a filter is active) */}
@@ -1062,7 +1112,7 @@ export function RecordingSidebar({
                   density="balanced"
                   dividers="rows"
                   hasHover
-                  data={recordings as RecordingRow[]}
+                  data={displayedRecordings as RecordingRow[]}
                   columns={columns}
                   plugins={{
                     rowClick: {

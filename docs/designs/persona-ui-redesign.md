@@ -8,9 +8,9 @@
 
 ## Overview
 
-`wortlaut` records and transcribes Google Meet, Microsoft Teams, and Webex meetings inside a self-hosted Kubernetes cluster using isolated Chromium workers and a local Parakeet ASR model. While the backend supports all five core personas defined in [`personas.md`](file:///data/wortlaut/personas.md)—**Mara** (Project/Account Lead), **Lukas** (Consultant/Tech Lead), **Svenja** (Platform Operator), **Dr. Thomas** (External Host/Privacy Officer), and **Tim** (API Consumer)—the current web interface in [`services/meeting/src/wortlaut/ui.py`](file:///data/wortlaut/services/meeting/src/wortlaut/ui.py) is a single 920-line inline HTML/JavaScript string originally built as an internal developer debug console.
+`wortlaut` records and transcribes Google Meet, Microsoft Teams, Webex, and Zoom meetings inside a self-hosted Kubernetes cluster using isolated Chromium workers and a local Parakeet ASR model. While the backend supports all six core personas defined in [`personas.md`](file:///data/wortlaut/personas.md)—**Mara** (Project/Account Lead), **Lukas** (Consultant/Tech Lead), **Svenja** (Platform Operator), **Dr. Thomas** (External Host/Privacy Officer), **Nina** (Invited Participant/Reader), and **Tim** (API Consumer)—the original web interface in [`services/meeting/src/wortlaut/ui.py`](file:///data/wortlaut/services/meeting/src/wortlaut/ui.py) was a single 920-line inline HTML/JavaScript string originally built as an internal developer debug console.
 
-This design replaces the inline debug page with a structured, persona-aligned Web UI built with **React 19**, **Tailwind CSS**, **Radix UI / shadcn/ui primitives**, **TanStack Query**, and **Lucide Icons**, compiled inside the existing `worker/` build pipeline and served directly by the FastAPI meeting service at `/` and `/ui`.
+This design replaces the inline debug page with a structured, persona-aligned Web UI built with **React 19**, **Astryx Design System (`@astryxdesign/core`, `@astryxdesign/theme-stone`, `@stylexjs/stylex`)**, **Tailwind CSS**, **TanStack Query**, and **Lucide Icons**, compiled inside the existing `worker/` build pipeline and served directly by the FastAPI meeting service at `/` and `/ui`.
 
 ## The Problem
 
@@ -26,18 +26,18 @@ Opening `https://wortlaut.data.mayflower.zone/ui` currently presents four usabil
 
 ## Goals
 
-*   **Persona-Segmented Information Architecture**: Separate the primary workspace via a fixed 240px left navigation sidebar ([`HeaderBar.tsx`](file:///data/wortlaut/worker/src/ui/components/HeaderBar.tsx)) into four clear sections (*Übersicht* / [`HomeView.tsx`](file:///data/wortlaut/worker/src/ui/components/HomeView.tsx), *Meetings* / [`RecordingSidebar.tsx`](file:///data/wortlaut/worker/src/ui/components/RecordingSidebar.tsx), *Kalender* / [`CalendarWorkspace.tsx`](file:///data/wortlaut/worker/src/ui/components/CalendarWorkspace.tsx), and *System & Diagnose* / [`SystemView.tsx`](file:///data/wortlaut/worker/src/ui/components/SystemView.tsx)), plus a full-page Recording Detail view ([`MeetingDetailView.tsx`](file:///data/wortlaut/worker/src/ui/components/MeetingDetailView.tsx)) with:
-    1.  **2-Column Transcript & Speaker Breakdown** (70% [`TranscriptTab.tsx`](file:///data/wortlaut/worker/src/ui/components/TranscriptTab.tsx) on the left, 30% sticky Speaker Talk-Time Breakdown & `.md`/`.txt`/`.vtt`/`.json` Export + Share-Link sidebar on the right — default view for **Mara** and **Lukas**).
+*   **Persona-Segmented Information Architecture**: Separate the primary workspace via a collapsible Astryx `SideNav` ([`HeaderBar.tsx`](file:///data/wortlaut/worker/src/ui/components/HeaderBar.tsx)) into three clear sections (*Übersicht & Aufnahmen* / [`RecordingSidebar.tsx`](file:///data/wortlaut/worker/src/ui/components/RecordingSidebar.tsx), *Kalender-Automatik* / [`CalendarWorkspace.tsx`](file:///data/wortlaut/worker/src/ui/components/CalendarWorkspace.tsx), and *Hilfe & Systemstatus* / [`SystemView.tsx`](file:///data/wortlaut/worker/src/ui/components/SystemView.tsx)), plus a global `Cmd+K`/`Ctrl+K` `CommandPalette` and a full-page Recording Detail view ([`MeetingDetailView.tsx`](file:///data/wortlaut/worker/src/ui/components/MeetingDetailView.tsx)) with:
+    1.  **2-Column Transcript & Speaker Breakdown** (70% [`TranscriptTab.tsx`](file:///data/wortlaut/worker/src/ui/components/TranscriptTab.tsx) on the left, 30% sticky Speaker Talk-Time Breakdown & `.md`/`.txt`/`.vtt`/`.json` Export + Share-Link sidebar on the right — default view for **Mara**, **Lukas**, and **Nina**).
     2.  **Collapsible Technical Disclosure (`Technische Details, Audio-Quellen & Worker-Diagnose`)** housing [`SourcesTab.tsx`](file:///data/wortlaut/worker/src/ui/components/SourcesTab.tsx) (source-to-participant binding verification for **Lukas** and **Svenja**) and [`DiagnosticsTab.tsx`](file:///data/wortlaut/worker/src/ui/components/DiagnosticsTab.tsx) (WebRTC signaling, Kubernetes attempt/pod lifecycle, ASR queue metrics, and SMTP retry controls for **Svenja**).
 *   **Dex OIDC User Authentication, Operator Token & Scoped Reader Mode**:
     *   Support browser SSO login via **Dex OIDC Authorization Code + PKCE** ([`oidc.py`](file:///data/wortlaut/services/meeting/src/wortlaut/oidc.py), [`WelcomeLandingView.tsx`](file:///data/wortlaut/worker/src/ui/components/WelcomeLandingView.tsx), [`AuthGateDialog.tsx`](file:///data/wortlaut/worker/src/ui/components/AuthGateDialog.tsx)) issuing `wortlaut-user-…` tokens with per-user recording/calendar isolation (`owner_sub` / `owner_email`, or full operator view via `WORTLAUT_OIDC_ADMIN_EMAILS`).
     *   Support the global operator `WORTLAUT_API_TOKEN` for automation and full administration.
-    *   Allow users with a per-recording `export_reader_token` (or URL hash `#token=wortlaut-read-...`) to open `/ui` directly in a focused single-recording Transcript & Export view without requiring an account or operator token.
+    *   Allow users with a per-recording `export_reader_token` (or URL hash `#token=wortlaut-read-...`) to open `/ui` directly in a focused single-recording Transcript & Export view without requiring an account or operator token, keeping the reader token isolated in `sessionStorage` so a logged-in SSO user can return to their account with one click (*Zurück zu meinem Konto*).
 *   **Non-Destructive Reactive Updates via TanStack Query**: Replace full-panel `innerHTML` replacement with React 19 + TanStack Query background polling so text selection, scroll position, active tabs, and open dialogs never reset during live 3-second updates.
 *   **Five-Stage Live Participation Stepper**: Provide an explicit visual progress indicator (*Scheduled* $\rightarrow$ *Starting Worker* $\rightarrow$ *Lobby / Waiting for Admission* $\rightarrow$ *Capturing Audio* $\rightarrow$ *Transcript Ready*) in [`ParticipationStepper.tsx`](file:///data/wortlaut/worker/src/ui/components/ParticipationStepper.tsx) with prominent action callouts when host admission or a one-click *Rejoin* (`POST /v1/recordings/{id}/rejoin`) is needed.
 *   **Dialog-Grouped Transcript, Full-Text Search & Speaker Filtering**: Group consecutive utterances from the same speaker (within 6.0s pause threshold) into readable dialogue blocks with deterministic speaker avatars/colors, clickable speaker filter chips showing speaking time, server-backed cross-meeting full-text search (`GET /v1/recordings?q=`), inline transcript search highlighting, and one-click Markdown/text clipboard copy.
-*   **Interactive Calendar Intake & `.ics`/`.eml` Upload**: Elevate Calendar & Mail events to a first-class view with direct click-through to linked recordings and a browser upload/paste dialog for `.ics` and `.eml` invitations (`POST /v1/calendar/messages`).
-*   **Single-Container Build Integration**: Compile the React 19 + Tailwind + shadcn/ui application inside the existing `worker/` build stage of [`services/meeting/Dockerfile`](file:///data/wortlaut/services/meeting/Dockerfile) so the runtime architecture remains a single FastAPI container with no separate frontend server.
+*   **Interactive Calendar Intake, OAuth2 Calendar Sync & `.ics`/`.eml` Upload**: Elevate Calendar & Mail events to a first-class view ([`CalendarWorkspace.tsx`](file:///data/wortlaut/worker/src/ui/components/CalendarWorkspace.tsx)) with OAuth2 Google Calendar (`calendar.readonly`) and Microsoft 365 (`Calendars.Read`) connections, per-event auto-record toggles (`POST /v1/calendar/oauth/events/{id}/toggle`), direct click-through to linked recordings, and a browser upload/paste dialog for `.ics` and `.eml` invitations (`POST /v1/calendar/messages`).
+*   **Single-Container Build Integration**: Compile the React 19 + Astryx Design System + Tailwind application inside the existing `worker/` build stage of [`services/meeting/Dockerfile`](file:///data/wortlaut/services/meeting/Dockerfile) so the runtime architecture remains a single FastAPI container with no separate frontend server.
 
 ## Non-Goals
 
@@ -145,19 +145,18 @@ flowchart TD
 
 ### 3. Frontend Component Architecture ([`worker/src/ui/`](file:///data/wortlaut/worker/src/ui))
 
-The UI is structured as a modular TypeScript React 19 application under [`worker/src/ui/`](file:///data/wortlaut/worker/src/ui) using `shadcn/ui` primitives (Radix UI + Tailwind CSS) and `@tanstack/react-query`:
+The UI is structured as a modular TypeScript React 19 application under [`worker/src/ui/`](file:///data/wortlaut/worker/src/ui) using Astryx Design System (`@astryxdesign/core`, `@astryxdesign/theme-stone`, `@stylexjs/stylex`), Tailwind CSS, and `@tanstack/react-query`:
 
-*   **State & Data Fetching ([`worker/src/ui/api.ts`](file:///data/wortlaut/worker/src/ui/api.ts) & [`worker/src/ui/App.tsx`](file:///data/wortlaut/worker/src/ui/App.tsx))**:
-    *   Token & OIDC helpers (`detectAuthMode`, `readInitialToken`, `startOidcLogin`, `completeOidcCallbackIfPresent`, `fetchAuthMe`): Manage token persistence in `localStorage` (`wortlaut_api_token`), handle `/auth/callback` PKCE code exchange (`POST /v1/auth/oidc/exchange`), and detect whether the credential is an operator token, a Dex OIDC user token (`^wortlaut-user-`), or a scoped reader token (`^wortlaut-read-([0-9a-f-]{36})\.`).
-    *   Typed API fetchers (`fetchHealth`, `fetchRecordings`, `fetchRecordingDetail`, `fetchTranscript`, `fetchCalendar`, `createRecording`, `cancelRecording`, `rejoinRecording`, `issueReaderToken`, `retryMailDelivery`, `importCalendarPayload`, `downloadExportFile`) consumed by TanStack Query `useQuery` hooks in [`App.tsx`](file:///data/wortlaut/worker/src/ui/App.tsx#L60-L171).
+*   **State & Data Fetching ([`worker/src/ui/api.ts`](file:///data/wortlaut/worker/src/ui/api.ts), [`worker/src/ui/types.ts`](file:///data/wortlaut/worker/src/ui/types.ts) & [`worker/src/ui/App.tsx`](file:///data/wortlaut/worker/src/ui/App.tsx))**:
+    *   Token & OIDC helpers (`parseTokenAuthMode`, `loadInitialToken`, `saveTokenToStorage`, `getSavedAccountToken`, `exitReaderModeToAccount`, `startOidcLogin`, `completeOidcCallbackIfPresent`, `fetchAuthMe`): Manage token persistence in `localStorage` (`wortlaut_api_token`) and `sessionStorage` (`wortlaut_reader_token`), handle `/auth/callback` PKCE code exchange (`POST /v1/auth/oidc/exchange` and `POST /v1/calendar/oauth/exchange`), and parse the discriminated `AuthMode` union (`{ kind: 'unauthenticated' } | { kind: 'operator'; token: string; user?: OidcUser | null } | { kind: 'reader'; token: string; recordingId: string }`).
+    *   Typed API fetchers (`fetchRecordings`, `fetchRecordingDetail`, `fetchTranscript`, `fetchCalendar`, `createRecording`, `cancelRecording`, `deleteRecording`, `rejoinRecording`, `issueReaderToken`, `retryMailDelivery`, `importCalendarPayload`, `startCalendarOAuthLogin`, `syncCalendarConnection`, `updateCalendarConnection`, `deleteCalendarConnection`, `toggleCalendarSyncedEvent`, `downloadExportFile`) consumed by TanStack Query `useQuery` hooks in [`App.tsx`](file:///data/wortlaut/worker/src/ui/App.tsx#L160-L274).
 *   **Core View Components**:
     *   [`WelcomeLandingView.tsx`](file:///data/wortlaut/worker/src/ui/components/WelcomeLandingView.tsx) & [`AuthGateDialog.tsx`](file:///data/wortlaut/worker/src/ui/components/AuthGateDialog.tsx): Displayed when unauthenticated; offers one-click **Dex OIDC SSO login** (`Mit Mayflower-Account anmelden (SSO)`) alongside manual token entry for Operator and Scoped Reader tokens.
-    *   [`HeaderBar.tsx`](file:///data/wortlaut/worker/src/ui/components/HeaderBar.tsx): Fixed 240px left navigation sidebar (`lg:w-60`) with the 4 workspace sections (*Übersicht*, *Meetings*, *Kalender*, *System & Diagnose*), primary **`+ Neue Aufnahme`** CTA, live 3s poll toggle, and user/session status card.
-    *   [`HomeView.tsx`](file:///data/wortlaut/worker/src/ui/components/HomeView.tsx): Landing dashboard showing active/recent recordings, instant meeting-link dispatch input, and calendar invitation instructions.
-    *   [`NewRecordingDialog.tsx`](file:///data/wortlaut/worker/src/ui/components/NewRecordingDialog.tsx): Radix `Dialog` triggered by **"+ Neue Aufnahme"** with two tabs:
-        1.  *Per Meeting-Link*: URL input with live regex provider detection (`meet.google.com`, `teams.microsoft.com` / `teams.live.com`, `*.webex.com`), optional title, optional `guest_name`, and mode toggle (*Sofort beitreten* with duration presets vs. *Termin planen* with start/end datetime pickers).
-        2.  *Per Kalendereinladung (.ics / .eml)*: Drag-and-drop file upload or raw text paste submitting to `POST /v1/calendar/messages`.
-    *   [`RecordingSidebar.tsx`](file:///data/wortlaut/worker/src/ui/components/RecordingSidebar.tsx): Full-text/title/speaker search (`GET /v1/recordings?q=`), provider filter, status pills, and recording list cards.
+    *   [`HeaderBar.tsx`](file:///data/wortlaut/worker/src/ui/components/HeaderBar.tsx): Collapsible Astryx `SideNav` with the 3 workspace sections (*Übersicht & Aufnahmen*, *Kalender-Automatik*, *Hilfe & Systemstatus*), `Meeting planen / .ics` modal trigger, `Schnellsuche (⌘K)` CommandPalette trigger, live 3s poll switch, Light/Dark/Auto `SegmentedControl` theme switcher, and user/session profile footer (plus `ReaderTopBar` for Scoped Reader Mode).
+    *   [`NewRecordingDialog.tsx`](file:///data/wortlaut/worker/src/ui/components/NewRecordingDialog.tsx): Astryx `Modal` triggered by **"Meeting planen / .ics"** with two tabs:
+        1.  *Per Meeting-Link*: URL input with live regex provider detection (`meet.google.com`, `teams.microsoft.com` / `teams.live.com`, `*.webex.com`, `*.zoom.us`), optional title, optional `guest_name`, and mode toggle (*Sofort beitreten* with duration presets vs. *Termin planen* with start/end datetime pickers).
+        2.  *Per Kalendereinladung (.ics / .eml)*: File upload or raw text paste submitting to `POST /v1/calendar/messages`.
+    *   [`RecordingSidebar.tsx`](file:///data/wortlaut/worker/src/ui/components/RecordingSidebar.tsx): Unified *Übersicht & Aufnahmen* workspace with instant meeting-link dispatch bar, First-Run orientation checklist for new users, upcoming calendar strip, full-text/title/speaker search (`GET /v1/recordings?q=`), provider filter (`google_meet`, `teams`, `webex`, `zoom`), status pills, and recording list table.
     *   [`MeetingDetailView.tsx`](file:///data/wortlaut/worker/src/ui/components/MeetingDetailView.tsx): Full-page recording workspace with a 70/30 2-column layout (`TranscriptTab` on the left; sticky speaker talk-time breakdown, `.md`/`.txt`/`.vtt`/`.json` export buttons, and *Lese-Link teilen* button on the right) and a collapsible technical section at the bottom containing [`SourcesTab.tsx`](file:///data/wortlaut/worker/src/ui/components/SourcesTab.tsx) and [`DiagnosticsTab.tsx`](file:///data/wortlaut/worker/src/ui/components/DiagnosticsTab.tsx).
     *   [`ParticipationStepper.tsx`](file:///data/wortlaut/worker/src/ui/components/ParticipationStepper.tsx): Visual 5-step progress bar mapping `participation`, `processing`, and `participation_reason` / `end_reason` to clear German status stages and recovery buttons (*Erneut beitreten*).
     *   [`TranscriptTab.tsx`](file:///data/wortlaut/worker/src/ui/components/TranscriptTab.tsx):
@@ -166,25 +165,25 @@ The UI is structured as a modular TypeScript React 19 application under [`worker
         *   Groups consecutive segments from the same speaker (where `seg.start - prev.end <= 6.0` seconds and `speaker_label` matches) into cohesive dialogue turns while preserving per-segment timestamps and providing one-click copy as Markdown or plain text.
     *   [`SourcesTab.tsx`](file:///data/wortlaut/worker/src/ui/components/SourcesTab.tsx): Displays per-stream WebRTC receiver bindings (`provider_source_id`, `participant_name`, `signaled_participant_id`, `csi`, `speech_seconds`, `sample_text`) and a one-click filter jump into `TranscriptTab`.
     *   [`DiagnosticsTab.tsx`](file:///data/wortlaut/worker/src/ui/components/DiagnosticsTab.tsx): Displays SMTP delivery status (`retryMailDelivery`), ASR queue metrics, Kubernetes job/pod attempt history, WebRTC signaling counters, and a copyable JSON inspector.
-    *   [`CalendarWorkspace.tsx`](file:///data/wortlaut/worker/src/ui/components/CalendarWorkspace.tsx): Full-width table of imported calendar/mail events (`title`, `provider`, `organizer`, `status`, `reason`, `dtstamp`) where clicking any row with a `recording_id` opens that recording.
-    *   [`SystemView.tsx`](file:///data/wortlaut/worker/src/ui/components/SystemView.tsx): Operator capacity, provider readiness, retention policy, and health status overview.
+    *   [`CalendarWorkspace.tsx`](file:///data/wortlaut/worker/src/ui/components/CalendarWorkspace.tsx): Manage OAuth2 Google Calendar and Microsoft 365 connections (`auto_record_own`, `auto_record_all`), toggle per-event recording (`toggleCalendarSyncedEvent`), and inspect imported `.ics`/mail invitations (`events`) with one-click navigation to linked recordings.
+    *   [`SystemView.tsx`](file:///data/wortlaut/worker/src/ui/components/SystemView.tsx): Operator capacity, provider readiness (`google_meet`, `teams`, `webex`, `zoom`), retention policy, and health status overview.
 
 ### 4. Backend API Adjustments (`services/meeting/src/wortlaut/app.py`)
 
 To support the new UI workflows without workarounds:
 
 1.  **Multi-Value `participation` Filter on `GET /v1/recordings`**:
-    *   Allow `participation` query parameter to accept comma-separated values (e.g., `participation=scheduled,joining,waiting_admission,capturing`) so the *"Live & Warteraum"* quick-filter pill executes as a single database query (`Recording.participation.in_(values)`).
+    *   Allow `participation` query parameter in [`list_recordings`](file:///data/wortlaut/services/meeting/src/wortlaut/app.py#L750-L754) to accept comma-separated values (e.g., `participation=scheduled,joining,waiting_admission,capturing`) using `Recording.participation.in_(values)`, while [`App.tsx`](file:///data/wortlaut/worker/src/ui/App.tsx#L199-L231) also supports instant client-side status pill filtering across the loaded recordings page.
 2.  **Scoped Reader Token Support on `GET /v1/recordings/{recording_id}`**:
-    *   Update `get_recording` in [`services/meeting/src/wortlaut/app.py`](file:///data/wortlaut/services/meeting/src/wortlaut/app.py#L659-L774) to accept either the global operator `api_token` or that recording's `export_reader_token(recording)`. When authenticated via `export_reader_token`, return the recording metadata, `live_status`, and `asr`/`ingest` summary while omitting internal Kubernetes pod/job UIDs and SMTP recipient addresses.
+    *   Update `get_recording` in [`services/meeting/src/wortlaut/app.py`](file:///data/wortlaut/services/meeting/src/wortlaut/app.py#L1018-L1150) to accept either the global operator `api_token`, a Dex OIDC owner token, or that recording's `export_reader_token(recording)`. When authenticated via `export_reader_token`, return the recording metadata, `live_status`, and `asr`/`ingest` summary while omitting internal Kubernetes pod/job UIDs and SMTP recipient addresses.
 
 ### 5. Build & Asset Serving Pipeline
 
 ```mermaid
 flowchart LR
-    subgraph Build["worker/ Build Pipeline (Vite + Tailwind)"]
+    subgraph Build["worker/ Build Pipeline (Vite + Astryx + Tailwind)"]
         SDKEntry["worker/index.html + src/sdk-page.ts"] --> SDKDist["worker/dist/"]
-        UIEntry["worker/src/ui/main.tsx + styles.css"] --> UIDist["worker/dist/ui/app.js & app.css"]
+        UIEntry["worker/src/ui/main.tsx + layers.css + styles.css"] --> UIDist["worker/dist/ui/app.js & app.css"]
     end
 
     subgraph Runtime["FastAPI Container (services/meeting)"]
@@ -194,9 +193,9 @@ flowchart LR
     end
 ```
 
-*   [`worker/package.json`](file:///data/wortlaut/worker/package.json) already runs `vite build && vite build --config vite.meet.config.ts` to compile browser bundles into `worker/dist/`. A dedicated [`worker/vite.ui.config.ts`](file:///data/wortlaut/worker/vite.ui.config.ts) configuration will bundle `worker/src/ui/main.tsx` (React 19 + Radix UI + TanStack Query + Lucide Icons) and Tailwind CSS into `worker/dist/ui/app.js` and `worker/dist/ui/app.css`.
-*   [`services/meeting/Dockerfile`](file:///data/wortlaut/services/meeting/Dockerfile#L1-L16) already runs `npm run build` in the `sdk` stage and copies `/worker/dist` to `/app/sdk`, which FastAPI mounts at `/sdk` ([`app.py`](file:///data/wortlaut/services/meeting/src/wortlaut/app.py#L118-L119)). Thus `/sdk/ui/app.js` and `/sdk/ui/app.css` are automatically packaged and served with zero Dockerfile stage additions.
-*   [`services/meeting/src/wortlaut/ui.py`](file:///data/wortlaut/services/meeting/src/wortlaut/ui.py) serves the HTML host document that injects `window.__WORTLAUT_BOOT__ = { failureReasons: FAILURE_REASONS, instance: _build_instance_info() }` and loads `/ui/static/app.css` and `/ui/static/app.js` (also mounted at `/sdk/ui/`).
+*   [`worker/package.json`](file:///data/wortlaut/worker/package.json) runs `vite build && vite build --config vite.meet.config.ts && vite build --config vite.ui.config.ts` to compile browser bundles into `worker/dist/`. The dedicated [`worker/vite.ui.config.ts`](file:///data/wortlaut/worker/vite.ui.config.ts) configuration bundles `worker/src/ui/main.tsx` (React 19 + Astryx Design System + TanStack Query + Lucide Icons) and Tailwind CSS into `worker/dist/ui/app.js` and `worker/dist/ui/app.css`.
+*   [`services/meeting/Dockerfile`](file:///data/wortlaut/services/meeting/Dockerfile#L1-L16) runs `npm run build` in the `sdk` stage and copies `/worker/dist` to `/app/sdk`, which FastAPI mounts at `/sdk` ([`app.py`](file:///data/wortlaut/services/meeting/src/wortlaut/app.py#L118-L119)). Thus `/sdk/ui/app.js` and `/sdk/ui/app.css` are automatically packaged and served with zero Dockerfile stage additions.
+*   [`services/meeting/src/wortlaut/ui.py`](file:///data/wortlaut/services/meeting/src/wortlaut/ui.py) serves the HTML host document that injects `window.__WORTLAUT_BOOT__ = { failureReasons: FAILURE_REASONS, instance: _build_instance_info() }` and loads `/sdk/ui/app.css` and `/sdk/ui/app.js`.
 
 ## Alternatives Considered
 
@@ -241,10 +240,10 @@ flowchart LR
 
 *   **Type / Scope**: Frontend Build & Dependency Configuration
 *   **Proposed Changes**:
-    *   Add runtime UI libraries required for the React 19 + `shadcn/ui` + TanStack Query architecture: `react`, `react-dom`, `@tanstack/react-query`, `@radix-ui/react-dialog`, `@radix-ui/react-tabs`, `@radix-ui/react-dropdown-menu`, `@radix-ui/react-tooltip`, `lucide-react`, `clsx`, and `tailwind-merge`.
-    *   Add devDependencies: `@types/react`, `@types/react-dom`, `@vitejs/plugin-react`, and `@tailwindcss/vite` (or `tailwindcss`).
+    *   Add runtime UI libraries required for the React 19 + Astryx Design System + TanStack Query architecture: `react`, `react-dom`, `@tanstack/react-query`, `@astryxdesign/core`, `@astryxdesign/theme-stone`, `@stylexjs/stylex`, `lucide-react`, `clsx`, and `tailwind-merge`.
+    *   Add devDependencies: `@astryxdesign/cli`, `@types/react`, `@types/react-dom`, `@vitejs/plugin-react`, `@tailwindcss/vite`, and `tailwindcss`.
     *   Update the `"build"` script to include `vite build --config vite.ui.config.ts` so the UI bundle is built alongside the Webex SDK and Meet capture bundles.
-*   **Rationale**: Integrates the React 19 + `shadcn/ui` + TanStack Query dependency tree into the existing `worker` package that [`services/meeting/Dockerfile`](file:///data/wortlaut/services/meeting/Dockerfile) already builds.
+*   **Rationale**: Integrates the React 19 + Astryx Design System + TanStack Query dependency tree into the existing `worker` package that [`services/meeting/Dockerfile`](file:///data/wortlaut/services/meeting/Dockerfile) already builds.
 
 #### 2. [`worker/tsconfig.json`](file:///data/wortlaut/worker/tsconfig.json) (Modify)
 
@@ -260,43 +259,43 @@ flowchart LR
     *   Configure Vite with `@vitejs/plugin-react` and Tailwind CSS to compile `src/ui/main.tsx` into `dist/ui/app.js` and `dist/ui/app.css` with deterministic asset filenames (`entryFileNames: "app.js"`, `assetFileNames: "app.[ext]"`).
 *   **Rationale**: Produces predictable static bundle paths (`/sdk/ui/app.js` and `/sdk/ui/app.css`) that [`services/meeting/src/wortlaut/ui.py`](file:///data/wortlaut/services/meeting/src/wortlaut/ui.py) can reference directly without manifest parsing.
 
-#### 4. [`worker/src/ui/styles.css`](file:///data/wortlaut/worker/src/ui/styles.css) (Create)
+#### 4. [`worker/src/ui/layers.css`](file:///data/wortlaut/worker/src/ui/layers.css) & [`worker/src/ui/styles.css`](file:///data/wortlaut/worker/src/ui/styles.css) (Create)
 
-*   **Type / Scope**: Design System Tokens & Tailwind Stylesheet
+*   **Type / Scope**: Design System Layers & Tailwind Stylesheet
 *   **Proposed Changes**:
-    *   Import Tailwind CSS and define the `shadcn/ui` dark/slate design tokens (`--background`, `--foreground`, `--card`, `--border`, `--primary`, `--muted`, `--accent`, `--destructive`, `--warning`, `--success`) and custom scrollbar styling.
-*   **Rationale**: Establishes consistent visual hierarchy, typography, spacing, and status colors across all views and modals.
+    *   Declare CSS cascade layers (`@layer priority1, ...`) in `layers.css` for `@astryxdesign/core` StyleX rules and import Tailwind CSS and theme variables in `styles.css`.
+*   **Rationale**: Establishes consistent visual hierarchy, typography, spacing, and Light/Dark/System theme variables across all views and modals.
 
 #### 5. [`worker/src/ui/types.ts`](file:///data/wortlaut/worker/src/ui/types.ts) & [`worker/src/ui/api.ts`](file:///data/wortlaut/worker/src/ui/api.ts) (Create)
 
-*   **Type / Scope**: TypeScript API Client & TanStack Query Hooks
+*   **Type / Scope**: TypeScript API Client & Auth/OAuth Helpers
 *   **Proposed Changes**:
-    *   Define TypeScript interfaces for `RecordingSummary`, `RecordingDetail`, `TranscriptExport`, `TranscriptSegment`, `SourceSummary`, `CalendarEvent`, and `AuthMode` (`"unauthenticated" | "operator" | "reader"`).
-    *   Implement token parsing logic that detects `wortlaut-read-<uuid>.<mac>` vs. operator tokens, extracts `#token=...` from `window.location.hash` on startup, and strips the hash via `history.replaceState`.
-    *   Provide TanStack Query hooks (`useHealthQuery`, `useRecordingsQuery`, `useRecordingDetailQuery`, `useTranscriptQuery`, `useCalendarQuery`) and mutation helpers (`createRecording`, `cancelRecording`, `rejoinRecording`, `retryDelivery`, `importCalendarMessage`, `downloadExportFile`).
-*   **Rationale**: Centralizes authentication, error formatting, and non-destructive 3-second polling via `@tanstack/react-query`.
+    *   Define TypeScript interfaces for `Provider` (`'google_meet' | 'teams' | 'webex' | 'zoom'`), `RecordingSummary`, `RecordingDetail`, `TranscriptExport`, `TranscriptSegment`, `SourceSummary`, `CalendarEvent`, `CalendarConnection`, `CalendarSyncedEvent`, and `AuthMode` (`{ kind: 'unauthenticated' } | { kind: 'operator'; token: string; user?: OidcUser | null } | { kind: 'reader'; token: string; recordingId: string }`).
+    *   Implement token parsing logic (`parseTokenAuthMode`, `loadInitialToken`) that detects `wortlaut-read-<uuid>.<mac>` vs. `wortlaut-user-...` OIDC and operator tokens, extracts `#token=...` from `window.location.hash` on startup into `sessionStorage`, and strips the hash via `history.replaceState`.
+    *   Provide typed API fetchers and mutation helpers (`fetchRecordings`, `fetchRecordingDetail`, `fetchTranscript`, `fetchCalendar`, `createRecording`, `cancelRecording`, `deleteRecording`, `rejoinRecording`, `issueReaderToken`, `retryMailDelivery`, `importCalendarPayload`, `startCalendarOAuthLogin`, `syncCalendarConnection`, `updateCalendarConnection`, `deleteCalendarConnection`, `toggleCalendarSyncedEvent`, `downloadExportFile`).
+*   **Rationale**: Centralizes authentication, OAuth2 PKCE flows, error formatting, and non-destructive 3-second polling via `@tanstack/react-query`.
 
 #### 6. [`worker/src/ui/components/ui/primitives.tsx`](file:///data/wortlaut/worker/src/ui/components/ui/primitives.tsx) (Create)
 
-*   **Type / Scope**: Reusable `shadcn/ui` Component Primitives
+*   **Type / Scope**: Reusable Domain Status & Theme Primitives
 *   **Proposed Changes**:
-    *   Implement accessible Radix UI / `shadcn/ui` components: `Dialog` (`DialogContent`, `DialogHeader`, `DialogTitle`, `DialogDescription`), `Tabs` (`TabsList`, `TabsTrigger`, `TabsContent`), `DropdownMenu`, `Tooltip`, `Badge` (with provider and participation status variants), `Button`, `Card`, and `Input`.
-*   **Rationale**: Provides accessible, keyboard-navigable UI building blocks with focus trapping and ARIA semantics.
+    *   Implement `ThemeModeContext` / `useThemeMode` (`'light' | 'dark' | 'system'`), `ProviderBadge` (`google_meet`, `teams`, `webex`, `zoom` via `@astryxdesign/core/Token`), `StatusIndicator`, and `StatusBadge` (via `@astryxdesign/core/StatusDot`).
+*   **Rationale**: Provides shared provider and participation status badges across tables, headers, and detail views.
 
 #### 7. [`worker/src/ui/components/HeaderBar.tsx`](file:///data/wortlaut/worker/src/ui/components/HeaderBar.tsx) & [`worker/src/ui/components/AuthGateDialog.tsx`](file:///data/wortlaut/worker/src/ui/components/AuthGateDialog.tsx) (Create)
 
-*   **Type / Scope**: Top Navigation, Session Control & Onboarding Modal
+*   **Type / Scope**: Side Navigation, Reader Header, Session Control & Onboarding Modal
 *   **Proposed Changes**:
-    *   `HeaderBar`: Renders brand logo, `/health/ready` live status dot, workspace view switcher (`Aufnahmen` vs. `Kalender & Mail`), primary **`+ Neue Aufnahme`** CTA button, 3-second live-refresh toggle, and token session indicator (`Operator` or `Lesezugriff` badge with switch/logout button).
-    *   `AuthGateDialog`: Renders a clean onboarding dialog when no token is present or after a `401` response, explaining both Operator Token and Scoped Reader Token (`wortlaut-read-...`) login paths.
-*   **Rationale**: Eliminates the broken unauthenticated state and replaces the permanent top dispatch form with a clean navigation bar.
+    *   `HeaderBar`: Renders the collapsible Astryx `SideNav` with brand heading (`Meet · Teams · Webex · Zoom`), `/health/ready` live status dot, workspace navigation (`Übersicht & Aufnahmen`, `Kalender-Automatik`, `Hilfe & Systemstatus`), **`Meeting planen / .ics`** modal button, **`Schnellsuche (⌘K)`** trigger, 3-second live-refresh switch, Light/Dark/Auto `SegmentedControl` theme switcher, and user profile / session footer (plus `ReaderTopBar` for Scoped Reader Mode).
+    *   `AuthGateDialog`: Renders a clean onboarding dialog when switching credentials or after a `401` response, supporting Dex OIDC SSO login, Operator Token, and Scoped Reader Token (`wortlaut-read-...`).
+*   **Rationale**: Eliminates the broken unauthenticated state and provides a structured frame-first navigation layout.
 
 #### 8. [`worker/src/ui/components/NewRecordingDialog.tsx`](file:///data/wortlaut/worker/src/ui/components/NewRecordingDialog.tsx) (Create)
 
 *   **Type / Scope**: Ad-Hoc Dispatch & `.ics`/`.eml` Upload Modal (**Lukas** & **Mara**)
 *   **Proposed Changes**:
-    *   Radix `Dialog` containing two tabs:
-        1.  *Meeting-Link starten*: Meeting URL input with instant provider detection badge (*Google Meet*, *Microsoft Teams*, *Webex*), optional title, optional bot display name (`guest_name`), mode selector (*Sofort beitreten (Live)* with duration presets vs. *Termin planen* with `datetime-local` inputs), and submit action.
+    *   Astryx `Modal` containing two tabs:
+        1.  *Meeting-Link starten*: Meeting URL input with instant provider detection badge (*Google Meet*, *Microsoft Teams*, *Cisco Webex*, *Zoom*), optional title, optional bot display name (`guest_name`), mode selector (*Sofort beitreten (Live)* with duration presets vs. *Termin planen* with `datetime-local` inputs), and submit action.
         2.  *Kalendereinladung importieren (.ics / .eml)*: File upload dropzone and raw text paste area calling `POST /v1/calendar/messages`, displaying imported event status and jumping directly to the created recording.
 *   **Rationale**: Gives **Lukas** a fast, guided dispatch modal and gives **Mara** a browser-based `.ics`/`.eml` import workflow.
 
@@ -304,9 +303,9 @@ flowchart LR
 
 *   **Type / Scope**: Master Navigation Views (**Mara**, **Lukas**, **Svenja**)
 *   **Proposed Changes**:
-    *   `RecordingSidebar`: Title search input (`#title-search`), provider selector (`#provider-filter`), status quick-filter pills (`Alle`, `Live & Warteraum`, `Geplant`, `Fertig`, `Fehler`), and compact recording cards showing human-readable titles, provider badges, status badges, duration, and failure hints.
-    *   `CalendarWorkspace`: Full-width view of imported calendar and instant-email invitations with status badges (`accepted`, `rejected`, `cancelled`), organizer, title, and one-click navigation to the linked recording.
-*   **Rationale**: Elevates calendar intake out of a buried `<details>` tag and makes finding active, failed, or completed recordings immediate.
+    *   `RecordingSidebar`: Instant meeting-link dispatch bar, First-Run orientation checklist, upcoming calendar strip, full-text/title/speaker search (`#title-search`), provider selector (`#provider-filter`), status quick-filter pills (`Alle`, `Live & Warteraum`, `Geplant`, `Fertig`, `Fehler`), and recording list table showing titles, provider badges, status badges, speaker badges, duration, and failure hints.
+    *   `CalendarWorkspace`: Full-width workspace for OAuth2 Google/Microsoft calendar connections, synced calendar events with 1-click auto-record toggles, and imported `.ics`/instant-email invitations with one-click navigation to linked recordings.
+*   **Rationale**: Elevates calendar intake and OAuth2 calendar sync to a first-class workspace and makes finding active, failed, or completed recordings immediate.
 
 #### 10. [`worker/src/ui/components/ParticipationStepper.tsx`](file:///data/wortlaut/worker/src/ui/components/ParticipationStepper.tsx) (Create)
 

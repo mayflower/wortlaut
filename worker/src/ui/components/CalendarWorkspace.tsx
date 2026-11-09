@@ -10,6 +10,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import { Layout, LayoutContent, LayoutHeader } from '@astryxdesign/core/Layout';
+import { Breadcrumbs, BreadcrumbItem } from '@astryxdesign/core/Breadcrumbs';
 import { Heading } from '@astryxdesign/core/Heading';
 import { Text } from '@astryxdesign/core/Text';
 import { HStack } from '@astryxdesign/core/HStack';
@@ -51,6 +52,7 @@ export interface CalendarWorkspaceProps {
   onRefreshCalendar: () => void;
   onSelectRecording: (recordingId: string) => void;
   onOpenImportModal: () => void;
+  onNavigateHome?: () => void;
 }
 
 const CALENDAR_STATUS_LABELS: Record<string, string> = {
@@ -117,6 +119,7 @@ export function CalendarWorkspace({
   onRefreshCalendar,
   onSelectRecording,
   onOpenImportModal,
+  onNavigateHome,
 }: CalendarWorkspaceProps) {
   const instance = getInstanceInfo();
   const failureReasons = getFailureReasons();
@@ -381,14 +384,23 @@ export function CalendarWorkspace({
       height="fill"
       header={
         <LayoutHeader hasDivider>
-          <HStack justify="between" vAlign="center" wrap="wrap" gap={3}>
-            <VStack gap={0.5}>
-              <Heading level={1}>Kalender &amp; E-Mail-Einladungen</Heading>
-              <Text type="supporting" color="secondary">
-                Verbinden Sie Ihren Google- oder Microsoft-365-Kalender per
-                OAuth2 (Read-Only) oder laden Sie eine Kalendereinladung hoch.
-              </Text>
-            </VStack>
+          <VStack gap={2}>
+            {onNavigateHome && (
+              <Breadcrumbs variant="supporting" label="Pfadnavigation">
+                <BreadcrumbItem onClick={onNavigateHome}>
+                  Startseite
+                </BreadcrumbItem>
+                <BreadcrumbItem isCurrent>Kalender</BreadcrumbItem>
+              </Breadcrumbs>
+            )}
+            <HStack justify="between" vAlign="center" wrap="wrap" gap={3}>
+              <VStack gap={0.5}>
+                <Heading level={1}>Kalender &amp; E-Mail-Einladungen</Heading>
+                <Text type="supporting" color="secondary">
+                  Verbinden Sie Ihren Google- oder Microsoft-365-Kalender per
+                  OAuth2 (Read-Only) oder laden Sie eine Kalendereinladung hoch.
+                </Text>
+              </VStack>
 
             <HStack gap={2} vAlign="center" wrap="wrap">
               {instance.botEmail && (
@@ -418,7 +430,8 @@ export function CalendarWorkspace({
                 onClick={onOpenImportModal}
               />
             </HStack>
-          </HStack>
+            </HStack>
+          </VStack>
         </LayoutHeader>
       }
       content={
