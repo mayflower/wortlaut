@@ -81,13 +81,18 @@ export function ReaderTopBar({
       className="border-b border-[var(--color-border)] bg-[var(--color-background-surface)]"
     >
       <HStack gap={2} vAlign="center" wrap="wrap">
-        <span id="health-dot">
-          <StatusDot
-            variant={healthy ? 'success' : 'error'}
-            label="wortlaut"
-            tooltip={healthy ? 'System bereit' : 'System nicht erreichbar'}
-          />
-        </span>
+        <HStack gap={1.5} vAlign="center">
+          <span id="health-dot">
+            <StatusDot
+              variant={healthy ? 'success' : 'error'}
+              label="wortlaut"
+              tooltip={healthy ? 'System bereit' : 'System nicht erreichbar'}
+            />
+          </span>
+          <Text type="body" weight="bold">
+            wortlaut
+          </Text>
+        </HStack>
         {authMode.kind === 'reader' ? (
           <Token
             size="sm"

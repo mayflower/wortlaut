@@ -55,6 +55,12 @@ export function ParticipationStepper({
     (recording.ingest?.durable_sample_count || 0) / 16000
   );
 
+  const isFailedJoin =
+    recording.participation === 'ended' &&
+    sampleSec === 0 &&
+    Boolean(reason) &&
+    reason !== 'normal';
+
   let activeIndex = 0;
   if (recording.participation === 'scheduled') {
     activeIndex = 0;
@@ -69,14 +75,9 @@ export function ParticipationStepper({
   } else if (recording.participation === 'capturing') {
     activeIndex = 3;
   } else if (recording.participation === 'ended') {
-    activeIndex = 4;
+    activeIndex =
+      recording.processing === 'completed' && !isFailedJoin ? 5 : 4;
   }
-
-  const isFailedJoin =
-    recording.participation === 'ended' &&
-    sampleSec === 0 &&
-    Boolean(reason) &&
-    reason !== 'normal';
 
   const sources: SourceSummary[] = transcript?.sources_summary || [];
   const totalSpeechSec = Math.max(

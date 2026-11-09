@@ -169,38 +169,56 @@ export function WelcomeLandingView({
           </Card>
 
           <VStack gap={2}>
-            <Heading level={4}>Ablauf</Heading>
-            <List listStyle="decimal" density="compact" edge="flush">
-              <ListItem
-                label="Kalender verbinden oder Meeting-Link starten"
-                description="Google Calendar / Microsoft 365 per Read-Only-OAuth2 verknüpfen, Meeting-URL direkt einfügen oder Bot per E-Mail einladen."
-                endContent={
-                  instance.botEmail ? (
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      icon={
-                        copiedMail ? (
-                          <Check className="h-3 w-3" />
-                        ) : (
-                          <Copy className="h-3 w-3" />
-                        )
-                      }
-                      label={copiedMail ? 'Kopiert' : instance.botEmail}
-                      onClick={handleCopyBotMail}
-                    />
-                  ) : undefined
-                }
-              />
-              <ListItem
-                label="Im Warteraum zulassen"
-                description={`Der Bot tritt stummgeschaltet als „${instance.assistantName}“ bei und erfasst jede Teilnehmer-Audiospur vor dem Konferenz-Mix einzeln.`}
-              />
-              <ListItem
-                label="Protokoll lesen, teilen oder exportieren"
-                description="Fertige Transkripte lassen sich nach Sprechern filtern, als .md, .txt, .vtt oder .json herunterladen und per Lese-Link teilen."
-              />
-            </List>
+            <HStack justify="between" vAlign="center" wrap="wrap" gap={2}>
+              <Heading level={4}>Ablauf in 3 Schritten</Heading>
+              {instance.botEmail && (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  icon={
+                    copiedMail ? (
+                      <Check className="h-3 w-3" />
+                    ) : (
+                      <Copy className="h-3 w-3" />
+                    )
+                  }
+                  label={copiedMail ? 'Kopiert' : `Bot-E-Mail: ${instance.botEmail}`}
+                  onClick={handleCopyBotMail}
+                />
+              )}
+            </HStack>
+            <div className="divide-y divide-[var(--color-border)]">
+              <div className="py-2.5">
+                <VStack gap={0.5}>
+                  <Text type="body" weight="semibold">
+                    1. Kalender verbinden oder Meeting-Link starten
+                  </Text>
+                  <Text type="supporting" color="secondary">
+                    Google Calendar oder Microsoft 365 per Read-Only-OAuth2 verknüpfen, Meeting-URL direkt einfügen oder den Bot per E-Mail einladen.
+                  </Text>
+                </VStack>
+              </div>
+              <div className="py-2.5">
+                <VStack gap={0.5}>
+                  <Text type="body" weight="semibold">
+                    2. Im Warteraum zulassen
+                  </Text>
+                  <Text type="supporting" color="secondary">
+                    Der Bot tritt stummgeschaltet als „{instance.assistantName}“ bei und erfasst jede Teilnehmer-Audiospur vor dem Konferenz-Mix einzeln.
+                  </Text>
+                </VStack>
+              </div>
+              <div className="py-2.5">
+                <VStack gap={0.5}>
+                  <Text type="body" weight="semibold">
+                    3. Protokoll lesen, teilen oder exportieren
+                  </Text>
+                  <Text type="supporting" color="secondary">
+                    Fertige Transkripte lassen sich nach Sprechern filtern, als .md, .txt, .vtt oder .json herunterladen und per Lese-Link teilen.
+                  </Text>
+                </VStack>
+              </div>
+            </div>
           </VStack>
         </VStack>
 

@@ -3,6 +3,8 @@ import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { Token } from '@astryxdesign/core/Token';
 import { StatusDot } from '@astryxdesign/core/StatusDot';
+import { HStack } from '@astryxdesign/core/Stack';
+import { Text } from '@astryxdesign/core/Text';
 import type { ParticipationState, Provider } from '../../types';
 import { PARTICIPATION_LABELS, PROVIDER_LABELS } from '../../api';
 
@@ -44,6 +46,27 @@ export function ProviderBadge({
       color={colorMap[provider] || 'gray'}
       label={PROVIDER_LABELS[provider] || provider}
     />
+  );
+}
+
+export function StatusIndicator({
+  variant = 'neutral',
+  isPulsing = false,
+  label,
+  weight = 'normal',
+}: {
+  variant?: 'success' | 'warning' | 'error' | 'accent' | 'neutral';
+  isPulsing?: boolean;
+  label: string;
+  weight?: 'normal' | 'medium' | 'semibold' | 'bold';
+}) {
+  return (
+    <HStack gap={1.5} vAlign="center" wrap="nowrap">
+      <StatusDot variant={variant} isPulsing={isPulsing} label={label} />
+      <Text type="supporting" weight={weight} maxLines={1}>
+        {label}
+      </Text>
+    </HStack>
   );
 }
 
@@ -93,5 +116,5 @@ export function StatusBadge({
     }
   }
 
-  return <StatusDot variant={variant} isPulsing={isPulsing} label={label} />;
+  return <StatusIndicator variant={variant} isPulsing={isPulsing} label={label} weight="medium" />;
 }

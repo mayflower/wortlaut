@@ -244,7 +244,7 @@ export function RecordingSidebar({
     {
       key: 'actions',
       header: '',
-      width: pixel(110),
+      width: pixel(135),
       align: 'end',
       renderCell: (row) => (
         <Button
@@ -370,7 +370,7 @@ export function RecordingSidebar({
               </div>
 
               <HStack gap={2} vAlign="center" wrap="wrap">
-                <div id="provider-filter" className="w-48">
+                <div id="provider-filter" className="w-56">
                   <Selector
                     size="sm"
                     label="Konferenzsystem filtern"

@@ -41,7 +41,7 @@ import type {
   CalendarEvent,
   CalendarSyncedEventInfo,
 } from '../types';
-import { ProviderBadge } from './ui/primitives';
+import { ProviderBadge, StatusIndicator } from './ui/primitives';
 
 export interface CalendarWorkspaceProps {
   token: string;
@@ -55,7 +55,10 @@ export interface CalendarWorkspaceProps {
 
 const CALENDAR_STATUS_LABELS: Record<string, string> = {
   accepted: 'Eingeplant',
+  CONFIRMED: 'Bestätigt',
+  confirmed: 'Bestätigt',
   cancelled: 'Abgesagt',
+  CANCELLED: 'Abgesagt',
   rejected: 'Abgelehnt',
   ignored: 'Ignoriert',
 };
@@ -150,7 +153,7 @@ export function CalendarWorkspace({
       width: pixel(150),
       renderCell: (ev) => {
         if (ev.status === 'cancelled') {
-          return <StatusDot variant="error" label="Abgesagt" />;
+          return <StatusIndicator variant="error" weight="medium" label="Abgesagt" />;
         }
         const toggleBusy = oauthBusy === `toggle-${ev.id}`;
         return (
@@ -168,18 +171,22 @@ export function CalendarWorkspace({
     {
       key: 'title',
       header: 'Termin & Konferenz',
-      width: proportional(2, { minWidth: 220 }),
+      width: proportional(2, { minWidth: 240 }),
       renderCell: (ev) => (
-        <HStack gap={2} vAlign="center" wrap="wrap">
-          <ProviderBadge provider={ev.meeting_provider} />
-          <Text type="body" weight="semibold" color="primary">
+        <HStack gap={2} vAlign="center" wrap="nowrap">
+          <span className="shrink-0">
+            <ProviderBadge provider={ev.meeting_provider} />
+          </span>
+          <Text type="body" weight="semibold" color="primary" maxLines={1}>
             {ev.title || 'Kalendertermin'}
           </Text>
-          <Token
-            size="sm"
-            color="gray"
-            label={ev.calendar_provider === 'google' ? 'Google' : 'M365'}
-          />
+          <span className="shrink-0">
+            <Token
+              size="sm"
+              color="gray"
+              label={ev.calendar_provider === 'google' ? 'Google' : 'M365'}
+            />
+          </span>
         </HStack>
       ),
     },
@@ -247,7 +254,10 @@ export function CalendarWorkspace({
       header: 'Status',
       width: pixel(175),
       renderCell: (ev) => {
-        const isAccepted = ev.status === 'accepted';
+        const isAccepted =
+          ev.status === 'accepted' ||
+          ev.status === 'CONFIRMED' ||
+          ev.status === 'confirmed';
         const statusLabel = CALENDAR_STATUS_LABELS[ev.status] || ev.status;
         const reasonText =
           ev.reason && failureReasons[ev.reason]
@@ -255,12 +265,13 @@ export function CalendarWorkspace({
             : ev.reason;
         return (
           <VStack gap={0.5} hAlign="start">
-            <StatusDot
+            <StatusIndicator
               variant={isAccepted ? 'success' : 'error'}
+              weight="medium"
               label={statusLabel}
             />
             {reasonText && (
-              <Text type="supporting" color="secondary">
+              <Text type="supporting" color="secondary" maxLines={1}>
                 {reasonText}
               </Text>
             )}
@@ -273,9 +284,9 @@ export function CalendarWorkspace({
       header: 'Termin & Konferenzsystem',
       width: proportional(2, { minWidth: 220 }),
       renderCell: (ev) => (
-        <HStack gap={2} vAlign="center" wrap="wrap">
+        <HStack gap={2} vAlign="center" wrap="nowrap">
           {ev.provider && <ProviderBadge provider={ev.provider} />}
-          <Text type="body" weight="semibold" color="primary">
+          <Text type="body" weight="semibold" color="primary" maxLines={1}>
             {ev.title || 'Kalendertermin'}
           </Text>
         </HStack>
@@ -404,7 +415,7 @@ export function CalendarWorkspace({
                   <HStack justify="between" vAlign="center">
                     <Heading level={3}>Google Calendar</Heading>
                     {googleConn ? (
-                      <StatusDot variant="success" label="Verbunden" />
+                      <StatusIndicator variant="success" weight="medium" label="Verbunden" />
                     ) : (
                       <Token size="sm" color="gray" label="calendar.readonly" />
                     )}
@@ -488,7 +499,7 @@ export function CalendarWorkspace({
                   <HStack justify="between" vAlign="center">
                     <Heading level={3}>Microsoft 365 / Outlook</Heading>
                     {microsoftConn ? (
-                      <StatusDot variant="success" label="Verbunden" />
+                      <StatusIndicator variant="success" weight="medium" label="Verbunden" />
                     ) : (
                       <Token size="sm" color="gray" label="Calendars.Read" />
                     )}

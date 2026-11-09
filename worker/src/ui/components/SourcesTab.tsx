@@ -6,7 +6,6 @@ import {
   proportional,
   type TableColumn,
 } from '@astryxdesign/core/Table';
-import { StatusDot } from '@astryxdesign/core/StatusDot';
 import { Token } from '@astryxdesign/core/Token';
 import { Button } from '@astryxdesign/core/Button';
 import { Text } from '@astryxdesign/core/Text';
@@ -14,6 +13,7 @@ import { VStack } from '@astryxdesign/core/VStack';
 import { EmptyState } from '@astryxdesign/core/EmptyState';
 import { formatDurationHuman } from '../api';
 import type { SourceSummary } from '../types';
+import { StatusIndicator } from './ui/primitives';
 
 export interface SourcesTabProps {
   sources: SourceSummary[];
@@ -49,8 +49,9 @@ export function SourcesTab({
         return (
           <div className="source-row">
             <VStack gap={0.5} hAlign="start">
-              <StatusDot
+              <StatusIndicator
                 variant={hasName ? 'success' : hasId ? 'accent' : 'warning'}
+                weight="semibold"
                 label={
                   src.participant_name ||
                   (src.signaled_participant_id
@@ -71,11 +72,11 @@ export function SourcesTab({
     {
       key: 'provider_source_id',
       header: 'WebRTC-Quelle / Session',
-      width: proportional(1.5, { minWidth: 200 }),
+      width: proportional(1.5, { minWidth: 190 }),
       renderCell: (src) => (
         <VStack gap={0.5} hAlign="start">
           <Token size="sm" color="blue" label={src.provider_source_id} />
-          <Text type="supporting" color="secondary">
+          <Text type="supporting" color="secondary" maxLines={1}>
             {src.signaled_participant_id
               ? `Session: ${src.signaled_participant_id}`
               : 'Keine Session-ID'}
@@ -87,7 +88,7 @@ export function SourcesTab({
     {
       key: 'speech_seconds',
       header: 'Aktive Sprache',
-      width: pixel(165),
+      width: pixel(155),
       renderCell: (src) => (
         <Text type="supporting" color="primary" hasTabularNumbers>
           <strong>{formatDurationHuman(src.speech_seconds)}</strong> (
@@ -98,7 +99,7 @@ export function SourcesTab({
     {
       key: 'segment_count',
       header: 'Segmente',
-      width: pixel(100),
+      width: pixel(105),
       renderCell: (src) => (
         <Text type="supporting" color="primary" hasTabularNumbers>
           {src.segment_count}
@@ -108,7 +109,7 @@ export function SourcesTab({
     {
       key: 'action',
       header: '',
-      width: pixel(175),
+      width: pixel(140),
       align: 'end',
       renderCell: (src) => {
         const isFiltered = selectedSourceFilter === src.provider_source_id;
@@ -121,7 +122,7 @@ export function SourcesTab({
               variant={isFiltered ? 'primary' : 'secondary'}
               size="sm"
               icon={<Filter className="h-3.5 w-3.5" />}
-              label={isFiltered ? 'Filter aktiv' : 'Im Transkript filtern'}
+              label={isFiltered ? 'Aktiv' : 'Filtern'}
               onClick={() =>
                 onSelectSourceForTranscript(src.provider_source_id)
               }

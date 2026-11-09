@@ -24,4 +24,11 @@
     font-family: var(--font-family-body, system-ui, -apple-system, sans-serif);
     -webkit-font-smoothing: antialiased;
   }
+
+  .astryx-table-scroll-wrapper {
+    --container-padding-block-start: 0px;
+    --container-padding-block-end: 0px;
+    --container-padding-inline-start: 0px;
+    --container-padding-inline-end: 0px;
+  }
 }

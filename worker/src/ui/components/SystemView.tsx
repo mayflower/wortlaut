@@ -31,7 +31,7 @@ import {
   getInstanceInfo,
 } from '../api';
 import type { AuthMode, RecordingSummary } from '../types';
-import { ProviderBadge, StatusBadge } from './ui/primitives';
+import { ProviderBadge, StatusBadge, StatusIndicator } from './ui/primitives';
 
 export interface SystemViewProps {
   healthy: boolean;
@@ -102,9 +102,9 @@ export function SystemView({
       header: 'Besprechung',
       width: proportional(1.6, { minWidth: 200 }),
       renderCell: (row) => (
-        <HStack gap={2} vAlign="center" wrap="wrap">
+        <HStack gap={2} vAlign="center" wrap="nowrap">
           <ProviderBadge provider={row.provider} />
-          <Text type="body" weight="semibold" color="primary">
+          <Text type="body" weight="semibold" color="primary" maxLines={1}>
             {formatRecordingTitle(row)}
           </Text>
         </HStack>
@@ -121,7 +121,7 @@ export function SystemView({
             ? failureReasons[reason]
             : reason || 'Verarbeitungsfehler';
         return (
-          <Text type="supporting" color="secondary">
+          <Text type="supporting" color="secondary" maxLines={1}>
             {reasonText}
           </Text>
         );
@@ -130,7 +130,7 @@ export function SystemView({
     {
       key: 'action',
       header: '',
-      width: pixel(110),
+      width: pixel(135),
       align: 'end',
       renderCell: (row) => (
         <Button
@@ -188,8 +188,9 @@ export function SystemView({
                 <Heading level={3}>Plattform- &amp; Kapazitätsstatus</Heading>
                 <MetadataList columns={4}>
                   <MetadataListItem label="API & Datenbank">
-                    <StatusDot
+                    <StatusIndicator
                       variant={healthy ? 'success' : 'warning'}
+                      weight="medium"
                       label={
                         healthy ? 'Bereit (/health/ready)' : 'Prüfe Verbindung…'
                       }
@@ -224,12 +225,13 @@ export function SystemView({
                           : 'Playwright/Chromium WebRTC · Gast-Modus'
                       }
                       endContent={
-                        <StatusDot
+                        <StatusIndicator
                           variant={
                             instance.providers.google_meet
                               ? 'success'
                               : 'neutral'
                           }
+                          weight="medium"
                           label={
                             instance.providers.google_meet
                               ? 'Aktiviert'
@@ -242,10 +244,11 @@ export function SystemView({
                       label="Microsoft Teams"
                       description="Playwright/Chromium Web-Client · Gast-Beitritt"
                       endContent={
-                        <StatusDot
+                        <StatusIndicator
                           variant={
                             instance.providers.teams ? 'success' : 'neutral'
                           }
+                          weight="medium"
                           label={
                             instance.providers.teams
                               ? 'Aktiviert'
@@ -258,10 +261,11 @@ export function SystemView({
                       label="Cisco Webex"
                       description="Browser-SDK / Service-Token"
                       endContent={
-                        <StatusDot
+                        <StatusIndicator
                           variant={
                             instance.providers.webex ? 'success' : 'neutral'
                           }
+                          weight="medium"
                           label={
                             instance.providers.webex
                               ? 'Aktiviert'
