@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { Button } from '@astryxdesign/core/Button';
 import { IconButton } from '@astryxdesign/core/IconButton';
+import { Avatar } from '@astryxdesign/core/Avatar';
 import { HStack } from '@astryxdesign/core/HStack';
 import { VStack } from '@astryxdesign/core/VStack';
 import { Text } from '@astryxdesign/core/Text';
@@ -254,20 +255,40 @@ export function HeaderBar({
             <SegmentedControlItem value="system" label="Auto" />
           </SegmentedControl>
 
-          <Button
-            variant="secondary"
-            size="sm"
-            width="fill"
-            icon={<KeyRound className="h-3.5 w-3.5" />}
-            label={
-              authMode.kind === 'operator'
-                ? authMode.user
-                  ? authMode.user.email
-                  : 'API-Schlüssel aktiv'
-                : 'Anmelden'
-            }
-            onClick={onOpenAuthDialog}
-          />
+          {authMode.kind === 'operator' && authMode.user ? (
+            <button
+              type="button"
+              onClick={onOpenAuthDialog}
+              className="flex w-full items-center gap-2.5 rounded-lg p-1.5 text-left transition-colors hover:bg-[var(--color-background-muted)] cursor-pointer"
+            >
+              <Avatar
+                size="sm"
+                shape="circle"
+                name={authMode.user.name || authMode.user.email}
+              />
+              <div className="min-w-0 flex-1">
+                <Text type="supporting" weight="semibold" maxLines={1}>
+                  {authMode.user.name || authMode.user.email}
+                </Text>
+                <Text type="supporting" color="secondary" maxLines={1}>
+                  {authMode.user.email}
+                </Text>
+              </div>
+            </button>
+          ) : (
+            <Button
+              variant="secondary"
+              size="sm"
+              width="fill"
+              icon={<KeyRound className="h-3.5 w-3.5" />}
+              label={
+                authMode.kind === 'operator'
+                  ? 'API-Schlüssel aktiv'
+                  : 'Anmelden'
+              }
+              onClick={onOpenAuthDialog}
+            />
+          )}
         </VStack>
       }
     >

@@ -229,14 +229,55 @@ export function RecordingSidebar({
     },
     {
       key: 'duration',
-      header: 'Audio',
-      width: pixel(95),
+      header: 'Dauer',
+      width: pixel(115),
       renderCell: (row) => {
         const samples = row.quality?.durable_sample_count || 0;
         const audioSec = Math.round(samples / 16000);
+        if (audioSec > 0) {
+          return (
+            <Text type="supporting" color="primary" weight="medium" hasTabularNumbers>
+              {formatDurationHuman(audioSec)}
+            </Text>
+          );
+        }
+        if (row.participation === 'capturing') {
+          return (
+            <Text type="supporting" color="primary" weight="medium">
+              Live
+            </Text>
+          );
+        }
+        const plannedMin = Math.max(
+          0,
+          Math.round(
+            (new Date(row.ends_at).getTime() -
+              new Date(row.starts_at).getTime()) /
+              60000
+          )
+        );
+        if (row.participation === 'scheduled' && plannedMin > 0) {
+          return (
+            <Text type="supporting" color="secondary" hasTabularNumbers>
+              {plannedMin} Min.
+            </Text>
+          );
+        }
+        const reason = row.participation_reason;
+        const isFailedEmpty =
+          row.participation === 'ended' &&
+          Boolean(reason) &&
+          reason !== 'normal';
+        if (!isFailedEmpty && plannedMin > 0) {
+          return (
+            <Text type="supporting" color="secondary" hasTabularNumbers>
+              {plannedMin} Min.
+            </Text>
+          );
+        }
         return (
-          <Text type="supporting" color="secondary" hasTabularNumbers>
-            {audioSec > 0 ? formatDurationHuman(audioSec) : '–'}
+          <Text type="supporting" color="secondary">
+            –
           </Text>
         );
       },
@@ -275,21 +316,12 @@ export function RecordingSidebar({
               </VStack>
 
               <HStack gap={1.5} vAlign="center" wrap="wrap">
-                {onOpenIcsImport && (
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    icon={<CalendarPlus className="h-3.5 w-3.5" />}
-                    label=".ics / .eml importieren"
-                    onClick={onOpenIcsImport}
-                  />
-                )}
                 <Button
                   variant="secondary"
                   size="sm"
-                  icon={<Plus className="h-3.5 w-3.5" />}
-                  label="Erweitert planen…"
-                  onClick={onOpenNewRecording}
+                  icon={<CalendarPlus className="h-3.5 w-3.5" />}
+                  label="Termin planen / .ics"
+                  onClick={onOpenIcsImport || onOpenNewRecording}
                 />
               </HStack>
             </HStack>
@@ -470,6 +502,24 @@ export function RecordingSidebar({
                 hasHover
                 data={recordings as RecordingRow[]}
                 columns={columns}
+                plugins={{
+                  rowClick: {
+                    transformBodyRow: (props, item) => ({
+                      ...props,
+                      htmlProps: {
+                        ...props.htmlProps,
+                        onClick: (e) => {
+                          props.htmlProps.onClick?.(e);
+                          onSelectRecording(item.id);
+                        },
+                        style: {
+                          ...props.htmlProps.style,
+                          cursor: 'pointer',
+                        },
+                      },
+                    }),
+                  },
+                }}
               />
             )}
           </VStack>

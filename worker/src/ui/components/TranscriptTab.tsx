@@ -32,6 +32,13 @@ export interface TranscriptTabProps {
   onSelectedSourceFilterChange: (sourceId: string) => void;
 }
 
+interface TurnParagraph {
+  id: string;
+  start: number;
+  end: number;
+  text: string;
+}
+
 interface GroupedTurn {
   id: string;
   speakerLabel: string;
@@ -40,7 +47,7 @@ interface GroupedTurn {
   attributionStatus: string;
   start: number;
   end: number;
-  segments: TranscriptSegment[];
+  paragraphs: TurnParagraph[];
 }
 
 export function TranscriptTab({
@@ -80,7 +87,8 @@ export function TranscriptTab({
     });
   }, [segments, selectedSourceFilter, searchQuery]);
 
-  // Merge consecutive segments from the same speaker within 8 seconds into clean editorial turns
+  // Group consecutive segments from the same speaker into a single turn,
+  // splitting into sub-paragraphs when a pause exceeds 8 seconds.
   const groupedTurns = useMemo<GroupedTurn[]>(() => {
     const turns: GroupedTurn[] = [];
     for (const seg of filteredSegments) {
@@ -88,11 +96,21 @@ export function TranscriptTab({
       if (
         prev &&
         prev.providerSourceId === seg.provider_source_id &&
-        prev.speakerLabel === seg.speaker_label &&
-        seg.start - prev.end <= 8.0
+        prev.speakerLabel === seg.speaker_label
       ) {
         prev.end = seg.end;
-        prev.segments.push(seg);
+        const lastPara = prev.paragraphs[prev.paragraphs.length - 1];
+        if (lastPara && seg.start - lastPara.end <= 8.0) {
+          lastPara.end = seg.end;
+          lastPara.text = `${lastPara.text} ${seg.text}`;
+        } else {
+          prev.paragraphs.push({
+            id: seg.segment_id,
+            start: seg.start,
+            end: seg.end,
+            text: seg.text,
+          });
+        }
       } else {
         turns.push({
           id: seg.segment_id,
@@ -102,7 +120,14 @@ export function TranscriptTab({
           attributionStatus: seg.attribution_status,
           start: seg.start,
           end: seg.end,
-          segments: [seg],
+          paragraphs: [
+            {
+              id: seg.segment_id,
+              start: seg.start,
+              end: seg.end,
+              text: seg.text,
+            },
+          ],
         });
       }
     }
@@ -111,7 +136,7 @@ export function TranscriptTab({
 
   const handleCopyTurn = async (turn: GroupedTurn) => {
     if (!navigator.clipboard) return;
-    const text = `[${formatDurationClock(turn.start)}] ${turn.speakerLabel}: ${turn.segments.map((s) => s.text).join(' ')}`;
+    const text = `[${formatDurationClock(turn.start)}] ${turn.speakerLabel}: ${turn.paragraphs.map((p) => p.text).join('\n')}`;
     await navigator.clipboard.writeText(text).catch(() => {});
     setCopiedTurnId(turn.id);
     setTimeout(() => setCopiedTurnId(null), 1600);
@@ -191,13 +216,12 @@ export function TranscriptTab({
             {groupedTurns.map((turn) => {
               const isCopied = copiedTurnId === turn.id;
               const isBound = turn.attributionStatus === 'bound';
-              const combinedText = turn.segments.map((s) => s.text).join(' ');
 
               return (
                 <div
                   key={turn.id}
                   id={`seg-${turn.id}`}
-                  className="group py-3.5 transition-colors hover:bg-[var(--color-background-muted)]/40 px-2 rounded-md"
+                  className="group py-3.5"
                 >
                   <HStack gap={3} vAlign="start">
                     <Avatar
@@ -265,11 +289,24 @@ export function TranscriptTab({
                         </div>
                       </HStack>
 
-                      <div className="mt-1">
-                        <Text type="body" color="primary">
-                          {combinedText}
-                        </Text>
-                      </div>
+                      <VStack gap={1.5} paddingBlockStart={1}>
+                        {turn.paragraphs.map((para, idx) => (
+                          <div key={para.id}>
+                            {idx > 0 && (
+                              <Text
+                                type="supporting"
+                                color="secondary"
+                                hasTabularNumbers
+                              >
+                                [{formatDurationClock(para.start)}]
+                              </Text>
+                            )}
+                            <Text type="body" color="primary">
+                              {para.text}
+                            </Text>
+                          </div>
+                        ))}
+                      </VStack>
                     </div>
                   </HStack>
                 </div>

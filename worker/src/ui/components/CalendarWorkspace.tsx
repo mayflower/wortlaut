@@ -66,6 +66,49 @@ const CALENDAR_STATUS_LABELS: Record<string, string> = {
 type SyncedEventRow = CalendarSyncedEventInfo & Record<string, unknown>;
 type IcsEventRow = CalendarEvent & { _rowKey: string } & Record<string, unknown>;
 
+function formatCalendarSlot(
+  startsAt: string | null,
+  endsAt?: string | null
+): string {
+  if (!startsAt) return 'Serientermin';
+  const start = new Date(startsAt);
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const tomorrow = new Date(today.getTime() + 86400000);
+  const targetDay = new Date(
+    start.getFullYear(),
+    start.getMonth(),
+    start.getDate()
+  );
+
+  let dayPrefix: string;
+  if (targetDay.getTime() === today.getTime()) {
+    dayPrefix = 'Heute';
+  } else if (targetDay.getTime() === tomorrow.getTime()) {
+    dayPrefix = 'Morgen';
+  } else {
+    dayPrefix = start.toLocaleDateString('de-DE', {
+      weekday: 'short',
+      day: '2-digit',
+      month: '2-digit',
+    });
+  }
+
+  const startTime = start.toLocaleTimeString('de-DE', {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+  if (endsAt) {
+    const end = new Date(endsAt);
+    const endTime = end.toLocaleTimeString('de-DE', {
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+    return `${dayPrefix}, ${startTime} – ${endTime}`;
+  }
+  return `${dayPrefix}, ${startTime}`;
+}
+
 export function CalendarWorkspace({
   token,
   events,
@@ -207,17 +250,11 @@ export function CalendarWorkspace({
     },
     {
       key: 'starts_at',
-      header: 'Zeitpunkt',
-      width: pixel(155),
+      header: 'Zeitfenster',
+      width: pixel(190),
       renderCell: (ev) => (
         <Text type="supporting" color="secondary" hasTabularNumbers>
-          {new Date(ev.starts_at).toLocaleString('de-DE', {
-            day: '2-digit',
-            month: '2-digit',
-            year: 'numeric',
-            hour: '2-digit',
-            minute: '2-digit',
-          })}
+          {formatCalendarSlot(ev.starts_at, ev.ends_at)}
         </Text>
       ),
     },
@@ -305,18 +342,10 @@ export function CalendarWorkspace({
     {
       key: 'starts_at',
       header: 'Geplante Zeit',
-      width: pixel(155),
+      width: pixel(190),
       renderCell: (ev) => (
         <Text type="supporting" color="secondary" hasTabularNumbers>
-          {ev.starts_at
-            ? new Date(ev.starts_at).toLocaleString('de-DE', {
-                day: '2-digit',
-                month: '2-digit',
-                year: 'numeric',
-                hour: '2-digit',
-                minute: '2-digit',
-              })
-            : 'Serientermin'}
+          {formatCalendarSlot(ev.starts_at, ev.ends_at)}
         </Text>
       ),
     },
@@ -609,49 +638,52 @@ export function CalendarWorkspace({
               </div>
             )}
 
-            {/* Imported .ics / IMAP Events */}
-            <div id="calendar-list">
-              <Section variant="section">
-                <VStack gap={2}>
-                  <HStack justify="between" vAlign="center" wrap="wrap">
-                    <Heading level={3}>
-                      E-Mail- &amp; .ics-Kalendereinladungen ({events.length})
-                    </Heading>
-                    {instance.botEmail && (
-                      <Text type="supporting" color="secondary">
-                        Einladungsadresse: <code>{instance.botEmail}</code>
-                      </Text>
-                    )}
-                  </HStack>
+            {/* Imported .ics / IMAP Events (shown when events exist or when no OAuth calendar is connected yet) */}
+            {(events.length > 0 || (!googleConn && !microsoftConn)) && (
+              <div id="calendar-list">
+                <Section variant="section">
+                  <VStack gap={2}>
+                    <HStack justify="between" vAlign="center" wrap="wrap">
+                      <Heading level={3}>
+                        E-Mail- &amp; .ics-Kalendereinladungen ({events.length})
+                      </Heading>
+                      {instance.botEmail && (
+                        <Text type="supporting" color="secondary">
+                          Einladungsadresse: <code>{instance.botEmail}</code>
+                        </Text>
+                      )}
+                    </HStack>
 
-                  {events.length === 0 ? (
-                    <EmptyState
-                      icon={<Mail className="h-8 w-8" />}
-                      title="Keine manuellen .ics- oder E-Mail-Einladungen"
-                      description="Laden Sie eine .ics-Datei hoch oder verbinden Sie oben Ihren Google- bzw. Microsoft-365-Kalender für die automatische Synchronisation."
-                      actions={
-                        <Button
-                          variant="secondary"
-                          size="sm"
-                          icon={<CalendarPlus className="h-3.5 w-3.5" />}
-                          label=".ics-Datei importieren"
-                          onClick={onOpenImportModal}
-                        />
-                      }
-                    />
-                  ) : (
-                    <Table<IcsEventRow>
-                      idKey="_rowKey"
-                      density="balanced"
-                      dividers="rows"
-                      hasHover
-                      data={icsRows}
-                      columns={icsColumns}
-                    />
-                  )}
-                </VStack>
-              </Section>
-            </div>
+                    {events.length === 0 ? (
+                      <EmptyState
+                        isCompact
+                        icon={<Mail className="h-6 w-6" />}
+                        title="Noch keine Kalendereinladungen vorhanden"
+                        description="Verbinden Sie oben Ihren Google- oder Microsoft-365-Kalender oder laden Sie eine .ics-Datei hoch."
+                        actions={
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            icon={<CalendarPlus className="h-3.5 w-3.5" />}
+                            label=".ics-Datei importieren"
+                            onClick={onOpenImportModal}
+                          />
+                        }
+                      />
+                    ) : (
+                      <Table<IcsEventRow>
+                        idKey="_rowKey"
+                        density="balanced"
+                        dividers="rows"
+                        hasHover
+                        data={icsRows}
+                        columns={icsColumns}
+                      />
+                    )}
+                  </VStack>
+                </Section>
+              </div>
+            )}
           </VStack>
         </LayoutContent>
       }
