@@ -187,6 +187,35 @@ export interface CalendarEvent {
   recording_ids?: string[];
 }
 
+export interface CalendarConnectionInfo {
+  id: string;
+  provider: 'google' | 'microsoft';
+  account_email: string;
+  owner_email: string;
+  last_synced_at: string | null;
+  sync_error: string | null;
+  created_at: string;
+}
+
+export interface CalendarSyncedEventInfo {
+  id: string;
+  connection_id: string;
+  calendar_provider: 'google' | 'microsoft';
+  external_event_id: string;
+  title: string | null;
+  starts_at: string;
+  ends_at: string;
+  organizer_email: string | null;
+  is_self_organized: boolean;
+  meeting_provider: Provider;
+  meeting_url: string;
+  status: string;
+  auto_record: boolean;
+  user_override: boolean | null;
+  recording_id: string | null;
+  recording_participation: ParticipationState | null;
+}
+
 export interface UserIdentity {
   sub: string;
   email: string;
@@ -207,6 +236,13 @@ export interface InstanceInfo {
     issuer: string;
     clientId: string;
     allowedDomains: string[];
+  };
+  calendarOAuth?: {
+    googleEnabled: boolean;
+    microsoftEnabled: boolean;
+    googleClientId: string;
+    microsoftClientId: string;
+    microsoftTenantId: string;
   };
   providers: {
     google_meet: boolean;

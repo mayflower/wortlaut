@@ -1,6 +1,8 @@
 import type {
   AuthMode,
+  CalendarConnectionInfo,
   CalendarEvent,
+  CalendarSyncedEventInfo,
   InstanceInfo,
   Provider,
   RecordingDetail,
@@ -11,6 +13,7 @@ import type {
 const STORAGE_KEY = 'wortlaut_api_token';
 const READER_SESSION_KEY = 'wortlaut_reader_token';
 const OIDC_PKCE_STORAGE_KEY = 'wortlaut_oidc_pkce';
+const CALENDAR_OAUTH_PKCE_STORAGE_KEY = 'wortlaut_cal_oauth_pkce';
 const READER_TOKEN_RE =
   /^wortlaut-read-([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\.([A-Za-z0-9_-]+)$/;
 const USER_TOKEN_RE = /^wortlaut-user-([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)$/;
@@ -124,8 +127,75 @@ export async function startOidcLogin(): Promise<void> {
   window.location.assign(authUrl.toString());
 }
 
+export async function startCalendarOAuthConnect(
+  provider: 'google' | 'microsoft'
+): Promise<void> {
+  const instance = getInstanceInfo();
+  const calOAuth = instance.calendarOAuth;
+  const verifier = randomBase64Url(32);
+  const state = randomBase64Url(16);
+  const redirectUri = `${window.location.origin}/auth/callback`;
+
+  const digest = await crypto.subtle.digest(
+    'SHA-256',
+    new TextEncoder().encode(verifier)
+  );
+  const challenge = encodeBase64Url(new Uint8Array(digest));
+
+  sessionStorage.setItem(
+    CALENDAR_OAUTH_PKCE_STORAGE_KEY,
+    JSON.stringify({ provider, verifier, state, redirectUri })
+  );
+
+  if (provider === 'google') {
+    if (!calOAuth?.googleEnabled || !calOAuth.googleClientId) {
+      throw new Error(
+        'Google-Calendar-OAuth ist auf dieser Instanz noch nicht mit einer Client-ID konfiguriert.'
+      );
+    }
+    const authUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
+    authUrl.searchParams.set('client_id', calOAuth.googleClientId);
+    authUrl.searchParams.set('redirect_uri', redirectUri);
+    authUrl.searchParams.set('response_type', 'code');
+    authUrl.searchParams.set(
+      'scope',
+      'openid email https://www.googleapis.com/auth/calendar.readonly'
+    );
+    authUrl.searchParams.set('access_type', 'offline');
+    authUrl.searchParams.set('prompt', 'consent');
+    authUrl.searchParams.set('state', state);
+    authUrl.searchParams.set('code_challenge', challenge);
+    authUrl.searchParams.set('code_challenge_method', 'S256');
+    window.location.assign(authUrl.toString());
+    return;
+  }
+
+  if (!calOAuth?.microsoftEnabled || !calOAuth.microsoftClientId) {
+    throw new Error(
+      'Microsoft-365-Kalender-OAuth ist auf dieser Instanz noch nicht mit einer Client-ID konfiguriert.'
+    );
+  }
+  const tenant = calOAuth.microsoftTenantId || 'common';
+  const authUrl = new URL(
+    `https://login.microsoftonline.com/${encodeURIComponent(tenant)}/oauth2/v2.0/authorize`
+  );
+  authUrl.searchParams.set('client_id', calOAuth.microsoftClientId);
+  authUrl.searchParams.set('redirect_uri', redirectUri);
+  authUrl.searchParams.set('response_type', 'code');
+  authUrl.searchParams.set(
+    'scope',
+    'openid email offline_access Calendars.Read'
+  );
+  authUrl.searchParams.set('prompt', 'select_account');
+  authUrl.searchParams.set('state', state);
+  authUrl.searchParams.set('code_challenge', challenge);
+  authUrl.searchParams.set('code_challenge_method', 'S256');
+  window.location.assign(authUrl.toString());
+}
+
 export async function completeOidcCallbackIfPresent(): Promise<{
   token?: string;
+  calendarConnected?: CalendarConnectionInfo;
   error?: string;
 } | null> {
   if (typeof window === 'undefined') return null;
@@ -137,6 +207,65 @@ export async function completeOidcCallbackIfPresent(): Promise<{
 
   if (!code && !errParam && !window.location.pathname.startsWith('/auth/callback')) {
     return null;
+  }
+
+  const rawCalStored = sessionStorage.getItem(CALENDAR_OAUTH_PKCE_STORAGE_KEY);
+  if (rawCalStored) {
+    sessionStorage.removeItem(CALENDAR_OAUTH_PKCE_STORAGE_KEY);
+    const clearToCalendar = () => {
+      window.history.replaceState(null, '', '/ui#view=calendar');
+    };
+    if (errParam) {
+      clearToCalendar();
+      return {
+        error: `Kalender-Verknüpfung fehlgeschlagen: ${errDesc || errParam}`,
+      };
+    }
+    if (!code) {
+      clearToCalendar();
+      return null;
+    }
+    let calStored: {
+      provider: 'google' | 'microsoft';
+      verifier: string;
+      state: string;
+      redirectUri: string;
+    };
+    try {
+      calStored = JSON.parse(rawCalStored);
+    } catch {
+      clearToCalendar();
+      return { error: 'Ungültiger lokaler Kalender-OAuth-PKCE-Status.' };
+    }
+    if (!state || state !== calStored.state) {
+      clearToCalendar();
+      return { error: 'Ungültiger Kalender-OAuth-State-Parameter.' };
+    }
+    const activeToken = getSavedAccountToken() || loadInitialToken();
+    try {
+      const res = await apiRequest<{
+        connection: CalendarConnectionInfo;
+        synced_events: CalendarSyncedEventInfo[];
+      }>('/v1/calendar/oauth/exchange', activeToken, {
+        method: 'POST',
+        body: JSON.stringify({
+          provider: calStored.provider,
+          code,
+          code_verifier: calStored.verifier,
+          redirect_uri: calStored.redirectUri,
+        }),
+      });
+      clearToCalendar();
+      return { calendarConnected: res.connection };
+    } catch (err) {
+      clearToCalendar();
+      return {
+        error:
+          err instanceof Error
+            ? `Kalender-Verknüpfung fehlgeschlagen: ${err.message}`
+            : 'Kalender-Verknüpfung fehlgeschlagen.',
+      };
+    }
   }
 
   const clearCallbackUrl = () => {
@@ -514,8 +643,52 @@ export async function fetchTranscript(
   return apiRequest(`/v1/recordings/${encodeURIComponent(recordingId)}/transcript`, token);
 }
 
-export async function fetchCalendar(token: string): Promise<{ events: CalendarEvent[] }> {
+export async function fetchCalendar(token: string): Promise<{
+  events: CalendarEvent[];
+  connections?: CalendarConnectionInfo[];
+  synced_events?: CalendarSyncedEventInfo[];
+}> {
   return apiRequest('/v1/calendar', token);
+}
+
+export async function syncCalendarConnection(
+  token: string,
+  connectionId: string
+): Promise<{
+  connection: CalendarConnectionInfo;
+  synced_events: CalendarSyncedEventInfo[];
+}> {
+  return apiRequest(
+    `/v1/calendar/oauth/connections/${encodeURIComponent(connectionId)}/sync`,
+    token,
+    { method: 'POST' }
+  );
+}
+
+export async function disconnectCalendarConnection(
+  token: string,
+  connectionId: string
+): Promise<{ deleted: boolean; id: string }> {
+  return apiRequest(
+    `/v1/calendar/oauth/connections/${encodeURIComponent(connectionId)}`,
+    token,
+    { method: 'DELETE' }
+  );
+}
+
+export async function toggleCalendarSyncedEvent(
+  token: string,
+  eventId: string,
+  enabled: boolean
+): Promise<CalendarSyncedEventInfo> {
+  return apiRequest(
+    `/v1/calendar/oauth/events/${encodeURIComponent(eventId)}/toggle`,
+    token,
+    {
+      method: 'POST',
+      body: JSON.stringify({ enabled }),
+    }
+  );
 }
 
 export async function createRecording(

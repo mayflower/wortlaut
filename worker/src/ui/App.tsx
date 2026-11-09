@@ -69,6 +69,10 @@ export function App() {
         setOidcError(null);
         setToken(res.token);
         queryClient.invalidateQueries();
+      } else if (res.calendarConnected) {
+        setOidcError(null);
+        setActiveNav('calendar');
+        queryClient.invalidateQueries();
       } else if (res.error) {
         setOidcError(res.error);
       }
@@ -395,7 +399,10 @@ export function App() {
         onChangeNav={handleChangeNav}
         recordingsCount={allRecordings.length}
         activeLiveCount={activeLiveCount}
-        calendarCount={calendarQuery.data?.events?.length || 0}
+        calendarCount={
+          (calendarQuery.data?.events?.length || 0) +
+          (calendarQuery.data?.synced_events?.length || 0)
+        }
         livePoll={livePoll}
         onToggleLivePoll={setLivePoll}
         onManualRefresh={handleManualRefresh}
@@ -510,7 +517,11 @@ export function App() {
             />
           ) : activeNav === 'calendar' ? (
             <CalendarWorkspace
+              token={token}
               events={calendarQuery.data?.events || []}
+              connections={calendarQuery.data?.connections || []}
+              syncedEvents={calendarQuery.data?.synced_events || []}
+              onRefreshCalendar={handleManualRefresh}
               onSelectRecording={handleSelectRecording}
               onOpenImportModal={handleOpenIcsImportModal}
             />

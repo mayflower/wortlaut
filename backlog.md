@@ -24,7 +24,7 @@ Grundlage dieses Backlogs ist das Wettbewerbs-Screening aus [`feature_matrix.md`
 | **Gespeicherte Host-/Bot-Sessions für Teams & Webex (wie bei Meet)** | **++** | **++** | **+** | **+** | **o** | **Aufnehmen (P2):** Erlaubt dem Bot in internen Firmen-Termine den Beitritt als authentifizierter Domänen-Nutzer ohne Warteraum-Hürde. |
 | **Automatische Live-E2E-Canary-Prüfung für Provider-Änderungen** | **o** | **o** | **++** | **o** | **o** | **Aufnehmen (P2):** Meet, Teams und Webex ändern regelmäßig ihr Web-Frontend. Svenja erkennt Brüche über `make test-live` frühzeitig. |
 | **Lokale KI-Zusammenfassung / Action-Items im Cluster** | **++** | **+** | **-** | **-** | **++** | **Nur entkoppelt über Tim (P3):** Keine Halluzinationsgefahr im Primärprotokoll; besser als nachgelagerter Webhook-Consumer gegen ein lokales Cluster-LLM. |
-| **OAuth-Kalender-Vollzugriff (Google / Microsoft 365)** | **+** | **+** | **--** | **--** | **o** | **Ablehnen (Non-Goal):** Erfordert weitreichende Tenant-Berechtigungen auf fremde Postfächer. Gezielte Einladung per `.ics`/IMAP ist datenschutzrechtlich überlegen. |
+| **OAuth2-Kalender-Integration (Google Workspace & Microsoft 365)** | **++** | **++** | **+** | **+** | **o** | **Aufnehmen (P1-0 – Top-Priorität):** Dedizierter OAuth2-Connect (`Google calendar.readonly` & `Microsoft Graph Calendars.Read`, parallel nutzbar): Auto-Join für selbst organisierte Termine, 1-Klick-Toggle in der UI für externe Termine. |
 | **Video-Aufzeichnung (MP4) & Screen-Recording** | **o** | **o** | **--** | **--** | **o** | **Ablehnen (Non-Goal):** Vervielfacht Speicher-/CPU-Last und verschärft die datenschutzrechtliche Eingriffstiefe massiv (Recht am eigenen Bild). |
 | **Stimmprofile (Voiceprints) / Akustische Diarisierung** | **o** | **o** | **-** | **--** | **-** | **Strikt verboten (`AGENTS.md`):** Biometrische Stimmprofile verstoßen gegen Dr. Thomas’ Vorgaben und die Architekturregel der nachgewiesenen Teilnehmersitzung. |
 | **Nachträgliches manuelles Überschreiben von Sprechernamen** | **+** | **+** | **-** | **--** | **-** | **Ablehnen (`AGENTS.md`):** Das Protokoll bildet die verifizierte Provider-Teilnehmerbindung ab; manuelles Umdeuten von Tonspuren verfälscht den Nachweis. |
@@ -34,6 +34,16 @@ Grundlage dieses Backlogs ist das Wettbewerbs-Screening aus [`feature_matrix.md`
 ## 2. Priorisierter Backlog
 
 ### Priorität 1 (P1) – Hoher Nutzen für Mara, Lukas & Tim bei minimalem Architektur-Eingriff
+
+#### P1-0: OAuth2-Kalender-Integration für Google Calendar & Microsoft 365 (Offen – Top-Priorität)
+- **Ziel-Personas:** Mara, Lukas, Dr. Thomas
+- **Problem:** Im Arbeitsalltag möchten Kollegen vor einem Meeting weder `.ics`-Dateien exportieren noch Meeting-Links kopieren; zudem lassen sich bei externen Kundenterminen (bei denen der Kunde `ORGANIZER` ist) keine Bot-E-Mail-Gäste in die fremde Einladung eintragen.
+- **Lösung & Umfang:**
+  - Dedizierter OAuth2-Kalender-Connect in `wortlaut` (`/v1/calendar/oauth/{google|microsoft}` + Callback) mit minimalen Lese-Scopes (`https://www.googleapis.com/auth/calendar.readonly` und Microsoft Graph `Calendars.Read` + `offline_access`), auch parallel pro Nutzer verknüpfbar.
+  - Hintergrund-Synchronisation der anstehenden Termine (Erkennung von Google-Meet-, Microsoft-Teams- und Cisco-Webex-Links in `hangoutLink`, `onlineMeeting`, `location` und `description`).
+  - **Regelbasiertes Standardverhalten:**
+    1. **Selbst organisierte Termine** (`organizer == verbundener Nutzer`): Automatisch zur Aufzeichnung eingeplant (*Auto-Join*, in der UI jederzeit per 1-Klick-Toggle abwählbar).
+    2. **Externe Termine** (fremder Organisator): Erscheinen in der persönlichen Kalenderübersicht in `wortlaut` und lassen sich mit einem **1-Klick-Toggle (`Aufzeichnen: An/Aus`)** aktivieren, ohne dass die externe Gästeliste verändert wird.
 
 #### P1-1: Schreibgeschützter Web-UI-Freigabelink direkt in der Ergebnis-E-Mail (Umgesetzt)
 - **Status:** **Umgesetzt** in [`mail.py`](file:///data/wortlaut/services/meeting/src/wortlaut/mail.py#L221-L308), [`app.py`](file:///data/wortlaut/services/meeting/src/wortlaut/app.py#L775-L786) (`POST /v1/recordings/{recording_id}/reader-token`) und [`MeetingDetailView.tsx`](file:///data/wortlaut/worker/src/ui/components/MeetingDetailView.tsx#L136-L157).
@@ -110,4 +120,3 @@ Folgende Features kommerzieller Konkurrenten werden **bewusst nicht** implementi
 1. **Keine akustische Diarisierung oder Voiceprints** (verstößt gegen [`AGENTS.md`](file:///data/wortlaut/AGENTS.md) und **Dr. Thomas**’ Datenschutzanforderungen).
 2. **Keine Active-Speaker-DOM-Namensheuristiken als Ersatz für WebRTC-Quellenbindung** (`AGENTS.md`).
 3. **Keine Video- oder Bildschirm-Aufzeichnung** (unverhältnismäßiger Eingriff in Persönlichkeitsrechte und Speicherbedarf).
-4. **Kein OAuth-Vollzugriff auf Mitarbeiter-Kalender** (der explizite Einladungsweg per `.ics`/IMAP stellt sicher, dass `wortlaut` nur Termine sieht, zu denen der Bot bewusst eingeladen wurde).

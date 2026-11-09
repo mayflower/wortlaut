@@ -39,6 +39,15 @@ from starlette.concurrency import run_in_threadpool
 
 from wortlaut.asr import finalize_processing, inference_pass
 from wortlaut.calendar import entry_json, imap_pass, import_mail
+from wortlaut.calendar_oauth import (
+    CalendarOAuthProvider,
+    calendar_oauth_pass,
+    connection_json,
+    exchange_calendar_oauth_code,
+    sync_connection,
+    synced_event_json,
+    toggle_synced_event,
+)
 from wortlaut.controller import controller_pass, new_attempt, request_cancellation
 from wortlaut.database import get_engine, session
 from wortlaut.exports import export_data, export_reader_token, render_export
@@ -50,7 +59,9 @@ from wortlaut.models import (
     AudioChunk,
     AudioControl,
     AudioStream,
+    CalendarConnection,
     CalendarEntry,
+    CalendarSyncedEvent,
     Delivery,
     Recording,
     TranscriptSegment,
@@ -112,6 +123,8 @@ async def lifespan(app: FastAPI):
     if get_settings().enable_controller:
         tasks.append(asyncio.create_task(processing_loop(stop, recurrence_pass, 60)))
         tasks.append(asyncio.create_task(processing_loop(stop, controller_pass, 5)))
+        if get_settings().enable_calendar_oauth_sync:
+            tasks.append(asyncio.create_task(processing_loop(stop, calendar_oauth_pass, 60)))
     if get_settings().enable_imap:
         tasks.append(asyncio.create_task(processing_loop(stop, imap_pass, 30)))
     if get_settings().enable_smtp:
@@ -173,6 +186,17 @@ class OidcExchangeRequest(BaseModel):
     code_verifier: str = Field(min_length=43, max_length=256)
     redirect_uri: str = Field(min_length=1, max_length=1024)
     nonce: str | None = Field(default=None, max_length=256)
+
+
+class CalendarOAuthExchangeRequest(BaseModel):
+    provider: CalendarOAuthProvider
+    code: str = Field(min_length=1, max_length=2048)
+    code_verifier: str = Field(min_length=43, max_length=256)
+    redirect_uri: str = Field(min_length=1, max_length=1024)
+
+
+class CalendarEventToggleRequest(BaseModel):
+    enabled: bool
 
 
 class RecordingRequest(BaseModel):
@@ -499,9 +523,15 @@ async def import_calendar_message(request: Request, db: Db, principal: AuthPrinc
 @app.get("/v1/calendar")
 def calendar_status(db: Db, principal: AuthPrincipal):
     cal_query = select(CalendarEntry).order_by(CalendarEntry.dtstamp.desc())
+    conn_query = select(CalendarConnection).order_by(CalendarConnection.created_at.desc())
+    synced_query = select(CalendarSyncedEvent).order_by(CalendarSyncedEvent.starts_at.asc())
     if not principal.is_admin:
         user_email = (principal.email or "").lower()
         cal_query = cal_query.where(func.lower(CalendarEntry.organizer) == user_email)
+        conn_query = conn_query.where(func.lower(CalendarConnection.owner_email) == user_email)
+        synced_query = synced_query.where(
+            func.lower(CalendarSyncedEvent.owner_email) == user_email
+        )
     entries = db.scalars(cal_query.limit(128)).all()
     result = []
     for entry in entries:
@@ -511,7 +541,114 @@ def calendar_status(db: Db, principal: AuthPrincipal):
         item = entry_json(entry, recordings[0] if len(recordings) == 1 else None)
         item["recording_ids"] = [str(r.id) for r in recordings]
         result.append(item)
-    return {"events": result}
+
+    connections = [connection_json(c) for c in db.scalars(conn_query).all()]
+    synced_rows = db.scalars(synced_query.limit(200)).all()
+    rec_ids = [ev.recording_id for ev in synced_rows if ev.recording_id]
+    rec_map = (
+        {
+            r.id: r
+            for r in db.scalars(select(Recording).where(Recording.id.in_(rec_ids))).all()
+        }
+        if rec_ids
+        else {}
+    )
+    synced_events = [
+        synced_event_json(ev, rec_map.get(ev.recording_id) if ev.recording_id else None)
+        for ev in synced_rows
+    ]
+    return {
+        "events": result,
+        "connections": connections,
+        "synced_events": synced_events,
+    }
+
+
+@app.post("/v1/calendar/oauth/exchange")
+def calendar_oauth_exchange(
+    body: CalendarOAuthExchangeRequest,
+    db: Db,
+    response: Response,
+    principal: AuthPrincipal,
+):
+    response.headers["Cache-Control"] = "no-store"
+    return exchange_calendar_oauth_code(
+        db=db,
+        principal=principal,
+        provider=body.provider,
+        code=body.code,
+        code_verifier=body.code_verifier,
+        redirect_uri=body.redirect_uri,
+    )
+
+
+@app.post("/v1/calendar/oauth/connections/{connection_id}/sync")
+def calendar_oauth_sync_now(
+    connection_id: uuid.UUID, db: Db, principal: AuthPrincipal
+):
+    conn = db.scalar(
+        select(CalendarConnection)
+        .where(CalendarConnection.id == connection_id)
+        .with_for_update()
+    )
+    if conn is None:
+        raise HTTPException(404, "Calendar connection not found")
+    user_email = (principal.email or "operator@local").lower()
+    if not principal.is_admin and conn.owner_email.lower() != user_email:
+        raise HTTPException(404, "Calendar connection not found")
+    synced = sync_connection(db, conn)
+    db.commit()
+    return {
+        "connection": connection_json(conn),
+        "synced_events": [synced_event_json(ev) for ev in synced],
+    }
+
+
+@app.delete("/v1/calendar/oauth/connections/{connection_id}")
+def calendar_oauth_disconnect(
+    connection_id: uuid.UUID, db: Db, principal: AuthPrincipal
+):
+    conn = db.scalar(
+        select(CalendarConnection)
+        .where(CalendarConnection.id == connection_id)
+        .with_for_update()
+    )
+    if conn is None:
+        raise HTTPException(404, "Calendar connection not found")
+    user_email = (principal.email or "operator@local").lower()
+    if not principal.is_admin and conn.owner_email.lower() != user_email:
+        raise HTTPException(404, "Calendar connection not found")
+    now = datetime.now(UTC)
+    linked_events = db.scalars(
+        select(CalendarSyncedEvent)
+        .where(CalendarSyncedEvent.connection_id == conn.id)
+        .with_for_update()
+    ).all()
+    for ev in linked_events:
+        if ev.recording_id:
+            rec = db.scalar(
+                select(Recording)
+                .where(Recording.id == ev.recording_id)
+                .with_for_update()
+            )
+            if rec and rec.participation == "scheduled" and rec.cancelled_at is None:
+                request_cancellation(rec, now)
+    db.execute(
+        delete(CalendarSyncedEvent).where(CalendarSyncedEvent.connection_id == conn.id)
+    )
+    db.delete(conn)
+    db.commit()
+    return {"deleted": True, "id": str(connection_id)}
+
+
+@app.post("/v1/calendar/oauth/events/{event_id}/toggle")
+def calendar_oauth_toggle_event(
+    event_id: uuid.UUID,
+    body: CalendarEventToggleRequest,
+    db: Db,
+    principal: AuthPrincipal,
+):
+    return toggle_synced_event(db, principal, event_id, body.enabled)
 
 
 @app.get("/metrics", dependencies=[Depends(api_auth)])
@@ -1083,6 +1220,15 @@ def cancel_recording(recording_id: uuid.UUID, db: Db, principal: AuthPrincipal):
     if recording is None or not can_access_recording(db, principal, recording):
         raise HTTPException(404, "Recording not found")
     request_cancellation(recording, datetime.now(UTC))
+    synced_for_rec = db.scalars(
+        select(CalendarSyncedEvent)
+        .where(CalendarSyncedEvent.recording_id == recording.id)
+        .with_for_update()
+    ).all()
+    for sev in synced_for_rec:
+        sev.recording_id = None
+        sev.user_override = False
+        sev.auto_record = False
     db.commit()
     return recording_json(recording)
 
@@ -1113,6 +1259,15 @@ def delete_recording(recording_id: uuid.UUID, db: Db, principal: AuthPrincipal):
             db.execute(delete(AudioStream).where(AudioStream.id.in_(stream_ids)))
         db.execute(delete(Attempt).where(Attempt.id.in_(attempt_ids)))
     db.execute(delete(Delivery).where(Delivery.recording_id == recording.id))
+    synced_for_rec = db.scalars(
+        select(CalendarSyncedEvent)
+        .where(CalendarSyncedEvent.recording_id == recording.id)
+        .with_for_update()
+    ).all()
+    for sev in synced_for_rec:
+        sev.recording_id = None
+        sev.user_override = False
+        sev.auto_record = False
     cal_id = recording.calendar_entry_id
     db.delete(recording)
     db.flush()

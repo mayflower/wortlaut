@@ -44,6 +44,12 @@ class Settings(BaseSettings):
     max_mail_bytes: int = Field(default=1024 * 1024, ge=1)
     calendar_horizon_days: int = Field(default=14, ge=1, le=90)
     max_occurrences_per_series: int = Field(default=256, ge=1)
+    enable_calendar_oauth_sync: bool = True
+    google_calendar_client_id: str | None = None
+    google_calendar_client_secret: SecretStr | None = None
+    microsoft_calendar_client_id: str | None = None
+    microsoft_calendar_client_secret: SecretStr | None = None
+    microsoft_calendar_tenant_id: str = "common"
     enable_smtp: bool = False
     smtp_host: str | None = None
     smtp_port: int = 587

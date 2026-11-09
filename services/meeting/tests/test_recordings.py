@@ -1230,4 +1230,188 @@ def test_oidc_dex_pkce_exchange_and_per_user_isolation(client, database, monkeyp
     assert del_res.json() == {"deleted": True, "id": rec_thomas_id}
     assert client.get(f"/v1/recordings/{rec_thomas_id}", headers=thomas_headers).status_code == 404
 
+    monkeypatch.setenv("WORTLAUT_GOOGLE_CALENDAR_CLIENT_ID", "gcal-client-id")
+    monkeypatch.setenv("WORTLAUT_GOOGLE_CALENDAR_CLIENT_SECRET", "gcal-secret")
+    monkeypatch.setenv("WORTLAUT_MICROSOFT_CALENDAR_CLIENT_ID", "m365-client-id")
+    monkeypatch.setenv("WORTLAUT_MICROSOFT_CALENDAR_CLIENT_SECRET", "m365-secret")
+    get_settings.cache_clear()
+
+    import wortlaut.calendar_oauth as cal_oauth_mod
+
+    gcal_start = (now + timedelta(hours=1)).isoformat()
+    gcal_end = (now + timedelta(hours=2)).isoformat()
+    m365_start = (now + timedelta(hours=3)).isoformat()
+    m365_end = (now + timedelta(hours=4)).isoformat()
+
+    class _FakeCalTokenResp:
+        def __init__(self, email: str):
+            self.status_code = 200
+            self._email = email
+
+        def json(self):
+            return {
+                "access_token": f"access-{self._email}",
+                "refresh_token": f"refresh-{self._email}",
+                "expires_in": 3600,
+                "id_token": _make_id_token("sub-cal", self._email, "Cal User"),
+            }
+
+    monkeypatch.setattr(
+        cal_oauth_mod.httpx,
+        "post",
+        lambda url, **kw: _FakeCalTokenResp(
+            "mara.lindner@mayflower.de"
+            if "googleapis.com" in url
+            else "thomas.berg@mayflower.de"
+        ),
+    )
+    class _FakeCalGetResp:
+        def __init__(self, payload: dict):
+            self.status_code = 200
+            self._payload = payload
+
+        def json(self):
+            return self._payload
+
+    def _fake_cal_get(url, **kw):
+        if "googleapis.com" in url:
+            return _FakeCalGetResp(
+                {
+                    "items": [
+                        {
+                            "id": "gcal-own-1",
+                            "status": "confirmed",
+                            "summary": "Interner Sprint Planning",
+                            "organizer": {"email": "mara.lindner@mayflower.de", "self": True},
+                            "start": {"dateTime": gcal_start},
+                            "end": {"dateTime": gcal_end},
+                            "hangoutLink": "https://meet.google.com/own-meet-xyz",
+                        },
+                        {
+                            "id": "gcal-ext-2",
+                            "status": "confirmed",
+                            "summary": "Kunden-Workshop ACME",
+                            "organizer": {"email": "kunde@acme-corp.example", "self": False},
+                            "start": {"dateTime": gcal_start},
+                            "end": {"dateTime": gcal_end},
+                            "hangoutLink": "https://meet.google.com/ext-cust-abc",
+                        },
+                    ]
+                }
+            )
+        return _FakeCalGetResp(
+            {
+                "value": [
+                    {
+                        "id": "m365-ext-1",
+                        "subject": "Enterprise Pitch Microsoft Teams",
+                        "isCancelled": False,
+                        "isOrganizer": False,
+                        "organizer": {
+                            "emailAddress": {"address": "procurement@enterprise.example"}
+                        },
+                        "start": {"dateTime": m365_start, "timeZone": "UTC"},
+                        "end": {"dateTime": m365_end, "timeZone": "UTC"},
+                        "onlineMeeting": {
+                            "joinUrl": "https://teams.microsoft.com/meet/999888777?p=ext"
+                        },
+                    }
+                ]
+            }
+        )
+
+    monkeypatch.setattr(cal_oauth_mod.httpx, "get", _fake_cal_get)
+
+    gcal_ex = client.post(
+        "/v1/calendar/oauth/exchange",
+        headers=mara_headers,
+        json={
+            "provider": "google",
+            "code": "gcal-auth-code",
+            "code_verifier": "g" * 44,
+            "redirect_uri": "https://wortlaut.data.mayflower.tech/auth/callback",
+        },
+    )
+    assert gcal_ex.status_code == 200, gcal_ex.text
+    gcal_data = gcal_ex.json()
+    assert gcal_data["connection"]["provider"] == "google"
+    assert gcal_data["connection"]["account_email"] == "mara.lindner@mayflower.de"
+    events_by_ext = {e["external_event_id"]: e for e in gcal_data["synced_events"]}
+    assert set(events_by_ext) == {"gcal-own-1", "gcal-ext-2"}
+
+    own_ev = events_by_ext["gcal-own-1"]
+    assert own_ev["is_self_organized"] is True
+    assert own_ev["auto_record"] is True
+    assert own_ev["recording_id"] is not None
+
+    ext_ev = events_by_ext["gcal-ext-2"]
+    assert ext_ev["is_self_organized"] is False
+    assert ext_ev["auto_record"] is False
+    assert ext_ev["recording_id"] is None
+
+    toggle_on = client.post(
+        f"/v1/calendar/oauth/events/{ext_ev['id']}/toggle",
+        headers=mara_headers,
+        json={"enabled": True},
+    )
+    assert toggle_on.status_code == 200
+    assert toggle_on.json()["auto_record"] is True
+    assert toggle_on.json()["user_override"] is True
+    ext_rec_id = toggle_on.json()["recording_id"]
+    assert ext_rec_id is not None
+
+    cancel_ext = client.post(f"/v1/recordings/{ext_rec_id}/cancel", headers=mara_headers)
+    assert cancel_ext.status_code == 200
+    resync = client.post(
+        f"/v1/calendar/oauth/connections/{gcal_data['connection']['id']}/sync",
+        headers=mara_headers,
+    )
+    assert resync.status_code == 200
+    resync_by_ext = {e["external_event_id"]: e for e in resync.json()["synced_events"]}
+    assert resync_by_ext["gcal-ext-2"]["auto_record"] is False
+    assert resync_by_ext["gcal-ext-2"]["user_override"] is False
+    assert resync_by_ext["gcal-ext-2"]["recording_id"] is None
+
+    toggle_off = client.post(
+        f"/v1/calendar/oauth/events/{own_ev['id']}/toggle",
+        headers=mara_headers,
+        json={"enabled": False},
+    )
+    assert toggle_off.status_code == 200
+    assert toggle_off.json()["auto_record"] is False
+    assert toggle_off.json()["user_override"] is False
+    assert toggle_off.json()["recording_id"] is None
+
+    m365_ex = client.post(
+        "/v1/calendar/oauth/exchange",
+        headers=thomas_headers,
+        json={
+            "provider": "microsoft",
+            "code": "m365-auth-code",
+            "code_verifier": "m" * 44,
+            "redirect_uri": "https://wortlaut.data.mayflower.tech/auth/callback",
+        },
+    )
+    assert m365_ex.status_code == 200, m365_ex.text
+    m365_ev = m365_ex.json()["synced_events"][0]
+    assert m365_ev["calendar_provider"] == "microsoft"
+    assert m365_ev["meeting_provider"] == "teams"
+    assert m365_ev["is_self_organized"] is False
+    assert m365_ev["auto_record"] is False
+
+    cal_mara = client.get("/v1/calendar", headers=mara_headers).json()
+    assert len(cal_mara["connections"]) == 1
+    assert {e["external_event_id"] for e in cal_mara["synced_events"]} == {
+        "gcal-own-1",
+        "gcal-ext-2",
+    }
+
+    disc = client.delete(
+        f"/v1/calendar/oauth/connections/{gcal_data['connection']['id']}",
+        headers=mara_headers,
+    )
+    assert disc.status_code == 200
+    assert client.get("/v1/calendar", headers=mara_headers).json()["connections"] == []
+
+
 

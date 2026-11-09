@@ -228,3 +228,83 @@ class TranscriptSegment(Base):
 
     id: Mapped[str] = mapped_column(ForeignKey("asr_jobs.id"), primary_key=True)
     result: Mapped[dict] = mapped_column(JSONB)
+
+
+class CalendarConnection(Base):
+    __tablename__ = "calendar_connections"
+    __table_args__ = (
+        UniqueConstraint(
+            "owner_email",
+            "provider",
+            "account_email",
+            name="uq_calendar_connections_owner_provider",
+        ),
+        CheckConstraint(
+            "provider IN ('google', 'microsoft')",
+            name="calendar_connections_provider",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    owner_sub: Mapped[str | None] = mapped_column(String(256), index=True)
+    owner_email: Mapped[str] = mapped_column(String(320), index=True)
+    provider: Mapped[str] = mapped_column(String(32))
+    account_email: Mapped[str] = mapped_column(String(320))
+    encrypted_refresh_token: Mapped[str] = mapped_column(String)
+    encrypted_access_token: Mapped[str | None] = mapped_column(String, nullable=True)
+    token_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_synced_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    sync_error: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), server_default=func.now()
+    )
+
+
+class CalendarSyncedEvent(Base):
+    __tablename__ = "calendar_synced_events"
+    __table_args__ = (
+        UniqueConstraint(
+            "connection_id",
+            "external_event_id",
+            name="uq_calendar_synced_events_conn_ext",
+        ),
+        CheckConstraint(
+            "calendar_provider IN ('google', 'microsoft')",
+            name="calendar_synced_events_cal_provider",
+        ),
+        CheckConstraint(
+            "meeting_provider IN ('webex', 'google_meet', 'teams')",
+            name="calendar_synced_events_mtg_provider",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    connection_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("calendar_connections.id", ondelete="CASCADE"), index=True
+    )
+    owner_sub: Mapped[str | None] = mapped_column(String(256), index=True)
+    owner_email: Mapped[str] = mapped_column(String(320), index=True)
+    calendar_provider: Mapped[str] = mapped_column(String(32))
+    external_event_id: Mapped[str] = mapped_column(String(512))
+    ical_uid: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    title: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    organizer_email: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    is_self_organized: Mapped[bool] = mapped_column(Boolean, default=False)
+    meeting_provider: Mapped[str] = mapped_column(String(32))
+    meeting_url: Mapped[str] = mapped_column(String(2048))
+    status: Mapped[str] = mapped_column(String(32), default="confirmed")
+    auto_record: Mapped[bool] = mapped_column(Boolean, default=False)
+    user_override: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    recording_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("recordings.id", ondelete="SET NULL"), nullable=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), server_default=func.now()
+    )
+
