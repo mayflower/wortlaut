@@ -545,6 +545,15 @@ export async function cancelRecording(
   });
 }
 
+export async function deleteRecording(
+  token: string,
+  recordingId: string
+): Promise<{ deleted: boolean; id: string }> {
+  return apiRequest(`/v1/recordings/${encodeURIComponent(recordingId)}`, token, {
+    method: 'DELETE',
+  });
+}
+
 export async function rejoinRecording(
   token: string,
   recordingId: string

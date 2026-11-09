@@ -32,7 +32,7 @@ from pydantic import (
     model_serializer,
     model_validator,
 )
-from sqlalchemy import func, or_, select, text, tuple_
+from sqlalchemy import delete, func, or_, select, text, tuple_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
@@ -1085,6 +1085,47 @@ def cancel_recording(recording_id: uuid.UUID, db: Db, principal: AuthPrincipal):
     request_cancellation(recording, datetime.now(UTC))
     db.commit()
     return recording_json(recording)
+
+
+@app.delete("/v1/recordings/{recording_id}")
+def delete_recording(recording_id: uuid.UUID, db: Db, principal: AuthPrincipal):
+    recording = db.scalar(select(Recording).where(Recording.id == recording_id).with_for_update())
+    if recording is None or not can_access_recording(db, principal, recording):
+        raise HTTPException(404, "Recording not found")
+    if recording.participation in ("starting", "joining", "waiting_admission", "capturing"):
+        raise HTTPException(409, "Stop active recording before deleting")
+    if get_settings().s3_access_key or recording.audio_deleted_at is None:
+        try:
+            get_storage().delete_recording(recording.id)
+        except Exception:
+            pass
+    attempt_ids = db.scalars(select(Attempt.id).where(Attempt.recording_id == recording.id)).all()
+    if attempt_ids:
+        stream_ids = db.scalars(
+            select(AudioStream.id).where(AudioStream.attempt_id.in_(attempt_ids))
+        ).all()
+        if stream_ids:
+            job_ids = select(AsrJob.id).where(AsrJob.stream_id.in_(stream_ids))
+            db.execute(delete(TranscriptSegment).where(TranscriptSegment.id.in_(job_ids)))
+            db.execute(delete(AsrJob).where(AsrJob.stream_id.in_(stream_ids)))
+            db.execute(delete(AudioControl).where(AudioControl.stream_id.in_(stream_ids)))
+            db.execute(delete(AudioChunk).where(AudioChunk.stream_id.in_(stream_ids)))
+            db.execute(delete(AudioStream).where(AudioStream.id.in_(stream_ids)))
+        db.execute(delete(Attempt).where(Attempt.id.in_(attempt_ids)))
+    db.execute(delete(Delivery).where(Delivery.recording_id == recording.id))
+    cal_id = recording.calendar_entry_id
+    db.delete(recording)
+    db.flush()
+    if cal_id is not None:
+        entry = db.get(CalendarEntry, cal_id)
+        if entry is not None and not entry.recurrence_anchor:
+            other = db.scalar(
+                select(Recording.id).where(Recording.calendar_entry_id == cal_id).limit(1)
+            )
+            if other is None:
+                entry.status = "cancelled"
+    db.commit()
+    return {"deleted": True, "id": str(recording_id)}
 
 
 @app.post("/v1/recordings/{recording_id}/rejoin")

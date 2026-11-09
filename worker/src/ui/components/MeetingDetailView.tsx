@@ -14,6 +14,7 @@ import {
   ShieldCheck,
   Square,
   Subtitles,
+  Trash2,
   Users,
 } from 'lucide-react';
 import {
@@ -36,6 +37,7 @@ export interface MeetingDetailViewProps {
   onBack?: () => void;
   onRejoin: () => void;
   onCancel: () => void;
+  onDelete?: () => void;
   onRetryMail: () => void;
   onShareReaderLink?: () => Promise<string | null>;
   onDownload: (format: 'txt' | 'vtt' | 'json' | 'md') => void;
@@ -60,6 +62,7 @@ export function MeetingDetailView({
   onBack,
   onRejoin,
   onCancel,
+  onDelete,
   onRetryMail,
   onShareReaderLink,
   onDownload,
@@ -69,6 +72,7 @@ export function MeetingDetailView({
   const [selectedSourceFilter, setSelectedSourceFilter] = useState<string>('');
   const [showTechDetails, setShowTechDetails] = useState<boolean>(false);
   const [confirmCancel, setConfirmCancel] = useState<boolean>(false);
+  const [confirmDelete, setConfirmDelete] = useState<boolean>(false);
   const [copiedId, setCopiedId] = useState<boolean>(false);
   const [copiedShareLink, setCopiedShareLink] = useState<boolean>(false);
   const instance = getInstanceInfo();
@@ -78,6 +82,12 @@ export function MeetingDetailView({
     recording.participation !== 'ended' &&
     !recording.cancelled_at;
   const canRejoin = isOperator && recording.participation === 'ended';
+  const canDelete =
+    isOperator &&
+    Boolean(onDelete) &&
+    (recording.participation === 'ended' ||
+      recording.participation === 'scheduled' ||
+      Boolean(recording.cancelled_at));
   const exportsReady =
     recording.processing === 'completed' || recording.processing === 'failed';
 
@@ -221,6 +231,47 @@ export function MeetingDetailView({
                 size="sm"
                 disabled={actionBusy}
                 onClick={() => setConfirmCancel(false)}
+              >
+                <span>Abbrechen</span>
+              </Button>
+            </div>
+          )}
+
+          {canDelete && !confirmDelete && (
+            <Button
+              variant="danger"
+              size="sm"
+              id="delete-rec-btn"
+              disabled={actionBusy}
+              onClick={() => setConfirmDelete(true)}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              <span>Löschen</span>
+            </Button>
+          )}
+
+          {canDelete && confirmDelete && (
+            <div className="inline-flex items-center gap-1.5 rounded-lg border border-red-800/80 bg-red-950/70 px-2.5 py-1 text-xs">
+              <span className="font-medium text-red-200">
+                Aufnahme &amp; Transkript endgültig löschen?
+              </span>
+              <Button
+                variant="danger"
+                size="sm"
+                id="confirm-delete-rec-btn"
+                disabled={actionBusy}
+                onClick={() => {
+                  setConfirmDelete(false);
+                  onDelete?.();
+                }}
+              >
+                <span>Endgültig löschen</span>
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={actionBusy}
+                onClick={() => setConfirmDelete(false)}
               >
                 <span>Abbrechen</span>
               </Button>

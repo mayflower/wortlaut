@@ -1198,7 +1198,10 @@ def test_oidc_dex_pkce_exchange_and_per_user_isolation(client, database, monkeyp
     assert "Datenschutz- &amp; Transparenzhinweis" in privacy.text
     assert "Keine Stimmprofile" in privacy.text
 
+    from wortlaut.settings import get_settings
+
     monkeypatch.setenv("WORTLAUT_ENABLE_GOOGLE_MEET", "true")
+    get_settings.cache_clear()
     attempt_id, attempt_headers = prepare(client, rec_mara_id)
     assert (
         client.post(
@@ -1218,4 +1221,13 @@ def test_oidc_dex_pkce_exchange_and_per_user_isolation(client, database, monkeyp
     assert "mara.lindner@mayflower.de" in boot_data["chat_intro"]
     assert f"/ui#view=meetings&id={rec_mara_id}" in boot_data["chat_intro"]
     assert "/privacy" in boot_data["chat_intro"]
+
+    assert (
+        client.delete(f"/v1/recordings/{rec_thomas_id}", headers=mara_headers).status_code == 404
+    )
+    del_res = client.delete(f"/v1/recordings/{rec_thomas_id}", headers=thomas_headers)
+    assert del_res.status_code == 200
+    assert del_res.json() == {"deleted": True, "id": rec_thomas_id}
+    assert client.get(f"/v1/recordings/{rec_thomas_id}", headers=thomas_headers).status_code == 404
+
 

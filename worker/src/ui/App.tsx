@@ -5,6 +5,7 @@ import {
   ApiError,
   cancelRecording,
   completeOidcCallbackIfPresent,
+  deleteRecording,
   downloadExportFile,
   exitReaderModeToAccount,
   fetchCalendar,
@@ -318,6 +319,21 @@ export function App() {
     }
   };
 
+  const handleDelete = async () => {
+    if (!rec) return;
+    setActionBusy(true);
+    setActionError(null);
+    try {
+      await deleteRecording(token, rec.id);
+      setSelectedId(null);
+      await queryClient.invalidateQueries();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setActionBusy(false);
+    }
+  };
+
   const handleRejoin = async () => {
     if (!rec) return;
     setActionBusy(true);
@@ -449,6 +465,7 @@ export function App() {
                     : undefined
                 }
                 onCancel={handleCancel}
+                onDelete={handleDelete}
                 onRejoin={handleRejoin}
                 onRetryMail={handleRetryMail}
                 onShareReaderLink={handleShareReaderLink}
