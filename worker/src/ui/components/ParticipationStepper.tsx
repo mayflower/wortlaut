@@ -132,10 +132,10 @@ export function ParticipationStepper({
           <div className="flex items-center gap-2.5">
             <Loader2 className="h-4 w-4 shrink-0 text-sky-400 animate-spin" />
             <div>
-              <strong>Bot tritt dem Meeting bei:</strong> Erscheint in wenigen
-              Sekunden stummgeschaltet als <strong>„{botName}“</strong> im
-              Meeting. Falls ein Warteraum aktiv ist, lassen Sie ihn dort bitte
-              als Gast zu.
+              <strong>Bot tritt dem Meeting bei (Dauer ca. 15–30 Sek.):</strong>{' '}
+              Der isolierte Browser-Worker startet und erscheint stummgeschaltet
+              als <strong>„{botName}“</strong> im Meeting. Falls ein Warteraum
+              aktiv ist, lassen Sie ihn dort bitte als Gast zu.
             </div>
           </div>
         </div>
@@ -147,8 +147,10 @@ export function ParticipationStepper({
             <AlertTriangle className="h-4 w-4 shrink-0 text-amber-400" />
             <div>
               <strong>Warteraum aktiv:</strong> Der Bot wartet im
-              Meeting-Warteraum auf Einlass durch den Host. Bitte lassen Sie{' '}
-              <strong>„{botName}“</strong> jetzt im Meeting-Fenster zu.
+              Meeting-Warteraum auf Einlass durch den Host (max.{' '}
+              {Math.round(instance.limits.lobbyTimeoutSeconds / 60)} Min.).
+              Bitte lassen Sie <strong>„{botName}“</strong> jetzt im
+              Meeting-Fenster zu.
             </div>
           </div>
         </div>

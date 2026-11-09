@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { Eye, EyeOff, KeyRound, MailCheck, ShieldCheck, Trash2, Users } from 'lucide-react';
+import { Eye, EyeOff, KeyRound, LogIn, ShieldCheck, Trash2, User } from 'lucide-react';
+import { getInstanceInfo } from '../api';
+import type { AuthMode } from '../types';
 import {
   Button,
   Dialog,
@@ -13,23 +15,30 @@ export interface AuthGateDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   currentToken: string;
+  authMode: AuthMode;
   authError: string | null;
   onSaveToken: (token: string) => void;
+  onStartOidcLogin: () => void;
 }
 
 export function AuthGateDialog({
   open,
   onOpenChange,
   currentToken,
+  authMode,
   authError,
   onSaveToken,
+  onStartOidcLogin,
 }: AuthGateDialogProps) {
+  const instance = getInstanceInfo();
+  const oidcEnabled = Boolean(instance.oidc?.enabled);
+  const currentUser = authMode.kind === 'operator' ? authMode.user : undefined;
   const [value, setValue] = useState(currentToken);
   const [showPlain, setShowPlain] = useState(false);
 
   useEffect(() => {
-    setValue(currentToken);
-  }, [currentToken, open]);
+    setValue(currentUser ? '' : currentToken);
+  }, [currentToken, currentUser, open]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -45,12 +54,11 @@ export function AuthGateDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-lg font-bold text-white">
             <KeyRound className="h-5 w-5 text-sky-400" />
-            <span>Mit wortlaut verbinden</span>
+            <span>Anmeldung &amp; Zugang</span>
           </DialogTitle>
           <DialogDescription className="text-xs text-slate-400">
-            wortlaut läuft selbstgehostet in Ihrer Infrastruktur. Melden Sie
-            sich mit Ihrem Team-Zugangsschlüssel oder einem Lese-Token aus einer
-            Transkript-E-Mail an.
+            Melden Sie sich per Mayflower-SSO (Dex) an oder verwenden Sie einen
+            Lese-Token bzw. API-Schlüssel.
           </DialogDescription>
         </DialogHeader>
 
@@ -60,39 +68,66 @@ export function AuthGateDialog({
           </div>
         )}
 
-        <div className="mb-4 grid grid-cols-1 gap-2.5 sm:grid-cols-2">
-          <div className="rounded-xl border border-slate-800 bg-slate-950/80 p-3 text-xs space-y-1.5">
-            <div className="flex items-center gap-2 font-semibold text-sky-300">
-              <Users className="h-4 w-4 shrink-0 text-sky-400" />
-              <span>1. Team- / Operator-Schlüssel</span>
+        {currentUser && (
+          <div className="mb-4 flex items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-950/90 p-3.5 text-xs">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <User className="h-4 w-4 shrink-0 text-sky-400" />
+              <div className="truncate">
+                <div className="font-semibold text-white truncate">
+                  {currentUser.name}
+                </div>
+                <div className="text-slate-400 truncate">{currentUser.email}</div>
+              </div>
             </div>
-            <p className="text-[11px] leading-relaxed text-slate-400">
-              Für neue Meeting-Aufnahmen, Kalender-Einladungen und alle
-              Transkripte. Erhältlich bei Ihrem Plattform-Team (Kubernetes-Secret{' '}
-              <code className="text-slate-300">wortlaut-runtime</code>).
-            </p>
+            <Button
+              type="button"
+              variant="danger"
+              size="sm"
+              onClick={() => {
+                setValue('');
+                onSaveToken('');
+                onOpenChange(false);
+              }}
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              <span>Abmelden</span>
+            </Button>
           </div>
+        )}
 
-          <div className="rounded-xl border border-slate-800 bg-slate-950/80 p-3 text-xs space-y-1.5">
-            <div className="flex items-center gap-2 font-semibold text-emerald-300">
-              <MailCheck className="h-4 w-4 shrink-0 text-emerald-400" />
-              <span>2. Einzel-Transkript lesen</span>
-            </div>
-            <p className="text-[11px] leading-relaxed text-slate-400">
-              Öffnen Sie direkt den Link aus Ihrer Ergebnis-E-Mail oder fügen
-              Sie einen Lese-Token (<code className="text-slate-300">wortlaut-read-…</code>)
-              für genau eine Besprechung ein.
-            </p>
+        {oidcEnabled && (
+          <div className="mb-4">
+            <Button
+              type="button"
+              variant="primary"
+              size="md"
+              onClick={onStartOidcLogin}
+              className="w-full justify-center py-2.5"
+            >
+              <LogIn className="h-4 w-4" />
+              <span>
+                {currentUser
+                  ? 'SSO-Sitzung erneuern / Konto wechseln'
+                  : 'Mit Mayflower-Account anmelden (SSO)'}
+              </span>
+            </Button>
           </div>
-        </div>
+        )}
 
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form
+          onSubmit={handleSubmit}
+          className={
+            oidcEnabled
+              ? 'space-y-4 border-t border-slate-800/80 pt-4'
+              : 'space-y-4'
+          }
+        >
           <div className="space-y-1.5">
             <label
               htmlFor="api-token"
               className="block text-xs font-semibold uppercase tracking-wider text-slate-400"
             >
-              Zugangsschlüssel (Team-Token oder Lese-Token)
+              Alternativ: Lese-Token (wortlaut-read-…) oder API-Schlüssel
             </label>
             <div className="relative">
               <input
@@ -100,8 +135,8 @@ export function AuthGateDialog({
                 type={showPlain ? 'text' : 'password'}
                 value={value}
                 onChange={(e) => setValue(e.target.value)}
-                placeholder="Schlüssel hier einfügen…"
-                autoFocus
+                placeholder="Token hier einfügen…"
+                autoFocus={!oidcEnabled}
                 className="w-full rounded-lg border border-slate-700 bg-slate-950 pl-3 pr-10 py-2.5 text-sm text-white placeholder-slate-500 focus:border-sky-500 focus:outline-none"
               />
               <button
@@ -126,7 +161,7 @@ export function AuthGateDialog({
           </div>
 
           <div className="flex items-center justify-between gap-2 pt-1">
-            {currentToken ? (
+            {currentToken && !currentUser ? (
               <Button
                 type="button"
                 variant="danger"
@@ -143,18 +178,22 @@ export function AuthGateDialog({
               <div />
             )}
             <div className="flex items-center gap-2">
-              {currentToken && (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="md"
-                  onClick={() => onOpenChange(false)}
-                >
-                  Abbrechen
-                </Button>
-              )}
-              <Button type="submit" variant="primary" size="md" id="save-token">
-                Jetzt verbinden
+              <Button
+                type="button"
+                variant="ghost"
+                size="md"
+                onClick={() => onOpenChange(false)}
+              >
+                Schließen
+              </Button>
+              <Button
+                type="submit"
+                variant={oidcEnabled ? 'outline' : 'primary'}
+                size="md"
+                id="save-token"
+                disabled={!value.trim()}
+              >
+                Token übernehmen
               </Button>
             </div>
           </div>

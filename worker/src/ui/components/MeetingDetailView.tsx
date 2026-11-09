@@ -32,12 +32,13 @@ export interface MeetingDetailViewProps {
   recording: RecordingDetail;
   transcript: TranscriptExport;
   isOperator: boolean;
+  backLabel?: string;
   onBack?: () => void;
   onRejoin: () => void;
   onCancel: () => void;
   onRetryMail: () => void;
   onShareReaderLink?: () => Promise<string | null>;
-  onDownload: (format: 'txt' | 'vtt' | 'json') => void;
+  onDownload: (format: 'txt' | 'vtt' | 'json' | 'md') => void;
   actionBusy: boolean;
   actionError: string | null;
 }
@@ -55,6 +56,7 @@ export function MeetingDetailView({
   recording,
   transcript,
   isOperator,
+  backLabel = 'Alle Meetings',
   onBack,
   onRejoin,
   onCancel,
@@ -66,6 +68,7 @@ export function MeetingDetailView({
 }: MeetingDetailViewProps) {
   const [selectedSourceFilter, setSelectedSourceFilter] = useState<string>('');
   const [showTechDetails, setShowTechDetails] = useState<boolean>(false);
+  const [confirmCancel, setConfirmCancel] = useState<boolean>(false);
   const [copiedId, setCopiedId] = useState<boolean>(false);
   const [copiedShareLink, setCopiedShareLink] = useState<boolean>(false);
   const instance = getInstanceInfo();
@@ -96,7 +99,11 @@ export function MeetingDetailView({
     recording.participation === 'ended' &&
     recording.processing === 'completed' &&
     audioSeconds > 0 &&
-    (!reason || reason === 'normal' || reason === 'room_empty');
+    (!reason ||
+      reason === 'normal' ||
+      reason === 'room_empty' ||
+      reason === 'cancelled' ||
+      reason === 'deadline');
 
   const handleCopyId = async () => {
     if (!navigator.clipboard) return;
@@ -126,7 +133,7 @@ export function MeetingDetailView({
             className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-400 hover:text-white cursor-pointer"
           >
             <ArrowLeft className="h-4 w-4" />
-            <span>Alle Meetings</span>
+            <span>{backLabel}</span>
           </button>
         ) : (
           <div />
@@ -169,17 +176,55 @@ export function MeetingDetailView({
             </Button>
           )}
 
-          {canCancel && (
+          {canCancel && !confirmCancel && (
             <Button
               variant="danger"
               size="sm"
               id="cancel-rec-btn"
               disabled={actionBusy}
-              onClick={onCancel}
+              onClick={() => {
+                if (recording.participation === 'scheduled') {
+                  onCancel();
+                } else {
+                  setConfirmCancel(true);
+                }
+              }}
             >
               <Square className="h-3.5 w-3.5" />
-              <span>Aufnahme beenden</span>
+              <span>
+                {recording.participation === 'scheduled'
+                  ? 'Termin stornieren'
+                  : 'Aufnahme beenden'}
+              </span>
             </Button>
+          )}
+
+          {canCancel && confirmCancel && (
+            <div className="inline-flex items-center gap-1.5 rounded-lg border border-red-800/80 bg-red-950/70 px-2.5 py-1 text-xs">
+              <span className="font-medium text-red-200">
+                Laufende Aufnahme wirklich beenden?
+              </span>
+              <Button
+                variant="danger"
+                size="sm"
+                id="confirm-cancel-rec-btn"
+                disabled={actionBusy}
+                onClick={() => {
+                  setConfirmCancel(false);
+                  onCancel();
+                }}
+              >
+                <span>Ja, beenden</span>
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={actionBusy}
+                onClick={() => setConfirmCancel(false)}
+              >
+                <span>Abbrechen</span>
+              </Button>
+            </div>
           )}
         </div>
       </div>
@@ -307,7 +352,10 @@ export function MeetingDetailView({
                   const pct = Math.round(
                     ((src.speech_seconds || 0) / totalSpeechSeconds) * 100
                   );
+                  const filterKey =
+                    src.signaled_participant_id || src.provider_source_id;
                   const isActive =
+                    selectedSourceFilter === filterKey ||
                     selectedSourceFilter === src.provider_source_id;
                   const barColor =
                     SPEAKER_BAR_COLORS[idx % SPEAKER_BAR_COLORS.length];
@@ -319,13 +367,11 @@ export function MeetingDetailView({
 
                   return (
                     <button
-                      key={src.provider_source_id}
+                      key={`${src.provider_source_id}:${filterKey}`}
                       type="button"
                       onClick={() =>
                         setSelectedSourceFilter((prev) =>
-                          prev === src.provider_source_id
-                            ? ''
-                            : src.provider_source_id
+                          prev === filterKey ? '' : filterKey
                         )
                       }
                       className={cn(
@@ -362,6 +408,20 @@ export function MeetingDetailView({
               Transkript exportieren
             </h2>
             <div className="space-y-2">
+              <button
+                type="button"
+                data-export="md"
+                disabled={!exportsReady}
+                onClick={() => onDownload('md')}
+                className="flex w-full items-center justify-between rounded-xl border border-slate-800 bg-slate-950/80 px-3.5 py-2.5 text-xs font-medium text-slate-200 hover:border-slate-700 hover:bg-slate-800/70 disabled:opacity-40 disabled:pointer-events-none cursor-pointer"
+              >
+                <span className="inline-flex items-center gap-2">
+                  <FileText className="h-4 w-4 text-violet-400" />
+                  <span>Markdown-Protokoll (.md)</span>
+                </span>
+                <span className="text-[11px] text-slate-400">Download</span>
+              </button>
+
               <button
                 type="button"
                 data-export="txt"

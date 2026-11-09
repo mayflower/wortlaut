@@ -10,7 +10,6 @@ import {
   Copy,
   FileText,
   Mail,
-  Mic,
   Play,
   ShieldCheck,
   Tag,
@@ -106,8 +105,13 @@ export function HomeView({
         if (!startsAt || !endsAt) {
           throw new Error('Bitte Start- und Endzeit angeben.');
         }
-        startIso = new Date(startsAt).toISOString();
-        endIso = new Date(endsAt).toISOString();
+        const startDate = new Date(startsAt);
+        const endDate = new Date(endsAt);
+        if (endDate <= startDate) {
+          throw new Error('Die Endzeit muss nach der Startzeit liegen.');
+        }
+        startIso = startDate.toISOString();
+        endIso = endDate.toISOString();
       }
       const created = await createRecording(token, {
         meeting_url: meetingUrl.trim(),
@@ -128,20 +132,20 @@ export function HomeView({
 
   return (
     <div className="mx-auto max-w-5xl space-y-7">
-      {/* Hero Quick-Join Card (Otter / Fireflies style) */}
-      <section className="rounded-2xl border border-slate-800 bg-gradient-to-b from-slate-900 to-slate-900/75 p-6 shadow-xl">
-        <div className="mb-4 flex flex-wrap items-start justify-between gap-2">
+      {/* Hero Quick-Join Card */}
+      <section className="rounded-xl border border-slate-800 bg-slate-900/75 p-6 space-y-4">
+        <div className="flex flex-wrap items-start justify-between gap-2">
           <div>
-            <h1 className="text-lg font-bold text-white">
-              Meeting jetzt aufzeichnen oder einplanen
+            <h1 className="text-base font-semibold text-white">
+              Meeting aufzeichnen oder einplanen
             </h1>
             <p className="text-xs text-slate-400">
-              Fügen Sie einen Google Meet-, Microsoft Teams- oder Webex-Link
-              ein. Der Assistent tritt stummgeschaltet als{' '}
-              <strong className="text-slate-200">
+              Google Meet-, Microsoft Teams- oder Webex-Link einfügen. Der Bot
+              tritt stummgeschaltet als{' '}
+              <strong className="font-medium text-slate-200">
                 „{guestName.trim() || instance.assistantName}“
               </strong>{' '}
-              bei und erfasst Sprecher getrennt.
+              bei.
             </p>
           </div>
           {detectedProvider && <ProviderBadge provider={detectedProvider} />}
@@ -191,7 +195,7 @@ export function HomeView({
                 {submitting
                   ? 'Startet…'
                   : joinMode === 'live'
-                    ? 'Jetzt aufzeichnen'
+                    ? `Jetzt aufzeichnen (${durationMin} Min.)`
                     : 'Termin planen'}
               </span>
             </Button>
@@ -321,15 +325,41 @@ export function HomeView({
             </div>
           )}
 
-          {detectedProvider === 'google_meet' &&
-            !instance.providers.google_meet_auth_session && (
-              <div className="rounded-lg border border-sky-800/70 bg-sky-950/40 px-3.5 py-2 text-xs text-sky-200">
-                <strong>Hinweis für Google Meet:</strong> Der Bot tritt als Gast{' '}
-                <strong>„{guestName.trim() || instance.assistantName}“</strong>{' '}
-                bei. Bitte stellen Sie sicher, dass Gäste im Meeting-Warteraum
-                zugelassen werden können.
-              </div>
-            )}
+          {detectedProvider && (
+            <div className="rounded-lg border border-sky-800/70 bg-sky-950/40 px-3.5 py-2 text-xs text-sky-200">
+              {detectedProvider === 'google_meet' ? (
+                <>
+                  <strong>Hinweis für Google Meet:</strong> Der Bot tritt
+                  stummgeschaltet als{' '}
+                  <strong>
+                    „{guestName.trim() || instance.assistantName}“
+                  </strong>{' '}
+                  bei. Falls die Besprechung einen Warteraum nutzt, lassen Sie
+                  den Bot bitte im Meeting zu.
+                </>
+              ) : detectedProvider === 'teams' ? (
+                <>
+                  <strong>Hinweis für Microsoft Teams:</strong> Der Bot tritt im
+                  Web-Client als Gast{' '}
+                  <strong>
+                    „{guestName.trim() || instance.assistantName}“
+                  </strong>{' '}
+                  bei. Bitte lassen Sie ihn in der Teams-Lobby zu, sobald der
+                  Status <em>„Wartet auf Einlass“</em> anzeigt.
+                </>
+              ) : (
+                <>
+                  <strong>Hinweis für Cisco Webex:</strong> Der Bot tritt als{' '}
+                  <strong>
+                    „{guestName.trim() || instance.assistantName}“
+                  </strong>{' '}
+                  bei und erfasst die aktiven Audio-Streams über die
+                  Webex-Teilnehmersitzung. Bei aktivierter Lobby bitte im Raum
+                  zulassen.
+                </>
+              )}
+            </div>
+          )}
 
           {error && (
             <div className="rounded-lg border border-red-800/80 bg-red-950/60 px-3.5 py-2 text-xs text-red-200">
@@ -344,11 +374,15 @@ export function HomeView({
             <div className="flex flex-wrap items-center gap-2">
               <Mail className="h-3.5 w-3.5 text-sky-400" />
               <span>
-                Tipp für Serientermine: Laden Sie einfach{' '}
+                Tipp für Serientermine: Laden Sie{' '}
                 <code className="rounded bg-slate-950 px-1.5 py-0.5 font-mono text-slate-200">
                   {instance.botEmail}
                 </code>{' '}
-                direkt in Ihrem Kalender ein.
+                direkt im Kalender ein
+                {instance.mail.allowedDomains.length > 0
+                  ? ` (erlaubte Absender: ${instance.mail.allowedDomains.map((d) => `@${d}`).join(', ')})`
+                  : ''}
+                .
               </span>
               <button
                 type="button"
@@ -381,8 +415,7 @@ export function HomeView({
           <div className="flex items-center gap-1.5 text-[11px] text-slate-500">
             <ShieldCheck className="h-3.5 w-3.5 text-emerald-400" />
             <span>
-              100 % lokal (Parakeet-GPU) · Roh-Audio wird nach{' '}
-              {instance.retention.audioHours}h gelöscht
+              Lokale Parakeet-GPU · Roh-Audio nach {instance.retention.audioHours}h gelöscht
             </span>
           </div>
         </div>
@@ -514,83 +547,33 @@ export function HomeView({
         </div>
 
         {recentCompleted.length === 0 ? (
-          <div className="rounded-2xl border border-slate-800 bg-slate-900/60 p-6 space-y-5">
-            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800/80 pb-4">
-              <div>
-                <h3 className="text-sm font-bold text-white">
-                  Willkommen! So entsteht Ihr erstes Meeting-Transkript in 3
-                  Schritten:
-                </h3>
-                <p className="text-xs text-slate-400">
-                  Noch keine Besprechungen aufgezeichnet — starten Sie oben
-                  sofort ein Live-Meeting oder planen Sie einen Termin per
-                  Kalender ein.
-                </p>
-              </div>
+          <div className="rounded-xl border border-slate-800 bg-slate-900/50 px-6 py-10 text-center space-y-1.5">
+            <div className="text-sm font-medium text-slate-200">
+              Noch keine abgeschlossenen Aufnahmen
             </div>
-
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-              <div className="rounded-xl border border-slate-800/90 bg-slate-950/70 p-4 space-y-2">
-                <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-sky-500/20 text-xs font-bold text-sky-300 border border-sky-500/40">
-                  1
-                </span>
-                <div className="text-xs font-bold text-white">
-                  Link einfügen oder Bot einladen
-                </div>
-                <p className="text-xs leading-relaxed text-slate-400">
-                  Fügen Sie oben einen Google Meet-, Teams- oder Webex-Link ein
-                  oder laden Sie{' '}
-                  <code className="text-slate-200">
-                    {instance.botEmail || 'den Bot'}
-                  </code>{' '}
-                  in Ihrem Kalender als Gast ein.
-                </p>
-              </div>
-
-              <div className="rounded-xl border border-slate-800/90 bg-slate-950/70 p-4 space-y-2">
-                <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-amber-500/20 text-xs font-bold text-amber-300 border border-amber-500/40">
-                  2
-                </span>
-                <div className="text-xs font-bold text-white">
-                  Bot „{instance.assistantName}“ im Warteraum zulassen
-                </div>
-                <p className="text-xs leading-relaxed text-slate-400">
-                  Der Bot tritt stummgeschaltet (ohne Kamera/Mikrofon) bei.
-                  Lassen Sie ihn im Meeting-Warteraum zu — hier in der UI sehen
-                  Sie den Live-Status in Echtzeit.
-                </p>
-              </div>
-
-              <div className="rounded-xl border border-slate-800/90 bg-slate-950/70 p-4 space-y-2">
-                <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-emerald-500/20 text-xs font-bold text-emerald-300 border border-emerald-500/40">
-                  3
-                </span>
-                <div className="text-xs font-bold text-white">
-                  Sprechergetrenntes Transkript &amp; Export
-                </div>
-                <p className="text-xs leading-relaxed text-slate-400">
-                  Jede Audiospur wird vor dem Mix getrennt erfasst und lokal per
-                  Parakeet-GPU transkribiert. Sie erhalten Redeanteile, Suche
-                  sowie <code>.txt</code>, <code>.vtt</code> und{' '}
-                  <code>.json</code>.
-                </p>
-              </div>
-            </div>
+            <p className="text-xs text-slate-400">
+              Fügen Sie oben einen Meeting-Link ein oder laden Sie eine{' '}
+              <code>.ics</code>-Datei hoch. Sobald der Bot im Warteraum
+              zugelassen wurde, erscheint das Transkript hier.
+            </p>
           </div>
         ) : (
           <div className="overflow-hidden rounded-xl border border-slate-800 bg-slate-900/75 divide-y divide-slate-800/80">
             {recentCompleted.map((rec) => {
               const reason = rec.participation_reason;
+              const samples = rec.quality?.durable_sample_count || 0;
               const isNormalEnd =
-                !reason || reason === 'normal' || reason === 'room_empty';
+                !reason ||
+                reason === 'normal' ||
+                reason === 'room_empty' ||
+                ((reason === 'cancelled' || reason === 'deadline') && samples > 0);
               const hasError = rec.processing === 'failed' || !isNormalEnd;
               const reasonHint =
-                reason && failureReasons[reason]
+                !isNormalEnd && reason && failureReasons[reason]
                   ? failureReasons[reason]
                   : !isNormalEnd
                     ? reason
                     : null;
-              const samples = rec.quality?.durable_sample_count || 0;
               const audioSec = Math.round(samples / 16000);
 
               return (

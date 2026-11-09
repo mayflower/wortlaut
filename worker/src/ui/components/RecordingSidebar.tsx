@@ -89,7 +89,7 @@ export function RecordingSidebar({
               type="search"
               value={titleSearch}
               onChange={(e) => onTitleSearchChange(e.target.value)}
-              placeholder="Nach Meeting-Titel, Thema oder Raum suchen…"
+              placeholder="Titel, Sprecher oder Transkript-Inhalt suchen…"
               className="w-full rounded-lg border border-slate-700 bg-slate-950 pl-9 pr-3 py-2 text-xs text-slate-100 placeholder-slate-500 focus:border-sky-500 focus:outline-none"
             />
           </div>
@@ -178,18 +178,21 @@ export function RecordingSidebar({
           recordings.map((item) => {
             const isSelected = item.id === selectedId;
             const reason = item.participation_reason;
+            const samples = item.quality?.durable_sample_count || 0;
             const isNormalEnd =
-              !reason || reason === 'normal' || reason === 'room_empty';
+              !reason ||
+              reason === 'normal' ||
+              reason === 'room_empty' ||
+              ((reason === 'cancelled' || reason === 'deadline') && samples > 0);
             const hasError =
               item.processing === 'failed' ||
               (item.participation === 'ended' && !isNormalEnd);
             const reasonHint =
-              reason && failureReasons[reason]
+              !isNormalEnd && reason && failureReasons[reason]
                 ? failureReasons[reason]
                 : reason && !isNormalEnd
                   ? reason
                   : null;
-            const samples = item.quality?.durable_sample_count || 0;
             const audioSec = Math.round(samples / 16000);
             const startFormatted = new Date(item.starts_at).toLocaleString(
               'de-DE',

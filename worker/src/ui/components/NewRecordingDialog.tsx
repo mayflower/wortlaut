@@ -3,6 +3,7 @@ import { CalendarPlus, Link2, Upload, Video } from 'lucide-react';
 import {
   createRecording,
   detectProviderFromUrl,
+  getInstanceInfo,
   importCalendarPayload,
 } from '../api';
 import type { RecordingSummary } from '../types';
@@ -56,6 +57,7 @@ export function NewRecordingDialog({
   const [error, setError] = useState<string | null>(null);
 
   const detectedProvider = detectProviderFromUrl(meetingUrl);
+  const instance = getInstanceInfo();
 
   const handleDispatchSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -73,8 +75,13 @@ export function NewRecordingDialog({
         if (!startsAt || !endsAt) {
           throw new Error('Bitte Start- und Endzeit angeben.');
         }
-        startIso = new Date(startsAt).toISOString();
-        endIso = new Date(endsAt).toISOString();
+        const startDate = new Date(startsAt);
+        const endDate = new Date(endsAt);
+        if (endDate <= startDate) {
+          throw new Error('Die Endzeit muss nach der Startzeit liegen.');
+        }
+        startIso = startDate.toISOString();
+        endIso = endDate.toISOString();
       }
       const created: RecordingSummary = await createRecording(token, {
         meeting_url: meetingUrl.trim(),
@@ -156,14 +163,14 @@ export function NewRecordingDialog({
 
           <TabsContent value="link">
             <form
-              id="dispatch-form"
+              id="modal-dispatch-form"
               onSubmit={handleDispatchSubmit}
               className="space-y-4"
             >
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between">
                   <label
-                    htmlFor="meeting-url"
+                    htmlFor="modal-meeting-url"
                     className="text-xs font-semibold uppercase tracking-wider text-slate-400"
                   >
                     Meeting-Link (Meet, Teams oder Webex)
@@ -173,7 +180,7 @@ export function NewRecordingDialog({
                   )}
                 </div>
                 <input
-                  id="meeting-url"
+                  id="modal-meeting-url"
                   type="url"
                   required
                   value={meetingUrl}
@@ -186,13 +193,13 @@ export function NewRecordingDialog({
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div className="space-y-1.5">
                   <label
-                    htmlFor="meeting-title"
+                    htmlFor="modal-meeting-title"
                     className="block text-xs font-semibold uppercase tracking-wider text-slate-400"
                   >
                     Meeting-Titel (optional)
                   </label>
                   <input
-                    id="meeting-title"
+                    id="modal-meeting-title"
                     type="text"
                     maxLength={200}
                     value={title}
@@ -203,13 +210,13 @@ export function NewRecordingDialog({
                 </div>
                 <div className="space-y-1.5">
                   <label
-                    htmlFor="guest-name"
+                    htmlFor="modal-guest-name"
                     className="block text-xs font-semibold uppercase tracking-wider text-slate-400"
                   >
                     Bot-Anzeigename (optional)
                   </label>
                   <input
-                    id="guest-name"
+                    id="modal-guest-name"
                     type="text"
                     maxLength={120}
                     value={guestName}
@@ -223,13 +230,13 @@ export function NewRecordingDialog({
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div className="space-y-1.5">
                   <label
-                    htmlFor="join-mode"
+                    htmlFor="modal-join-mode"
                     className="block text-xs font-semibold uppercase tracking-wider text-slate-400"
                   >
                     Start-Modus
                   </label>
                   <select
-                    id="join-mode"
+                    id="modal-join-mode"
                     value={joinMode}
                     onChange={(e) =>
                       setJoinMode(e.target.value as 'live' | 'scheduled')
@@ -242,15 +249,15 @@ export function NewRecordingDialog({
                 </div>
 
                 {joinMode === 'live' && (
-                  <div className="space-y-1.5" id="duration-field">
+                  <div className="space-y-1.5" id="modal-duration-field">
                     <label
-                      htmlFor="duration-min"
+                      htmlFor="modal-duration-min"
                       className="block text-xs font-semibold uppercase tracking-wider text-slate-400"
                     >
                       Maximale Aufnahmedauer
                     </label>
                     <select
-                      id="duration-min"
+                      id="modal-duration-min"
                       value={durationMin}
                       onChange={(e) => setDurationMin(e.target.value)}
                       className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white focus:border-sky-500 focus:outline-none"
@@ -266,30 +273,30 @@ export function NewRecordingDialog({
 
               {joinMode === 'scheduled' && (
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  <div className="space-y-1.5" id="start-field">
+                  <div className="space-y-1.5" id="modal-start-field">
                     <label
-                      htmlFor="starts-at"
+                      htmlFor="modal-starts-at"
                       className="block text-xs font-semibold uppercase tracking-wider text-slate-400"
                     >
                       Startzeit
                     </label>
                     <input
-                      id="starts-at"
+                      id="modal-starts-at"
                       type="datetime-local"
                       value={startsAt}
                       onChange={(e) => setStartsAt(e.target.value)}
                       className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white focus:border-sky-500 focus:outline-none"
                     />
                   </div>
-                  <div className="space-y-1.5" id="end-field">
+                  <div className="space-y-1.5" id="modal-end-field">
                     <label
-                      htmlFor="ends-at"
+                      htmlFor="modal-ends-at"
                       className="block text-xs font-semibold uppercase tracking-wider text-slate-400"
                     >
                       Endzeit
                     </label>
                     <input
-                      id="ends-at"
+                      id="modal-ends-at"
                       type="datetime-local"
                       value={endsAt}
                       onChange={(e) => setEndsAt(e.target.value)}
@@ -316,6 +323,15 @@ export function NewRecordingDialog({
 
           <TabsContent value="ics">
             <form onSubmit={handleIcsSubmit} className="space-y-4">
+              {instance.mail.allowedDomains.length > 0 && (
+                <div className="rounded-lg border border-slate-800 bg-slate-950/70 px-3 py-2 text-[11px] text-slate-400">
+                  Hinweis: Der in der <code>.ics</code>-Datei eingetragene{' '}
+                  <code>ORGANIZER</code> muss zu einer freigeschalteten Domain
+                  gehören ({instance.mail.allowedDomains.map((d) => `@${d}`).join(', ')}
+                  ). Für externe Kundentermine nutzen Sie bitte den Reiter{' '}
+                  <strong>Meeting-Link</strong>.
+                </div>
+              )}
               <div className="space-y-2">
                 <label className="flex cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed border-slate-700 bg-slate-950/60 p-4 text-center hover:border-sky-500/80">
                   <Upload className="mb-1.5 h-5 w-5 text-sky-400" />

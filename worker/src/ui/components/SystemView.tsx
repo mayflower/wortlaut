@@ -3,11 +3,11 @@ import {
   Activity,
   AlertTriangle,
   ArrowRight,
+  BookOpen,
   CheckCircle2,
   Cpu,
   KeyRound,
   Mail,
-  RefreshCw,
   Server,
   ShieldCheck,
   Video,
@@ -62,11 +62,14 @@ export function SystemView({
 
   const problemRecordings = recordings.filter((r) => {
     const reason = r.participation_reason;
-    const abnormal = Boolean(
-      reason && reason !== 'normal' && reason !== 'room_empty'
-    );
+    const samples = r.quality?.durable_sample_count || 0;
+    const cleanStop =
+      !reason ||
+      reason === 'normal' ||
+      reason === 'room_empty' ||
+      ((reason === 'cancelled' || reason === 'deadline') && samples > 0);
     return (
-      r.processing === 'failed' || (r.participation === 'ended' && abnormal)
+      r.processing === 'failed' || (r.participation === 'ended' && !cleanStop)
     );
   });
 
@@ -84,30 +87,19 @@ export function SystemView({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <label className="inline-flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-900 px-3 py-1.5 text-xs text-slate-300 cursor-pointer select-none">
-            <input
-              id="auto-refresh"
-              type="checkbox"
-              checked={livePoll}
-              onChange={(e) => onToggleLivePoll(e.target.checked)}
-              className="h-3.5 w-3.5 rounded border-slate-700 bg-slate-950 text-sky-500 focus:ring-sky-500"
-            />
-            <span>Live-Polling (3s)</span>
-          </label>
-
-          <Button
-            variant="secondary"
-            size="sm"
-            id="refresh-btn"
-            onClick={onManualRefresh}
+          <a
+            href="/docs"
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1.5 rounded-md border border-slate-700 bg-slate-800 px-2.5 py-1 text-xs font-medium text-slate-100 hover:bg-slate-700 transition-colors"
           >
-            <RefreshCw className="h-3.5 w-3.5" />
-            <span>Jetzt aktualisieren</span>
-          </Button>
+            <BookOpen className="h-3.5 w-3.5 text-sky-400" />
+            <span>OpenAPI / REST-Doku (/docs)</span>
+          </a>
 
           <Button variant="secondary" size="sm" onClick={onOpenAuthDialog}>
             <KeyRound className="h-3.5 w-3.5" />
-            <span>Zugangsschlüssel verwalten</span>
+            <span>Zugang &amp; Konto</span>
           </Button>
         </div>
       </div>

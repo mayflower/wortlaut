@@ -17,11 +17,12 @@ Dieses Dokument beschreibt die fünf zentralen Personas für `wortlaut` sowie ih
 3. Erhält nach Gesprächsende automatisch die fertigen Transkripte per E-Mail.
 
 ### Hauptnutzungsanforderungen
-- **Provider-Unabhängigkeit ohne Umschalten**: Einladungen für Google Meet, Microsoft Teams und Webex müssen über denselben Posteingang erkannt und parallel verarbeitet werden.
-- **Zuverlässige Kalender-Synchronisation**: Änderungen an Terminzeiten, verschobene Einzeltermine einer Serie sowie Absagen (`CANCEL`) müssen automatisch übernommen werden, ohne doppelte Bots zu starten.
-- **Automatischer Ergebnisversand**: Nach Abschluss der lokalen Spracherkennung werden `TXT`-, `WebVTT`- und `JSON`-Transkripte (bei großen Dateien als ZIP oder authentifizierter Download-Link) direkt an die verifizierte Organisator-Adresse zugestellt.
-- **Klare Rückmeldung bei Nicht-Teilnahme**: Wenn der Bot nicht eingelassen wird (`lobby_timeout`, `admission_denied`), einen Passcode/Login benötigt oder keine Audiospur empfängt, muss eine verständliche Benachrichtigungs-E-Mail mit dem konkreten Abbruchgrund versendet werden.
+- **Provider-Unabhängigkeit ohne Umschalten**: Einladungen für Google Meet ([`capture.ts`](file:///data/wortlaut/worker/src/meet/capture.ts)), Microsoft Teams ([`teams-browser.ts`](file:///data/wortlaut/worker/src/teams-browser.ts)) und Webex ([`webex-browser.ts`](file:///data/wortlaut/worker/src/webex-browser.ts)) müssen über denselben Posteingang erkannt und parallel verarbeitet werden ([`calendar_sync.py`](file:///data/wortlaut/services/meeting/src/wortlaut/calendar_sync.py)).
+- **Zuverlässige Kalender-Synchronisation**: Änderungen an Terminzeiten, verschobene Einzeltermine einer Serie sowie Absagen (`CANCEL`) müssen automatisch übernommen werden, ohne doppelte Bots zu starten ([`calendar_sync.py`](file:///data/wortlaut/services/meeting/src/wortlaut/calendar_sync.py)).
+- **Automatischer Ergebnisversand & Lese-Link**: Nach Abschluss der lokalen Spracherkennung werden `TXT`-, `WebVTT`-, `Markdown` (`.md`)- und `JSON`-Transkripte ([`exports.py`](file:///data/wortlaut/services/meeting/src/wortlaut/exports.py)) sowie ein direkter schreibgeschützter Web-UI-Lese-Link (`#token=wortlaut-read-…`) direkt an die verifizierte Organisator-Adresse zugestellt ([`mail.py`](file:///data/wortlaut/services/meeting/src/wortlaut/mail.py)).
+- **Klare Rückmeldung bei Nicht-Teilnahme**: Wenn der Bot nicht eingelassen wird (`lobby_timeout`, `admission_denied`), einen Passcode/Login benötigt oder keine Audiospur empfängt, wird sofort eine verständliche Benachrichtigungs-E-Mail mit dem konkreten Abbruchgrund versendet ([`send_failure_notification_email()`](file:///data/wortlaut/services/meeting/src/wortlaut/mail.py#L311-L376)).
 - **Sprecherzuordnung aus dem Meeting**: Im Transkript sollen die im Meeting angezeigten Teilnehmernamen erscheinen, ohne dass Sprecher im Nachhinein manuell zugewiesen werden müssen.
+- **Persönliche Mandantentrennung (Dex OIDC)**: Meldet sich Mara per SSO (Dex OIDC, [`oidc.py`](file:///data/wortlaut/services/meeting/src/wortlaut/oidc.py)) in der Web-UI an, sieht sie ausschließlich ihre eigenen Aufnahmen und Kalendereinladungen (`owner_sub` / `owner_email`).
 
 ---
 
@@ -32,9 +33,9 @@ Dieses Dokument beschreibt die fünf zentralen Personas für `wortlaut` sowie ih
 - Entscheidet oft erst wenige Minuten vor oder während eines laufenden Gesprächs, dass eine Aufzeichnung zur Dokumentation benötigt wird.
 
 ### Typischer Ablauf
-1. Öffnet die integrierte Web-UI (`/ui`), gibt den Meeting-Link, einen optionalen Titel sowie bei Bedarf einen sprechenden Bot-Namen ein und startet den Bot im Modus *Sofort beitreten (Live)*.
-2. Prüft im Live-Banner, ob der Bot im Warteraum wartet oder bereits Audio und Teilnehmer erfasst.
-3. Durchsucht das Transkript noch während oder unmittelbar nach dem Call im Browser und lädt den Export herunter.
+1. Öffnet die integrierte Web-UI (`/ui`, [`App.tsx`](file:///data/wortlaut/worker/src/ui/App.tsx)), meldet sich per Dex OIDC SSO an ([`WelcomeLandingView.tsx`](file:///data/wortlaut/worker/src/ui/components/WelcomeLandingView.tsx)), gibt den Meeting-Link, einen optionalen Titel sowie bei Bedarf einen sprechenden Bot-Namen ein ([`NewRecordingDialog.tsx`](file:///data/wortlaut/worker/src/ui/components/NewRecordingDialog.tsx)) und startet den Bot im Modus *Sofort beitreten (Live)*.
+2. Prüft im Live-Banner ([`ParticipationStepper.tsx`](file:///data/wortlaut/worker/src/ui/components/ParticipationStepper.tsx)), ob der Bot im Warteraum wartet oder bereits Audio und Teilnehmer erfasst.
+3. Durchsucht das Transkript noch während oder unmittelbar nach dem Call im Browser ([`MeetingDetailView.tsx`](file:///data/wortlaut/worker/src/ui/components/MeetingDetailView.tsx), [`TranscriptTab.tsx`](file:///data/wortlaut/worker/src/ui/components/TranscriptTab.tsx)) und lädt den Export (`.md`, `.txt`, `.vtt`, `.json`) herunter oder teilt einen Lese-Link (`wortlaut-read-…`).
 
 ### Hauptnutzungsanforderungen
 - **Schneller Ad-hoc-Dispatch**: Start eines Bots mit wenigen Klicks direkt über die Web-UI inkl. frei wählbarem Meeting-Titel (`title`) und Bot-Anzeigenamen (`guest_name`).
@@ -56,10 +57,10 @@ Dieses Dokument beschreibt die fünf zentralen Personas für `wortlaut` sowie ih
 3. Analysiert bei Provider-Änderungen (z. B. geändertes DOM oder neue Signaling-Kanäle in Meet/Teams/Webex) die erfassten Diagnose- und Telemetriedaten.
 
 ### Hauptnutzungsanforderungen
-- **Strikte Isolation & sichere Zugangsdaten**: Ein kurzlebiger Kubernetes-Job mit isoliertem Chromium-Profil pro Aufnahme; Bootstrap-Secrets werden erst nach beobachteter Pod-Terminierung gelöscht; keine Token oder Zugangsdaten in Logs, URLs oder ConfigMaps.
-- **Begrenzte Kapazitäten & Backpressure**: Feste Obergrenzen für gleichzeitige Meetings, aktive Audio-Quellen, unsegmentiertes Audio und offene ASR-Jobs, damit Lastspitzen weder Datenbank noch GPU-Speicher überlasten.
-- **Nahtlose OTLP- & Loki-Telemetrie**: Strukturierte Logs und OpenTelemetry-Traces (`wortlaut.worker.status`) für Receiver-Bindungen, erkannte DOM-/Signaling-Teilnehmer, SDP-Beschreibungen und DataChannel-/HTTP-/WebSocket-Signaling direkt im bestehenden Grafana-Stack.
-- **Eindeutige Fehlerklassifikation**: Präzise maschinenlesbare Endgründe (`end_reason` / `participation_reason` wie `human_verification_required`, `auth_session_missing`, `teams_sending_device_active`, `audio_clock_interrupted`, `room_empty`) statt generischer Abstürze.
+- **Strikte Isolation & sichere Zugangsdaten**: Ein kurzlebiger Kubernetes-Job mit isoliertem Chromium-Profil pro Aufnahme ([`controller.py`](file:///data/wortlaut/services/meeting/src/wortlaut/controller.py)); Bootstrap-Secrets werden erst nach beobachteter Pod-Terminierung gelöscht; keine Token oder Zugangsdaten in Logs, URLs oder ConfigMaps; Admin-Berechtigung über `WORTLAUT_OIDC_ADMIN_EMAILS` oder `WORTLAUT_API_TOKEN` ([`oidc.py`](file:///data/wortlaut/services/meeting/src/wortlaut/oidc.py), [`settings.py`](file:///data/wortlaut/services/meeting/src/wortlaut/settings.py)).
+- **Begrenzte Kapazitäten & Backpressure**: Feste Obergrenzen für gleichzeitige Meetings (`max_active_meetings`), aktive Audio-Quellen, unsegmentiertes Audio und offene ASR-Jobs ([`settings.py`](file:///data/wortlaut/services/meeting/src/wortlaut/settings.py), [`SystemView.tsx`](file:///data/wortlaut/worker/src/ui/components/SystemView.tsx)), damit Lastspitzen weder Datenbank noch GPU-Speicher überlasten.
+- **Nahtlose OTLP- & Loki-Telemetrie**: Strukturierte Logs und OpenTelemetry-Traces (`wortlaut.worker.status`) für Receiver-Bindungen, erkannte DOM-/Signaling-Teilnehmer, SDP-Beschreibungen und DataChannel-/HTTP-/WebSocket-Signaling direkt im bestehenden Grafana-Stack ([`DiagnosticsTab.tsx`](file:///data/wortlaut/worker/src/ui/components/DiagnosticsTab.tsx), [`SourcesTab.tsx`](file:///data/wortlaut/worker/src/ui/components/SourcesTab.tsx)).
+- **Eindeutige Fehlerklassifikation**: Präzise maschinenlesbare Endgründe (`end_reason` / `participation_reason` wie `human_verification_required`, `auth_session_missing`, `teams_sending_device_active`, `audio_clock_interrupted`, `room_empty` in [`reasons.py`](file:///data/wortlaut/services/meeting/src/wortlaut/reasons.py)) statt generischer Abstürze.
 
 ---
 
@@ -91,6 +92,6 @@ Dieses Dokument beschreibt die fünf zentralen Personas für `wortlaut` sowie ih
 2. Fragt den Bearbeitungsstand über `GET /v1/recordings/{id}` ab und ruft nach Abschluss `GET /v1/recordings/{id}/exports/json` ab.
 
 ### Hauptnutzungsanforderungen
-- **Idempotente REST-API**: Sicheres Wiederholen von Requests über `Idempotency-Key` ohne Risiko doppelter Aufnahmen (`HTTP 409` bei abweichendem Payload).
-- **Maschinenlesbare Qualitäts- & Quellenmetriken**: Der JSON-Export muss neben den zeitgestempelten Segmenten und Wörtern auch eine vollständige Quellenübersicht (`sources_summary`) sowie belastbare Qualitätsindikatoren (`has_audio_gaps`, `attribution_unknown`, `unprocessed_audio`, `failed_asr_ranges`) liefern, damit nachgelagerte Systeme unvollständige Aufnahmen erkennen können.
-- **Gültigkeitsbegrenzte Lese-Tokens**: Möglichkeit, Exporte über dedizierte, zeitlich und auf eine Aufnahme begrenzte Reader-Tokens (`wortlaut-read-...`) abzurufen, ohne den globalen Operator-API-Token weiterzugeben.
+- **Idempotente REST-API**: Sicheres Wiederholen von Requests über `Idempotency-Key` ohne Risiko doppelter Aufnahmen (`HTTP 409` bei abweichendem Payload in [`app.py`](file:///data/wortlaut/services/meeting/src/wortlaut/app.py#L483-L612)).
+- **Maschinenlesbare Qualitäts- & Quellenmetriken**: Der JSON-Export ([`exports.py`](file:///data/wortlaut/services/meeting/src/wortlaut/exports.py)) muss neben den zeitgestempelten Segmenten und Wörtern auch eine vollständige Quellenübersicht (`sources_summary`) sowie belastbare Qualitätsindikatoren (`has_audio_gaps`, `attribution_unknown`, `unprocessed_audio`, `failed_asr_ranges`) liefern, damit nachgelagerte Systeme unvollständige Aufnahmen erkennen können.
+- **Gültigkeitsbegrenzte Lese-Tokens**: Möglichkeit, Exporte über dedizierte, zeitlich und auf eine Aufnahme begrenzte Reader-Tokens (`wortlaut-read-...`, `POST /v1/recordings/{id}/reader-token` in [`app.py`](file:///data/wortlaut/services/meeting/src/wortlaut/app.py#L775-L786)) abzurufen, ohne den globalen Operator-API-Token weiterzugeben.

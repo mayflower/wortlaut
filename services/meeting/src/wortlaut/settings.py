@@ -11,6 +11,15 @@ class Settings(BaseSettings):
 
     database_url: SecretStr
     api_token: SecretStr
+    oidc_issuer: str = "https://id.data.mayflower.tech"
+    oidc_internal_issuer: str = ""
+    oidc_client_id: str = "wortlaut"
+    oidc_allowed_domains: list[str] = ["mayflower.de"]
+    oidc_admin_emails: list[str] = [
+        "johann-peter.hartmann@mayflower.de",
+        "johann.hartmann@mayflower.de",
+        "johannhartmann@gmail.com",
+    ]
     webex_service_token: SecretStr | None = None
     enable_webex_browser: bool = False
     enable_webex_refresh: bool = False

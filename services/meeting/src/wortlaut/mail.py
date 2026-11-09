@@ -94,6 +94,7 @@ def build_message(db, recording, delivery):
             f"Grund: {reason or 'unbekannt'}\n"
             f"Hinweis: {explanation or 'Es wurde kein Audio im Meeting empfangen.'}\n"
             f"Verarbeitung: {data['processing']}\n"
+            f"Web-UI (Status & Erneut starten): {settings.api_url.rstrip('/')}/ui\n"
             "Es wurde kein Audio aufgezeichnet; daher sind keine Transkript-Exporte angehängt.\n"
         )
         message.set_content(body)
@@ -113,6 +114,13 @@ def build_message(db, recording, delivery):
     failure = data["processing_error"] or (
         "ASR-Ausfälle" if quality["failed_asr_ranges"] else "keiner"
     )
+    reader_cred = export_reader_token(recording) if recording.export_reader_nonce else None
+    reader_ui_line = (
+        f"Web-Ansicht (schreibgeschützter Lese-Link): "
+        f"{settings.api_url.rstrip('/')}/ui#token=wortlaut-read-{recording.id}.{reader_cred.removeprefix('wortlaut-read-')}\n"
+        if reader_cred
+        else ""
+    )
     body = (
         f"wortlaut – {recording.provider}\n"
         + title_line
@@ -129,7 +137,9 @@ def build_message(db, recording, delivery):
         f"Quellenabdeckung: {quality['source_coverage']}\n"
         f"Audioabschluss: {drain}\n"
         f"Verarbeitungsfehler: {failure}\n"
-        "Die vollständigen Qualitäts- und Zeitangaben stehen im JSON-Export.\n"
+        f"Web-UI: {settings.api_url.rstrip('/')}/ui\n"
+        + reader_ui_line
+        + "Die vollständigen Qualitäts- und Zeitangaben stehen im JSON-Export.\n"
     )
     message.set_content(body)
     exports = {}
@@ -171,19 +181,22 @@ def build_message(db, recording, delivery):
                 raise ValueError("Large-export download requires an HTTPS API origin")
             recording.export_reader_nonce = recording.export_reader_nonce or uuid.uuid4()
             credential = export_reader_token(recording)
+            sig = credential.removeprefix("wortlaut-read-")
+            ui_link = f"{settings.api_url.rstrip('/')}/ui#token=wortlaut-read-{recording.id}.{sig}"
             message.clear_content()
             base_url = settings.api_url.rstrip("/") + f"/v1/recordings/{recording.id}/exports"
             downloads = "\n".join(
                 f"curl --fail --header {shlex.quote('Authorization: Bearer ' + credential)} "
                 f"{shlex.quote(base_url + '/' + format)} "
                 f"--output 'wortlaut-{recording.id}.{format}'"
-                for format in ("txt", "vtt", "json")
+                for format in ("txt", "vtt", "json", "md")
             )
             message.set_content(
                 body
                 + "\nDie vollständigen Exporte überschreiten auch komprimiert das Anhangslimit.\n"
-                "Lesezugang nur für die drei Exporte dieser Aufnahme, bis zum Ablauf der "
+                "Lesezugang nur für die Exporte dieser Aufnahme, bis zum Ablauf der "
                 "Transkriptaufbewahrung. Dieser Zugang erlaubt keine Steuerung.\n"
+                f"Web-Ansicht (schreibgeschützter Lese-Link):\n{ui_link}\n"
                 "Download im Terminal (Zugang vertraulich behandeln):\n" + downloads + "\n"
             )
     return message
@@ -261,13 +274,27 @@ def smtp_pass(engine):
                     else None
                 )
                 recipients = settings.result_recipients.get(
-                    entry.organizer if entry else "default", []
+                    entry.organizer
+                    if entry
+                    else (recording.owner_email or "default"),
+                    settings.result_recipients.get("default", []),
                 )
                 if (entry and settings.mail_reply_to_sender
                         and settings.mail_sender_auth == "dkim"
                         and entry.organizer.rsplit("@", 1)[-1]
                         in settings.mail_allowed_sender_domains):
                     recipients = [entry.organizer]
+                elif (
+                    not entry
+                    and recording.owner_email
+                    and settings.mail_reply_to_sender
+                    and (
+                        not settings.mail_allowed_sender_domains
+                        or recording.owner_email.rsplit("@", 1)[-1].lower()
+                        in {d.lower() for d in settings.mail_allowed_sender_domains}
+                    )
+                ):
+                    recipients = [recording.owner_email]
                 has_audio = db.scalar(
                     select(AudioChunk.id)
                     .join(AudioStream)

@@ -32,7 +32,7 @@ from pydantic import (
     model_serializer,
     model_validator,
 )
-from sqlalchemy import func, select, text, tuple_
+from sqlalchemy import func, or_, select, text, tuple_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
@@ -43,7 +43,7 @@ from wortlaut.controller import controller_pass, new_attempt, request_cancellati
 from wortlaut.database import get_engine, session
 from wortlaut.exports import export_data, export_reader_token, render_export
 from wortlaut.ingest import accept_chunk, accept_control, capacity_reached, verify_owner
-from wortlaut.mail import delivery_json, smtp_pass
+from wortlaut.mail import FAILURE_REASONS, delivery_json, smtp_pass
 from wortlaut.models import (
     AsrJob,
     Attempt,
@@ -53,6 +53,15 @@ from wortlaut.models import (
     CalendarEntry,
     Delivery,
     Recording,
+    TranscriptSegment,
+)
+from wortlaut.oidc import (
+    Principal,
+    can_access_recording,
+    exchange_oidc_code,
+    is_admin_email,
+    verify_dex_id_token,
+    verify_user_session_token,
 )
 from wortlaut.processing import RATE, segmentation_pass, stream_quality
 from wortlaut.recurrence import recurrence_pass
@@ -132,6 +141,38 @@ def api_auth(authorization: Annotated[str | None, Header()] = None):
         token.encode(), get_settings().api_token.get_secret_value().encode()
     ):
         raise HTTPException(401, "Invalid API credential")
+
+
+def user_auth(authorization: Annotated[str | None, Header()] = None) -> Principal:
+    token = bearer_value(authorization)
+    if secrets.compare_digest(
+        token.encode(), get_settings().api_token.get_secret_value().encode()
+    ):
+        return Principal(kind="operator", is_admin=True)
+    session_principal = verify_user_session_token(token)
+    if session_principal is not None:
+        return session_principal
+    if token.count(".") == 2 and not token.startswith("wortlaut-read-"):
+        claims = verify_dex_id_token(token)
+        email = claims["email"].strip().lower()
+        return Principal(
+            kind="user",
+            sub=claims["sub"],
+            email=email,
+            name=claims.get("name") or email,
+            is_admin=is_admin_email(email),
+        )
+    raise HTTPException(401, "Invalid API or OIDC credential")
+
+
+AuthPrincipal = Annotated[Principal, Depends(user_auth)]
+
+
+class OidcExchangeRequest(BaseModel):
+    code: str = Field(min_length=1, max_length=2048)
+    code_verifier: str = Field(min_length=43, max_length=256)
+    redirect_uri: str = Field(min_length=1, max_length=1024)
+    nonce: str | None = Field(default=None, max_length=256)
 
 
 class RecordingRequest(BaseModel):
@@ -317,6 +358,7 @@ def recording_json(recording: Recording) -> dict:
         "provider": recording.provider,
         "title": recording.title,
         "guest_name": recording.guest_name,
+        "owner_email": recording.owner_email,
         "starts_at": recording.starts_at,
         "ends_at": recording.ends_at,
         "participation": recording.participation,
@@ -340,8 +382,31 @@ def recording_json(recording: Recording) -> dict:
 
 @app.get("/", response_class=HTMLResponse)
 @app.get("/ui", response_class=HTMLResponse)
+@app.get("/auth/callback", response_class=HTMLResponse)
 def web_ui():
     return HTMLResponse(render_ui(), headers={"Cache-Control": "no-store"})
+
+
+@app.post("/v1/auth/oidc/exchange")
+def oidc_exchange(body: OidcExchangeRequest, response: Response):
+    response.headers["Cache-Control"] = "no-store"
+    return exchange_oidc_code(
+        code=body.code,
+        code_verifier=body.code_verifier,
+        redirect_uri=body.redirect_uri,
+        nonce=body.nonce,
+    )
+
+
+@app.get("/v1/auth/me")
+def auth_me(principal: AuthPrincipal):
+    return {
+        "kind": principal.kind,
+        "sub": principal.sub,
+        "email": principal.email,
+        "name": principal.name,
+        "is_admin": principal.is_admin,
+    }
 
 
 @app.get("/health/live")
@@ -359,10 +424,11 @@ def ready():
     return {"status": "ready"}
 
 
-@app.post("/v1/recordings", dependencies=[Depends(api_auth)])
+@app.post("/v1/recordings")
 def create_recording(
     body: RecordingRequest,
     db: Db,
+    principal: AuthPrincipal,
     idempotency_key: Annotated[str, Header(min_length=1, max_length=200)],
 ):
     payload = body.model_dump(mode="json")
@@ -377,13 +443,17 @@ def create_recording(
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
     existing = db.scalar(select(Recording).where(Recording.idempotency_key == idempotency_key))
     if existing:
-        if existing.request_digest != digest:
+        if existing.request_digest != digest or not can_access_recording(db, principal, existing):
             raise HTTPException(409, "Idempotency key already has a different request")
         return recording_json(existing)
     if capacity_reached(db):
         raise HTTPException(503, "audio_capacity_limit")
     recording = Recording(
-        idempotency_key=idempotency_key, request_digest=digest, **body.model_dump()
+        idempotency_key=idempotency_key,
+        request_digest=digest,
+        owner_sub=principal.sub,
+        owner_email=principal.email.lower() if principal.email else None,
+        **body.model_dump(),
     )
     db.add(recording)
     try:
@@ -391,29 +461,43 @@ def create_recording(
     except IntegrityError:
         db.rollback()
         existing = db.scalar(select(Recording).where(Recording.idempotency_key == idempotency_key))
-        if existing is None or existing.request_digest != digest:
+        if (
+            existing is None
+            or existing.request_digest != digest
+            or not can_access_recording(db, principal, existing)
+        ):
             raise HTTPException(409, "Conflicting recording request") from None
         return recording_json(existing)
     return recording_json(recording)
 
 
-@app.post("/v1/calendar/messages", dependencies=[Depends(api_auth)])
-async def import_calendar_message(request: Request, db: Db):
+@app.post("/v1/calendar/messages")
+async def import_calendar_message(request: Request, db: Db, principal: AuthPrincipal):
     raw = bytearray()
     async for part in request.stream():
         raw.extend(part)
         if len(raw) > get_settings().max_mail_bytes:
             raise HTTPException(413, "Mail exceeds size limit")
     result = await run_in_threadpool(import_mail, db, bytes(raw))
+    if principal.kind == "user" and principal.email:
+        for item in result:
+            rec_id = item.get("recording_id")
+            if rec_id:
+                rec = db.get(Recording, uuid.UUID(str(rec_id)))
+                if rec and not rec.owner_email:
+                    rec.owner_sub = principal.sub
+                    rec.owner_email = principal.email.lower()
     db.commit()
     return {"events": result}
 
 
-@app.get("/v1/calendar", dependencies=[Depends(api_auth)])
-def calendar_status(db: Db):
-    entries = db.scalars(
-        select(CalendarEntry).order_by(CalendarEntry.dtstamp.desc()).limit(128)
-    ).all()
+@app.get("/v1/calendar")
+def calendar_status(db: Db, principal: AuthPrincipal):
+    cal_query = select(CalendarEntry).order_by(CalendarEntry.dtstamp.desc())
+    if not principal.is_admin:
+        user_email = (principal.email or "").lower()
+        cal_query = cal_query.where(func.lower(CalendarEntry.organizer) == user_email)
+    entries = db.scalars(cal_query.limit(128)).all()
     result = []
     for entry in entries:
         recordings = db.scalars(
@@ -482,9 +566,10 @@ def prometheus_metrics(db: Db):
     )
 
 
-@app.get("/v1/recordings", dependencies=[Depends(api_auth)])
+@app.get("/v1/recordings")
 def list_recordings(
     db: Db,
+    principal: AuthPrincipal,
     limit: Annotated[int, Query(ge=1, le=100)] = 25,
     cursor: Annotated[str | None, Query(max_length=200)] = None,
     provider: Provider | None = None,
@@ -501,6 +586,22 @@ def list_recordings(
     if starts_from and starts_before and starts_from >= starts_before:
         raise HTTPException(422, "Invalid start-time interval")
     query = select(Recording, Delivery).outerjoin(Delivery)
+    if not principal.is_admin:
+        user_email = (principal.email or "").lower()
+        calendar_match = (
+            select(CalendarEntry.id)
+            .where(
+                CalendarEntry.id == Recording.calendar_entry_id,
+                func.lower(CalendarEntry.organizer) == user_email,
+            )
+            .exists()
+        )
+        owner_predicates = [calendar_match]
+        if principal.sub:
+            owner_predicates.append(Recording.owner_sub == principal.sub)
+        if user_email:
+            owner_predicates.append(func.lower(Recording.owner_email) == user_email)
+        query = query.where(or_(*owner_predicates))
     if provider:
         query = query.where(Recording.provider == provider)
     if participation:
@@ -513,7 +614,55 @@ def list_recordings(
         query = query.where(Recording.processing == processing)
     if q and q.strip():
         needle = f"%{q.strip()}%"
-        query = query.where(Recording.title.ilike(needle))
+        segment_match = (
+            select(TranscriptSegment.id)
+            .join(AsrJob, AsrJob.id == TranscriptSegment.id)
+            .join(AudioStream, AudioStream.id == AsrJob.stream_id)
+            .join(Attempt, Attempt.id == AudioStream.attempt_id)
+            .where(
+                Attempt.recording_id == Recording.id,
+                or_(
+                    TranscriptSegment.result["text"].astext.ilike(needle),
+                    TranscriptSegment.result["participant_name"].astext.ilike(needle),
+                    TranscriptSegment.result["speaker_id"].astext.ilike(needle),
+                ),
+            )
+            .exists()
+        )
+        stream_match = (
+            select(AudioStream.id)
+            .join(Attempt, Attempt.id == AudioStream.attempt_id)
+            .outerjoin(AudioControl, AudioControl.stream_id == AudioStream.id)
+            .where(
+                Attempt.recording_id == Recording.id,
+                or_(
+                    AudioStream.contract["participant_name"].astext.ilike(needle),
+                    AudioStream.contract["speaker_id"].astext.ilike(needle),
+                    AudioControl.contract["participant_name"].astext.ilike(needle),
+                ),
+            )
+            .exists()
+        )
+        attempt_match = (
+            select(Attempt.id)
+            .where(
+                Attempt.recording_id == Recording.id,
+                or_(
+                    Attempt.diagnostics["receiver_sources"].astext.ilike(needle),
+                    Attempt.diagnostics["participant_sources"].astext.ilike(needle),
+                ),
+            )
+            .exists()
+        )
+        query = query.where(
+            or_(
+                Recording.title.ilike(needle),
+                Recording.guest_name.ilike(needle),
+                segment_match,
+                stream_match,
+                attempt_match,
+            )
+        )
     if starts_from:
         query = query.where(Recording.starts_at >= starts_from)
     if starts_before:
@@ -596,6 +745,34 @@ def list_recordings(
             .group_by(Attempt.recording_id)
         ).all()
     )
+    bound_stream_control = (
+        select(AudioControl.id)
+        .where(
+            AudioControl.stream_id == AudioStream.id,
+            AudioControl.kind == "bind",
+            AudioControl.contract["attribution_unknown"].as_boolean().is_(False),
+        )
+        .exists()
+    )
+    seg_attribution = {
+        row[0]: (row[1], bool(row[2]))
+        for row in db.execute(
+            select(
+                Attempt.recording_id,
+                func.count(TranscriptSegment.id),
+                func.bool_or(
+                    TranscriptSegment.result["attribution_unknown"].as_boolean().is_(True)
+                    & AudioStream.contract["attribution_unknown"].as_boolean().is_(True)
+                    & ~bound_stream_control
+                ),
+            )
+            .join(AudioStream, AudioStream.attempt_id == Attempt.id)
+            .join(AsrJob, AsrJob.stream_id == AudioStream.id)
+            .join(TranscriptSegment, TranscriptSegment.id == AsrJob.id)
+            .where(Attempt.recording_id.in_(identifiers))
+            .group_by(Attempt.recording_id)
+        )
+    }
     gaps = dict(
         db.execute(
             select(Attempt.recording_id, func.count())
@@ -617,7 +794,9 @@ def list_recordings(
     )
     items = []
     for recording, delivery in page:
-        samples, unknown, unreadable = audio.get(recording.id, (0, False, False))
+        samples, raw_unknown, unreadable = audio.get(recording.id, (0, False, False))
+        seg_count, seg_unknown = seg_attribution.get(recording.id, (0, False))
+        unknown = seg_unknown if seg_count > 0 else raw_unknown
         incomplete_drain = drains.get(recording.id, False)
         failed = bool(failures.get(recording.id) or unreadable or recording.processing == "failed")
         status = (
@@ -660,26 +839,51 @@ def list_recordings(
     return {"items": items, "next_cursor": next_cursor}
 
 
-@app.get("/v1/recordings/{recording_id}")
-def get_recording(
+def _authenticate_recording_access(
+    db: Session,
     recording_id: uuid.UUID,
-    db: Db,
-    authorization: Annotated[str | None, Header()] = None,
-):
+    authorization: str | None,
+) -> tuple[Recording, Principal]:
     token = bearer_value(authorization)
     recording = db.get(Recording, recording_id)
     reader = export_reader_token(recording) if recording else None
     is_operator = secrets.compare_digest(
         token.encode(), get_settings().api_token.get_secret_value().encode()
     )
-    is_reader = reader is not None and secrets.compare_digest(token.encode(), reader.encode())
-    if not is_operator and not is_reader:
-        raise HTTPException(401, "Invalid API credential")
-    if not recording:
+    if is_operator:
+        principal = Principal(kind="operator", is_admin=True)
+    elif reader is not None and secrets.compare_digest(token.encode(), reader.encode()):
+        principal = Principal(kind="reader", recording_id=recording.id if recording else None)
+    else:
+        principal = verify_user_session_token(token)
+        if principal is None and token.count(".") == 2 and not token.startswith("wortlaut-read-"):
+            claims = verify_dex_id_token(token)
+            email = claims["email"].strip().lower()
+            principal = Principal(
+                kind="user",
+                sub=claims["sub"],
+                email=email,
+                name=claims.get("name") or email,
+                is_admin=is_admin_email(email),
+            )
+        if principal is None:
+            raise HTTPException(401, "Invalid API credential")
+    if not recording or not can_access_recording(db, principal, recording):
         raise HTTPException(404, "Recording not found")
+    return recording, principal
+
+
+@app.get("/v1/recordings/{recording_id}")
+def get_recording(
+    recording_id: uuid.UUID,
+    db: Db,
+    authorization: Annotated[str | None, Header()] = None,
+):
+    recording, principal = _authenticate_recording_access(db, recording_id, authorization)
+    is_full_view = principal.kind in ("operator", "user")
     result = recording_json(recording)
     raw_delivery = delivery_json(db.get(Delivery, recording.id))
-    if not is_operator and isinstance(raw_delivery, dict):
+    if not is_full_view and isinstance(raw_delivery, dict):
         raw_delivery = {
             k: v
             for k, v in raw_delivery.items()
@@ -701,7 +905,7 @@ def get_recording(
                     "pod_uids": a.pod_uids,
                     "process_ended_at": a.process_ended_at,
                 }
-                if is_operator
+                if is_full_view
                 else {}
             ),
         }
@@ -803,9 +1007,11 @@ def get_recording(
     return result
 
 
-@app.post("/v1/recordings/{recording_id}/delivery/retry", dependencies=[Depends(api_auth)])
-def retry_delivery(recording_id: uuid.UUID, db: Db):
+@app.post("/v1/recordings/{recording_id}/delivery/retry")
+def retry_delivery(recording_id: uuid.UUID, db: Db, principal: AuthPrincipal):
     recording = db.scalar(select(Recording).where(Recording.id == recording_id).with_for_update())
+    if recording is not None and not can_access_recording(db, principal, recording):
+        raise HTTPException(404, "Recording not found")
     if recording is not None and recording.transcript_deleted_at is not None:
         raise HTTPException(410, "Transcript retention expired")
     delivery = db.scalar(
@@ -820,10 +1026,12 @@ def retry_delivery(recording_id: uuid.UUID, db: Db):
     return delivery_json(delivery)
 
 
-@app.post("/v1/recordings/{recording_id}/reader-token", dependencies=[Depends(api_auth)])
-def issue_reader_token(recording_id: uuid.UUID, db: Db, response: Response):
+@app.post("/v1/recordings/{recording_id}/reader-token")
+def issue_reader_token(
+    recording_id: uuid.UUID, db: Db, response: Response, principal: AuthPrincipal
+):
     recording = db.scalar(select(Recording).where(Recording.id == recording_id).with_for_update())
-    if recording is None:
+    if recording is None or not can_access_recording(db, principal, recording):
         raise HTTPException(404, "Recording not found")
     if recording.transcript_deleted_at is not None:
         raise HTTPException(410, "Transcript retention expired")
@@ -864,20 +1072,20 @@ def prepare_attempt(recording_id: uuid.UUID, db: Db, response: Response):
     return {"attempt_id": str(attempt.id), "bootstrap_credential": token}
 
 
-@app.post("/v1/recordings/{recording_id}/cancel", dependencies=[Depends(api_auth)])
-def cancel_recording(recording_id: uuid.UUID, db: Db):
+@app.post("/v1/recordings/{recording_id}/cancel")
+def cancel_recording(recording_id: uuid.UUID, db: Db, principal: AuthPrincipal):
     recording = db.scalar(select(Recording).where(Recording.id == recording_id).with_for_update())
-    if recording is None:
+    if recording is None or not can_access_recording(db, principal, recording):
         raise HTTPException(404, "Recording not found")
     request_cancellation(recording, datetime.now(UTC))
     db.commit()
     return recording_json(recording)
 
 
-@app.post("/v1/recordings/{recording_id}/rejoin", dependencies=[Depends(api_auth)])
-def rejoin_recording(recording_id: uuid.UUID, db: Db):
+@app.post("/v1/recordings/{recording_id}/rejoin")
+def rejoin_recording(recording_id: uuid.UUID, db: Db, principal: AuthPrincipal):
     recording = db.scalar(select(Recording).where(Recording.id == recording_id).with_for_update())
-    if recording is None:
+    if recording is None or not can_access_recording(db, principal, recording):
         raise HTTPException(404, "Recording not found")
     if recording.metadata_deleted_at or recording.transcript_deleted_at:
         raise HTTPException(410, "Recording retention expired")
@@ -900,6 +1108,9 @@ def rejoin_recording(recording_id: uuid.UUID, db: Db):
     recording.processing = "pending"
     recording.processing_error = None
     recording.processing_finished_at = None
+    existing_delivery = db.get(Delivery, recording.id)
+    if existing_delivery is not None:
+        db.delete(existing_delivery)
     db.commit()
     return recording_json(recording)
 
@@ -910,15 +1121,7 @@ def get_transcript(
     db: Db,
     authorization: Annotated[str | None, Header()] = None,
 ):
-    token = bearer_value(authorization)
-    recording = db.get(Recording, recording_id)
-    reader = export_reader_token(recording) if recording else None
-    if not secrets.compare_digest(
-        token.encode(), get_settings().api_token.get_secret_value().encode()
-    ) and (reader is None or not secrets.compare_digest(token.encode(), reader.encode())):
-        raise HTTPException(401, "Invalid credential")
-    if recording is None:
-        raise HTTPException(404, "Recording not found")
+    recording, _ = _authenticate_recording_access(db, recording_id, authorization)
     if recording.transcript_deleted_at:
         raise HTTPException(410, "Transcript retention expired")
     return export_data(db, recording)
@@ -927,19 +1130,11 @@ def get_transcript(
 @app.get("/v1/recordings/{recording_id}/exports/{format}")
 def get_export(
     recording_id: uuid.UUID,
-    format: Literal["txt", "vtt", "json"],
+    format: Literal["txt", "vtt", "json", "md"],
     db: Db,
     authorization: Annotated[str | None, Header()] = None,
 ):
-    token = bearer_value(authorization)
-    recording = db.get(Recording, recording_id)
-    reader = export_reader_token(recording) if recording else None
-    if not secrets.compare_digest(
-        token.encode(), get_settings().api_token.get_secret_value().encode()
-    ) and (reader is None or not secrets.compare_digest(token.encode(), reader.encode())):
-        raise HTTPException(401, "Invalid export credential")
-    if recording is None:
-        raise HTTPException(404, "Recording not found")
+    recording, _ = _authenticate_recording_access(db, recording_id, authorization)
     if recording.processing not in ("completed", "failed"):
         raise HTTPException(409, "Processing is still pending")
     if recording.transcript_deleted_at:
@@ -1114,6 +1309,16 @@ def worker_status(
         attempt.ended_at = datetime.now(UTC)
         attempt.end_reason = body.reason or "normal"
         recording.participation_reason = attempt.end_reason
+        if (
+            attempt.end_reason in FAILURE_REASONS
+            and body.audio_samples == 0
+            and recording.processing == "pending"
+            and not db.scalar(
+                select(AudioStream.id).where(AudioStream.attempt_id == attempt.id).limit(1)
+            )
+        ):
+            recording.processing = "completed"
+            recording.processing_finished_at = attempt.ended_at
     elif not recording.cancelled_at:
         recording.participation_reason = body.reason or None
     db.commit()

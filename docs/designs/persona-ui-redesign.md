@@ -1,8 +1,8 @@
 # Persona-Driven Information Architecture and Web UI Redesign
 
 *   **Author:** wortlaut Engineering
-*   **Status:** Proposed
-*   **Date:** 2026-11-07
+*   **Status:** Implemented
+*   **Date:** 2026-11-09
 
 --------------------------------------------------------------------------------
 
@@ -26,22 +26,23 @@ Opening `https://wortlaut.data.mayflower.zone/ui` currently presents four usabil
 
 ## Goals
 
-*   **Persona-Segmented Information Architecture**: Separate the primary workspace into clear navigation views (*Recordings*, *Calendar & Mail Intake*, and *System & Capacity Status*) and structure the Recording Detail view into three dedicated tabs:
-    1.  **Transcript & Speakers** (default view for **Mara** and **Lukas**).
-    2.  **Participants & Audio Sources** (source-to-participant binding verification for **Lukas** and **Svenja**).
-    3.  **Diagnostics & Delivery** (WebRTC signaling, Kubernetes attempt/pod lifecycle, ASR queue metrics, and SMTP retry controls for **Svenja**).
-*   **Dedicated Scoped Reader Mode**: Allow users with a per-recording `export_reader_token` (or URL hash `#token=wortlaut-read-...`) to open `/ui` directly in a focused single-recording Transcript & Export view without requiring the global operator token.
+*   **Persona-Segmented Information Architecture**: Separate the primary workspace via a fixed 240px left navigation sidebar ([`HeaderBar.tsx`](file:///data/wortlaut/worker/src/ui/components/HeaderBar.tsx)) into four clear sections (*Übersicht* / [`HomeView.tsx`](file:///data/wortlaut/worker/src/ui/components/HomeView.tsx), *Meetings* / [`RecordingSidebar.tsx`](file:///data/wortlaut/worker/src/ui/components/RecordingSidebar.tsx), *Kalender* / [`CalendarWorkspace.tsx`](file:///data/wortlaut/worker/src/ui/components/CalendarWorkspace.tsx), and *System & Diagnose* / [`SystemView.tsx`](file:///data/wortlaut/worker/src/ui/components/SystemView.tsx)), plus a full-page Recording Detail view ([`MeetingDetailView.tsx`](file:///data/wortlaut/worker/src/ui/components/MeetingDetailView.tsx)) with:
+    1.  **2-Column Transcript & Speaker Breakdown** (70% [`TranscriptTab.tsx`](file:///data/wortlaut/worker/src/ui/components/TranscriptTab.tsx) on the left, 30% sticky Speaker Talk-Time Breakdown & `.md`/`.txt`/`.vtt`/`.json` Export + Share-Link sidebar on the right — default view for **Mara** and **Lukas**).
+    2.  **Collapsible Technical Disclosure (`Technische Details, Audio-Quellen & Worker-Diagnose`)** housing [`SourcesTab.tsx`](file:///data/wortlaut/worker/src/ui/components/SourcesTab.tsx) (source-to-participant binding verification for **Lukas** and **Svenja**) and [`DiagnosticsTab.tsx`](file:///data/wortlaut/worker/src/ui/components/DiagnosticsTab.tsx) (WebRTC signaling, Kubernetes attempt/pod lifecycle, ASR queue metrics, and SMTP retry controls for **Svenja**).
+*   **Dex OIDC User Authentication, Operator Token & Scoped Reader Mode**:
+    *   Support browser SSO login via **Dex OIDC Authorization Code + PKCE** ([`oidc.py`](file:///data/wortlaut/services/meeting/src/wortlaut/oidc.py), [`WelcomeLandingView.tsx`](file:///data/wortlaut/worker/src/ui/components/WelcomeLandingView.tsx), [`AuthGateDialog.tsx`](file:///data/wortlaut/worker/src/ui/components/AuthGateDialog.tsx)) issuing `wortlaut-user-…` tokens with per-user recording/calendar isolation (`owner_sub` / `owner_email`, or full operator view via `WORTLAUT_OIDC_ADMIN_EMAILS`).
+    *   Support the global operator `WORTLAUT_API_TOKEN` for automation and full administration.
+    *   Allow users with a per-recording `export_reader_token` (or URL hash `#token=wortlaut-read-...`) to open `/ui` directly in a focused single-recording Transcript & Export view without requiring an account or operator token.
 *   **Non-Destructive Reactive Updates via TanStack Query**: Replace full-panel `innerHTML` replacement with React 19 + TanStack Query background polling so text selection, scroll position, active tabs, and open dialogs never reset during live 3-second updates.
-*   **Five-Stage Live Participation Stepper**: Provide an explicit visual progress indicator (*Scheduled* $\rightarrow$ *Starting Worker* $\rightarrow$ *Lobby / Waiting for Admission* $\rightarrow$ *Capturing Audio* $\rightarrow$ *Transcript Ready*) with prominent action callouts when host admission or a one-click *Rejoin* (`POST /v1/recordings/{id}/rejoin`) is needed.
-*   **Dialog-Grouped Transcript & Speaker Filtering**: Group consecutive utterances from the same speaker into readable dialogue blocks with deterministic speaker avatars/colors, clickable speaker filter chips showing speaking time, inline search highlighting, and one-click clipboard copy.
+*   **Five-Stage Live Participation Stepper**: Provide an explicit visual progress indicator (*Scheduled* $\rightarrow$ *Starting Worker* $\rightarrow$ *Lobby / Waiting for Admission* $\rightarrow$ *Capturing Audio* $\rightarrow$ *Transcript Ready*) in [`ParticipationStepper.tsx`](file:///data/wortlaut/worker/src/ui/components/ParticipationStepper.tsx) with prominent action callouts when host admission or a one-click *Rejoin* (`POST /v1/recordings/{id}/rejoin`) is needed.
+*   **Dialog-Grouped Transcript, Full-Text Search & Speaker Filtering**: Group consecutive utterances from the same speaker (within 6.0s pause threshold) into readable dialogue blocks with deterministic speaker avatars/colors, clickable speaker filter chips showing speaking time, server-backed cross-meeting full-text search (`GET /v1/recordings?q=`), inline transcript search highlighting, and one-click Markdown/text clipboard copy.
 *   **Interactive Calendar Intake & `.ics`/`.eml` Upload**: Elevate Calendar & Mail events to a first-class view with direct click-through to linked recordings and a browser upload/paste dialog for `.ics` and `.eml` invitations (`POST /v1/calendar/messages`).
 *   **Single-Container Build Integration**: Compile the React 19 + Tailwind + shadcn/ui application inside the existing `worker/` build stage of [`services/meeting/Dockerfile`](file:///data/wortlaut/services/meeting/Dockerfile) so the runtime architecture remains a single FastAPI container with no separate frontend server.
 
 ## Non-Goals
 
-*   **Multi-User Identity Provider (OIDC/SAML) in `wortlaut`**: Authentication continues to use the operator `WORTLAUT_API_TOKEN` for full control and HMAC-derived `export_reader_token` credentials for per-recording read access.
 *   **Audio Playback or Waveform Streaming in the Browser**: Raw PCM audio is retained only for ASR segmentation and deleted after 24 hours per privacy requirements (**Dr. Thomas**); the UI will not stream or play back raw meeting audio.
-*   **Post-Hoc Manual Speaker Renaming or Voiceprint Diarization**: Speaker attribution strictly reflects verified provider participant bindings (`AGENTS.md`); the UI displays binding evidence and coverage status rather than manual speaker overrides.
+*   **Post-Hoc Manual Speaker Renaming or Voiceprint Diarization**: Speaker attribution strictly reflects verified provider participant bindings ([`AGENTS.md`](file:///data/wortlaut/AGENTS.md)); the UI displays binding evidence and coverage status rather than manual speaker overrides.
 *   **Separate Frontend Microservice**: No standalone Node.js or Nginx container will be introduced in Kubernetes or ArgoCD.
 
 ## Open Questions
@@ -142,28 +143,31 @@ flowchart TD
 +---------------------------------------+----------------------------------------------------------+
 ```
 
-### 3. Frontend Component Architecture (`worker/ui/`)
+### 3. Frontend Component Architecture ([`worker/src/ui/`](file:///data/wortlaut/worker/src/ui))
 
-The UI is structured as a modular TypeScript React 19 application under `worker/ui/` using `shadcn/ui` primitives (Radix UI + Tailwind CSS) and `@tanstack/react-query`:
+The UI is structured as a modular TypeScript React 19 application under [`worker/src/ui/`](file:///data/wortlaut/worker/src/ui) using `shadcn/ui` primitives (Radix UI + Tailwind CSS) and `@tanstack/react-query`:
 
-*   **State & Data Fetching (`worker/ui/api.ts`)**:
-    *   `useAuthToken()`: Manages token persistence in `localStorage` (`wortlaut_api_token`) and parses `#token=...` or `?token=...` URL parameters on boot. Detects whether the credential is an operator token or a scoped reader token (`^wortlaut-read-([0-9a-f-]{36})\.`).
-    *   `useRecordingsQuery(filters)`: Polls `GET /v1/recordings` every 3 seconds when live polling is enabled. Uses TanStack Query's structural sharing so unchanged recording items do not trigger component re-renders.
-    *   `useRecordingDetailQuery(recordingId)`: Polls `GET /v1/recordings/{id}` and `GET /v1/recordings/{id}/transcript` in parallel. Because React reconciles virtual DOM nodes by key (`segment_id`), active text selections (`window.getSelection()`), input focus, scroll position, and open tabs remain intact across 3-second refreshes.
-    *   `useCalendarQuery()`: Polls `GET /v1/calendar` when the *Kalender & Mail* view is active.
+*   **State & Data Fetching ([`worker/src/ui/api.ts`](file:///data/wortlaut/worker/src/ui/api.ts) & [`worker/src/ui/App.tsx`](file:///data/wortlaut/worker/src/ui/App.tsx))**:
+    *   Token & OIDC helpers (`detectAuthMode`, `readInitialToken`, `startOidcLogin`, `completeOidcCallbackIfPresent`, `fetchAuthMe`): Manage token persistence in `localStorage` (`wortlaut_api_token`), handle `/auth/callback` PKCE code exchange (`POST /v1/auth/oidc/exchange`), and detect whether the credential is an operator token, a Dex OIDC user token (`^wortlaut-user-`), or a scoped reader token (`^wortlaut-read-([0-9a-f-]{36})\.`).
+    *   Typed API fetchers (`fetchHealth`, `fetchRecordings`, `fetchRecordingDetail`, `fetchTranscript`, `fetchCalendar`, `createRecording`, `cancelRecording`, `rejoinRecording`, `issueReaderToken`, `retryMailDelivery`, `importCalendarPayload`, `downloadExportFile`) consumed by TanStack Query `useQuery` hooks in [`App.tsx`](file:///data/wortlaut/worker/src/ui/App.tsx#L60-L171).
 *   **Core View Components**:
-    *   `AuthGateDialog`: Displayed when no valid token is configured; allows entering an Operator Token or a Scoped Reader Token, with clear explanations of both roles.
-    *   `NewRecordingDialog`: Radix `Dialog` triggered by **"+ Neue Aufnahme"** with two tabs:
+    *   [`WelcomeLandingView.tsx`](file:///data/wortlaut/worker/src/ui/components/WelcomeLandingView.tsx) & [`AuthGateDialog.tsx`](file:///data/wortlaut/worker/src/ui/components/AuthGateDialog.tsx): Displayed when unauthenticated; offers one-click **Dex OIDC SSO login** (`Mit Mayflower-Account anmelden (SSO)`) alongside manual token entry for Operator and Scoped Reader tokens.
+    *   [`HeaderBar.tsx`](file:///data/wortlaut/worker/src/ui/components/HeaderBar.tsx): Fixed 240px left navigation sidebar (`lg:w-60`) with the 4 workspace sections (*Übersicht*, *Meetings*, *Kalender*, *System & Diagnose*), primary **`+ Neue Aufnahme`** CTA, live 3s poll toggle, and user/session status card.
+    *   [`HomeView.tsx`](file:///data/wortlaut/worker/src/ui/components/HomeView.tsx): Landing dashboard showing active/recent recordings, instant meeting-link dispatch input, and calendar invitation instructions.
+    *   [`NewRecordingDialog.tsx`](file:///data/wortlaut/worker/src/ui/components/NewRecordingDialog.tsx): Radix `Dialog` triggered by **"+ Neue Aufnahme"** with two tabs:
         1.  *Per Meeting-Link*: URL input with live regex provider detection (`meet.google.com`, `teams.microsoft.com` / `teams.live.com`, `*.webex.com`), optional title, optional `guest_name`, and mode toggle (*Sofort beitreten* with duration presets vs. *Termin planen* with start/end datetime pickers).
         2.  *Per Kalendereinladung (.ics / .eml)*: Drag-and-drop file upload or raw text paste submitting to `POST /v1/calendar/messages`.
-    *   `ParticipationStepper`: Visual 5-step progress bar mapping `participation`, `processing`, and `participation_reason` / `end_reason` to clear German status stages and recovery buttons (*Erneut beitreten*).
-    *   `TranscriptTab`:
+    *   [`RecordingSidebar.tsx`](file:///data/wortlaut/worker/src/ui/components/RecordingSidebar.tsx): Full-text/title/speaker search (`GET /v1/recordings?q=`), provider filter, status pills, and recording list cards.
+    *   [`MeetingDetailView.tsx`](file:///data/wortlaut/worker/src/ui/components/MeetingDetailView.tsx): Full-page recording workspace with a 70/30 2-column layout (`TranscriptTab` on the left; sticky speaker talk-time breakdown, `.md`/`.txt`/`.vtt`/`.json` export buttons, and *Lese-Link teilen* button on the right) and a collapsible technical section at the bottom containing [`SourcesTab.tsx`](file:///data/wortlaut/worker/src/ui/components/SourcesTab.tsx) and [`DiagnosticsTab.tsx`](file:///data/wortlaut/worker/src/ui/components/DiagnosticsTab.tsx).
+    *   [`ParticipationStepper.tsx`](file:///data/wortlaut/worker/src/ui/components/ParticipationStepper.tsx): Visual 5-step progress bar mapping `participation`, `processing`, and `participation_reason` / `end_reason` to clear German status stages and recovery buttons (*Erneut beitreten*).
+    *   [`TranscriptTab.tsx`](file:///data/wortlaut/worker/src/ui/components/TranscriptTab.tsx):
         *   Computes deterministic speaker colors and two-letter initials from `speaker_label`.
         *   Renders clickable speaker filter chips from `sources_summary` with speech duration.
-        *   Groups consecutive segments from the same speaker (where `next.start - prev.end <= 5.0` seconds and `speaker_label` matches) into cohesive `DialogueGroup` blocks while preserving per-segment timestamps on hover/sub-lines.
-    *   `SourcesTab`: Displays per-stream WebRTC receiver bindings (`provider_source_id`, `participant_name`, `signaled_participant_id`, `csi`, `speech_seconds`, `sample_text`) and a one-click filter jump into `TranscriptTab`.
-    *   `DiagnosticsTab`: Displays SMTP delivery status (`retry` mutation), ASR queue metrics, Kubernetes job/pod attempt history, WebRTC signaling counters, and a copyable JSON inspector.
-    *   `CalendarWorkspace`: Full-width table of imported calendar/mail events (`title`, `provider`, `organizer`, `status`, `reason`, `dtstamp`) where clicking any row with a `recording_id` switches to the *Aufnahmen* view and selects that recording.
+        *   Groups consecutive segments from the same speaker (where `seg.start - prev.end <= 6.0` seconds and `speaker_label` matches) into cohesive dialogue turns while preserving per-segment timestamps and providing one-click copy as Markdown or plain text.
+    *   [`SourcesTab.tsx`](file:///data/wortlaut/worker/src/ui/components/SourcesTab.tsx): Displays per-stream WebRTC receiver bindings (`provider_source_id`, `participant_name`, `signaled_participant_id`, `csi`, `speech_seconds`, `sample_text`) and a one-click filter jump into `TranscriptTab`.
+    *   [`DiagnosticsTab.tsx`](file:///data/wortlaut/worker/src/ui/components/DiagnosticsTab.tsx): Displays SMTP delivery status (`retryMailDelivery`), ASR queue metrics, Kubernetes job/pod attempt history, WebRTC signaling counters, and a copyable JSON inspector.
+    *   [`CalendarWorkspace.tsx`](file:///data/wortlaut/worker/src/ui/components/CalendarWorkspace.tsx): Full-width table of imported calendar/mail events (`title`, `provider`, `organizer`, `status`, `reason`, `dtstamp`) where clicking any row with a `recording_id` opens that recording.
+    *   [`SystemView.tsx`](file:///data/wortlaut/worker/src/ui/components/SystemView.tsx): Operator capacity, provider readiness, retention policy, and health status overview.
 
 ### 4. Backend API Adjustments (`services/meeting/src/wortlaut/app.py`)
 
@@ -192,7 +196,7 @@ flowchart LR
 
 *   [`worker/package.json`](file:///data/wortlaut/worker/package.json) already runs `vite build && vite build --config vite.meet.config.ts` to compile browser bundles into `worker/dist/`. A dedicated [`worker/vite.ui.config.ts`](file:///data/wortlaut/worker/vite.ui.config.ts) configuration will bundle `worker/src/ui/main.tsx` (React 19 + Radix UI + TanStack Query + Lucide Icons) and Tailwind CSS into `worker/dist/ui/app.js` and `worker/dist/ui/app.css`.
 *   [`services/meeting/Dockerfile`](file:///data/wortlaut/services/meeting/Dockerfile#L1-L16) already runs `npm run build` in the `sdk` stage and copies `/worker/dist` to `/app/sdk`, which FastAPI mounts at `/sdk` ([`app.py`](file:///data/wortlaut/services/meeting/src/wortlaut/app.py#L118-L119)). Thus `/sdk/ui/app.js` and `/sdk/ui/app.css` are automatically packaged and served with zero Dockerfile stage additions.
-*   [`services/meeting/src/wortlaut/ui.py`](file:///data/wortlaut/services/meeting/src/wortlaut/ui.py) serves the HTML host document that injects `window.__WORTLAUT_BOOT__ = { failureReasons: FAILURE_REASONS }` and loads `/sdk/ui/app.css` and `/sdk/ui/app.js`.
+*   [`services/meeting/src/wortlaut/ui.py`](file:///data/wortlaut/services/meeting/src/wortlaut/ui.py) serves the HTML host document that injects `window.__WORTLAUT_BOOT__ = { failureReasons: FAILURE_REASONS, instance: _build_instance_info() }` and loads `/ui/static/app.css` and `/ui/static/app.js` (also mounted at `/sdk/ui/`).
 
 ## Alternatives Considered
 

@@ -55,6 +55,12 @@ def _build_instance_info() -> dict:
                 "audioHours": 24,
                 "transcriptDays": 30,
             },
+            "oidc": {
+                "enabled": False,
+                "issuer": "",
+                "clientId": "wortlaut",
+                "allowedDomains": [],
+            },
         }
 
     bot_email: str | None = None
@@ -86,6 +92,12 @@ def _build_instance_info() -> dict:
         "retention": {
             "audioHours": s.audio_retention_hours,
             "transcriptDays": s.transcript_retention_days,
+        },
+        "oidc": {
+            "enabled": bool(s.oidc_issuer),
+            "issuer": s.oidc_issuer,
+            "clientId": s.oidc_client_id,
+            "allowedDomains": list(s.oidc_allowed_domains or []),
         },
     }
 

@@ -17,6 +17,8 @@ export type NavSection = 'home' | 'meetings' | 'calendar' | 'system';
 export interface HeaderBarProps {
   healthy: boolean;
   authMode: AuthMode;
+  hasSavedAccount?: boolean;
+  onReturnToAccount?: () => void;
   activeNav: NavSection;
   onChangeNav: (nav: NavSection) => void;
   recordingsCount: number;
@@ -32,6 +34,8 @@ export interface HeaderBarProps {
 export function HeaderBar({
   healthy,
   authMode,
+  hasSavedAccount,
+  onReturnToAccount,
   activeNav,
   onChangeNav,
   recordingsCount,
@@ -43,31 +47,62 @@ export function HeaderBar({
   onOpenNewRecording,
   onOpenAuthDialog,
 }: HeaderBarProps) {
-  // Clean, distraction-free top bar for single-recording Reader Links (Mara / Dr. Thomas)
-  if (authMode.kind === 'reader') {
+  // Clean, distraction-free top bar for single-recording Reader Links or unauthenticated Landing Page
+  if (authMode.kind === 'reader' || authMode.kind === 'unauthenticated') {
     return (
-      <header className="sticky top-0 z-30 flex items-center justify-between border-b border-slate-800/90 bg-slate-950/95 px-6 py-3 backdrop-blur-sm">
-        <div className="flex items-center gap-3">
+      <header className="sticky top-0 z-30 flex flex-wrap items-center justify-between gap-3 border-b border-slate-800/90 bg-slate-950/95 px-4 sm:px-8 py-3.5 backdrop-blur-sm">
+        <div className="flex flex-wrap items-center gap-3">
           <span
             id="health-dot"
+            title={healthy ? 'System bereit' : 'System nicht erreichbar'}
             className={cn(
               'h-2.5 w-2.5 rounded-full',
-              healthy ? 'bg-emerald-400' : 'bg-red-500'
+              healthy
+                ? 'bg-emerald-400 shadow-[0_0_8px_#34d399]'
+                : 'bg-red-500'
             )}
           />
           <span className="text-base font-bold tracking-tight text-white">
             wortlaut
           </span>
-          <span className="inline-flex items-center gap-1.5 rounded-full border border-sky-800/70 bg-sky-950/60 px-2.5 py-0.5 text-[11px] font-medium text-sky-300">
-            <ShieldCheck className="h-3 w-3 text-sky-400" />
-            <span>Freigegebenes Transkript</span>
-          </span>
+          {authMode.kind === 'reader' ? (
+            <span
+              title="Schreibgeschützter Lese-Link für genau diese Besprechung"
+              className="inline-flex items-center gap-1.5 rounded-full border border-sky-800/70 bg-sky-950/60 px-2.5 py-0.5 text-[11px] font-medium text-sky-300"
+            >
+              <ShieldCheck className="h-3 w-3 text-sky-400" />
+              <span>Freigegebenes Transkript (Nur-Lese-Link)</span>
+            </span>
+          ) : (
+            <span className="hidden sm:inline-flex items-center gap-1.5 rounded-full border border-slate-800 bg-slate-900/80 px-2.5 py-0.5 text-[11px] font-medium text-slate-300">
+              <span>Google Meet · Microsoft Teams · Cisco Webex</span>
+            </span>
+          )}
         </div>
 
-        <Button variant="outline" size="sm" onClick={onOpenAuthDialog}>
-          <KeyRound className="h-3.5 w-3.5 text-sky-400" />
-          <span>Zugang wechseln</span>
-        </Button>
+        <div className="flex items-center gap-2">
+          {authMode.kind === 'reader' && hasSavedAccount && onReturnToAccount && (
+            <Button
+              variant="primary"
+              size="sm"
+              id="return-to-account-btn"
+              onClick={onReturnToAccount}
+            >
+              <Home className="h-3.5 w-3.5" />
+              <span>Zurück zu meinem Konto</span>
+            </Button>
+          )}
+          <Button
+            variant={authMode.kind === 'unauthenticated' ? 'primary' : 'outline'}
+            size="sm"
+            onClick={onOpenAuthDialog}
+          >
+            <KeyRound className="h-3.5 w-3.5" />
+            <span>
+              {authMode.kind === 'reader' ? 'Zugang wechseln' : 'Anmelden'}
+            </span>
+          </Button>
+        </div>
       </header>
     );
   }
@@ -230,17 +265,21 @@ export function HeaderBar({
           <button
             type="button"
             onClick={onOpenAuthDialog}
-            className="flex w-full items-center justify-between rounded-lg border border-slate-800 bg-slate-900/90 px-3 py-2 text-xs text-slate-300 hover:border-slate-700 hover:text-white cursor-pointer"
+            className="flex w-full items-center justify-between gap-2 rounded-lg border border-slate-800 bg-slate-900/90 px-3 py-2 text-xs text-slate-300 hover:border-slate-700 hover:text-white cursor-pointer"
           >
-            <span className="flex items-center gap-2 truncate">
+            <span className="flex items-center gap-2 min-w-0">
               <KeyRound className="h-3.5 w-3.5 shrink-0 text-sky-400" />
               <span className="truncate font-medium">
                 {authMode.kind === 'operator'
-                  ? 'Team-Zugang aktiv'
-                  : 'Mit Schlüssel verbinden'}
+                  ? authMode.user
+                    ? authMode.user.email
+                    : 'API-Schlüssel aktiv'
+                  : 'Anmelden'}
               </span>
             </span>
-            <span className="text-[10px] text-slate-500">Ändern</span>
+            <span className="shrink-0 text-[10px] text-slate-500">
+              {authMode.kind === 'operator' && authMode.user ? 'SSO' : 'Konto'}
+            </span>
           </button>
         </div>
       </aside>

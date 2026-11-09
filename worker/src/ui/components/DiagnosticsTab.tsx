@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import {
   Activity,
+  BookOpen,
   Check,
   Copy,
   Cpu,
@@ -8,6 +9,7 @@ import {
   RefreshCw,
   Server,
 } from 'lucide-react';
+import { DELIVERY_STATUS_LABELS, PROCESSING_LABELS } from '../api';
 import type { RecordingDetail, TranscriptExport } from '../types';
 import { Button } from './ui/primitives';
 
@@ -31,7 +33,7 @@ export function DiagnosticsTab({
 
   const origin =
     typeof window !== 'undefined' ? window.location.origin : '';
-  const curlSnippet = `curl --fail -H "Authorization: Bearer $WORTLAUT_TOKEN" "${origin}/v1/recordings/${recording.id}/exports/json"`;
+  const curlSnippet = `curl --fail -H "Authorization: Bearer $WORTLAUT_API_TOKEN" "${origin}/v1/recordings/${recording.id}/exports/json"`;
 
   const handleCopyCurl = async () => {
     if (!navigator.clipboard) return;
@@ -97,7 +99,9 @@ export function DiagnosticsTab({
             </div>
             <div className="flex justify-between">
               <span className="text-slate-400">Verarbeitungsstatus:</span>
-              <span className="font-semibold">{recording.processing}</span>
+              <span className="font-semibold">
+                {PROCESSING_LABELS[recording.processing] || recording.processing}
+              </span>
             </div>
           </div>
         </div>
@@ -162,7 +166,8 @@ export function DiagnosticsTab({
             <div className="flex justify-between">
               <span className="text-slate-400">Status:</span>
               <span className="font-semibold">
-                {recording.delivery?.status ?? 'pending'}
+                {DELIVERY_STATUS_LABELS[recording.delivery?.status ?? 'pending'] ||
+                  (recording.delivery?.status ?? 'pending')}
               </span>
             </div>
             {recording.delivery?.attempts != null && (
@@ -228,10 +233,21 @@ export function DiagnosticsTab({
       )}
 
       <div className="rounded-xl border border-slate-800 bg-slate-950/75 p-4 space-y-2">
-        <div className="flex items-center justify-between">
-          <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-            REST-API / Integrations-Abruf (cURL)
-          </span>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-3">
+            <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+              REST-API / Integrations-Abruf (cURL)
+            </span>
+            <a
+              href="/docs"
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1 text-xs font-medium text-sky-400 hover:text-sky-300 hover:underline"
+            >
+              <BookOpen className="h-3.5 w-3.5" />
+              <span>OpenAPI-Dokumentation (/docs)</span>
+            </a>
+          </div>
           <Button variant="secondary" size="sm" onClick={handleCopyCurl}>
             {copiedCurl ? (
               <>

@@ -1,28 +1,28 @@
 # wortlaut
 
-Self-hosted meeting transcription for Google Meet, Webex, and Microsoft Teams. wortlaut joins as a browser participant, captures incoming WebRTC audio sources per receiver before mixing, transcribes them with a local Parakeet model, and produces TXT, WebVTT, and JSON exports.
+Self-hosted meeting transcription for Google Meet, Webex, and Microsoft Teams. wortlaut joins as a browser participant, captures incoming WebRTC audio sources per receiver before mixing, transcribes them with a local Parakeet model, and produces TXT, WebVTT, Markdown (`.md`), and JSON exports.
 
-Meetings can be scheduled through the HTTP API, the integrated Web-UI, or email invitations. Meet, Webex, and Teams run side by side, with a provider selected for each recording. They share storage, transcription, and capacity limits.
+Meetings can be scheduled through the HTTP API, the integrated Web-UI (`/` and `/ui`), or email invitations. Meet, Webex, and Teams run side by side, with a provider selected for each recording. They share storage, transcription, and capacity limits.
 
 ## Current status
 
-wortlaut is under active development. Browser participation and transcription work, and participant names are resolved from the browser DOM, SDP, and signaling channels when unambiguously matched to a receiver source; live provider verification for speaker attribution is still ongoing.
+wortlaut is under active development. Browser participation, per-receiver WebRTC audio capture, and local Parakeet transcription work across Google Meet, Webex, and Microsoft Teams. Participant names are resolved from the browser DOM, SDP, and signaling channels when unambiguously matched to a receiver source.
 
-| Provider | Available path | Current limits |
+| Provider | Available path | Current status & limits |
 | --- | --- | --- |
-| Google Meet | Chromium web client; guest or saved browser session | Live verification of participant-bound audio sources pending |
-| Webex | Chromium guest join; separate SDK path also available | Browser join and intelligible transcription verified live; participant binding and source coverage remain unverified. SDK path needs separate live validation |
-| Microsoft Teams | Chromium guest join with English/German controls | Audio sources are captured per WebRTC receiver; live admission and participant binding remain unverified |
+| Google Meet | Chromium web client ([capture.ts](worker/src/meet/capture.ts)); guest or saved browser session | Per-receiver WebRTC audio capture and participant binding verified live |
+| Webex | Chromium guest join ([webex-browser.ts](worker/src/webex-browser.ts)); separate SDK path also available | Browser join, multistream `AUDIO-MAIN` receiver capture, and `activeSpeakerNotification` DataChannel attribution verified live. SDK path needs separate live validation |
+| Microsoft Teams | Chromium guest join with English/German controls ([teams-browser.ts](worker/src/teams-browser.ts)) | Per-receiver WebRTC audio capture and CSI participant rebinding verified live |
 
-The Webex browser trial on 12 October 2026 received intelligible speech on two sources, with some duplicated speech. Receiving multiple tracks does not prove that each track represents a different participant. Unbound sources are explicitly marked `speaker_id: null` and `attribution_unknown: true`; source coverage remains `unknown`.
+Unbound sources are explicitly marked `speaker_id: null` and `attribution_unknown: true` when transcribed speech cannot be attributed to a verified participant session; source coverage remains `unknown` unless complete signaling coverage is proven.
 
 The intended model is transcription per incoming source with a verified provider participant identity. Speaker diarization, voiceprints, and active-speaker name guesses are not substitutes for that binding. Meet uses the browser only: no Google Meet REST, Media, or Calendar API.
 
 ## Architecture
 
-- **Meeting service** — Python/FastAPI, integrated Web-UI (`/` and `/ui`), PostgreSQL-backed scheduling, Kubernetes worker management, audio ingest, exports, and email processing in one service.
-- **Worker** — TypeScript, Playwright, and sandboxed Chromium; one short-lived Kubernetes Job per meeting. Browser workers use a virtual display under Linux. The alternative Webex SDK path uses a hosted HTTPS page.
-- **ASR service** — a shared local Parakeet model for speech recognition.
+- **Meeting service** ([app.py](services/meeting/src/wortlaut/app.py), [models.py](services/meeting/src/wortlaut/models.py)) — Python/FastAPI, integrated Web-UI ([ui.py](services/meeting/src/wortlaut/ui.py) serving `/` and `/ui`), Dex OIDC authentication ([oidc.py](services/meeting/src/wortlaut/oidc.py)), PostgreSQL-backed scheduling, Kubernetes worker management, audio ingest, exports ([exports.py](services/meeting/src/wortlaut/exports.py)), and email processing ([mail.py](services/meeting/src/wortlaut/mail.py)) in one service.
+- **Worker** ([worker](worker)) — TypeScript, Playwright, and sandboxed Chromium; one short-lived Kubernetes Job per meeting. Browser workers use a virtual display under Linux. The alternative Webex SDK path uses a hosted HTTPS page.
+- **ASR service** ([services/asr](services/asr)) — a shared local Parakeet model for speech recognition.
 - **Storage** — PostgreSQL for state and transcripts, S3-compatible storage for audio.
 
 See [meeting service](services/meeting), [ASR service](services/asr), [worker](worker), and [deployment configuration](deploy).
@@ -101,9 +101,14 @@ kubectl --kubeconfig .dev/kubeconfig --context data \
   -n "wortlaut-$(id -un)" rollout restart deployment/wortlaut-meeting
 ```
 
-## Schedule, inspect, and export a recording
+## Authentication, scheduling, and exporting a recording
 
-The operator API token is generated in `.dev/runtime.env`. Supply it privately as `WORTLAUT_API_TOKEN`; do not put it in URLs. Set `MEETING_URL` to a real meeting you are authorized to record, and `STARTS_AT` / `ENDS_AT` to ISO 8601 timestamps including a timezone.
+wortlaut supports three credential types ([oidc.py](services/meeting/src/wortlaut/oidc.py), [app.py](services/meeting/src/wortlaut/app.py)):
+1. **Dex OIDC User Sessions (`wortlaut-user-…`)**: Browser users sign in via OIDC Authorization Code + PKCE (`GET /auth/callback`, `POST /v1/auth/oidc/exchange`, `GET /v1/auth/me` configured via `WORTLAUT_OIDC_ISSUER` and `WORTLAUT_OIDC_CLIENT_ID`). Regular users only see and manage their own recordings (`owner_sub` / `owner_email`), while emails listed in `WORTLAUT_OIDC_ADMIN_EMAILS` have full operator access.
+2. **Operator API Token (`WORTLAUT_API_TOKEN`)**: Generated in `.dev/runtime.env` for full operator and automation access. Supply it privately via the `Authorization: Bearer` header; do not put it in URLs.
+3. **Scoped Reader Token (`wortlaut-read-<recording_id>.<mac>`)**: Issued per recording (`POST /v1/recordings/{id}/reader-token` or included as `#token=wortlaut-read-…` in result emails) for read-only access to a single recording's transcript and exports.
+
+Set `MEETING_URL` to a real meeting you are authorized to record, and `STARTS_AT` / `ENDS_AT` to ISO 8601 timestamps including a timezone.
 
 ```sh
 # Requires jq. Use provider=webex for a Webex URL or provider=teams for Teams.
@@ -130,9 +135,9 @@ curl --fail-with-body -X POST "http://127.0.0.1:34601/v1/recordings/$RECORDING_I
   -H "Authorization: Bearer $WORTLAUT_API_TOKEN"
 ```
 
-Exports support `txt`, `vtt`, and `json`. They return HTTP 409 while processing is pending and HTTP 410 after transcript retention expires. The recording detail includes participation, processing, audio gaps, source attribution, worker diagnostics, `live_status`, and delivery status. `GET /v1/recordings/{id}/transcript` returns live or completed transcript segments, and `GET /v1/recordings` lists recordings with cursor pagination; see the OpenAPI UI for filters and other endpoints.
+Exports ([exports.py](services/meeting/src/wortlaut/exports.py)) support `txt`, `vtt`, `md` (GitHub-Flavored Markdown), and `json` via `GET /v1/recordings/{id}/exports/{format}` (or `?format=`). They return HTTP 409 while processing is pending and HTTP 410 after transcript retention expires. The recording detail includes participation, processing, audio gaps, source attribution, worker diagnostics, `live_status`, and delivery status. `GET /v1/recordings/{id}/transcript` returns live or completed transcript segments, `GET /v1/recordings` lists recordings with cursor pagination and full-text/speaker search (`?q=`), `POST /v1/recordings/{id}/rejoin` triggers a fresh worker join attempt, `POST /v1/recordings/{id}/reader-token` issues a scoped read-only link token, `POST /v1/recordings/{id}/delivery/retry` retries SMTP delivery, and `GET /metrics` exposes Prometheus metrics; see the OpenAPI UI (`/docs`) for all parameters.
 
-By default, the scheduler starts workers 60 seconds before a meeting, allows two active meetings across all providers, waits up to ten minutes for admission, and stops a worker after five minutes if no remote participants or active audio are observed (`room_empty`). Completed transcription does not imply complete audio coverage or correct speaker attribution.
+By default ([settings.py](services/meeting/src/wortlaut/settings.py)), the scheduler starts workers 60 seconds before a meeting, allows 15 active meetings (`max_active_meetings`) across all providers, waits up to ten minutes for admission, and stops a worker after five minutes if no remote participants or active audio are observed (`room_empty`). Completed transcription does not imply complete audio coverage or correct speaker attribution.
 
 ## Email invitations and results
 

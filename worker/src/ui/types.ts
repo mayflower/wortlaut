@@ -38,6 +38,7 @@ export interface RecordingSummary {
   provider: Provider;
   title: string | null;
   guest_name: string | null;
+  owner_email?: string | null;
   starts_at: string;
   ends_at: string;
   participation: ParticipationState;
@@ -186,14 +187,27 @@ export interface CalendarEvent {
   recording_ids?: string[];
 }
 
+export interface UserIdentity {
+  sub: string;
+  email: string;
+  name: string;
+  isAdmin: boolean;
+}
+
 export type AuthMode =
   | { kind: 'unauthenticated' }
-  | { kind: 'operator'; token: string }
+  | { kind: 'operator'; token: string; user?: UserIdentity }
   | { kind: 'reader'; token: string; recordingId: string };
 
 export interface InstanceInfo {
   assistantName: string;
   botEmail: string | null;
+  oidc?: {
+    enabled: boolean;
+    issuer: string;
+    clientId: string;
+    allowedDomains: string[];
+  };
   providers: {
     google_meet: boolean;
     google_meet_auth_session: boolean;

@@ -89,7 +89,11 @@ async function resolveApiToken(apiUrl: string, env: Record<string, string>): Pro
   const prodTokenPath = resolve(ROOT_DIR, '.dev/data-operator-token.txt');
   const runtimeEnvPath = resolve(ROOT_DIR, '.dev/runtime.env');
 
-  if (apiUrl.includes('wortlaut.data.mayflower.zone') && await fileExists(prodTokenPath)) {
+  if (
+    (apiUrl.includes('wortlaut.data.mayflower.tech') ||
+      apiUrl.includes('wortlaut.data.mayflower.zone')) &&
+    await fileExists(prodTokenPath)
+  ) {
     return (await readFile(prodTokenPath, 'utf8')).trim();
   }
   if (await fileExists(runtimeEnvPath)) {
@@ -104,7 +108,7 @@ async function resolveApiToken(apiUrl: string, env: Record<string, string>): Pro
 
 async function loadConfig(): Promise<LiveConfig> {
   const env = await loadEnvFiles();
-  const apiUrl = (env.WORTLAUT_LIVE_API_URL || 'https://wortlaut.data.mayflower.zone').replace(/\/+$/, '');
+  const apiUrl = (env.WORTLAUT_LIVE_API_URL || 'https://wortlaut.data.mayflower.tech').replace(/\/+$/, '');
   const apiToken = await resolveApiToken(apiUrl, env);
 
   const rawProviders = (env.PROVIDER || env.WORTLAUT_LIVE_PROVIDERS || 'google_meet,webex,teams')

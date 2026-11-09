@@ -165,11 +165,14 @@ def test_unknown_acceptance_requires_explicit_retry_and_large_export_reader_is_s
     assert not list(smtp.messages[0].iter_attachments())
     body = smtp.messages[0].get_body(preferencelist=("plain",)).get_content()
     assert f"/v1/recordings/{recording}/exports/json" in body
+    assert f"/v1/recordings/{recording}/exports/md" in body
     reader = re.search(r"wortlaut-read-[0-9a-f]{64}", body).group()
+    sig = reader.removeprefix("wortlaut-read-")
+    assert f"/ui#token=wortlaut-read-{recording}.{sig}" in body
     assert get_settings().api_token.get_secret_value() not in body
     assert "?token=" not in body
     access = {"Authorization": "Bearer " + reader}
-    for format in ("txt", "vtt", "json"):
+    for format in ("txt", "vtt", "json", "md"):
         endpoint = f"/v1/recordings/{recording}/exports/{format}"
         response = client.get(endpoint, headers=access)
         assert response.status_code == 200
@@ -321,7 +324,8 @@ def test_failed_join_without_audio_sends_notification_mail(
         json={"participation": "ended", "reason": "lobby_timeout", "drained": True},
     )
     assert response.status_code == 200
-    finalize_processing(database)
+    # Non-participation with 0 audio streams immediately finalizes processing
+    # without waiting for a separate finalize_processing pass.
     smtp_pass(database)
     assert smtp.envelopes == [["owner@mayflower.de"]]
     assert len(smtp.messages) == 1
@@ -331,3 +335,4 @@ def test_failed_join_without_audio_sends_notification_mail(
     body = message.get_body(preferencelist=("plain",)).get_content()
     assert "Zeitüberschreitung im Wartebereich" in body
     assert "Grund: lobby_timeout" in body
+    assert "/ui" in body

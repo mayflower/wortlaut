@@ -591,6 +591,20 @@ def test_web_ui_live_status_and_browser_participant_names_in_exports(
 
     txt = client.get(f"/v1/recordings/{recording}/exports/txt", headers=API).text
     assert "Alice Example: Guten Tag zusammen." in txt
+    md_res = client.get(f"/v1/recordings/{recording}/exports/md", headers=API)
+    assert md_res.status_code == 200
+    assert md_res.headers["content-type"].startswith("text/markdown")
+    assert "**Alice Example** (`00:00:00.000 – 00:00:01.000`): Guten Tag zusammen." in md_res.text
+    assert "| Alice Example | `participant-alice` |" in md_res.text
+
+    # Full-text and speaker search across recordings (P1-3)
+    by_text = client.get("/v1/recordings?q=Guten+Tag+zusammen", headers=API).json()["items"]
+    assert [r["id"] for r in by_text] == [recording]
+    by_speaker = client.get("/v1/recordings?q=Alice+Example", headers=API).json()["items"]
+    assert [r["id"] for r in by_speaker] == [recording]
+    by_missing = client.get("/v1/recordings?q=NichtVorhandenerBegriff", headers=API).json()["items"]
+    assert by_missing == []
+
     exported = client.get(f"/v1/recordings/{recording}/exports/json", headers=API).json()
     assert exported["segments"][0]["speaker_label"] == "Alice Example"
     assert exported["quality"]["attribution_unknown"] is False
@@ -1005,3 +1019,176 @@ def test_persona_workflows_rejoin_desc_filters_reader_token_and_metrics(client, 
     assert metrics_res.status_code == 200
     assert "wortlaut_recordings_total" in metrics_res.text
     assert "wortlaut_active_attempts 1" in metrics_res.text
+
+
+def test_oidc_dex_pkce_exchange_and_per_user_isolation(client, database, monkeypatch):
+    import base64
+    import json
+    import time
+
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import padding, rsa
+
+    import wortlaut.oidc as oidc_mod
+
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    pub_numbers = private_key.public_key().public_numbers()
+
+    def _int_b64(val: int) -> str:
+        length = (val.bit_length() + 7) // 8
+        return base64.urlsafe_b64encode(val.to_bytes(length, "big")).rstrip(b"=").decode("ascii")
+
+    jwks = [
+        {
+            "kty": "RSA",
+            "kid": "test-dex-key-1",
+            "alg": "RS256",
+            "use": "sig",
+            "n": _int_b64(pub_numbers.n),
+            "e": _int_b64(pub_numbers.e),
+        }
+    ]
+    monkeypatch.setattr(oidc_mod, "fetch_dex_jwks", lambda *, force_refresh=False: jwks)
+
+    def _make_id_token(sub: str, email: str, name: str, nonce: str = "n1") -> str:
+        header = {"alg": "RS256", "typ": "JWT", "kid": "test-dex-key-1"}
+        now_ts = int(time.time())
+        payload = {
+            "iss": "https://id.data.mayflower.tech",
+            "sub": sub,
+            "aud": "wortlaut",
+            "exp": now_ts + 3600,
+            "iat": now_ts,
+            "nonce": nonce,
+            "email": email,
+            "email_verified": True,
+            "name": name,
+        }
+        h_b64 = (
+            base64.urlsafe_b64encode(json.dumps(header).encode("utf-8"))
+            .rstrip(b"=")
+            .decode("ascii")
+        )
+        p_b64 = (
+            base64.urlsafe_b64encode(json.dumps(payload).encode("utf-8"))
+            .rstrip(b"=")
+            .decode("ascii")
+        )
+        signing_input = f"{h_b64}.{p_b64}".encode("ascii")
+        sig = private_key.sign(signing_input, padding.PKCS1v15(), hashes.SHA256())
+        s_b64 = base64.urlsafe_b64encode(sig).rstrip(b"=").decode("ascii")
+        return f"{h_b64}.{p_b64}.{s_b64}"
+
+    next_id_token = {"value": ""}
+
+    class _FakeResp:
+        status_code = 200
+
+        def json(self):
+            return {"id_token": next_id_token["value"], "token_type": "bearer"}
+
+    monkeypatch.setattr(oidc_mod.httpx, "post", lambda *a, **kw: _FakeResp())
+
+    next_id_token["value"] = _make_id_token(
+        "sub-mara", "mara.lindner@mayflower.de", "Mara Lindner", "nonce-mara"
+    )
+    ex_mara = client.post(
+        "/v1/auth/oidc/exchange",
+        json={
+            "code": "code-mara",
+            "code_verifier": "v" * 44,
+            "redirect_uri": "http://127.0.0.1:34601/auth/callback",
+            "nonce": "nonce-mara",
+        },
+    )
+    assert ex_mara.status_code == 200
+    mara_token = ex_mara.json()["token"]
+    assert mara_token.startswith("wortlaut-user-")
+    assert ex_mara.json()["user"]["email"] == "mara.lindner@mayflower.de"
+    assert ex_mara.json()["user"]["is_admin"] is False
+    mara_headers = {"Authorization": f"Bearer {mara_token}"}
+
+    me_mara = client.get("/v1/auth/me", headers=mara_headers)
+    assert me_mara.status_code == 200
+    assert me_mara.json()["email"] == "mara.lindner@mayflower.de"
+
+    next_id_token["value"] = _make_id_token(
+        "sub-thomas", "thomas.berg@mayflower.de", "Thomas Berg", "nonce-thomas"
+    )
+    thomas_token = client.post(
+        "/v1/auth/oidc/exchange",
+        json={
+            "code": "code-thomas",
+            "code_verifier": "v" * 44,
+            "redirect_uri": "http://127.0.0.1:34601/auth/callback",
+            "nonce": "nonce-thomas",
+        },
+    ).json()["token"]
+    thomas_headers = {"Authorization": f"Bearer {thomas_token}"}
+
+    next_id_token["value"] = _make_id_token(
+        "sub-admin",
+        "johann-peter.hartmann@mayflower.de",
+        "Johann-Peter Hartmann",
+        "nonce-admin",
+    )
+    ex_admin = client.post(
+        "/v1/auth/oidc/exchange",
+        json={
+            "code": "code-admin",
+            "code_verifier": "v" * 44,
+            "redirect_uri": "http://127.0.0.1:34601/auth/callback",
+            "nonce": "nonce-admin",
+        },
+    )
+    assert ex_admin.status_code == 200
+    assert ex_admin.json()["user"]["is_admin"] is True
+    admin_headers = {"Authorization": f"Bearer {ex_admin.json()['token']}"}
+
+    now = datetime.now(UTC)
+    rec_mara = client.post(
+        "/v1/recordings",
+        headers={**mara_headers, "Idempotency-Key": "oidc-mara-1"},
+        json={
+            "provider": "google_meet",
+            "meeting_url": "https://meet.google.com/abc-defg-hij",
+            "title": "Mara Sprint Sync",
+            "starts_at": now.isoformat(),
+            "ends_at": (now + timedelta(minutes=30)).isoformat(),
+        },
+    )
+    assert rec_mara.status_code == 200
+    rec_mara_id = rec_mara.json()["id"]
+    assert rec_mara.json()["owner_email"] == "mara.lindner@mayflower.de"
+
+    rec_thomas = client.post(
+        "/v1/recordings",
+        headers={**thomas_headers, "Idempotency-Key": "oidc-thomas-1"},
+        json={
+            "provider": "teams",
+            "meeting_url": "https://teams.microsoft.com/meet/222222222?p=two",
+            "title": "Thomas Kunden-Call",
+            "starts_at": now.isoformat(),
+            "ends_at": (now + timedelta(minutes=30)).isoformat(),
+        },
+    )
+    assert rec_thomas.status_code == 200
+    rec_thomas_id = rec_thomas.json()["id"]
+
+    mara_list_ids = {
+        r["id"] for r in client.get("/v1/recordings", headers=mara_headers).json()["items"]
+    }
+    assert rec_mara_id in mara_list_ids
+    assert rec_thomas_id not in mara_list_ids
+
+    assert client.get(f"/v1/recordings/{rec_thomas_id}", headers=mara_headers).status_code == 404
+    assert (
+        client.post(f"/v1/recordings/{rec_thomas_id}/cancel", headers=mara_headers).status_code
+        == 404
+    )
+
+    admin_list_ids = {
+        r["id"] for r in client.get("/v1/recordings", headers=admin_headers).json()["items"]
+    }
+    assert {rec_mara_id, rec_thomas_id} <= admin_list_ids
+    assert client.get(f"/v1/recordings/{rec_thomas_id}", headers=admin_headers).status_code == 200

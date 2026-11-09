@@ -46,6 +46,8 @@ def remove_audio_metadata(db, recording, stream_ids, now):
     recording.meeting_url = ""
     recording.title = None
     recording.guest_name = None
+    recording.owner_sub = None
+    recording.owner_email = None
     recording.export_reader_nonce = None
     recording.metadata_deleted_at = now
 

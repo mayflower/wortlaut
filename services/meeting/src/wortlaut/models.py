@@ -41,6 +41,8 @@ class Recording(Base):
     provider: Mapped[str] = mapped_column(String(32), default="webex", server_default="webex")
     title: Mapped[str | None] = mapped_column(String(200))
     guest_name: Mapped[str | None] = mapped_column(String(120))
+    owner_sub: Mapped[str | None] = mapped_column(String(256), index=True)
+    owner_email: Mapped[str | None] = mapped_column(String(320), index=True)
     starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     participation: Mapped[str] = mapped_column(String(32), default="scheduled")

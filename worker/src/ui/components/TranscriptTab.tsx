@@ -8,7 +8,12 @@ import {
   Search,
   ShieldAlert,
 } from 'lucide-react';
-import { formatDurationClock, formatDurationHuman } from '../api';
+import {
+  ATTRIBUTION_STATUS_LABELS,
+  SOURCE_COVERAGE_LABELS,
+  formatDurationClock,
+  formatDurationHuman,
+} from '../api';
 import type { SourceSummary, TranscriptExport, TranscriptSegment } from '../types';
 import { Button, cn } from './ui/primitives';
 
@@ -77,6 +82,26 @@ interface DialogueGroup {
   segments: TranscriptSegment[];
 }
 
+function highlightSearchText(text: string, query: string): React.ReactNode {
+  const q = query.trim();
+  if (!q) return text;
+  const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const parts = text.split(new RegExp(`(${escaped})`, 'gi'));
+  if (parts.length <= 1) return text;
+  return parts.map((part, idx) =>
+    part.toLowerCase() === q.toLowerCase() ? (
+      <mark
+        key={idx}
+        className="rounded bg-amber-500/35 px-0.5 font-medium text-amber-100"
+      >
+        {part}
+      </mark>
+    ) : (
+      part
+    )
+  );
+}
+
 export function TranscriptTab({
   transcript,
   selectedSourceFilter,
@@ -93,7 +118,8 @@ export function TranscriptTab({
     return rawSegments.filter((seg) => {
       if (
         selectedSourceFilter &&
-        seg.provider_source_id !== selectedSourceFilter
+        seg.provider_source_id !== selectedSourceFilter &&
+        seg.speaker_id !== selectedSourceFilter
       ) {
         return false;
       }
@@ -133,12 +159,12 @@ export function TranscriptTab({
   }, [filteredSegments]);
 
   const handleCopyTranscript = async () => {
-    const text = filteredSegments
-      .map(
-        (s) =>
-          `[${formatDurationClock(s.start)} – ${formatDurationClock(s.end)}] ${s.speaker_label}: ${s.text}`
-      )
-      .join('\n');
+    const text = dialogueGroups
+      .map((g) => {
+        const body = g.segments.map((s) => s.text.trim()).join(' ');
+        return `**[${formatDurationClock(g.start)} – ${formatDurationClock(g.end)}] ${g.speakerLabel}**\n${body}`;
+      })
+      .join('\n\n');
     if (!text || !navigator.clipboard) return;
     await navigator.clipboard.writeText(text).catch(() => {});
     setCopied(true);
@@ -147,7 +173,9 @@ export function TranscriptTab({
 
   const quality = transcript.quality;
   const isCleanAttribution =
-    !quality.attribution_unknown && quality.source_coverage === 'complete';
+    !quality.attribution_unknown && rawSegments.length > 0;
+  const coverageLabel =
+    SOURCE_COVERAGE_LABELS[quality.source_coverage] || quality.source_coverage;
 
   return (
     <div className="space-y-4">
@@ -165,7 +193,7 @@ export function TranscriptTab({
             <>
               <ShieldAlert className="h-4 w-4 text-amber-400" />
               <span className="text-slate-300">
-                Quellenabdeckung: <strong>{quality.source_coverage}</strong>
+                Quellenabdeckung: <strong>{coverageLabel}</strong>
                 {quality.attribution_unknown
                   ? ' · Einzelne Segmente ohne bestätigte Teilnehmerbindung'
                   : ''}
@@ -199,16 +227,18 @@ export function TranscriptTab({
               src.speaker_label ||
               src.signaled_participant_id ||
               src.provider_source_id;
+            const filterKey =
+              src.signaled_participant_id || src.provider_source_id;
             const palette = SPEAKER_PALETTE[speakerStyleIndex(label)];
-            const active = selectedSourceFilter === src.provider_source_id;
+            const active =
+              selectedSourceFilter === filterKey ||
+              selectedSourceFilter === src.provider_source_id;
             return (
               <button
-                key={src.provider_source_id}
+                key={`${src.provider_source_id}:${filterKey}`}
                 type="button"
                 onClick={() =>
-                  onChangeSourceFilter(
-                    active ? '' : src.provider_source_id
-                  )
+                  onChangeSourceFilter(active ? '' : filterKey)
                 }
                 className={cn(
                   'inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition-all cursor-pointer',
@@ -321,11 +351,12 @@ export function TranscriptTab({
                           palette.name
                         )}
                       >
-                        {group.speakerLabel}
+                        {highlightSearchText(group.speakerLabel, searchQuery)}
                       </span>
                       {group.attributionStatus !== 'bound' && (
                         <span className="rounded bg-amber-950/80 px-1.5 py-0.5 text-[10px] font-medium text-amber-300 border border-amber-800/60">
-                          {group.attributionStatus}
+                          {ATTRIBUTION_STATUS_LABELS[group.attributionStatus] ||
+                            group.attributionStatus}
                         </span>
                       )}
                     </div>
@@ -338,7 +369,7 @@ export function TranscriptTab({
                   <div className="space-y-1 text-sm leading-relaxed text-slate-100">
                     {group.segments.map((seg) => (
                       <p key={seg.segment_id} className="m-0">
-                        {seg.text}
+                        {highlightSearchText(seg.text, searchQuery)}
                       </p>
                     ))}
                   </div>

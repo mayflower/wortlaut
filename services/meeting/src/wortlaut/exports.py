@@ -221,7 +221,11 @@ def export_data(db: Session, recording: Recording):
                 a.diagnostics.get("audio_clock", {}).get("total_interruptions", 0) > 0
                 for a in attempts
             ),
-            "attribution_unknown": any(q["attribution_unknown"] for q in qualities),
+            "attribution_unknown": (
+                any(s.get("attribution_unknown") for s in segments)
+                if segments
+                else any(q["attribution_unknown"] for q in qualities)
+            ),
             "unprocessed_audio": any(q["unprocessed_ranges"] for q in qualities),
             "failed_asr_ranges": [
                 {
@@ -333,28 +337,81 @@ def _build_sources_summary(
                 None,
             )
         )
-        summary.append(
-            {
-                "provider_source_id": sid,
-                "participant_name": part_name,
-                "signaled_participant_id": sig_id,
-                "csi": rcv.get("csi"),
-                "source_kind": rcv.get("source_kind")
-                or (src_quals[0].get("source_kind") if src_quals else "speaker"),
-                "segment_count": len(src_segs),
-                "speech_seconds": round(
-                    sum(max(0.0, seg["end"] - seg["start"]) for seg in src_segs), 2
-                ),
-                "accepted_seconds": round(
-                    sum(q.get("accepted_samples", 0) for q in src_quals) / RATE, 2
-                ),
-                "first_start": src_segs[0]["start"] if src_segs else None,
-                "sample_text": (
-                    " ".join(src_segs[0]["text"].split())[:140] if src_segs else None
-                ),
-            }
+        if segments and not src_segs:
+            continue
+        accepted_sec = round(
+            sum(q.get("accepted_samples", 0) for q in src_quals) / RATE, 2
         )
-    return summary
+        kind = rcv.get("source_kind") or (
+            src_quals[0].get("source_kind") if src_quals else "speaker"
+        )
+        if src_segs:
+            grouped: dict[str | None, list[dict]] = {}
+            for seg in src_segs:
+                key = seg.get("participant_id") or seg.get("speaker_id")
+                grouped.setdefault(key, []).append(seg)
+            for seg_pid, group_segs in grouped.items():
+                eff_sig_id = seg_pid or sig_id
+                eff_name = (
+                    next(
+                        (
+                            g.get("participant_name")
+                            for g in group_segs
+                            if g.get("participant_name")
+                        ),
+                        None,
+                    )
+                    or (participant_names.get(eff_sig_id) if eff_sig_id else None)
+                    or part_name
+                )
+                summary.append(
+                    {
+                        "provider_source_id": sid,
+                        "participant_name": eff_name,
+                        "signaled_participant_id": eff_sig_id,
+                        "csi": rcv.get("csi"),
+                        "source_kind": kind,
+                        "segment_count": len(group_segs),
+                        "speech_seconds": round(
+                            sum(max(0.0, seg["end"] - seg["start"]) for seg in group_segs), 2
+                        ),
+                        "accepted_seconds": accepted_sec,
+                        "first_start": group_segs[0]["start"],
+                        "sample_text": " ".join(group_segs[0]["text"].split())[:140],
+                    }
+                )
+        else:
+            summary.append(
+                {
+                    "provider_source_id": sid,
+                    "participant_name": part_name,
+                    "signaled_participant_id": sig_id,
+                    "csi": rcv.get("csi"),
+                    "source_kind": kind,
+                    "segment_count": 0,
+                    "speech_seconds": 0.0,
+                    "accepted_seconds": accepted_sec,
+                    "first_start": None,
+                    "sample_text": None,
+                }
+            )
+    merged: list[dict] = []
+    by_participant: dict[str, dict] = {}
+    for item in summary:
+        pid = item.get("signaled_participant_id")
+        if pid and pid in by_participant:
+            existing = by_participant[pid]
+            existing["segment_count"] += item["segment_count"]
+            existing["speech_seconds"] = round(
+                existing["speech_seconds"] + item["speech_seconds"], 2
+            )
+            if not existing.get("participant_name") and item.get("participant_name"):
+                existing["participant_name"] = item["participant_name"]
+        else:
+            if pid:
+                by_participant[pid] = item
+            merged.append(item)
+    return merged
 
 
 def render_export(data, format):
@@ -381,6 +438,50 @@ def render_export(data, format):
         f"; Unverarbeitete Bereiche: {unprocessed}"
     )
     header = f"wortlaut {data['recording_id']}\nZeitursprung: {data['time_origin_utc']}\n{status}\n"
+    if format == "md":
+        title = data.get("title") or f"wortlaut {data['recording_id']}"
+        period = data["scheduled_period"]
+        lines = [
+            f"# {title}",
+            "",
+            f"- **Aufnahme-ID:** `{data['recording_id']}`",
+            f"- **Provider:** `{data['provider']}`",
+            f"- **Termin:** {period['start']} bis {period['end']}",
+            f"- **Zeitursprung (UTC):** {data['time_origin_utc']}",
+            f"- **Status:** {status}",
+            "",
+        ]
+        sources = data.get("sources_summary") or []
+        if sources:
+            lines.extend(
+                [
+                    "## Sprecher & Quellen",
+                    "",
+                    "| Teilnehmer | Sitzungs-ID | Quelle | Segmente | Sprechzeit (s) |",
+                    "| --- | --- | --- | ---: | ---: |",
+                ]
+            )
+            for src in sources:
+                p_name = (src.get("participant_name") or "–").replace("|", "\\|")
+                sig_id = (src.get("signaled_participant_id") or "–").replace("|", "\\|")
+                prov_id = (src.get("provider_source_id") or "–").replace("|", "\\|")
+                seg_count = src["segment_count"]
+                speech_sec = src["speech_seconds"]
+                lines.append(
+                    f"| {p_name} | `{sig_id}` | `{prov_id}` | {seg_count} | {speech_sec} |"
+                )
+            lines.append("")
+        lines.extend(["## Transkript", ""])
+        if not data["segments"]:
+            lines.append("_Keine Transkriptsegmente vorhanden._")
+        else:
+            for segment in data["segments"]:
+                text = " ".join(segment["text"].split())
+                label = " ".join(segment["speaker_label"].split())
+                span = f"{timestamp(segment['start'])} – {timestamp(segment['end'])}"
+                lines.append(f"**{label}** (`{span}`): {text}")
+                lines.append("")
+        return "\n".join(lines).rstrip() + "\n", "text/markdown; charset=utf-8"
     if format == "txt":
         lines = [header]
         for segment in data["segments"]:
