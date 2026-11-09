@@ -26,7 +26,32 @@ The intended model is transcription per incoming source with a verified provider
 - **ASR service** ([services/asr](services/asr)) — a shared local Parakeet model for speech recognition.
 - **Storage** — PostgreSQL for state and transcripts, S3-compatible storage for audio.
 
-See [meeting service](services/meeting), [ASR service](services/asr), [worker](worker), and [deployment configuration](deploy).
+See [meeting service](services/meeting), [ASR service](services/asr), [worker](worker), [Helm chart](charts/wortlaut), [Docker Compose](docker-compose.yml), and [Kubernetes Kustomize manifests](deploy).
+
+## Self-hosting & deployment options
+
+wortlaut supports four deployment setups depending on your environment ([runtime_backends.py](services/meeting/src/wortlaut/runtime_backends.py)):
+
+1. **Docker Compose (`WORTLAUT_CONTROLLER_BACKEND=docker`)** — Single-server / VM deployment ([docker-compose.yml](docker-compose.yml)). Starts `wortlaut-meeting`, `wortlaut-asr`, PostgreSQL 17, and MinIO S3, and spawns isolated short-lived `wortlaut-worker` containers via the Docker Engine socket:
+   ```sh
+   docker compose up -d --build
+   # Web-UI: http://127.0.0.1:8000/ui
+   ```
+2. **Helm Chart for Kubernetes (`WORTLAUT_CONTROLLER_BACKEND=kubernetes`)** — Production Kubernetes deployment ([charts/wortlaut](charts/wortlaut)):
+   ```sh
+   helm install wortlaut ./charts/wortlaut \
+     --namespace wortlaut --create-namespace \
+     --set config.apiUrl=https://wortlaut.example.org/ \
+     --set config.sdkPageUrl=https://wortlaut.example.org/sdk/ \
+     --set secrets.apiToken="$WORTLAUT_API_TOKEN" \
+     --set secrets.databaseUrl="$DATABASE_URL"
+   ```
+   *(Alternatively, declarative Kubernetes manifests via Kustomize are available under [deploy/k8s/base](deploy/k8s/base).)*
+3. **Local Process / Bare-Metal Mode (`WORTLAUT_CONTROLLER_BACKEND=local`)** — Runs `wortlaut-meeting` directly on Linux and spawns isolated `node dist-worker/runtime/main.js` subprocesses per recording ([scripts/run-local.sh](scripts/run-local.sh)):
+   ```sh
+   ./scripts/run-local.sh
+   ```
+4. **CPU Fallback for ASR (`WORTLAUT_ASR_ALLOW_CPU=true`)** — For production scale, an NVIDIA GPU node is recommended for `wortlaut-asr`. For evaluation, CI, or small setups without a GPU, setting `WORTLAUT_ASR_ALLOW_CPU=true` loads the Parakeet ASR model on CPU (`map_location="cpu"` in [services/asr/app.py](services/asr/app.py); enabled by default in `docker-compose.yml`).
 
 ## Development setup
 

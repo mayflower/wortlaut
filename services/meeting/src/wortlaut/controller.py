@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from wortlaut.ingest import capacity_reached
 from wortlaut.models import Attempt, Recording
+from wortlaut.runtime_backends import DockerRuntime, LocalProcessRuntime
 from wortlaut.settings import get_settings
 
 TIMEOUT = (5, 10)
@@ -24,6 +25,13 @@ SCHEDULER_LOCK = 749836124
 
 @lru_cache
 def kubernetes_api():
+    backend = get_settings().controller_backend
+    if backend == "docker":
+        runtime = DockerRuntime()
+        return runtime, runtime
+    if backend == "local":
+        runtime = LocalProcessRuntime()
+        return runtime, runtime
     configuration = client.Configuration()
     config.load_incluster_config(client_configuration=configuration)
     configuration.retries = 0

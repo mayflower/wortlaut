@@ -634,3 +634,98 @@ def test_concurrent_secret_creation_reserves_shared_capacity_before_network_call
     controller_pass(database, cluster.apis)
     assert len(cluster.jobs) == len(cluster.secrets) == 2
     assert client.get(f"/v1/recordings/{third}", headers=API).json()["active_attempt_id"] is None
+
+
+def test_local_process_runtime_reconciles_attempt_and_cleans_up_secret(
+    client, database, tmp_path, monkeypatch
+):
+    from wortlaut.runtime_backends import LocalProcessRuntime
+
+    monkeypatch.setattr(controller_module, "SCHEDULER_LOCK", uuid.uuid4().int >> 65)
+    monkeypatch.setenv("WORTLAUT_WEBEX_SERVICE_TOKEN", "controlled-provider-not-real-webex")
+    get_settings.cache_clear()
+
+    worker_dir = tmp_path / "worker"
+    entrypoint = worker_dir / "dist-worker/runtime/main.js"
+    entrypoint.parent.mkdir(parents=True)
+    entrypoint.write_text("process.exit(0);\n", encoding="utf-8")
+
+    runtime = LocalProcessRuntime(root=tmp_path / "state", worker_dir=worker_dir)
+    recording_id = create(client, "local-runtime-recording")
+
+    # 1st pass: creates attempt + local secret
+    controller_pass(database, (runtime, runtime))
+    # 2nd pass: launches subprocess and observes pod
+    controller_pass(database, (runtime, runtime))
+    with Session(database) as db:
+        attempt = db.scalar(select(Attempt).where(Attempt.recording_id == uuid.UUID(recording_id)))
+        assert attempt is not None
+        assert attempt.job_uid is not None
+        proc = runtime.procs.get(attempt.job_name)
+        if proc:
+            proc.wait(timeout=5)
+
+    # 3rd pass: observes process exit, removes finalizer and deletes bootstrap secret
+    controller_pass(database, (runtime, runtime))
+    with Session(database) as db:
+        attempt = db.scalar(select(Attempt).where(Attempt.recording_id == uuid.UUID(recording_id)))
+        rec = db.get(Recording, uuid.UUID(recording_id))
+        assert rec.participation == "ended"
+        assert attempt.secret_deleted_at is not None
+        assert not (runtime.root / f"{attempt.job_name}.json").exists()
+
+
+def test_docker_runtime_reconciles_container_lifecycle_via_engine_api(
+    client, database, tmp_path, monkeypatch
+):
+    import json
+
+    from wortlaut.runtime_backends import DockerRuntime
+
+    monkeypatch.setattr(controller_module, "SCHEDULER_LOCK", uuid.uuid4().int >> 65)
+    monkeypatch.setenv("WORTLAUT_WEBEX_SERVICE_TOKEN", "controlled-provider-not-real-webex")
+    get_settings.cache_clear()
+
+    containers = {}
+    runtime = DockerRuntime(root=tmp_path / "docker-state")
+
+    def fake_docker_request(method, path, payload=None):
+        if method == "POST" and path.startswith("/containers/create?"):
+            name = path.split("name=", 1)[1]
+            cid = uuid.uuid4().hex
+            containers[name] = {"Id": cid, "Running": False, "ExitCode": 0, "Payload": payload}
+            return 201, json.dumps({"Id": cid})
+        if method == "POST" and path.endswith("/start"):
+            name = path.split("/")[2]
+            containers[name]["Running"] = True
+            return 204, ""
+        if method == "POST" and "/stop" in path:
+            name = path.split("/")[2]
+            containers[name]["Running"] = False
+            return 204, ""
+        if method == "GET" and path.endswith("/json"):
+            name = path.split("/")[2]
+            c = containers[name]
+            return 200, json.dumps({"State": {"Running": c["Running"], "ExitCode": c["ExitCode"]}})
+        if method == "DELETE":
+            name = path.split("/")[2].split("?")[0]
+            containers.pop(name, None)
+            return 204, ""
+        return 404, ""
+
+    monkeypatch.setattr(runtime, "_docker_request", fake_docker_request)
+    recording_id = create(client, "docker-runtime-recording")
+
+    controller_pass(database, (runtime, runtime))
+    controller_pass(database, (runtime, runtime))
+    assert len(containers) == 1
+    container_name = next(iter(containers))
+    assert containers[container_name]["Running"] is True
+
+    # Simulate container exit
+    containers[container_name]["Running"] = False
+    controller_pass(database, (runtime, runtime))
+    assert containers == {}
+    with Session(database) as db:
+        attempt = db.scalar(select(Attempt).where(Attempt.recording_id == uuid.UUID(recording_id)))
+        assert attempt.secret_deleted_at is not None

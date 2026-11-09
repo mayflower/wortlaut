@@ -479,10 +479,10 @@
         <div class="section-header">
           <span class="section-kicker" data-i18n="qs_kicker">SELBST HOSTEN (OPEN SOURCE)</span>
           <h2 class="section-title" data-i18n="qs_title">
-            In wenigen Minuten im eigenen Cluster starten
+            In wenigen Minuten auf dem eigenen Server oder Cluster starten
           </h2>
           <p class="section-desc" data-i18n="qs_desc">
-            wortlaut ist freie Software unter der GNU AGPLv3. Installiere das System auf eurem Kubernetes-Cluster oder starte es direkt zur Evaluierung.
+            wortlaut ist freie Software unter der GNU AGPLv3. Starte das System per Docker Compose auf einem einzelnen Server, per Helm Chart in Kubernetes oder direkt lokal zur Evaluierung.
           </p>
         </div>
 
@@ -490,67 +490,57 @@
           <div class="code-card">
             <div class="code-card-header">
               <div class="code-tabs">
-                <button type="button" class="code-tab active" data-ctab="install" data-i18n="qs_tab1">Schnellstart (Installation)</button>
-                <button type="button" class="code-tab" data-ctab="k8s" data-i18n="qs_tab2">Kubernetes-Konfiguration</button>
-                <button type="button" class="code-tab" data-ctab="api" data-i18n="qs_tab3">REST-API Beispiel</button>
+                <button type="button" class="code-tab active" data-ctab="compose" data-i18n="qs_tab1">Docker Compose</button>
+                <button type="button" class="code-tab" data-ctab="helm" data-i18n="qs_tab2">Helm (Kubernetes)</button>
+                <button type="button" class="code-tab" data-ctab="local" data-i18n="qs_tab3">Lokal / Kustomize</button>
               </div>
               <button type="button" class="copy-btn" data-copy="true" data-i18n="copy_btn">Kopieren</button>
             </div>
 
-            <pre class="code-pane active" data-cpane="install"><code># 1. Repository von GitHub klonen
+            <pre class="code-pane active" data-cpane="compose"><code># 1. Repository klonen
 git clone https://github.com/mayflower/wortlaut.git
 cd wortlaut
 
-# 2. Lokale Umgebung vorbereiten
-make setup
+# 2. Kompletten Stack (inkl. Postgres, MinIO &amp; CPU-Fallback) starten
+docker compose up -d --build
 
-# 3. Vollständigen Stack im Kubernetes-Cluster starten
-make dev
+# Web-Oberfläche:  http://127.0.0.1:8000/ui
+# API-Übersicht:   http://127.0.0.1:8000/docs</code></pre>
 
-# Web-Oberfläche:  http://127.0.0.1:34601/ui
-# API-Übersicht:   http://127.0.0.1:34601/docs</code></pre>
+            <pre class="code-pane" data-cpane="helm"><code># Installation im Kubernetes-Cluster per Helm Chart
+helm install wortlaut ./charts/wortlaut \
+  --namespace wortlaut \
+  --create-namespace \
+  --set config.apiUrl=https://wortlaut.example.org/ \
+  --set config.sdkPageUrl=https://wortlaut.example.org/sdk/ \
+  --set secrets.apiToken="$WORTLAUT_API_TOKEN" \
+  --set secrets.databaseUrl="$DATABASE_URL"</code></pre>
 
-            <pre class="code-pane" data-cpane="k8s"><code># Beispiel-ConfigMap für den Betrieb in Kubernetes
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: wortlaut-config
-data:
-  WORTLAUT_API_URL: https://wortlaut.example.org/
-  WORTLAUT_SDK_PAGE_URL: https://wortlaut.example.org/sdk/
-  WORTLAUT_ENABLE_CONTROLLER: 'true'
-  WORTLAUT_ENABLE_MEET: 'true'
-  WORTLAUT_ENABLE_TEAMS: 'true'
-  WORTLAUT_ENABLE_ZOOM: 'true'</code></pre>
+            <pre class="code-pane" data-cpane="local"><code># Option A: Direkt lokal auf Linux starten (ohne Kubernetes)
+./scripts/run-local.sh
 
-            <pre class="code-pane" data-cpane="api"><code># Besprechung automatisiert über die REST-API starten
-curl -X POST https://wortlaut.example.org/v1/recordings \
-  -H "Authorization: Bearer $WORTLAUT_API_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "provider": "zoom",
-    "meeting_target": "https://zoom.us/j/1234567890",
-    "title": "Projekt-Abstimmung",
-    "starts_at": "2026-11-09T14:00:00Z",
-    "ends_at": "2026-11-09T15:00:00Z"
-  }'</code></pre>
+# Option B: Deklarativ per Kustomize in Kubernetes ausrollen
+kubectl apply -k deploy/k8s/base
+
+# Option C: Lokale Entwicklungsumgebung mit Tilt
+make setup &amp;&amp; make dev</code></pre>
           </div>
 
           <div style="display:flex;flex-direction:column;gap:18px;">
             <div class="info-box">
               <h3 data-i18n="qs_req_title">Was du für den Betrieb brauchst</h3>
               <ul class="check-list">
-                <li style="color:var(--stone-200);"><span class="check-icon">✓</span><span data-i18n="qs_req_1">Einen Kubernetes-Cluster (Linux amd64)</span></li>
-                <li style="color:var(--stone-200);"><span class="check-icon">✓</span><span data-i18n="qs_req_2">Einen GPU-Knoten (NVIDIA) für die lokale Spracherkennung</span></li>
-                <li style="color:var(--stone-200);"><span class="check-icon">✓</span><span data-i18n="qs_req_3">PostgreSQL-Datenbank &amp; S3-kompatiblen Speicher (z. B. MinIO oder RustFS)</span></li>
-                <li style="color:var(--stone-200);"><span class="check-icon">✓</span><span data-i18n="qs_req_4">Optional: OIDC-Anbindung für Single Sign-On, E-Mail-Postfach (SMTP/IMAP) &amp; OAuth-Zugang für Google/Microsoft-Kalender</span></li>
+                <li style="color:var(--stone-200);"><span class="check-icon">✓</span><span data-i18n="qs_req_1">Flexibles Deployment: Docker Compose (Einzelserver/VM), Kubernetes (Helm Chart oder Kustomize) oder direkt lokal</span></li>
+                <li style="color:var(--stone-200);"><span class="check-icon">✓</span><span data-i18n="qs_req_2">Spracherkennung: NVIDIA-GPU empfohlen für Echtzeit-Betrieb – dank CPU-Fallback auch ohne GPU test- und nutzbar</span></li>
+                <li style="color:var(--stone-200);"><span class="check-icon">✓</span><span data-i18n="qs_req_3">PostgreSQL-Datenbank &amp; S3-Speicher (bei Docker Compose bereits mit MinIO vorkonfiguriert)</span></li>
+                <li style="color:var(--stone-200);"><span class="check-icon">✓</span><span data-i18n="qs_req_4">Optional: Single Sign-On (OIDC), E-Mail-Versand (SMTP/IMAP) &amp; Kalender-Sync für Google Workspace / Microsoft 365</span></li>
               </ul>
             </div>
 
             <div class="info-box" style="border-color:rgba(16,185,129,0.35);">
               <h3 data-i18n="qs_oss_title">Quelloffen auf GitHub</h3>
               <p style="margin:0 0 16px;font-size:14px;color:var(--stone-300);" data-i18n="qs_oss_desc">
-                Der gesamte Quellcode, die Dokumentation und alle Kubernetes-Manifeste stehen frei unter der GNU Affero General Public License v3.0 bereit.
+                Der gesamte Quellcode, das Docker-Compose-Setup, das Helm-Chart und alle Kubernetes-Manifeste stehen frei unter der GNU Affero General Public License v3.0 bereit.
               </p>
               <a href="https://github.com/mayflower/wortlaut" target="_blank" rel="noopener noreferrer" class="btn btn-primary" style="width:100%;" data-i18n="qs_oss_btn">
                 Zum GitHub-Repository →

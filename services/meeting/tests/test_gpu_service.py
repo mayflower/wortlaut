@@ -92,3 +92,53 @@ def test_accelerator_failure_rejects_jobs_and_marks_gpu_process_unhealthy(monkey
     assert calls == [True]
     assert client.get("/health/ready").status_code == 503
     assert client.get("/health/live").status_code == 503
+
+
+def test_cpu_fallback_loads_model_on_cpu_when_enabled(monkeypatch):
+    path = Path(__file__).resolve().parents[2] / "asr/app.py"
+    spec = importlib.util.spec_from_file_location("cpu_fallback_fixture", path)
+    asr_service = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(asr_service)
+
+    restored = {}
+
+    class DummyModel:
+        def freeze(self):
+            restored["frozen"] = True
+
+        def eval(self):
+            restored["eval"] = True
+
+    class DummyASRModel:
+        @staticmethod
+        def restore_from(filename, map_location):
+            restored["filename"] = filename
+            restored["map_location"] = map_location
+            return DummyModel()
+
+    asr_models = SimpleNamespace(ASRModel=DummyASRModel)
+    nemo_pkg = SimpleNamespace(
+        collections=SimpleNamespace(asr=SimpleNamespace(models=asr_models))
+    )
+    monkeypatch.setitem(sys.modules, "nemo", nemo_pkg)
+    monkeypatch.setitem(sys.modules, "nemo.collections", nemo_pkg.collections)
+    monkeypatch.setitem(sys.modules, "nemo.collections.asr", nemo_pkg.collections.asr)
+    monkeypatch.setitem(
+        sys.modules,
+        "torch",
+        SimpleNamespace(cuda=SimpleNamespace(is_available=lambda: False)),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "huggingface_hub",
+        SimpleNamespace(hf_hub_download=lambda repo, name, revision: f"/tmp/{name}"),
+    )
+    monkeypatch.setenv("WORTLAUT_ASR_ALLOW_CPU", "true")
+    loaded = asr_service.load_model()
+    assert isinstance(loaded, DummyModel)
+    assert restored == {
+        "filename": "/tmp/parakeet-tdt-0.6b-v3.nemo",
+        "map_location": "cpu",
+        "frozen": True,
+        "eval": True,
+    }

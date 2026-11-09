@@ -1,0 +1,220 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wortlaut-meeting
+  namespace: {{ .Release.Namespace }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: wortlaut-meeting
+  template:
+    metadata:
+      labels:
+        app: wortlaut-meeting
+    spec:
+      serviceAccountName: wortlaut-meeting
+      automountServiceAccountToken: true
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+      containers:
+        - name: meeting
+          image: {{ .Values.images.meeting }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          ports:
+            - containerPort: 8000
+          env:
+            - name: WORTLAUT_WORKER_IMAGE
+              value: {{ .Values.images.worker | quote }}
+          envFrom:
+            - configMapRef:
+                name: wortlaut-config
+            - secretRef:
+                name: {{ .Values.secrets.runtimeSecretName }}
+            - secretRef:
+                name: {{ .Values.secrets.storageSecretName }}
+            - secretRef:
+                name: {{ .Values.secrets.asrSecretName }}
+            - secretRef:
+                name: {{ .Values.secrets.webexSecretName }}
+                optional: true
+            - secretRef:
+                name: {{ .Values.secrets.mailSecretName }}
+                optional: true
+            - secretRef:
+                name: {{ .Values.secrets.meetSecretName }}
+                optional: true
+            - secretRef:
+                name: {{ .Values.secrets.teamsSecretName }}
+                optional: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "4"
+              memory: 2Gi
+          startupProbe:
+            httpGet:
+              path: /health/ready
+              port: 8000
+            failureThreshold: 30
+            periodSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 8000
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: 8000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wortlaut-meeting
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector:
+    app: wortlaut-meeting
+  ports:
+    - port: 8000
+{{- if .Values.ingress.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: wortlaut-meeting
+  namespace: {{ .Release.Namespace }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  tls:
+    - hosts:
+        - {{ .Values.host }}
+      secretName: {{ .Values.ingress.tlsSecretName }}
+  rules:
+    - host: {{ .Values.host }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: wortlaut-meeting
+                port:
+                  number: 8000
+{{- end }}
+{{- if .Values.asr.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: wortlaut-model-cache
+  namespace: {{ .Release.Namespace }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- if .Values.asr.storageClassName }}
+  storageClassName: {{ .Values.asr.storageClassName | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.asr.cacheSize }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wortlaut-asr
+  namespace: {{ .Release.Namespace }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: wortlaut-asr
+  template:
+    metadata:
+      labels:
+        app: wortlaut-asr
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+      containers:
+        - name: asr
+          image: {{ .Values.images.asr }}
+          imagePullPolicy: {{ .Values.images.pullPolicy }}
+          ports:
+            - containerPort: 8000
+          env:
+            - name: WORTLAUT_ASR_ALLOW_CPU
+              value: {{ .Values.asr.allowCpu | ternary "true" "false" | quote }}
+          envFrom:
+            - secretRef:
+                name: {{ .Values.secrets.asrSecretName }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: "1"
+              memory: 4Gi
+              {{- if not .Values.asr.allowCpu }}
+              nvidia.com/gpu: {{ .Values.asr.gpuCount | toString | quote }}
+              {{- end }}
+            limits:
+              cpu: "4"
+              memory: 12Gi
+              {{- if not .Values.asr.allowCpu }}
+              nvidia.com/gpu: {{ .Values.asr.gpuCount | toString | quote }}
+              {{- end }}
+          volumeMounts:
+            - name: model-cache
+              mountPath: /model-cache
+          startupProbe:
+            httpGet:
+              path: /health/ready
+              port: 8000
+            failureThreshold: 60
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 8000
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: 8000
+      volumes:
+        - name: model-cache
+          persistentVolumeClaim:
+            claimName: wortlaut-model-cache
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wortlaut-asr
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector:
+    app: wortlaut-asr
+  ports:
+    - port: 8000
+{{- end }}

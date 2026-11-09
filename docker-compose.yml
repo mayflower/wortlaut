@@ -1,0 +1,96 @@
+name: wortlaut
+
+networks:
+  wortlaut:
+    name: wortlaut
+
+volumes:
+  postgres-data:
+  rustfs-data:
+  model-cache:
+
+services:
+  postgres:
+    image: postgres:17.9-bookworm
+    restart: unless-stopped
+    networks: [wortlaut]
+    environment:
+      POSTGRES_USER: wortlaut
+      POSTGRES_PASSWORD: ${WORTLAUT_POSTGRES_PASSWORD:-wortlaut-local-db}
+      POSTGRES_DB: wortlaut
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wortlaut -d wortlaut"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  rustfs:
+    image: rustfs/rustfs:1.0.4
+    restart: unless-stopped
+    networks: [wortlaut]
+    command: ["/data"]
+    environment:
+      RUSTFS_ACCESS_KEY: ${WORTLAUT_S3_ACCESS_KEY:-wortlaut-s3}
+      RUSTFS_SECRET_KEY: ${WORTLAUT_S3_SECRET_KEY:-wortlaut-s3-secret}
+      RUSTFS_OBS_LOG_DIRECTORY: ""
+    volumes:
+      - rustfs-data:/data
+
+  asr:
+    build:
+      context: .
+      dockerfile: services/asr/Dockerfile
+    restart: unless-stopped
+    networks: [wortlaut]
+    environment:
+      WORTLAUT_ASR_TOKEN: ${WORTLAUT_ASR_TOKEN:-wortlaut-local-asr-token}
+      WORTLAUT_ASR_ALLOW_CPU: ${WORTLAUT_ASR_ALLOW_CPU:-true}
+    volumes:
+      - model-cache:/model-cache
+
+  worker-image:
+    build:
+      context: .
+      dockerfile: services/worker/Dockerfile
+    image: wortlaut-worker:local
+    entrypoint: ["true"]
+
+  meeting:
+    build:
+      context: .
+      dockerfile: services/meeting/Dockerfile
+    restart: unless-stopped
+    networks: [wortlaut]
+    user: "0:0"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rustfs:
+        condition: service_started
+      worker-image:
+        condition: service_completed_successfully
+    ports:
+      - "${WORTLAUT_PORT:-34601}:8000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      WORTLAUT_DATABASE_URL: postgresql+psycopg://wortlaut:${WORTLAUT_POSTGRES_PASSWORD:-wortlaut-local-db}@postgres:5432/wortlaut
+      WORTLAUT_API_TOKEN: ${WORTLAUT_API_TOKEN:-wortlaut-local-admin-token}
+      WORTLAUT_API_URL: http://meeting:8000/
+      WORTLAUT_SDK_PAGE_URL: http://meeting:8000/sdk/
+      WORTLAUT_S3_ENDPOINT: http://rustfs:9000
+      WORTLAUT_S3_ACCESS_KEY: ${WORTLAUT_S3_ACCESS_KEY:-wortlaut-s3}
+      WORTLAUT_S3_SECRET_KEY: ${WORTLAUT_S3_SECRET_KEY:-wortlaut-s3-secret}
+      WORTLAUT_S3_CREATE_BUCKET: "true"
+      WORTLAUT_ASR_URL: http://asr:8000
+      WORTLAUT_ASR_TOKEN: ${WORTLAUT_ASR_TOKEN:-wortlaut-local-asr-token}
+      WORTLAUT_ENABLE_CONTROLLER: "true"
+      WORTLAUT_CONTROLLER_BACKEND: "docker"
+      WORTLAUT_DOCKER_NETWORK: "wortlaut"
+      WORTLAUT_WORKER_IMAGE: "wortlaut-worker:local"
+      WORTLAUT_ENABLE_GOOGLE_MEET: ${WORTLAUT_ENABLE_GOOGLE_MEET:-true}
+      WORTLAUT_ENABLE_TEAMS: ${WORTLAUT_ENABLE_TEAMS:-true}
+      WORTLAUT_ENABLE_ZOOM: ${WORTLAUT_ENABLE_ZOOM:-true}
+      WORTLAUT_ZOOM_LOCALE: ${WORTLAUT_ZOOM_LOCALE:-en-US}

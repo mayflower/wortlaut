@@ -1,0 +1,46 @@
+host: wortlaut.example.org
+
+images:
+  meeting: registry.data.mayflower.zone/wortlaut/wortlaut-meeting:latest
+  worker: registry.data.mayflower.zone/wortlaut/wortlaut-worker:latest
+  asr: registry.data.mayflower.zone/wortlaut/wortlaut-asr:latest
+  pullPolicy: IfNotPresent
+
+providers:
+  enableGoogleMeet: true
+  enableTeams: true
+  enableZoom: true
+  zoomLocale: en-US
+  enableWebexBrowser: false
+
+capacity:
+  maxActiveMeetings: 15
+  maxPendingSamplesTotal: 1728000000
+  maxStoredAudioBytes: 8589934592
+  maxOpenAsrJobs: 8192
+
+asr:
+  enabled: true
+  allowCpu: false
+  gpuCount: 1
+  storageClassName: ""
+  cacheSize: 20Gi
+
+secrets:
+  runtimeSecretName: wortlaut-runtime
+  storageSecretName: wortlaut-storage
+  asrSecretName: wortlaut-asr
+  webexSecretName: wortlaut-webex
+  mailSecretName: wortlaut-mail
+  meetSecretName: wortlaut-meet
+  teamsSecretName: wortlaut-teams
+
+ingress:
+  enabled: true
+  className: traefik
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    cert-manager.io/cluster-issuer: letsencrypt
+  tlsSecretName: wortlaut-tls
+
+otlpEndpoint: ""

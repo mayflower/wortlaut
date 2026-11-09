@@ -1,0 +1,60 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: wortlaut-config
+  namespace: {{ .Release.Namespace }}
+data:
+  WORTLAUT_NAMESPACE: {{ .Release.Namespace | quote }}
+  WORTLAUT_API_URL: {{ printf "https://%s/" .Values.host | quote }}
+  WORTLAUT_SDK_PAGE_URL: {{ printf "https://%s/sdk/" .Values.host | quote }}
+  WORTLAUT_ENABLE_CONTROLLER: "true"
+  WORTLAUT_CONTROLLER_BACKEND: "kubernetes"
+  WORTLAUT_S3_CREATE_BUCKET: "true"
+  WORTLAUT_ENABLE_GOOGLE_MEET: {{ .Values.providers.enableGoogleMeet | ternary "true" "false" | quote }}
+  WORTLAUT_ENABLE_TEAMS: {{ .Values.providers.enableTeams | ternary "true" "false" | quote }}
+  WORTLAUT_ENABLE_ZOOM: {{ .Values.providers.enableZoom | ternary "true" "false" | quote }}
+  WORTLAUT_ZOOM_LOCALE: {{ .Values.providers.zoomLocale | quote }}
+  WORTLAUT_ENABLE_WEBEX_BROWSER: {{ .Values.providers.enableWebexBrowser | ternary "true" "false" | quote }}
+  WORTLAUT_MAX_ACTIVE_MEETINGS: {{ .Values.capacity.maxActiveMeetings | toString | quote }}
+  WORTLAUT_MAX_PENDING_SAMPLES_TOTAL: {{ .Values.capacity.maxPendingSamplesTotal | toString | quote }}
+  WORTLAUT_MAX_STORED_AUDIO_BYTES: {{ .Values.capacity.maxStoredAudioBytes | toString | quote }}
+  WORTLAUT_MAX_OPEN_ASR_JOBS: {{ .Values.capacity.maxOpenAsrJobs | toString | quote }}
+{{- if .Values.otlpEndpoint }}
+  WORTLAUT_OTLP_ENDPOINT: {{ .Values.otlpEndpoint | quote }}
+{{- end }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: wortlaut-meeting
+  namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: wortlaut-controller
+  namespace: {{ .Release.Namespace }}
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "list", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "patch"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create", "get", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: wortlaut-controller
+  namespace: {{ .Release.Namespace }}
+subjects:
+  - kind: ServiceAccount
+    name: wortlaut-meeting
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: wortlaut-controller

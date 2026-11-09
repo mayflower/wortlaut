@@ -70,6 +70,10 @@ class Settings(BaseSettings):
     sdk_page_url: str = "https://wortlaut-johann.data.mayflower.zone/sdk/"
     bootstrap_lifetime_seconds: int = Field(default=0, ge=0)
     enable_controller: bool = False
+    controller_backend: Literal["kubernetes", "docker", "local"] = "kubernetes"
+    docker_network: str = "wortlaut"
+    local_worker_dir: Path = Path("worker")
+    runtime_state_dir: Path = Path("/tmp/wortlaut-runtime")
     namespace: str = "wortlaut-dev"
     api_url: str = "https://wortlaut-dev.data.mayflower.zone/"
     worker_image: str = "wortlaut-worker:dev"

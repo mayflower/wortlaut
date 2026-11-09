@@ -1,0 +1,11 @@
+apiVersion: v2
+name: wortlaut
+description: Sovereign self-hosted meeting transcription for Google Meet, Microsoft Teams, Cisco Webex, and Zoom
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://wortlaut.cloud
+sources:
+  - https://github.com/mayflower/wortlaut
+annotations:
+  licenses: AGPL-3.0-or-later

@@ -23,12 +23,17 @@ def load_model():
     import torch
     from huggingface_hub import hf_hub_download
 
-    if not torch.cuda.is_available():
+    allow_cpu = os.environ.get("WORTLAUT_ASR_ALLOW_CPU", "").lower() in ("1", "true", "yes")
+    if torch.cuda.is_available():
+        device = "cuda"
+    elif allow_cpu:
+        device = "cpu"
+    else:
         raise RuntimeError("Parakeet service requires an NVIDIA GPU")
     filename = hf_hub_download(
         "nvidia/parakeet-tdt-0.6b-v3", "parakeet-tdt-0.6b-v3.nemo", revision=MODEL_REVISION
     )
-    loaded = nemo_asr.models.ASRModel.restore_from(filename, map_location="cuda")
+    loaded = nemo_asr.models.ASRModel.restore_from(filename, map_location=device)
     loaded.freeze()
     loaded.eval()
     return loaded
