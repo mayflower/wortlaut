@@ -1,7 +1,21 @@
 import React, { useState } from 'react';
-import { Check, Copy, Eye, EyeOff, KeyRound, LogIn } from 'lucide-react';
+import { Check, Copy, KeyRound, LogIn } from 'lucide-react';
+import { Center } from '@astryxdesign/core/Center';
+import { Card } from '@astryxdesign/core/Card';
+import { Section } from '@astryxdesign/core/Section';
+import { Heading } from '@astryxdesign/core/Heading';
+import { Text } from '@astryxdesign/core/Text';
+import { HStack } from '@astryxdesign/core/HStack';
+import { VStack } from '@astryxdesign/core/VStack';
+import { FormLayout } from '@astryxdesign/core/FormLayout';
+import { TextInput } from '@astryxdesign/core/TextInput';
+import { Button } from '@astryxdesign/core/Button';
+import { Banner } from '@astryxdesign/core/Banner';
+import { Divider } from '@astryxdesign/core/Divider';
+import { List, ListItem } from '@astryxdesign/core/List';
+import { Avatar } from '@astryxdesign/core/Avatar';
 import { getInstanceInfo } from '../api';
-import { Button, ProviderBadge } from './ui/primitives';
+import { ProviderBadge } from './ui/primitives';
 
 export interface WelcomeLandingViewProps {
   healthy: boolean;
@@ -22,19 +36,19 @@ function extractTokenInput(raw: string): string {
 
 const EXAMPLE_LINES = [
   {
-    time: '00:14',
+    time: '00:00:14',
     speaker: 'Mara Lindner',
     source: 'Teams · Stream 1',
     text: 'Lass uns kurz die offenen Punkte für das Release am Donnerstag durchgehen.',
   },
   {
-    time: '00:23',
+    time: '00:00:23',
     speaker: 'Thomas Berg',
     source: 'Teams · Stream 2',
     text: 'Die Migration auf dem Datenbank-Cluster ist abgeschlossen, es fehlt nur noch der Abnahmetest.',
   },
   {
-    time: '00:35',
+    time: '00:00:35',
     speaker: 'Mara Lindner',
     source: 'Teams · Stream 1',
     text: 'Gut, dann planen wir den Testlauf für morgen um zehn Uhr ein und schicken danach das Protokoll herum.',
@@ -49,7 +63,6 @@ export function WelcomeLandingView({
   const instance = getInstanceInfo();
   const oidcEnabled = Boolean(instance.oidc?.enabled);
   const [tokenInput, setTokenInput] = useState('');
-  const [showPlain, setShowPlain] = useState(false);
   const [showTokenForm, setShowTokenForm] = useState(!oidcEnabled);
   const [copiedMail, setCopiedMail] = useState(false);
 
@@ -68,264 +81,185 @@ export function WelcomeLandingView({
   };
 
   return (
-    <div className="mx-auto max-w-5xl py-6 sm:py-12">
-      <div className="grid grid-cols-1 gap-10 lg:grid-cols-12 lg:items-start">
-        {/* Left column: Straightforward explanation + Sign-in */}
-        <div className="space-y-8 lg:col-span-6">
-          <div className="space-y-3">
-            <div className="flex flex-wrap items-center gap-2">
+    <Center axis="horizontal" paddingBlock={8} paddingInline={4}>
+      <div className="w-full max-w-5xl grid grid-cols-1 gap-8 lg:grid-cols-12 lg:items-start">
+        {/* Left column: Value proposition + Sign-in Card */}
+        <VStack gap={5} className="lg:col-span-6">
+          <VStack gap={2}>
+            <HStack gap={1.5} wrap="wrap">
               {instance.providers.google_meet && (
                 <ProviderBadge provider="google_meet" />
               )}
               {instance.providers.teams && <ProviderBadge provider="teams" />}
               {instance.providers.webex && <ProviderBadge provider="webex" />}
-            </div>
+            </HStack>
 
-            <h1 className="text-2xl sm:text-3xl font-semibold tracking-tight text-white">
-              Sprechergetrennte Meeting-Protokolle
-            </h1>
-            <p className="text-sm leading-relaxed text-slate-400">
-              <strong className="font-medium text-slate-200">
-                {instance.assistantName}
-              </strong>{' '}
-              tritt Besprechungen in Google Meet, Microsoft Teams und Webex als
-              stummer Teilnehmer bei, zeichnet die einzelnen Tonspuren vor dem
-              Audio-Mix getrennt auf und transkribiert sie lokal auf dem
-              Cluster.
-            </p>
-          </div>
+            <Heading level={1}>Sprechergetrennte Meeting-Protokolle</Heading>
+            <Text type="body" color="secondary">
+              <strong>{instance.assistantName}</strong> tritt Besprechungen in
+              Google Meet, Microsoft Teams und Webex als stummer Teilnehmer bei,
+              zeichnet die einzelnen Tonspuren vor dem Audio-Mix getrennt auf
+              und transkribiert sie lokal auf dem Cluster.
+            </Text>
+          </VStack>
 
-          {/* Sign-in box: Dex OIDC primary + optional token/reader-link fallback */}
-          <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-5 space-y-4">
-            <div className="space-y-1">
-              <div className="text-sm font-medium text-white">Anmelden</div>
-              <p className="text-xs text-slate-400">
-                {oidcEnabled
-                  ? 'Melden Sie sich mit Ihrem Mayflower-Account an, um eigene Aufnahmen und Kalender-Einladungen zu verwalten.'
-                  : 'Geben Sie Ihren Zugangsschlüssel oder einen Lese-Token für ein freigegebenes Protokoll ein.'}
-              </p>
-            </div>
+          <Card>
+            <VStack gap={3}>
+              <VStack gap={0.5}>
+                <Heading level={3}>Anmelden</Heading>
+                <Text type="supporting" color="secondary">
+                  {oidcEnabled
+                    ? 'Melden Sie sich mit Ihrem Mayflower-Account an, um eigene Aufnahmen und Kalender-Synchronisationen zu verwalten.'
+                    : 'Geben Sie Ihren Zugangsschlüssel oder einen Lese-Token für ein freigegebenes Protokoll ein.'}
+                </Text>
+              </VStack>
 
-            {authError && (
-              <div className="rounded-lg border border-red-800/80 bg-red-950/60 px-3 py-2 text-xs text-red-200">
-                {authError}
-              </div>
-            )}
+              {authError && (
+                <Banner status="error" container="card" title={authError} />
+              )}
 
-            {oidcEnabled && (
-              <Button
-                type="button"
-                variant="primary"
-                size="md"
-                onClick={onStartOidcLogin}
-                id="oidc-login-btn"
-                className="w-full justify-center py-2.5"
-              >
-                <LogIn className="h-4 w-4" />
-                <span>Mit Mayflower-Account anmelden (SSO)</span>
-              </Button>
-            )}
-
-            {oidcEnabled && !showTokenForm ? (
-              <div className="pt-1">
-                <button
-                  type="button"
-                  onClick={() => setShowTokenForm(true)}
-                  className="text-xs text-slate-400 hover:text-slate-200 underline underline-offset-4 cursor-pointer"
-                >
-                  Lese-Token (wortlaut-read-…) oder API-Schlüssel verwenden
-                </button>
-              </div>
-            ) : (
-              <form
-                onSubmit={handleSubmit}
-                className={
-                  oidcEnabled
-                    ? 'space-y-2 border-t border-slate-800/80 pt-3.5'
-                    : 'space-y-2'
-                }
-              >
-                {oidcEnabled && (
-                  <label
-                    htmlFor="landing-token-input"
-                    className="block text-xs text-slate-400"
-                  >
-                    Lese-Token (<code className="text-slate-300">wortlaut-read-…</code>) oder API-Schlüssel
-                  </label>
-                )}
-                <div className="flex flex-col gap-2 sm:flex-row">
-                  <div className="relative flex-1">
-                    <input
-                      id="landing-token-input"
-                      type={showPlain ? 'text' : 'password'}
-                      value={tokenInput}
-                      onChange={(e) => setTokenInput(e.target.value)}
-                      placeholder="Token oder Freigabe-Link einfügen…"
-                      autoFocus={!oidcEnabled}
-                      className="w-full rounded-lg border border-slate-700 bg-slate-950 pl-3.5 pr-9 py-2 text-sm text-white placeholder-slate-500 focus:border-sky-500 focus:outline-none"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowPlain((v) => !v)}
-                      title={
-                        showPlain ? 'Schlüssel verbergen' : 'Schlüssel anzeigen'
-                      }
-                      className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-200 cursor-pointer"
-                    >
-                      {showPlain ? (
-                        <EyeOff className="h-4 w-4" />
-                      ) : (
-                        <Eye className="h-4 w-4" />
-                      )}
-                    </button>
-                  </div>
-
+              {oidcEnabled && (
+                <span id="oidc-login-btn" className="contents">
                   <Button
-                    type="submit"
-                    variant={oidcEnabled ? 'outline' : 'primary'}
+                    type="button"
+                    variant="primary"
                     size="md"
-                    className="shrink-0 justify-center px-4"
-                  >
-                    <KeyRound className="h-4 w-4" />
-                    <span>Öffnen</span>
-                  </Button>
-                </div>
-              </form>
-            )}
-          </div>
-
-          {/* Plain, factual 3-step explanation (no cards, just clean typography) */}
-          <div className="space-y-4 border-t border-slate-800/80 pt-6">
-            <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-              Ablauf
-            </h2>
-
-            <ol className="space-y-3 text-sm text-slate-300">
-              <li className="flex gap-3">
-                <span className="font-mono text-xs text-slate-500 mt-0.5">
-                  01
+                    width="fill"
+                    icon={<LogIn className="h-4 w-4" />}
+                    label="Mit Mayflower-Account anmelden (SSO)"
+                    onClick={onStartOidcLogin}
+                  />
                 </span>
-                <div>
-                  <strong className="font-medium text-white">
-                    Link einfügen oder Termin einladen.
-                  </strong>{' '}
-                  <span className="text-slate-400">
-                    Meeting-URL direkt starten, eine <code>.ics</code>-Datei
-                    hochladen
-                    {instance.botEmail ? (
-                      <>
-                        {' '}
-                        oder{' '}
-                        <button
-                          type="button"
-                          onClick={handleCopyBotMail}
-                          className="inline-flex items-center gap-1 rounded border border-slate-800 bg-slate-900 px-1.5 py-0.5 font-mono text-xs text-slate-200 hover:border-slate-700 cursor-pointer"
-                        >
-                          <span>{instance.botEmail}</span>
-                          {copiedMail ? (
-                            <Check className="h-3 w-3 text-emerald-400" />
-                          ) : (
-                            <Copy className="h-3 w-3 text-slate-400" />
-                          )}
-                        </button>{' '}
-                        als Gast in den Kalender einladen.
-                      </>
-                    ) : (
-                      '.'
-                    )}
-                  </span>
-                </div>
-              </li>
+              )}
 
-              <li className="flex gap-3">
-                <span className="font-mono text-xs text-slate-500 mt-0.5">
-                  02
-                </span>
-                <div>
-                  <strong className="font-medium text-white">
-                    Im Warteraum zulassen.
-                  </strong>{' '}
-                  <span className="text-slate-400">
-                    Der Bot tritt ohne Kamera und Mikrofon als „
-                    {instance.assistantName}“ bei, stellt sich im Meeting-Chat
-                    mit Protokoll- und Datenschutz-Link vor und schreibt das
-                    Live-Transkript mit.
-                  </span>
-                </div>
-              </li>
-
-              <li className="flex gap-3">
-                <span className="font-mono text-xs text-slate-500 mt-0.5">
-                  03
-                </span>
-                <div>
-                  <strong className="font-medium text-white">
-                    Protokoll lesen, teilen oder exportieren.
-                  </strong>{' '}
-                  <span className="text-slate-400">
-                    Fertige Transkripte lassen sich nach Sprechern filtern, als{' '}
-                    <code>.txt</code>, <code>.md</code>, <code>.vtt</code> oder{' '}
-                    <code>.json</code> herunterladen und per schreibgeschütztem
-                    Lese-Link teilen.
-                  </span>
-                </div>
-              </li>
-            </ol>
-          </div>
-        </div>
-
-        {/* Right column: Quiet, realistic transcript specimen */}
-        <div className="lg:col-span-6">
-          <div className="rounded-xl border border-slate-800 bg-slate-900/50 overflow-hidden">
-            <div className="flex items-center justify-between border-b border-slate-800 px-5 py-3.5 text-xs">
-              <div className="flex items-center gap-2.5">
-                <span className="font-medium text-slate-200">
-                  Beispiel-Protokoll
-                </span>
-                <span className="text-slate-600">·</span>
-                <span className="text-slate-400">2 erkannte Teilnehmende</span>
-              </div>
-              <span className="font-mono text-[11px] text-slate-500">
-                TXT · MD · VTT · JSON
-              </span>
-            </div>
-
-            <div className="divide-y divide-slate-800/60 px-5">
-              {EXAMPLE_LINES.map((line) => (
-                <div key={line.time} className="py-4 space-y-1">
-                  <div className="flex items-baseline justify-between gap-2 text-xs">
-                    <span className="font-medium text-slate-200">
-                      {line.speaker}
-                    </span>
-                    <div className="flex items-center gap-2 font-mono text-[11px] text-slate-500">
-                      <span>{line.source}</span>
-                      <span>{line.time}</span>
+              {oidcEnabled && !showTokenForm ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  label="Lese-Token (wortlaut-read-…) oder API-Schlüssel verwenden"
+                  onClick={() => setShowTokenForm(true)}
+                />
+              ) : (
+                <form onSubmit={handleSubmit}>
+                  <FormLayout direction="vertical">
+                    {oidcEnabled && <Divider variant="subtle" />}
+                    <div id="landing-token-input">
+                      <TextInput
+                        type="password"
+                        label="Lese-Token (wortlaut-read-…) oder API-Schlüssel"
+                        value={tokenInput}
+                        onChange={setTokenInput}
+                        placeholder="Token oder Freigabe-Link einfügen…"
+                      />
                     </div>
-                  </div>
-                  <p className="text-sm leading-relaxed text-slate-300">
-                    {line.text}
-                  </p>
-                </div>
-              ))}
-            </div>
+                    <Button
+                      type="submit"
+                      variant={oidcEnabled ? 'secondary' : 'primary'}
+                      size="sm"
+                      width="fill"
+                      isDisabled={!tokenInput.trim()}
+                      icon={<KeyRound className="h-3.5 w-3.5" />}
+                      label="Mit Token öffnen"
+                    />
+                  </FormLayout>
+                </form>
+              )}
+            </VStack>
+          </Card>
 
-            <div className="border-t border-slate-800 bg-slate-950/50 px-5 py-3 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-400">
-              <span>
-                Lokale Spracherkennung (Parakeet-GPU) · Keine Cloud-Weitergabe
-              </span>
-              <span>
-                Roh-Audio nach {instance.retention.audioHours}h gelöscht ·{' '}
-                <a
-                  href="/privacy"
-                  className="text-sky-400 hover:text-sky-300 underline"
-                >
-                  Datenschutz-Info
-                </a>
-              </span>
-            </div>
-          </div>
+          <VStack gap={2}>
+            <Heading level={4}>Ablauf</Heading>
+            <List listStyle="decimal" density="compact" edge="flush">
+              <ListItem
+                label="Kalender verbinden oder Meeting-Link starten"
+                description="Google Calendar / Microsoft 365 per Read-Only-OAuth2 verknüpfen, Meeting-URL direkt einfügen oder Bot per E-Mail einladen."
+                endContent={
+                  instance.botEmail ? (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      icon={
+                        copiedMail ? (
+                          <Check className="h-3 w-3" />
+                        ) : (
+                          <Copy className="h-3 w-3" />
+                        )
+                      }
+                      label={copiedMail ? 'Kopiert' : instance.botEmail}
+                      onClick={handleCopyBotMail}
+                    />
+                  ) : undefined
+                }
+              />
+              <ListItem
+                label="Im Warteraum zulassen"
+                description={`Der Bot tritt stummgeschaltet als „${instance.assistantName}“ bei und erfasst jede Teilnehmer-Audiospur vor dem Konferenz-Mix einzeln.`}
+              />
+              <ListItem
+                label="Protokoll lesen, teilen oder exportieren"
+                description="Fertige Transkripte lassen sich nach Sprechern filtern, als .md, .txt, .vtt oder .json herunterladen und per Lese-Link teilen."
+              />
+            </List>
+          </VStack>
+        </VStack>
+
+        {/* Right column: Editorial transcript specimen */}
+        <div className="lg:col-span-6">
+          <Section variant="section">
+            <VStack gap={3}>
+              <HStack justify="between" vAlign="center">
+                <Heading level={4}>Beispiel-Protokoll</Heading>
+                <Text type="supporting" color="secondary">
+                  MD · TXT · VTT · JSON
+                </Text>
+              </HStack>
+
+              <Divider variant="subtle" />
+
+              <div className="divide-y divide-[var(--color-border)]">
+                {EXAMPLE_LINES.map((line) => (
+                  <div key={line.time} className="py-3">
+                    <HStack gap={2} vAlign="start">
+                      <Avatar size="sm" shape="circle" name={line.speaker} />
+                      <VStack gap={0.5} className="flex-1">
+                        <HStack justify="between" vAlign="center" gap={2}>
+                          <Text type="body" weight="semibold" color="primary">
+                            {line.speaker}
+                          </Text>
+                          <Text type="supporting" color="secondary" hasTabularNumbers>
+                            {line.source} · {line.time}
+                          </Text>
+                        </HStack>
+                        <Text type="body" color="primary">
+                          {line.text}
+                        </Text>
+                      </VStack>
+                    </HStack>
+                  </div>
+                ))}
+              </div>
+
+              <Divider variant="subtle" />
+
+              <HStack justify="between" vAlign="center" wrap="wrap" gap={2}>
+                <Text type="supporting" color="secondary">
+                  Lokale Spracherkennung (Parakeet-GPU) · Keine Cloud-Weitergabe
+                </Text>
+                <Text type="supporting" color="secondary">
+                  Roh-Audio nach {instance.retention.audioHours}h gelöscht ·{' '}
+                  <a
+                    href="/privacy"
+                    className="text-[var(--color-text-accent)] underline"
+                  >
+                    Datenschutz-Info
+                  </a>
+                </Text>
+              </HStack>
+            </VStack>
+          </Section>
         </div>
       </div>
-    </div>
+    </Center>
   );
 }

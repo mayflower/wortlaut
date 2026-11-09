@@ -1,80 +1,112 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { KeyRound } from 'lucide-react';
+import { AppShell } from '@astryxdesign/core/AppShell';
+import { CommandPalette } from '@astryxdesign/core/CommandPalette';
+import {
+  createStaticSource,
+  type SearchableItem,
+} from '@astryxdesign/core/Typeahead';
 import {
   ApiError,
-  cancelRecording,
+  PROVIDER_LABELS,
   completeOidcCallbackIfPresent,
-  deleteRecording,
-  downloadExportFile,
   exitReaderModeToAccount,
   fetchCalendar,
   fetchRecordingDetail,
   fetchRecordings,
   fetchTranscript,
+  formatRecordingTitle,
   getSavedAccountToken,
-  issueReaderToken,
   loadInitialToken,
   parseTokenAuthMode,
   readNavStateFromHash,
-  rejoinRecording,
-  retryMailDelivery,
   saveTokenToStorage,
   startOidcLogin,
   writeNavStateToHash,
 } from './api';
 import { AuthGateDialog } from './components/AuthGateDialog';
 import { CalendarWorkspace } from './components/CalendarWorkspace';
-import { HeaderBar, NavSection } from './components/HeaderBar';
-import { HomeView } from './components/HomeView';
+import {
+  HeaderBar,
+  ReaderTopBar,
+  type NavSection,
+} from './components/HeaderBar';
 import { MeetingDetailView } from './components/MeetingDetailView';
 import { NewRecordingDialog } from './components/NewRecordingDialog';
 import {
-  QuickStatusFilter,
   RecordingSidebar,
+  type QuickStatusFilter,
 } from './components/RecordingSidebar';
 import { SystemView } from './components/SystemView';
 import { WelcomeLandingView } from './components/WelcomeLandingView';
+import { useThemeMode } from './components/ui/primitives';
+
+interface CommandItem
+  extends SearchableItem<{
+    group: string;
+    action: () => void;
+    keywords?: string[];
+  }> {}
 
 export function App() {
   const queryClient = useQueryClient();
+  const { mode, setMode } = useThemeMode();
+
   const [token, setToken] = useState<string>(() => loadInitialToken());
-  const authMode = useMemo(() => parseTokenAuthMode(token), [token]);
-  const savedAccountToken = useMemo(() => getSavedAccountToken(), [token]);
+  const [authDialogOpen, setAuthDialogOpen] = useState<boolean>(false);
+  const [authError, setAuthError] = useState<string | null>(null);
 
   const initialNav = useMemo(() => readNavStateFromHash(), []);
   const [activeNav, setActiveNav] = useState<NavSection>(initialNav.view);
   const [selectedId, setSelectedId] = useState<string | null>(
     initialNav.recordingId
   );
-  const [selectedSourceFilter, setSelectedSourceFilter] = useState<string>('');
+  const [livePoll, setLivePoll] = useState<boolean>(true);
+  const [newRecordingOpen, setNewRecordingOpen] = useState<boolean>(false);
+  const [newRecordingTab, setNewRecordingTab] = useState<'link' | 'ics'>(
+    'link'
+  );
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState<boolean>(false);
 
   const [providerFilter, setProviderFilter] = useState<string>('');
   const [quickFilter, setQuickFilter] = useState<QuickStatusFilter>('all');
   const [titleSearch, setTitleSearch] = useState<string>('');
 
-  const [livePoll, setLivePoll] = useState<boolean>(true);
-  const [authDialogOpen, setAuthDialogOpen] = useState<boolean>(false);
-  const [newRecordingOpen, setNewRecordingOpen] = useState<boolean>(false);
-  const [newRecordingTab, setNewRecordingTab] = useState<'link' | 'ics'>('link');
-  const [actionBusy, setActionBusy] = useState<boolean>(false);
-  const [actionError, setActionError] = useState<string | null>(null);
-  const [oidcError, setOidcError] = useState<string | null>(null);
+  const authMode = useMemo(() => parseTokenAuthMode(token), [token]);
+  const hasSavedAccount = useMemo(
+    () => Boolean(getSavedAccountToken()),
+    [token]
+  );
 
+  // Global Cmd+K / Ctrl+K shortcut for CommandPalette
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        if (authMode.kind === 'operator') {
+          e.preventDefault();
+          setCommandPaletteOpen((open) => !open);
+        }
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [authMode.kind]);
+
+  // Complete Dex OIDC or Calendar OAuth2 Authorization Code + PKCE callback
   useEffect(() => {
     let cancelled = false;
     completeOidcCallbackIfPresent().then((res) => {
       if (cancelled || !res) return;
-      if (res.token) {
-        setOidcError(null);
+      if (res.error) {
+        setAuthError(res.error);
+      } else if (res.token) {
+        setAuthError(null);
         setToken(res.token);
-        queryClient.invalidateQueries();
       } else if (res.calendarConnected) {
-        setOidcError(null);
+        setAuthError(null);
         setActiveNav('calendar');
-        queryClient.invalidateQueries();
-      } else if (res.error) {
-        setOidcError(res.error);
+        setSelectedId(null);
+        queryClient.invalidateQueries({ queryKey: ['calendar'] });
       }
     });
     return () => {
@@ -82,336 +114,476 @@ export function App() {
     };
   }, [queryClient]);
 
+  // Keep browser Back/Forward history and hash token links in sync with UI state
   useEffect(() => {
-    if (authMode.kind === 'reader') {
-      setSelectedId(authMode.recordingId);
-    }
-  }, [authMode]);
-
-  useEffect(() => {
-    if (authMode.kind !== 'operator') return;
-    writeNavStateToHash(activeNav, selectedId);
-  }, [authMode.kind, activeNav, selectedId]);
-
-  useEffect(() => {
-    const onPopState = () => {
-      if (authMode.kind !== 'operator') return;
+    const onUrlChange = () => {
+      if (window.location.hash.includes('token=')) {
+        const extracted = loadInitialToken();
+        if (extracted) {
+          setToken(extracted);
+          setAuthError(null);
+          queryClient.invalidateQueries();
+        }
+      }
       const next = readNavStateFromHash();
       setActiveNav(next.view);
       setSelectedId(next.recordingId);
-      setSelectedSourceFilter('');
-      setActionError(null);
     };
-    window.addEventListener('popstate', onPopState);
-    return () => window.removeEventListener('popstate', onPopState);
-  }, [authMode.kind]);
+    window.addEventListener('popstate', onUrlChange);
+    window.addEventListener('hashchange', onUrlChange);
+    return () => {
+      window.removeEventListener('popstate', onUrlChange);
+      window.removeEventListener('hashchange', onUrlChange);
+    };
+  }, [queryClient]);
 
-  const pollInterval = livePoll ? 3000 : false;
+  useEffect(() => {
+    if (authMode.kind === 'operator') {
+      writeNavStateToHash(activeNav, selectedId);
+    }
+  }, [authMode.kind, activeNav, selectedId]);
 
+  useEffect(() => {
+    if (authMode.kind === 'reader') {
+      setSelectedId(authMode.recordingId);
+      setActiveNav('meetings');
+    }
+  }, [authMode]);
+
+  const handleStartOidcLogin = () => {
+    setAuthError(null);
+    startOidcLogin().catch((err) => {
+      setAuthError(err instanceof Error ? err.message : String(err));
+    });
+  };
+
+  // Health query
   const healthQuery = useQuery({
     queryKey: ['health'],
     queryFn: async () => {
       const res = await fetch('/health/ready');
       return res.ok;
     },
-    refetchInterval: pollInterval,
-    refetchIntervalInBackground: false,
+    refetchInterval: livePoll ? 5000 : false,
   });
 
-  // Unfiltered recordings query for HomeView & SystemView overview
-  const allRecordingsQuery = useQuery({
-    queryKey: ['recordings-all', token],
-    queryFn: () => fetchRecordings(token, {}),
+  // Recordings list query (operator only)
+  const recordingsQuery = useQuery({
+    queryKey: ['recordings', token, providerFilter, titleSearch],
+    queryFn: () =>
+      fetchRecordings(token, {
+        provider: providerFilter || undefined,
+        q: titleSearch.trim() || undefined,
+      }),
     enabled: authMode.kind === 'operator',
-    refetchInterval: pollInterval,
-    refetchIntervalInBackground: false,
+    refetchInterval: livePoll ? 3000 : false,
     retry: false,
   });
 
-  const apiFilter = useMemo(() => {
-    let participation: string | undefined;
-    let processing: string | undefined;
-    if (quickFilter === 'active') {
-      participation = 'starting,preparing,joining,waiting_admission,capturing';
-    } else if (quickFilter === 'scheduled') {
-      participation = 'scheduled';
-    } else if (quickFilter === 'completed') {
-      participation = 'ended';
-      processing = 'completed';
-    } else if (quickFilter === 'failed') {
-      participation = 'ended';
+  useEffect(() => {
+    const err = recordingsQuery.error;
+    if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
+      setAuthError(
+        'Sitzung abgelaufen oder ungültiger Schlüssel. Bitte melden Sie sich erneut an.'
+      );
+      saveTokenToStorage('');
+      setToken('');
+    } else if (recordingsQuery.isSuccess) {
+      setAuthError(null);
     }
-    return {
-      provider: providerFilter || undefined,
-      participation,
-      processing,
-      q: titleSearch || undefined,
-    };
-  }, [providerFilter, quickFilter, titleSearch]);
+  }, [recordingsQuery.error, recordingsQuery.isSuccess]);
 
-  const filteredRecordingsQuery = useQuery({
-    queryKey: ['recordings-filtered', token, apiFilter],
-    queryFn: () => fetchRecordings(token, apiFilter),
-    enabled: authMode.kind === 'operator' && activeNav === 'meetings',
-    refetchInterval: pollInterval,
-    refetchIntervalInBackground: false,
-    retry: false,
-  });
+  const rawRecordings = recordingsQuery.data?.items || [];
 
-  const allRecordings = useMemo(
-    () => allRecordingsQuery.data?.items || [],
-    [allRecordingsQuery.data]
-  );
-
+  // Client-side quick status filter
   const filteredRecordings = useMemo(() => {
-    const items =
-      filteredRecordingsQuery.data?.items || allRecordingsQuery.data?.items || [];
-    if (quickFilter === 'failed') {
-      return items.filter((item) => {
-        const r = item.participation_reason;
-        const samples = item.quality?.durable_sample_count || 0;
+    return rawRecordings.filter((r) => {
+      if (quickFilter === 'active') {
+        return [
+          'starting',
+          'preparing',
+          'joining',
+          'waiting_admission',
+          'capturing',
+        ].includes(r.participation);
+      }
+      if (quickFilter === 'scheduled') {
+        return r.participation === 'scheduled';
+      }
+      if (quickFilter === 'completed') {
+        return r.participation === 'ended' && r.processing === 'completed';
+      }
+      if (quickFilter === 'failed') {
+        const reason = r.participation_reason;
+        const samples = r.quality?.durable_sample_count || 0;
         const cleanStop =
-          !r ||
-          r === 'normal' ||
-          r === 'room_empty' ||
-          ((r === 'cancelled' || r === 'deadline') && samples > 0);
-        return item.processing === 'failed' || !cleanStop;
-      });
-    }
-    return items;
-  }, [filteredRecordingsQuery.data, allRecordingsQuery.data, quickFilter]);
+          !reason ||
+          reason === 'normal' ||
+          reason === 'room_empty' ||
+          ((reason === 'cancelled' || reason === 'deadline') && samples > 0);
+        return (
+          r.processing === 'failed' ||
+          (r.participation === 'ended' && !cleanStop)
+        );
+      }
+      return true;
+    });
+  }, [rawRecordings, quickFilter]);
 
-  const activeLiveCount = useMemo(
-    () =>
-      allRecordings.filter(
-        (r) =>
-          r.participation === 'starting' ||
-          r.participation === 'preparing' ||
-          r.participation === 'joining' ||
-          r.participation === 'waiting_admission' ||
-          r.participation === 'capturing'
-      ).length,
-    [allRecordings]
-  );
+  const activeLiveCount = useMemo(() => {
+    return rawRecordings.filter((r) =>
+      [
+        'starting',
+        'preparing',
+        'joining',
+        'waiting_admission',
+        'capturing',
+      ].includes(r.participation)
+    ).length;
+  }, [rawRecordings]);
 
+  // Calendar query (operator only)
   const calendarQuery = useQuery({
     queryKey: ['calendar', token],
     queryFn: () => fetchCalendar(token),
     enabled: authMode.kind === 'operator',
-    refetchInterval: activeNav === 'calendar' ? pollInterval : false,
-    refetchIntervalInBackground: false,
+    refetchInterval: livePoll ? 5000 : false,
     retry: false,
   });
 
+  // Active recording detail + transcript
   const activeRecordingId =
     authMode.kind === 'reader' ? authMode.recordingId : selectedId;
 
   const detailQuery = useQuery({
-    queryKey: ['recording-detail', token, activeRecordingId],
+    queryKey: ['recordingDetail', token, activeRecordingId],
     queryFn: () => fetchRecordingDetail(token, activeRecordingId!),
     enabled:
       authMode.kind !== 'unauthenticated' && Boolean(activeRecordingId),
-    refetchInterval: pollInterval,
-    refetchIntervalInBackground: false,
+    refetchInterval: livePoll ? 3000 : false,
     retry: false,
   });
 
   const transcriptQuery = useQuery({
-    queryKey: ['recording-transcript', token, activeRecordingId],
+    queryKey: ['transcript', token, activeRecordingId],
     queryFn: () => fetchTranscript(token, activeRecordingId!),
     enabled:
       authMode.kind !== 'unauthenticated' && Boolean(activeRecordingId),
-    refetchInterval: pollInterval,
-    refetchIntervalInBackground: false,
+    refetchInterval: livePoll ? 3000 : false,
     retry: false,
   });
 
-  const authError = useMemo(() => {
-    if (oidcError) {
-      return oidcError;
+  useEffect(() => {
+    const err = detailQuery.error || transcriptQuery.error;
+    if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
+      setAuthError('Ungültiger oder abgelaufener Lese-Link / API-Schlüssel.');
+      setAuthDialogOpen(true);
     }
-    const err =
-      allRecordingsQuery.error ||
-      filteredRecordingsQuery.error ||
-      detailQuery.error ||
-      transcriptQuery.error;
-    if (err instanceof ApiError && err.status === 401) {
-      return 'Ihre Sitzung oder Ihr Zugangsschlüssel ist abgelaufen oder ungültig (401 Unauthorized).';
-    }
-    return null;
-  }, [
-    oidcError,
-    allRecordingsQuery.error,
-    filteredRecordingsQuery.error,
-    detailQuery.error,
-    transcriptQuery.error,
-  ]);
+  }, [detailQuery.error, transcriptQuery.error]);
 
   const handleSaveToken = (nextToken: string) => {
     saveTokenToStorage(nextToken);
     setToken(nextToken);
-    setOidcError(null);
-    setActionError(null);
+    setAuthError(null);
     queryClient.invalidateQueries();
   };
 
-  const handleStartOidcLogin = async () => {
-    setOidcError(null);
-    try {
-      await startOidcLogin();
-    } catch (err) {
-      setOidcError(err instanceof Error ? err.message : String(err));
-    }
+  const handleReturnToAccount = () => {
+    const saved = exitReaderModeToAccount();
+    setToken(saved);
+    setSelectedId(null);
+    setActiveNav('home');
+    setAuthError(null);
+    queryClient.invalidateQueries();
   };
 
   const handleManualRefresh = () => {
     queryClient.invalidateQueries();
   };
 
-  const handleSelectRecording = (id: string) => {
+  const handleOpenRecording = (id: string) => {
     setSelectedId(id);
-    setSelectedSourceFilter('');
-    setActionError(null);
+    setActiveNav('meetings');
   };
 
-  const handleChangeNav = (nav: NavSection) => {
-    setActiveNav(nav);
-    setSelectedId(null);
-    setActionError(null);
-  };
-
-  const handleReturnToAccount = () => {
-    const restored = exitReaderModeToAccount();
-    setToken(restored);
-    setSelectedId(null);
-    setOidcError(null);
-    setActionError(null);
-    queryClient.invalidateQueries();
-  };
-
-  const handleTriggerNewRecording = () => {
-    setNewRecordingTab('link');
+  const handleOpenNewModal = (tab: 'link' | 'ics' = 'link') => {
+    setNewRecordingTab(tab);
     setNewRecordingOpen(true);
   };
 
-  const backLabel = useMemo(() => {
-    if (activeNav === 'meetings') return 'Alle Meetings';
-    if (activeNav === 'calendar') return 'Zurück zum Kalender';
-    if (activeNav === 'system') return 'Zurück zu System & Diagnose';
-    return 'Zurück zur Übersicht';
-  }, [activeNav]);
+  const calendarEvents = calendarQuery.data?.events || [];
+  const calendarConnections = calendarQuery.data?.connections || [];
+  const calendarSyncedEvents = calendarQuery.data?.synced_events || [];
 
-  const handleOpenIcsImportModal = () => {
-    setNewRecordingTab('ics');
-    setNewRecordingOpen(true);
-  };
+  // CommandPalette search source
+  const commandItems = useMemo<CommandItem[]>(() => {
+    const baseCommands: CommandItem[] = [
+      {
+        id: 'act:new-link',
+        label: 'Neues Meeting per Link aufzeichnen…',
+        auxiliaryData: {
+          group: 'Aktionen',
+          keywords: ['start', 'bot', 'link', 'meet', 'teams', 'webex'],
+          action: () => handleOpenNewModal('link'),
+        },
+      },
+      {
+        id: 'act:new-ics',
+        label: 'Kalendereinladung (.ics / .eml) importieren…',
+        auxiliaryData: {
+          group: 'Aktionen',
+          keywords: ['ics', 'eml', 'kalender', 'import'],
+          action: () => handleOpenNewModal('ics'),
+        },
+      },
+      {
+        id: 'nav:meetings',
+        label: 'Zu Aufnahmen wechseln',
+        auxiliaryData: {
+          group: 'Navigation',
+          keywords: ['aufnahmen', 'meetings', 'übersicht', 'home'],
+          action: () => {
+            setSelectedId(null);
+            setActiveNav('home');
+          },
+        },
+      },
+      {
+        id: 'nav:calendar',
+        label: 'Zu Kalender & Synchronisation wechseln',
+        auxiliaryData: {
+          group: 'Navigation',
+          keywords: ['kalender', 'google', 'outlook', 'microsoft', 'oauth'],
+          action: () => {
+            setSelectedId(null);
+            setActiveNav('calendar');
+          },
+        },
+      },
+      {
+        id: 'nav:system',
+        label: 'Zu System & Diagnose wechseln',
+        auxiliaryData: {
+          group: 'Navigation',
+          keywords: ['system', 'diagnose', 'status', 'gpu', 'parakeet'],
+          action: () => {
+            setSelectedId(null);
+            setActiveNav('system');
+          },
+        },
+      },
+      {
+        id: 'theme:toggle',
+        label: `Darstellung wechseln (aktuell: ${mode})`,
+        auxiliaryData: {
+          group: 'Einstellungen',
+          keywords: ['dark', 'light', 'theme', 'hell', 'dunkel'],
+          action: () => setMode(mode === 'dark' ? 'light' : 'dark'),
+        },
+      },
+    ];
 
-  const rec = detailQuery.data;
-  const trans = transcriptQuery.data;
+    const recordingCommands: CommandItem[] = rawRecordings
+      .slice(0, 30)
+      .map((r) => ({
+        id: `rec:${r.id}`,
+        label: `${formatRecordingTitle(r)} (${PROVIDER_LABELS[r.provider] || r.provider})`,
+        auxiliaryData: {
+          group: 'Aufnahmen',
+          keywords: [r.provider, r.participation, r.id],
+          action: () => handleOpenRecording(r.id),
+        },
+      }));
 
-  const handleCancel = async () => {
-    if (!rec) return;
-    setActionBusy(true);
-    setActionError(null);
-    try {
-      await cancelRecording(token, rec.id);
-      await queryClient.invalidateQueries();
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setActionBusy(false);
-    }
-  };
+    return [...baseCommands, ...recordingCommands];
+  }, [rawRecordings, mode]);
 
-  const handleDelete = async () => {
-    if (!rec) return;
-    setActionBusy(true);
-    setActionError(null);
-    try {
-      await deleteRecording(token, rec.id);
-      setSelectedId(null);
-      await queryClient.invalidateQueries();
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setActionBusy(false);
-    }
-  };
+  const commandSearchSource = useMemo(
+    () =>
+      createStaticSource(commandItems, {
+        keywords: (item) => item.auxiliaryData?.keywords || [],
+      }),
+    [commandItems]
+  );
 
-  const handleRejoin = async () => {
-    if (!rec) return;
-    setActionBusy(true);
-    setActionError(null);
-    try {
-      await rejoinRecording(token, rec.id);
-      await queryClient.invalidateQueries();
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setActionBusy(false);
-    }
-  };
-
-  const handleRetryMail = async () => {
-    if (!rec) return;
-    setActionBusy(true);
-    setActionError(null);
-    try {
-      await retryMailDelivery(token, rec.id);
-      await queryClient.invalidateQueries();
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setActionBusy(false);
-    }
-  };
-
-  const handleDownload = async (format: 'txt' | 'vtt' | 'json' | 'md') => {
-    if (!rec) return;
-    setActionError(null);
-    try {
-      await downloadExportFile(token, rec.id, format);
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : String(err));
-    }
-  };
-
-  const handleShareReaderLink = async (): Promise<string | null> => {
-    if (!rec) return null;
-    setActionError(null);
-    try {
-      const res = await issueReaderToken(token, rec.id);
-      return `${window.location.origin}/ui#token=${res.ui_token}`;
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : String(err));
-      return null;
-    }
-  };
-
-  return (
-    <div className="min-h-screen bg-[#0b1120] text-slate-100">
-      <HeaderBar
-        healthy={Boolean(healthQuery.data)}
-        authMode={authMode}
-        hasSavedAccount={Boolean(savedAccountToken)}
-        onReturnToAccount={handleReturnToAccount}
-        activeNav={activeNav}
-        onChangeNav={handleChangeNav}
-        recordingsCount={allRecordings.length}
-        activeLiveCount={activeLiveCount}
-        calendarCount={
-          (calendarQuery.data?.events?.length || 0) +
-          (calendarQuery.data?.synced_events?.length || 0)
+  // Reader or unauthenticated top-bar shell
+  if (authMode.kind === 'unauthenticated' || authMode.kind === 'reader') {
+    return (
+      <AppShell
+        variant="surface"
+        height="fill"
+        contentPadding={0}
+        topNav={
+          <ReaderTopBar
+            healthy={Boolean(healthQuery.data)}
+            authMode={authMode}
+            hasSavedAccount={hasSavedAccount}
+            onReturnToAccount={handleReturnToAccount}
+            onOpenAuthDialog={() => setAuthDialogOpen(true)}
+          />
         }
-        livePoll={livePoll}
-        onToggleLivePoll={setLivePoll}
-        onManualRefresh={handleManualRefresh}
-        onOpenNewRecording={handleTriggerNewRecording}
-        onOpenAuthDialog={() => setAuthDialogOpen(true)}
+      >
+        {authMode.kind === 'unauthenticated' ? (
+          <WelcomeLandingView
+            healthy={Boolean(healthQuery.data)}
+            authError={authError}
+            onConnectToken={handleSaveToken}
+            onStartOidcLogin={handleStartOidcLogin}
+            onOpenAuthDialog={() => setAuthDialogOpen(true)}
+          />
+        ) : (
+          <MeetingDetailView
+            authMode={authMode}
+            recording={detailQuery.data || null}
+            transcript={transcriptQuery.data || null}
+            isLoading={detailQuery.isLoading || transcriptQuery.isLoading}
+            onRefresh={handleManualRefresh}
+            onDeleted={() => {}}
+          />
+        )}
+
+        <AuthGateDialog
+          open={authDialogOpen}
+          onOpenChange={setAuthDialogOpen}
+          currentToken={token}
+          authMode={authMode}
+          authError={authError}
+          onSaveToken={handleSaveToken}
+          onStartOidcLogin={handleStartOidcLogin}
+        />
+      </AppShell>
+    );
+  }
+
+  // Operator full workspace shell with Astryx SideNav + Layout
+  return (
+    <AppShell
+      variant="surface"
+      height="fill"
+      contentPadding={0}
+      sideNav={
+        <HeaderBar
+          healthy={Boolean(healthQuery.data)}
+          authMode={authMode}
+          hasSavedAccount={hasSavedAccount}
+          onReturnToAccount={handleReturnToAccount}
+          activeNav={activeNav}
+          onChangeNav={(nav) => {
+            if (nav !== 'meetings') {
+              setSelectedId(null);
+            }
+            setActiveNav(nav);
+          }}
+          recordingsCount={rawRecordings.length}
+          activeLiveCount={activeLiveCount}
+          calendarCount={
+            calendarSyncedEvents.length > 0
+              ? calendarSyncedEvents.length
+              : calendarEvents.length
+          }
+          livePoll={livePoll}
+          onToggleLivePoll={setLivePoll}
+          onManualRefresh={handleManualRefresh}
+          onOpenNewRecording={() => handleOpenNewModal('link')}
+          onOpenAuthDialog={() => setAuthDialogOpen(true)}
+          onOpenCommandPalette={() => setCommandPaletteOpen(true)}
+        />
+      }
+    >
+      {activeNav === 'calendar' ? (
+        <CalendarWorkspace
+          token={token}
+          events={calendarEvents}
+          connections={calendarConnections}
+          syncedEvents={calendarSyncedEvents}
+          onRefreshCalendar={() =>
+            queryClient.invalidateQueries({ queryKey: ['calendar'] })
+          }
+          onSelectRecording={handleOpenRecording}
+          onOpenImportModal={() => handleOpenNewModal('ics')}
+        />
+      ) : activeNav === 'system' ? (
+        <SystemView
+          healthy={Boolean(healthQuery.data)}
+          authMode={authMode}
+          recordings={rawRecordings}
+          livePoll={livePoll}
+          onToggleLivePoll={setLivePoll}
+          onManualRefresh={handleManualRefresh}
+          onOpenAuthDialog={() => setAuthDialogOpen(true)}
+          onSelectRecording={handleOpenRecording}
+        />
+      ) : selectedId ? (
+        <MeetingDetailView
+          authMode={authMode}
+          recording={detailQuery.data || null}
+          transcript={transcriptQuery.data || null}
+          isLoading={detailQuery.isLoading || transcriptQuery.isLoading}
+          onRefresh={handleManualRefresh}
+          onBackToOverview={() => setSelectedId(null)}
+          onDeleted={() => {
+            setSelectedId(null);
+            handleManualRefresh();
+          }}
+        />
+      ) : (
+        <RecordingSidebar
+          token={token}
+          recordings={filteredRecordings}
+          selectedId={selectedId}
+          onSelectRecording={handleOpenRecording}
+          providerFilter={providerFilter}
+          onProviderFilterChange={setProviderFilter}
+          quickFilter={quickFilter}
+          onQuickFilterChange={setQuickFilter}
+          titleSearch={titleSearch}
+          onTitleSearchChange={setTitleSearch}
+          onOpenNewRecording={() => handleOpenNewModal('link')}
+          onOpenIcsImport={() => handleOpenNewModal('ics')}
+          onCreatedRecording={(id) => {
+            handleManualRefresh();
+            handleOpenRecording(id);
+          }}
+          isLoading={recordingsQuery.isLoading}
+        />
+      )}
+
+      <CommandPalette<CommandItem>
+        isOpen={commandPaletteOpen}
+        onOpenChange={setCommandPaletteOpen}
+        searchSource={commandSearchSource}
+        label="Schnellsuche & Befehle"
+        emptySearchText="Keine passenden Aufnahmen oder Befehle gefunden."
+        onValueChange={(id) => {
+          const match = commandItems.find((item) => item.id === id);
+          if (match?.auxiliaryData?.action) {
+            setCommandPaletteOpen(false);
+            match.auxiliaryData.action();
+          }
+        }}
+      />
+
+      <NewRecordingDialog
+        open={newRecordingOpen}
+        onOpenChange={setNewRecordingOpen}
+        token={token}
+        initialTab={newRecordingTab}
+        onCreatedRecording={(id) => {
+          handleManualRefresh();
+          handleOpenRecording(id);
+        }}
+        onImportedCalendar={(recId) => {
+          handleManualRefresh();
+          if (recId) {
+            handleOpenRecording(recId);
+          } else {
+            setActiveNav('calendar');
+          }
+        }}
       />
 
       <AuthGateDialog
-        open={authDialogOpen || Boolean(authError && token)}
+        open={authDialogOpen}
         onOpenChange={setAuthDialogOpen}
         currentToken={token}
         authMode={authMode}
@@ -419,126 +591,6 @@ export function App() {
         onSaveToken={handleSaveToken}
         onStartOidcLogin={handleStartOidcLogin}
       />
-
-      {authMode.kind === 'operator' && (
-        <NewRecordingDialog
-          open={newRecordingOpen}
-          onOpenChange={setNewRecordingOpen}
-          token={token}
-          initialTab={newRecordingTab}
-          onCreatedRecording={(id) => {
-            handleSelectRecording(id);
-            queryClient.invalidateQueries();
-          }}
-          onImportedCalendar={(recId) => {
-            if (recId) {
-              handleSelectRecording(recId);
-            } else {
-              handleChangeNav('calendar');
-            }
-            queryClient.invalidateQueries();
-          }}
-        />
-      )}
-
-      {/* Main Content Area (offset by 240px left sidebar on desktop for operators) */}
-      <div className={authMode.kind !== 'operator' ? '' : 'lg:pl-60'}>
-        <main className="mx-auto max-w-6xl p-4 sm:p-6 lg:p-8">
-          {authMode.kind === 'unauthenticated' ? (
-            <WelcomeLandingView
-              healthy={Boolean(healthQuery.data)}
-              authError={authError}
-              onConnectToken={handleSaveToken}
-              onStartOidcLogin={handleStartOidcLogin}
-              onOpenAuthDialog={() => setAuthDialogOpen(true)}
-            />
-          ) : activeRecordingId ? (
-            /* Full-page Meeting Detail View (Otter / Fireflies style) */
-            !rec || !trans ? (
-              <div className="rounded-xl border border-slate-800 bg-slate-900/75 py-16 text-center text-xs text-slate-400">
-                {detailQuery.error
-                  ? `Fehler beim Laden der Aufnahme: ${(detailQuery.error as Error).message}`
-                  : 'Lade Meeting-Transkript und Sprecherdaten…'}
-              </div>
-            ) : (
-              <MeetingDetailView
-                recording={rec}
-                transcript={trans}
-                isOperator={authMode.kind === 'operator'}
-                backLabel={backLabel}
-                onBack={
-                  authMode.kind === 'operator'
-                    ? () => setSelectedId(null)
-                    : undefined
-                }
-                onCancel={handleCancel}
-                onDelete={handleDelete}
-                onRejoin={handleRejoin}
-                onRetryMail={handleRetryMail}
-                onShareReaderLink={handleShareReaderLink}
-                onDownload={handleDownload}
-                actionBusy={actionBusy}
-                actionError={actionError}
-              />
-            )
-          ) : activeNav === 'home' ? (
-            <HomeView
-              token={token}
-              recordings={allRecordings}
-              calendarEvents={calendarQuery.data?.events || []}
-              onOpenRecording={handleSelectRecording}
-              onNavigateMeetings={() => handleChangeNav('meetings')}
-              onNavigateCalendar={() => handleChangeNav('calendar')}
-              onOpenIcsImport={handleOpenIcsImportModal}
-              onCreatedRecording={(id) => {
-                handleSelectRecording(id);
-                queryClient.invalidateQueries();
-              }}
-            />
-          ) : activeNav === 'meetings' ? (
-            <RecordingSidebar
-              recordings={filteredRecordings}
-              selectedId={selectedId}
-              onSelectRecording={handleSelectRecording}
-              providerFilter={providerFilter}
-              onProviderFilterChange={setProviderFilter}
-              quickFilter={quickFilter}
-              onQuickFilterChange={setQuickFilter}
-              titleSearch={titleSearch}
-              onTitleSearchChange={setTitleSearch}
-              onOpenNewRecording={() => {
-                setNewRecordingTab('link');
-                setNewRecordingOpen(true);
-              }}
-              isLoading={
-                filteredRecordingsQuery.isLoading ||
-                allRecordingsQuery.isLoading
-              }
-            />
-          ) : activeNav === 'calendar' ? (
-            <CalendarWorkspace
-              token={token}
-              events={calendarQuery.data?.events || []}
-              connections={calendarQuery.data?.connections || []}
-              syncedEvents={calendarQuery.data?.synced_events || []}
-              onRefreshCalendar={handleManualRefresh}
-              onSelectRecording={handleSelectRecording}
-              onOpenImportModal={handleOpenIcsImportModal}
-            />
-          ) : (
-            <SystemView
-              healthy={Boolean(healthQuery.data)}
-              authMode={authMode}
-              recordings={allRecordings}
-              livePoll={livePoll}
-              onToggleLivePoll={setLivePoll}
-              onManualRefresh={handleManualRefresh}
-              onOpenAuthDialog={() => setAuthDialogOpen(true)}
-              onSelectRecording={handleSelectRecording}
-            />
-          )}
-        </main>
-      </div>
-    </div>
+    </AppShell>
   );
 }

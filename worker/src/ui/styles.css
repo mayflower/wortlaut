@@ -1,31 +1,27 @@
-@import "tailwindcss";
+@layer reset, theme, base, astryx-base, astryx-theme, components, utilities;
 
-:root {
-  color-scheme: dark;
-}
+@import '@astryxdesign/theme-stone/fonts.css';
+@import 'tailwindcss/theme.css' layer(theme);
+@import 'tailwindcss/preflight.css' layer(base);
+@import '@astryxdesign/core/reset.css';
+@import '@astryxdesign/core/astryx.css';
+@import '@astryxdesign/theme-stone/theme.css';
+@import '@astryxdesign/core/tailwind-theme.css';
+@import 'tailwindcss/utilities.css' layer(utilities);
 
-body {
-  margin: 0;
-  background-color: #0b1120;
-  color: #f8fafc;
-  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  -webkit-font-smoothing: antialiased;
-}
+@layer base {
+  html,
+  body,
+  #root {
+    min-height: 100%;
+    height: 100%;
+    margin: 0;
+  }
 
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-
-::-webkit-scrollbar-track {
-  background: rgba(15, 23, 42, 0.4);
-}
-
-::-webkit-scrollbar-thumb {
-  background: rgba(71, 85, 105, 0.7);
-  border-radius: 9999px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: rgba(148, 163, 184, 0.8);
+  body {
+    background-color: var(--color-background-body, #101018);
+    color: var(--color-text-primary, #f0f0f9);
+    font-family: var(--font-family-body, system-ui, -apple-system, sans-serif);
+    -webkit-font-smoothing: antialiased;
+  }
 }

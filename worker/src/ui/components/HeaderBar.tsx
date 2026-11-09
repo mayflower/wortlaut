@@ -5,12 +5,33 @@ import {
   FolderOpen,
   Home,
   KeyRound,
+  Moon,
   Plus,
   RefreshCw,
+  Search,
   ShieldCheck,
+  Sun,
 } from 'lucide-react';
+import { Button } from '@astryxdesign/core/Button';
+import { IconButton } from '@astryxdesign/core/IconButton';
+import { HStack } from '@astryxdesign/core/HStack';
+import { VStack } from '@astryxdesign/core/VStack';
+import { Text } from '@astryxdesign/core/Text';
+import { StatusDot } from '@astryxdesign/core/StatusDot';
+import { Token } from '@astryxdesign/core/Token';
+import { Switch } from '@astryxdesign/core/Switch';
+import {
+  SegmentedControl,
+  SegmentedControlItem,
+} from '@astryxdesign/core/SegmentedControl';
+import {
+  SideNav,
+  SideNavHeading,
+  SideNavItem,
+  SideNavSection,
+} from '@astryxdesign/core/SideNav';
 import type { AuthMode } from '../types';
-import { Button, cn } from './ui/primitives';
+import { useThemeMode, type ThemeMode } from './ui/primitives';
 
 export type NavSection = 'home' | 'meetings' | 'calendar' | 'system';
 
@@ -29,13 +50,104 @@ export interface HeaderBarProps {
   onManualRefresh: () => void;
   onOpenNewRecording: () => void;
   onOpenAuthDialog: () => void;
+  onOpenCommandPalette?: () => void;
+}
+
+export function ReaderTopBar({
+  healthy,
+  authMode,
+  hasSavedAccount,
+  onReturnToAccount,
+  onOpenAuthDialog,
+}: Pick<
+  HeaderBarProps,
+  | 'healthy'
+  | 'authMode'
+  | 'hasSavedAccount'
+  | 'onReturnToAccount'
+  | 'onOpenAuthDialog'
+>) {
+  const { mode, setMode } = useThemeMode();
+
+  return (
+    <HStack
+      as="header"
+      justify="between"
+      vAlign="center"
+      wrap="wrap"
+      gap={3}
+      paddingInline={4}
+      paddingBlock={2}
+      className="border-b border-[var(--color-border)] bg-[var(--color-background-surface)]"
+    >
+      <HStack gap={2} vAlign="center" wrap="wrap">
+        <span id="health-dot">
+          <StatusDot
+            variant={healthy ? 'success' : 'error'}
+            label="wortlaut"
+            tooltip={healthy ? 'System bereit' : 'System nicht erreichbar'}
+          />
+        </span>
+        {authMode.kind === 'reader' ? (
+          <Token
+            size="sm"
+            color="blue"
+            icon={<ShieldCheck className="h-3 w-3" />}
+            label="Freigegebenes Transkript (Nur-Lese-Link)"
+          />
+        ) : (
+          <Text type="supporting" color="secondary">
+            Google Meet · Microsoft Teams · Cisco Webex
+          </Text>
+        )}
+      </HStack>
+
+      <HStack gap={2} vAlign="center" wrap="wrap">
+        <SegmentedControl
+          size="sm"
+          label="Farbschema"
+          value={mode}
+          onChange={(v) => setMode(v as ThemeMode)}
+        >
+          <SegmentedControlItem
+            value="light"
+            label="Hell"
+            icon={<Sun className="h-3.5 w-3.5" />}
+          />
+          <SegmentedControlItem
+            value="dark"
+            label="Dunkel"
+            icon={<Moon className="h-3.5 w-3.5" />}
+          />
+          <SegmentedControlItem value="system" label="Auto" />
+        </SegmentedControl>
+
+        {authMode.kind === 'reader' && hasSavedAccount && onReturnToAccount && (
+          <span id="return-to-account-btn">
+            <Button
+              variant="primary"
+              size="sm"
+              icon={<Home className="h-3.5 w-3.5" />}
+              label="Zurück zu meinem Konto"
+              onClick={onReturnToAccount}
+            />
+          </span>
+        )}
+        <Button
+          variant={authMode.kind === 'unauthenticated' ? 'primary' : 'secondary'}
+          size="sm"
+          icon={<KeyRound className="h-3.5 w-3.5" />}
+          label={authMode.kind === 'reader' ? 'Zugang wechseln' : 'Anmelden'}
+          onClick={onOpenAuthDialog}
+        />
+      </HStack>
+    </HStack>
+  );
 }
 
 export function HeaderBar({
   healthy,
   authMode,
-  hasSavedAccount,
-  onReturnToAccount,
   activeNav,
   onChangeNav,
   recordingsCount,
@@ -46,293 +158,153 @@ export function HeaderBar({
   onManualRefresh,
   onOpenNewRecording,
   onOpenAuthDialog,
+  onOpenCommandPalette,
 }: HeaderBarProps) {
-  // Clean, distraction-free top bar for single-recording Reader Links or unauthenticated Landing Page
-  if (authMode.kind === 'reader' || authMode.kind === 'unauthenticated') {
-    return (
-      <header className="sticky top-0 z-30 flex flex-wrap items-center justify-between gap-3 border-b border-slate-800/90 bg-slate-950/95 px-4 sm:px-8 py-3.5 backdrop-blur-sm">
-        <div className="flex flex-wrap items-center gap-3">
-          <span
-            id="health-dot"
-            title={healthy ? 'System bereit' : 'System nicht erreichbar'}
-            className={cn(
-              'h-2.5 w-2.5 rounded-full',
-              healthy
-                ? 'bg-emerald-400 shadow-[0_0_8px_#34d399]'
-                : 'bg-red-500'
-            )}
-          />
-          <span className="text-base font-bold tracking-tight text-white">
-            wortlaut
-          </span>
-          {authMode.kind === 'reader' ? (
-            <span
-              title="Schreibgeschützter Lese-Link für genau diese Besprechung"
-              className="inline-flex items-center gap-1.5 rounded-full border border-sky-800/70 bg-sky-950/60 px-2.5 py-0.5 text-[11px] font-medium text-sky-300"
-            >
-              <ShieldCheck className="h-3 w-3 text-sky-400" />
-              <span>Freigegebenes Transkript (Nur-Lese-Link)</span>
-            </span>
-          ) : (
-            <span className="hidden sm:inline-flex items-center gap-1.5 rounded-full border border-slate-800 bg-slate-900/80 px-2.5 py-0.5 text-[11px] font-medium text-slate-300">
-              <span>Google Meet · Microsoft Teams · Cisco Webex</span>
-            </span>
-          )}
-        </div>
-
-        <div className="flex items-center gap-2">
-          {authMode.kind === 'reader' && hasSavedAccount && onReturnToAccount && (
-            <Button
-              variant="primary"
-              size="sm"
-              id="return-to-account-btn"
-              onClick={onReturnToAccount}
-            >
-              <Home className="h-3.5 w-3.5" />
-              <span>Zurück zu meinem Konto</span>
-            </Button>
-          )}
-          <Button
-            variant={authMode.kind === 'unauthenticated' ? 'primary' : 'outline'}
-            size="sm"
-            onClick={onOpenAuthDialog}
-          >
-            <KeyRound className="h-3.5 w-3.5" />
-            <span>
-              {authMode.kind === 'reader' ? 'Zugang wechseln' : 'Anmelden'}
-            </span>
-          </Button>
-        </div>
-      </header>
-    );
-  }
-
-  const navItems: Array<{
-    id: NavSection;
-    label: string;
-    icon: React.ReactNode;
-    badge?: number;
-    badgeLive?: boolean;
-  }> = [
-    {
-      id: 'home',
-      label: 'Übersicht',
-      icon: <Home className="h-4 w-4" />,
-      badge: activeLiveCount > 0 ? activeLiveCount : undefined,
-      badgeLive: activeLiveCount > 0,
-    },
-    {
-      id: 'meetings',
-      label: 'Meetings',
-      icon: <FolderOpen className="h-4 w-4" />,
-      badge: recordingsCount,
-    },
-    {
-      id: 'calendar',
-      label: 'Kalender',
-      icon: <Calendar className="h-4 w-4" />,
-      badge: calendarCount,
-    },
-    {
-      id: 'system',
-      label: 'System & Diagnose',
-      icon: <Activity className="h-4 w-4" />,
-    },
-  ];
+  const { mode, setMode } = useThemeMode();
+  const isMeetingsActive = activeNav === 'home' || activeNav === 'meetings';
 
   return (
-    <>
-      {/* Desktop Left App Sidebar */}
-      <aside className="hidden lg:fixed lg:inset-y-0 lg:left-0 lg:z-30 lg:flex lg:w-60 lg:flex-col lg:border-r lg:border-slate-800/90 lg:bg-slate-950/95">
-        {/* Brand Header */}
-        <div className="flex items-center justify-between border-b border-slate-800/80 px-5 py-4">
-          <button
-            type="button"
-            onClick={() => onChangeNav('home')}
-            className="flex items-center gap-2.5 text-left cursor-pointer"
-          >
-            <span
-              id="health-dot"
-              title={healthy ? 'System bereit' : 'System nicht erreichbar'}
-              className={cn(
-                'h-2.5 w-2.5 rounded-full transition-colors',
-                healthy
-                  ? 'bg-emerald-400 shadow-[0_0_8px_#34d399]'
-                  : 'bg-red-500'
-              )}
-            />
-            <div>
-              <div className="text-base font-bold tracking-tight text-white">
-                wortlaut
-              </div>
-              <div className="text-[10px] font-medium text-slate-400">
-                Meet · Teams · Webex
-              </div>
-            </div>
-          </button>
-        </div>
-
-        {/* Primary CTA */}
-        {authMode.kind === 'operator' && (
-          <div className="px-4 pt-4 pb-2">
-            <Button
-              variant="primary"
-              size="md"
-              onClick={onOpenNewRecording}
-              id="open-dispatch-modal-btn"
-              className="w-full justify-center shadow-sm"
-            >
-              <Plus className="h-4 w-4" />
-              <span>Meeting aufzeichnen</span>
-            </Button>
-          </div>
-        )}
-
-        {/* Primary Navigation Links */}
-        <nav
-          aria-label="Hauptnavigation"
-          className="flex-1 space-y-1 px-3 py-3"
-        >
-          {authMode.kind === 'operator'
-            ? navItems.map((item) => {
-                const active = activeNav === item.id;
-                return (
-                  <button
-                    key={item.id}
-                    type="button"
-                    onClick={() => onChangeNav(item.id)}
-                    className={cn(
-                      'flex w-full items-center justify-between rounded-lg px-3 py-2 text-xs font-medium transition-colors cursor-pointer',
-                      active
-                        ? 'bg-sky-950/80 text-sky-300 border border-sky-800/60 font-semibold'
-                        : 'text-slate-400 hover:bg-slate-900 hover:text-slate-200 border border-transparent'
-                    )}
-                  >
-                    <span className="flex items-center gap-2.5">
-                      {item.icon}
-                      <span>{item.label}</span>
-                    </span>
-
-                    {item.badge !== undefined && (
-                      <span
-                        id={
-                          item.id === 'calendar' ? 'calendar-count' : undefined
-                        }
-                        className={cn(
-                          'rounded-full px-2 py-0.5 text-[10px] font-semibold',
-                          item.badgeLive
-                            ? 'bg-emerald-950 text-emerald-300 border border-emerald-700/60'
-                            : active
-                              ? 'bg-sky-900/80 text-sky-200'
-                              : 'bg-slate-900 text-slate-400'
-                        )}
-                      >
-                        {item.badge}
-                      </span>
-                    )}
-                  </button>
-                );
-              })
-            : null}
-        </nav>
-
-        {/* Sidebar Footer: Live Polling + Token */}
-        <div className="border-t border-slate-800/80 p-3 space-y-2">
-          <div className="flex items-center justify-between gap-2 px-1">
-            <label className="inline-flex items-center gap-1.5 text-[11px] text-slate-400 cursor-pointer select-none">
-              <input
-                id="auto-refresh"
-                type="checkbox"
-                checked={livePoll}
-                onChange={(e) => onToggleLivePoll(e.target.checked)}
-                className="h-3.5 w-3.5 rounded border-slate-700 bg-slate-900 text-sky-500 focus:ring-sky-500"
+    <SideNav
+      collapsible={{ defaultIsCollapsed: false, hasButton: true }}
+      header={
+        <SideNavHeading
+          heading="wortlaut"
+          subheading="Meet · Teams · Webex"
+          headerEndContent={
+            <span id="health-dot">
+              <StatusDot
+                variant={healthy ? 'success' : 'error'}
+                label=""
+                tooltip={healthy ? 'System bereit' : 'System nicht erreichbar'}
               />
-              <span>Live-Update (3s)</span>
-            </label>
-
-            <button
-              type="button"
-              id="refresh-btn"
-              onClick={onManualRefresh}
-              title="Daten jetzt aktualisieren"
-              className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-slate-400 hover:bg-slate-900 hover:text-slate-200 cursor-pointer"
-            >
-              <RefreshCw className="h-3 w-3" />
-              <span>Sync</span>
-            </button>
-          </div>
-
-          <button
-            type="button"
-            onClick={onOpenAuthDialog}
-            className="flex w-full items-center justify-between gap-2 rounded-lg border border-slate-800 bg-slate-900/90 px-3 py-2 text-xs text-slate-300 hover:border-slate-700 hover:text-white cursor-pointer"
-          >
-            <span className="flex items-center gap-2 min-w-0">
-              <KeyRound className="h-3.5 w-3.5 shrink-0 text-sky-400" />
-              <span className="truncate font-medium">
-                {authMode.kind === 'operator'
-                  ? authMode.user
-                    ? authMode.user.email
-                    : 'API-Schlüssel aktiv'
-                  : 'Anmelden'}
-              </span>
             </span>
-            <span className="shrink-0 text-[10px] text-slate-500">
-              {authMode.kind === 'operator' && authMode.user ? 'SSO' : 'Konto'}
+          }
+        />
+      }
+      topContent={
+        authMode.kind === 'operator' ? (
+          <VStack gap={1.5} paddingInline={2} paddingBlockEnd={1}>
+            <span id="open-dispatch-modal-btn" className="contents">
+              <Button
+                variant="primary"
+                size="md"
+                width="fill"
+                icon={<Plus className="h-4 w-4" />}
+                label="Meeting aufzeichnen"
+                onClick={onOpenNewRecording}
+              />
             </span>
-          </button>
-        </div>
-      </aside>
-
-      {/* Mobile / Tablet Top Header */}
-      <header className="sticky top-0 z-30 flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 bg-slate-950/95 px-4 py-2.5 backdrop-blur-sm lg:hidden">
-        <div className="flex items-center gap-2">
-          <span
-            className={cn(
-              'h-2.5 w-2.5 rounded-full',
-              healthy ? 'bg-emerald-400' : 'bg-red-500'
+            {onOpenCommandPalette && (
+              <Button
+                variant="secondary"
+                size="sm"
+                width="fill"
+                icon={<Search className="h-3.5 w-3.5" />}
+                label="Schnellsuche (⌘K)"
+                onClick={onOpenCommandPalette}
+              />
             )}
-          />
-          <span className="text-base font-bold text-white">wortlaut</span>
-        </div>
-
-        {authMode.kind === 'operator' && (
-          <div className="flex items-center gap-1 overflow-x-auto">
-            {navItems.map((item) => (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => onChangeNav(item.id)}
-                className={cn(
-                  'inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium cursor-pointer',
-                  activeNav === item.id
-                    ? 'bg-sky-950 text-sky-300 border border-sky-800/60'
-                    : 'text-slate-400 hover:text-slate-200'
-                )}
-              >
-                {item.icon}
-                <span>{item.label}</span>
-              </button>
-            ))}
-          </div>
-        )}
-
-        <div className="flex items-center gap-1.5">
-          {authMode.kind === 'operator' && (
-            <Button
-              variant="primary"
+          </VStack>
+        ) : undefined
+      }
+      footer={
+        <VStack gap={2} paddingInline={2} paddingBlock={1.5}>
+          <HStack justify="between" vAlign="center" gap={1}>
+            <Switch
               size="sm"
-              onClick={onOpenNewRecording}
-            >
-              <Plus className="h-3.5 w-3.5" />
-              <span>Aufzeichnen</span>
-            </Button>
-          )}
-          <Button variant="outline" size="sm" onClick={onOpenAuthDialog}>
-            <KeyRound className="h-3.5 w-3.5 text-sky-400" />
-          </Button>
-        </div>
-      </header>
-    </>
+              label="Live-Update (3s)"
+              value={livePoll}
+              onChange={(checked) => onToggleLivePoll(checked)}
+            />
+            <input
+              id="auto-refresh"
+              type="checkbox"
+              checked={livePoll}
+              onChange={(e) => onToggleLivePoll(e.target.checked)}
+              className="sr-only"
+              aria-hidden="true"
+              tabIndex={-1}
+            />
+            <span id="refresh-btn">
+              <IconButton
+                variant="ghost"
+                size="sm"
+                label="Daten jetzt aktualisieren"
+                tooltip="Jetzt aktualisieren"
+                icon={<RefreshCw className="h-3.5 w-3.5" />}
+                onClick={onManualRefresh}
+              />
+            </span>
+          </HStack>
+
+          <SegmentedControl
+            size="sm"
+            layout="fill"
+            label="Farbschema"
+            value={mode}
+            onChange={(v) => setMode(v as ThemeMode)}
+          >
+            <SegmentedControlItem value="light" label="Hell" />
+            <SegmentedControlItem value="dark" label="Dunkel" />
+            <SegmentedControlItem value="system" label="Auto" />
+          </SegmentedControl>
+
+          <Button
+            variant="secondary"
+            size="sm"
+            width="fill"
+            icon={<KeyRound className="h-3.5 w-3.5" />}
+            label={
+              authMode.kind === 'operator'
+                ? authMode.user
+                  ? authMode.user.email
+                  : 'API-Schlüssel aktiv'
+                : 'Anmelden'
+            }
+            onClick={onOpenAuthDialog}
+          />
+        </VStack>
+      }
+    >
+      {authMode.kind === 'operator' && (
+        <SideNavSection title="Navigation" isHeaderHidden>
+          <SideNavItem
+            label="Aufnahmen"
+            icon={<FolderOpen className="h-4 w-4" />}
+            isSelected={isMeetingsActive}
+            onClick={() => onChangeNav('home')}
+            endContent={
+              <HStack gap={1} vAlign="center">
+                {activeLiveCount > 0 && (
+                  <StatusDot
+                    variant="success"
+                    isPulsing
+                    label={`${activeLiveCount} live`}
+                  />
+                )}
+                <Token size="sm" label={String(recordingsCount)} />
+              </HStack>
+            }
+          />
+          <SideNavItem
+            label="Kalender"
+            icon={<Calendar className="h-4 w-4" />}
+            isSelected={activeNav === 'calendar'}
+            onClick={() => onChangeNav('calendar')}
+            endContent={
+              <span id="calendar-count">
+                <Token size="sm" label={String(calendarCount)} />
+              </span>
+            }
+          />
+          <SideNavItem
+            label="System & Diagnose"
+            icon={<Activity className="h-4 w-4" />}
+            isSelected={activeNav === 'system'}
+            onClick={() => onChangeNav('system')}
+          />
+        </SideNavSection>
+      )}
+    </SideNav>
   );
 }

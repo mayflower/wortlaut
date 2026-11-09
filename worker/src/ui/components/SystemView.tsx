@@ -1,25 +1,37 @@
 import React from 'react';
 import {
-  Activity,
-  AlertTriangle,
   ArrowRight,
   BookOpen,
   CheckCircle2,
-  Cpu,
   KeyRound,
-  Mail,
-  Server,
-  ShieldCheck,
-  Video,
-  XCircle,
 } from 'lucide-react';
+import { Layout, LayoutContent, LayoutHeader } from '@astryxdesign/core/Layout';
+import { Heading } from '@astryxdesign/core/Heading';
+import { Text } from '@astryxdesign/core/Text';
+import { HStack } from '@astryxdesign/core/HStack';
+import { VStack } from '@astryxdesign/core/VStack';
+import { Section } from '@astryxdesign/core/Section';
+import {
+  MetadataList,
+  MetadataListItem,
+} from '@astryxdesign/core/MetadataList';
+import { List, ListItem } from '@astryxdesign/core/List';
+import { StatusDot } from '@astryxdesign/core/StatusDot';
+import { Button } from '@astryxdesign/core/Button';
+import { EmptyState } from '@astryxdesign/core/EmptyState';
+import {
+  Table,
+  pixel,
+  proportional,
+  type TableColumn,
+} from '@astryxdesign/core/Table';
 import {
   formatRecordingTitle,
   getFailureReasons,
   getInstanceInfo,
 } from '../api';
 import type { AuthMode, RecordingSummary } from '../types';
-import { Button, ProviderBadge, StatusBadge, cn } from './ui/primitives';
+import { ProviderBadge, StatusBadge } from './ui/primitives';
 
 export interface SystemViewProps {
   healthy: boolean;
@@ -32,26 +44,25 @@ export interface SystemViewProps {
   onSelectRecording: (id: string) => void;
 }
 
+type ProblemRow = RecordingSummary & Record<string, unknown>;
+
 export function SystemView({
   healthy,
-  authMode,
   recordings,
-  livePoll,
-  onToggleLivePoll,
-  onManualRefresh,
   onOpenAuthDialog,
   onSelectRecording,
 }: SystemViewProps) {
   const failureReasons = getFailureReasons();
   const instance = getInstanceInfo();
 
-  const activeJobs = recordings.filter(
-    (r) =>
-      r.participation === 'starting' ||
-      r.participation === 'preparing' ||
-      r.participation === 'joining' ||
-      r.participation === 'waiting_admission' ||
-      r.participation === 'capturing'
+  const activeJobs = recordings.filter((r) =>
+    [
+      'starting',
+      'preparing',
+      'joining',
+      'waiting_admission',
+      'capturing',
+    ].includes(r.participation)
   );
 
   const asrJobs = recordings.filter(
@@ -73,283 +84,260 @@ export function SystemView({
     );
   });
 
+  const problemColumns: TableColumn<ProblemRow>[] = [
+    {
+      key: 'participation',
+      header: 'Status',
+      width: pixel(175),
+      renderCell: (row) => (
+        <StatusBadge
+          participation={row.participation}
+          processing={row.processing}
+          hasError={true}
+        />
+      ),
+    },
+    {
+      key: 'title',
+      header: 'Besprechung',
+      width: proportional(1.6, { minWidth: 200 }),
+      renderCell: (row) => (
+        <HStack gap={2} vAlign="center" wrap="wrap">
+          <ProviderBadge provider={row.provider} />
+          <Text type="body" weight="semibold" color="primary">
+            {formatRecordingTitle(row)}
+          </Text>
+        </HStack>
+      ),
+    },
+    {
+      key: 'participation_reason',
+      header: 'Hinweis / Abbruchgrund',
+      width: proportional(2, { minWidth: 220 }),
+      renderCell: (row) => {
+        const reason = row.participation_reason;
+        const reasonText =
+          reason && failureReasons[reason]
+            ? failureReasons[reason]
+            : reason || 'Verarbeitungsfehler';
+        return (
+          <Text type="supporting" color="secondary">
+            {reasonText}
+          </Text>
+        );
+      },
+    },
+    {
+      key: 'action',
+      header: '',
+      width: pixel(110),
+      align: 'end',
+      renderCell: (row) => (
+        <Button
+          variant="ghost"
+          size="sm"
+          label="Öffnen"
+          endContent={<ArrowRight className="h-3.5 w-3.5" />}
+          onClick={() => onSelectRecording(row.id)}
+        />
+      ),
+    },
+  ];
+
   return (
-    <div className="mx-auto max-w-6xl space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-bold text-white">
-            System &amp; Diagnose
-          </h1>
-          <p className="text-xs text-slate-400">
-            Plattformstatus, konfigurierte Konferenz-Provider, Kapazitätsgrenzen
-            und Aufzeichnungen mit Handlungsbedarf.
-          </p>
-        </div>
+    <Layout
+      height="fill"
+      header={
+        <LayoutHeader hasDivider>
+          <HStack justify="between" vAlign="center" wrap="wrap" gap={3}>
+            <VStack gap={0.5}>
+              <Heading level={1}>System &amp; Diagnose</Heading>
+              <Text type="supporting" color="secondary">
+                Plattformstatus, konfigurierte Konferenz-Provider,
+                Kapazitätsgrenzen und Aufzeichnungen mit Handlungsbedarf.
+              </Text>
+            </VStack>
 
-        <div className="flex flex-wrap items-center gap-2">
-          <a
-            href="/docs"
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex items-center gap-1.5 rounded-md border border-slate-700 bg-slate-800 px-2.5 py-1 text-xs font-medium text-slate-100 hover:bg-slate-700 transition-colors"
-          >
-            <BookOpen className="h-3.5 w-3.5 text-sky-400" />
-            <span>OpenAPI / REST-Doku (/docs)</span>
-          </a>
-
-          <Button variant="secondary" size="sm" onClick={onOpenAuthDialog}>
-            <KeyRound className="h-3.5 w-3.5" />
-            <span>Zugang &amp; Konto</span>
-          </Button>
-        </div>
-      </div>
-
-      {/* System Metrics Cards */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <div className="rounded-xl border border-slate-800 bg-slate-900/75 p-4 space-y-1.5">
-          <div className="flex items-center justify-between text-xs text-slate-400">
-            <span>API &amp; Datenbank</span>
-            <Server className="h-4 w-4 text-sky-400" />
-          </div>
-          <div className="flex items-center gap-2">
-            <span
-              className={cn(
-                'h-2.5 w-2.5 rounded-full',
-                healthy ? 'bg-emerald-400' : 'bg-amber-400'
-              )}
-            />
-            <span className="text-base font-bold text-white">
-              {healthy ? 'Bereit (/health/ready)' : 'Prüfe Verbindung…'}
-            </span>
-          </div>
-          <p className="text-[11px] text-slate-500">
-            PostgreSQL, S3-Speicher &amp; Prometheus <code>/metrics</code>
-          </p>
-        </div>
-
-        <div className="rounded-xl border border-slate-800 bg-slate-900/75 p-4 space-y-1.5">
-          <div className="flex items-center justify-between text-xs text-slate-400">
-            <span>Aktive Meeting-Bots</span>
-            <Activity className="h-4 w-4 text-emerald-400" />
-          </div>
-          <div className="text-xl font-bold text-white">
-            {activeJobs.length}{' '}
-            <span className="text-sm font-normal text-slate-400">
-              / {instance.limits.maxActiveMeetings} max.
-            </span>
-          </div>
-          <p className="text-[11px] text-slate-500">
-            Kurzlebige Playwright/WebRTC-Kubernetes-Jobs
-          </p>
-        </div>
-
-        <div className="rounded-xl border border-slate-800 bg-slate-900/75 p-4 space-y-1.5">
-          <div className="flex items-center justify-between text-xs text-slate-400">
-            <span>Parakeet-ASR-Queue</span>
-            <Cpu className="h-4 w-4 text-violet-400" />
-          </div>
-          <div className="text-xl font-bold text-white">{asrJobs.length}</div>
-          <p className="text-[11px] text-slate-500">
-            Aufnahmen in lokaler GPU-Spracherkennung
-          </p>
-        </div>
-
-        <div className="rounded-xl border border-slate-800 bg-slate-900/75 p-4 space-y-1.5">
-          <div className="flex items-center justify-between text-xs text-slate-400">
-            <span>Aufbewahrungsfristen</span>
-            <ShieldCheck className="h-4 w-4 text-sky-400" />
-          </div>
-          <div className="text-base font-bold text-white">
-            {instance.retention.audioHours}h Audio ·{' '}
-            {instance.retention.transcriptDays}d Text
-          </div>
-          <p className="text-[11px] text-slate-500">
-            Bot-Standardname: „{instance.assistantName}“
-          </p>
-        </div>
-      </div>
-
-      {/* Configured Providers & Mail Readiness */}
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <div className="rounded-xl border border-slate-800 bg-slate-900/75 p-5 space-y-3">
-          <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-slate-400">
-            <Video className="h-4 w-4 text-sky-400" />
-            <span>Konfigurierte Konferenz-Provider</span>
-          </div>
-          <div className="divide-y divide-slate-800/80 rounded-lg border border-slate-800 bg-slate-950/60">
-            <div className="flex items-center justify-between px-4 py-3 text-xs">
-              <div>
-                <div className="font-semibold text-white">Google Meet</div>
-                <div className="text-[11px] text-slate-400">
-                  Playwright/Chromium WebRTC ·{' '}
-                  {instance.providers.google_meet_auth_session
-                    ? 'Gespeicherte Google-Session aktiv'
-                    : 'Gast-Modus (ohne Login-Session)'}
-                </div>
-              </div>
-              <span
-                className={cn(
-                  'inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-semibold border',
-                  instance.providers.google_meet
-                    ? 'border-emerald-800 bg-emerald-950 text-emerald-300'
-                    : 'border-slate-700 bg-slate-900 text-slate-400'
-                )}
-              >
-                {instance.providers.google_meet ? (
-                  <CheckCircle2 className="h-3 w-3" />
-                ) : (
-                  <XCircle className="h-3 w-3" />
-                )}
-                {instance.providers.google_meet ? 'Aktiviert' : 'Deaktiviert'}
-              </span>
-            </div>
-
-            <div className="flex items-center justify-between px-4 py-3 text-xs">
-              <div>
-                <div className="font-semibold text-white">Microsoft Teams</div>
-                <div className="text-[11px] text-slate-400">
-                  Playwright/Chromium Web-Client · Gast-Beitritt
-                </div>
-              </div>
-              <span
-                className={cn(
-                  'inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-semibold border',
-                  instance.providers.teams
-                    ? 'border-emerald-800 bg-emerald-950 text-emerald-300'
-                    : 'border-slate-700 bg-slate-900 text-slate-400'
-                )}
-              >
-                {instance.providers.teams ? (
-                  <CheckCircle2 className="h-3 w-3" />
-                ) : (
-                  <XCircle className="h-3 w-3" />
-                )}
-                {instance.providers.teams ? 'Aktiviert' : 'Deaktiviert'}
-              </span>
-            </div>
-
-            <div className="flex items-center justify-between px-4 py-3 text-xs">
-              <div>
-                <div className="font-semibold text-white">Cisco Webex</div>
-                <div className="text-[11px] text-slate-400">
-                  Browser-SDK / Service-Token
-                </div>
-              </div>
-              <span
-                className={cn(
-                  'inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[11px] font-semibold border',
-                  instance.providers.webex
-                    ? 'border-emerald-800 bg-emerald-950 text-emerald-300'
-                    : 'border-slate-700 bg-slate-900 text-slate-400'
-                )}
-              >
-                {instance.providers.webex ? (
-                  <CheckCircle2 className="h-3 w-3" />
-                ) : (
-                  <XCircle className="h-3 w-3" />
-                )}
-                {instance.providers.webex
-                  ? 'Aktiviert'
-                  : 'Kein Zugang hinterlegt'}
-              </span>
-            </div>
-          </div>
-        </div>
-
-        <div className="rounded-xl border border-slate-800 bg-slate-900/75 p-5 space-y-3">
-          <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-slate-400">
-            <Mail className="h-4 w-4 text-emerald-400" />
-            <span>Kalender-Postfach &amp; E-Mail-Versand</span>
-          </div>
-          <div className="divide-y divide-slate-800/80 rounded-lg border border-slate-800 bg-slate-950/60 text-xs">
-            <div className="flex items-center justify-between px-4 py-3">
-              <span className="text-slate-300">Bot-Einladungsadresse</span>
-              <code className="font-mono text-slate-100">
-                {instance.botEmail || 'Nicht konfiguriert'}
-              </code>
-            </div>
-            <div className="flex items-center justify-between px-4 py-3">
-              <span className="text-slate-300">
-                IMAP-Kalenderempfang / SMTP-Ergebnisversand
-              </span>
-              <span className="font-medium text-slate-200">
-                IMAP: {instance.mail.imapEnabled ? 'Aktiv' : 'Aus'} · SMTP:{' '}
-                {instance.mail.smtpEnabled ? 'Aktiv' : 'Aus'}
-              </span>
-            </div>
-            <div className="flex items-center justify-between px-4 py-3">
-              <span className="text-slate-300">
-                Warteraum-Timeout / Leerer-Raum-Timeout
-              </span>
-              <span className="font-medium text-slate-200">
-                {Math.round(instance.limits.lobbyTimeoutSeconds / 60)} Min. /{' '}
-                {Math.round(instance.limits.emptyRoomTimeoutSeconds / 60)} Min.
-              </span>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Problem / Error Recordings */}
-      <div className="rounded-xl border border-slate-800 bg-slate-900/75 p-5 space-y-3">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <AlertTriangle className="h-4 w-4 text-amber-400" />
-            <h2 className="text-sm font-bold text-white">
-              Aufzeichnungen mit Hinweis oder Abbruch (
-              {problemRecordings.length})
-            </h2>
-          </div>
-        </div>
-
-        {problemRecordings.length === 0 ? (
-          <div className="flex items-center gap-2 rounded-lg border border-slate-800/80 bg-slate-950/50 px-4 py-3 text-xs text-emerald-300">
-            <CheckCircle2 className="h-4 w-4 text-emerald-400" />
-            <span>
-              Keine fehlgeschlagenen oder abgebrochenen Aufzeichnungen in der
-              aktuellen Ansicht.
-            </span>
-          </div>
-        ) : (
-          <div className="divide-y divide-slate-800/80 rounded-lg border border-slate-800 bg-slate-950/60">
-            {problemRecordings.slice(0, 10).map((item) => {
-              const reason = item.participation_reason;
-              const reasonText =
-                reason && failureReasons[reason]
-                  ? failureReasons[reason]
-                  : reason || 'Verarbeitungsfehler';
-              return (
-                <div
-                  key={item.id}
-                  onClick={() => onSelectRecording(item.id)}
-                  className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 hover:bg-slate-900 cursor-pointer transition-colors"
-                >
-                  <div className="min-w-0 flex-1 space-y-1">
-                    <div className="flex items-center gap-2">
-                      <ProviderBadge provider={item.provider} />
-                      <span className="text-xs font-semibold text-white">
-                        {formatRecordingTitle(item)}
-                      </span>
-                      <span className="font-mono text-[11px] text-slate-500">
-                        {item.id.slice(0, 8)}
-                      </span>
-                    </div>
-                    <p className="text-xs text-red-300">{reasonText}</p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <StatusBadge
-                      participation={item.participation}
-                      processing={item.processing}
-                      hasError={true}
+            <HStack gap={2} vAlign="center" wrap="wrap">
+              <Button
+                variant="secondary"
+                size="sm"
+                href="/docs"
+                target="_blank"
+                rel="noreferrer"
+                icon={<BookOpen className="h-3.5 w-3.5" />}
+                label="OpenAPI / REST-Doku (/docs)"
+              />
+              <Button
+                variant="secondary"
+                size="sm"
+                icon={<KeyRound className="h-3.5 w-3.5" />}
+                label="Zugang & Konto"
+                onClick={onOpenAuthDialog}
+              />
+            </HStack>
+          </HStack>
+        </LayoutHeader>
+      }
+      content={
+        <LayoutContent>
+          <VStack gap={4}>
+            {/* Platform Status & Limits */}
+            <Section variant="section">
+              <VStack gap={3}>
+                <Heading level={3}>Plattform- &amp; Kapazitätsstatus</Heading>
+                <MetadataList columns={4}>
+                  <MetadataListItem label="API & Datenbank">
+                    <StatusDot
+                      variant={healthy ? 'success' : 'warning'}
+                      label={
+                        healthy ? 'Bereit (/health/ready)' : 'Prüfe Verbindung…'
+                      }
                     />
-                    <ArrowRight className="h-4 w-4 text-slate-500" />
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-    </div>
+                  </MetadataListItem>
+                  <MetadataListItem label="Aktive Meeting-Bots">
+                    {activeJobs.length} / {instance.limits.maxActiveMeetings}{' '}
+                    max.
+                  </MetadataListItem>
+                  <MetadataListItem label="Parakeet-ASR-Queue">
+                    {asrJobs.length} Aufnahmen in GPU-Erkennung
+                  </MetadataListItem>
+                  <MetadataListItem label="Aufbewahrungsfristen">
+                    {instance.retention.audioHours}h Roh-Audio ·{' '}
+                    {instance.retention.transcriptDays}d Transkript
+                  </MetadataListItem>
+                </MetadataList>
+              </VStack>
+            </Section>
+
+            {/* Providers & Mail Configuration */}
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+              <Section variant="section">
+                <VStack gap={2}>
+                  <Heading level={3}>Konferenz-Provider</Heading>
+                  <List hasDividers edge="flush">
+                    <ListItem
+                      label="Google Meet"
+                      description={
+                        instance.providers.google_meet_auth_session
+                          ? 'Playwright/Chromium WebRTC · Gespeicherte Google-Session aktiv'
+                          : 'Playwright/Chromium WebRTC · Gast-Modus'
+                      }
+                      endContent={
+                        <StatusDot
+                          variant={
+                            instance.providers.google_meet
+                              ? 'success'
+                              : 'neutral'
+                          }
+                          label={
+                            instance.providers.google_meet
+                              ? 'Aktiviert'
+                              : 'Deaktiviert'
+                          }
+                        />
+                      }
+                    />
+                    <ListItem
+                      label="Microsoft Teams"
+                      description="Playwright/Chromium Web-Client · Gast-Beitritt"
+                      endContent={
+                        <StatusDot
+                          variant={
+                            instance.providers.teams ? 'success' : 'neutral'
+                          }
+                          label={
+                            instance.providers.teams
+                              ? 'Aktiviert'
+                              : 'Deaktiviert'
+                          }
+                        />
+                      }
+                    />
+                    <ListItem
+                      label="Cisco Webex"
+                      description="Browser-SDK / Service-Token"
+                      endContent={
+                        <StatusDot
+                          variant={
+                            instance.providers.webex ? 'success' : 'neutral'
+                          }
+                          label={
+                            instance.providers.webex
+                              ? 'Aktiviert'
+                              : 'Kein Zugang hinterlegt'
+                          }
+                        />
+                      }
+                    />
+                  </List>
+                </VStack>
+              </Section>
+
+              <Section variant="section">
+                <VStack gap={2}>
+                  <Heading level={3}>
+                    Kalender-Synchronisation &amp; E-Mail
+                  </Heading>
+                  <MetadataList columns="single">
+                    <MetadataListItem label="Bot-Einladungsadresse">
+                      {instance.botEmail || 'Nicht konfiguriert'}
+                    </MetadataListItem>
+                    <MetadataListItem label="Google Calendar OAuth2">
+                      {instance.calendarOAuth?.googleEnabled
+                        ? 'Aktiviert (calendar.readonly)'
+                        : 'Nicht konfiguriert'}
+                    </MetadataListItem>
+                    <MetadataListItem label="Microsoft 365 OAuth2">
+                      {instance.calendarOAuth?.microsoftEnabled
+                        ? 'Aktiviert (Calendars.Read)'
+                        : 'Nicht konfiguriert'}
+                    </MetadataListItem>
+                    <MetadataListItem label="IMAP / SMTP">
+                      IMAP: {instance.mail.imapEnabled ? 'Aktiv' : 'Aus'} ·
+                      SMTP: {instance.mail.smtpEnabled ? 'Aktiv' : 'Aus'}
+                    </MetadataListItem>
+                    <MetadataListItem label="Timeouts (Lobby / Leerer Raum)">
+                      {Math.round(instance.limits.lobbyTimeoutSeconds / 60)}{' '}
+                      Min. /{' '}
+                      {Math.round(instance.limits.emptyRoomTimeoutSeconds / 60)}{' '}
+                      Min.
+                    </MetadataListItem>
+                  </MetadataList>
+                </VStack>
+              </Section>
+            </div>
+
+            {/* Problem / Error Recordings */}
+            <Section variant="section">
+              <VStack gap={2}>
+                <Heading level={3}>
+                  Aufzeichnungen mit Hinweis oder Abbruch (
+                  {problemRecordings.length})
+                </Heading>
+
+                {problemRecordings.length === 0 ? (
+                  <EmptyState
+                    isCompact
+                    icon={<CheckCircle2 className="h-6 w-6" />}
+                    title="Keine fehlgeschlagenen Aufzeichnungen"
+                    description="Alle angezeigten Aufzeichnungen wurden regulär abgeschlossen oder befinden sich im geplanten Ablauf."
+                  />
+                ) : (
+                  <Table<ProblemRow>
+                    idKey="id"
+                    density="compact"
+                    dividers="rows"
+                    hasHover
+                    data={problemRecordings.slice(0, 12) as ProblemRow[]}
+                    columns={problemColumns}
+                  />
+                )}
+              </VStack>
+            </Section>
+          </VStack>
+        </LayoutContent>
+      }
+    />
   );
 }

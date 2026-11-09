@@ -1,14 +1,27 @@
 import React from 'react';
-import { Filter, Radio, UserCheck, UserX } from 'lucide-react';
+import { Filter, Radio } from 'lucide-react';
+import {
+  Table,
+  pixel,
+  proportional,
+  type TableColumn,
+} from '@astryxdesign/core/Table';
+import { StatusDot } from '@astryxdesign/core/StatusDot';
+import { Token } from '@astryxdesign/core/Token';
+import { Button } from '@astryxdesign/core/Button';
+import { Text } from '@astryxdesign/core/Text';
+import { VStack } from '@astryxdesign/core/VStack';
+import { EmptyState } from '@astryxdesign/core/EmptyState';
 import { formatDurationHuman } from '../api';
 import type { SourceSummary } from '../types';
-import { Button, cn } from './ui/primitives';
 
 export interface SourcesTabProps {
   sources: SourceSummary[];
   selectedSourceFilter: string;
   onSelectSourceForTranscript: (sourceId: string) => void;
 }
+
+type SourceRow = SourceSummary & Record<string, unknown>;
 
 export function SourcesTab({
   sources,
@@ -17,120 +30,123 @@ export function SourcesTab({
 }: SourcesTabProps) {
   if (sources.length === 0) {
     return (
-      <div className="rounded-xl border border-dashed border-slate-800 bg-slate-950/50 p-10 text-center space-y-2">
-        <Radio className="mx-auto h-7 w-7 text-slate-600" />
-        <div className="text-sm font-medium text-slate-300">
-          Noch keine empfangenen Audio-Quellen registriert
-        </div>
-        <p className="text-xs text-slate-500">
-          Sobald WebRTC-Receiver im Meeting Audio empfangen, werden hier die
-          einzelnen Streams und ihre Teilnehmerbindung aufgelistet.
-        </p>
-      </div>
+      <EmptyState
+        icon={<Radio className="h-8 w-8" />}
+        title="Noch keine empfangenen Audio-Quellen registriert"
+        description="Sobald WebRTC-Receiver im Meeting Audio empfangen, werden hier die einzelnen Streams und ihre Teilnehmerbindung aufgelistet."
+      />
     );
   }
 
+  const columns: TableColumn<SourceRow>[] = [
+    {
+      key: 'participant_name',
+      header: 'Sprecher & Bindung',
+      width: proportional(1.8, { minWidth: 220 }),
+      renderCell: (src) => {
+        const hasName = Boolean(src.participant_name);
+        const hasId = Boolean(src.signaled_participant_id);
+        return (
+          <div className="source-row">
+            <VStack gap={0.5} hAlign="start">
+              <StatusDot
+                variant={hasName ? 'success' : hasId ? 'accent' : 'warning'}
+                label={
+                  src.participant_name ||
+                  (src.signaled_participant_id
+                    ? `Teilnehmer ${src.signaled_participant_id}`
+                    : 'Zuordnung offen')
+                }
+              />
+              {src.sample_text && (
+                <Text type="supporting" color="secondary" maxLines={1}>
+                  „{src.sample_text}“
+                </Text>
+              )}
+            </VStack>
+          </div>
+        );
+      },
+    },
+    {
+      key: 'provider_source_id',
+      header: 'WebRTC-Quelle / Session',
+      width: proportional(1.5, { minWidth: 200 }),
+      renderCell: (src) => (
+        <VStack gap={0.5} hAlign="start">
+          <Token size="sm" color="blue" label={src.provider_source_id} />
+          <Text type="supporting" color="secondary">
+            {src.signaled_participant_id
+              ? `Session: ${src.signaled_participant_id}`
+              : 'Keine Session-ID'}
+            {src.csi != null ? ` · CSI: ${src.csi}` : ''}
+          </Text>
+        </VStack>
+      ),
+    },
+    {
+      key: 'speech_seconds',
+      header: 'Aktive Sprache',
+      width: pixel(165),
+      renderCell: (src) => (
+        <Text type="supporting" color="primary" hasTabularNumbers>
+          <strong>{formatDurationHuman(src.speech_seconds)}</strong> (
+          {formatDurationHuman(src.accepted_seconds)} Audio)
+        </Text>
+      ),
+    },
+    {
+      key: 'segment_count',
+      header: 'Segmente',
+      width: pixel(100),
+      renderCell: (src) => (
+        <Text type="supporting" color="primary" hasTabularNumbers>
+          {src.segment_count}
+        </Text>
+      ),
+    },
+    {
+      key: 'action',
+      header: '',
+      width: pixel(175),
+      align: 'end',
+      renderCell: (src) => {
+        const isFiltered = selectedSourceFilter === src.provider_source_id;
+        return (
+          <span
+            className="filter-source-btn"
+            data-filter-source={src.provider_source_id}
+          >
+            <Button
+              variant={isFiltered ? 'primary' : 'secondary'}
+              size="sm"
+              icon={<Filter className="h-3.5 w-3.5" />}
+              label={isFiltered ? 'Filter aktiv' : 'Im Transkript filtern'}
+              onClick={() =>
+                onSelectSourceForTranscript(src.provider_source_id)
+              }
+            />
+          </span>
+        );
+      },
+    },
+  ];
+
   return (
-    <div className="space-y-3">
-      <div className="text-xs text-slate-400">
+    <VStack gap={3}>
+      <Text type="supporting" color="secondary">
         Jede empfangene WebRTC-Audiospur wird vor dem Mix separat erfasst und an
         die nachgewiesene Provider-Teilnehmersitzung gebunden.
-      </div>
+      </Text>
 
-      <div className="grid grid-cols-1 gap-3">
-        {sources.map((src) => {
-          const isFiltered = selectedSourceFilter === src.provider_source_id;
-          const hasName = Boolean(src.participant_name);
-          const hasId = Boolean(src.signaled_participant_id);
-
-          return (
-            <div
-              key={src.provider_source_id}
-              className="source-row flex flex-col justify-between gap-3 rounded-xl border border-slate-800 bg-slate-950/80 p-4 sm:flex-row sm:items-center"
-            >
-              <div className="space-y-1.5">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span
-                    className={cn(
-                      'inline-flex items-center gap-1.5 rounded-md border px-2.5 py-0.5 text-xs font-semibold',
-                      hasName
-                        ? 'border-emerald-800/80 bg-emerald-950/80 text-emerald-300'
-                        : hasId
-                          ? 'border-sky-800/80 bg-sky-950/80 text-sky-300'
-                          : 'border-amber-800/80 bg-amber-950/80 text-amber-300'
-                    )}
-                  >
-                    {hasName || hasId ? (
-                      <UserCheck className="h-3.5 w-3.5" />
-                    ) : (
-                      <UserX className="h-3.5 w-3.5" />
-                    )}
-                    <span>
-                      {src.participant_name ||
-                        (src.signaled_participant_id
-                          ? `Teilnehmer ${src.signaled_participant_id}`
-                          : 'Zuordnung unklar')}
-                    </span>
-                  </span>
-
-                  <code className="rounded bg-slate-900 px-2 py-0.5 font-mono text-xs text-sky-400 border border-slate-800">
-                    {src.provider_source_id}
-                  </code>
-                </div>
-
-                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-400">
-                  <span>
-                    Segmente: <strong className="text-slate-200">{src.segment_count}</strong>
-                  </span>
-                  <span>
-                    Aktive Sprache:{' '}
-                    <strong className="text-slate-200">
-                      {formatDurationHuman(src.speech_seconds)}
-                    </strong>{' '}
-                    ({formatDurationHuman(src.accepted_seconds)} Audio)
-                  </span>
-                  {src.signaled_participant_id && (
-                    <span>
-                      Session-ID:{' '}
-                      <strong className="text-slate-200">
-                        {src.signaled_participant_id}
-                      </strong>
-                    </span>
-                  )}
-                  {src.csi != null && (
-                    <span>
-                      CSI/CSRC: <strong className="text-slate-200">{src.csi}</strong>
-                    </span>
-                  )}
-                </div>
-
-                {src.sample_text && (
-                  <div className="text-xs italic text-slate-400">
-                    „{src.sample_text}“
-                  </div>
-                )}
-              </div>
-
-              <div className="shrink-0">
-                <Button
-                  variant={isFiltered ? 'primary' : 'secondary'}
-                  size="sm"
-                  className="filter-source-btn"
-                  data-filter-source={src.provider_source_id}
-                  onClick={() =>
-                    onSelectSourceForTranscript(src.provider_source_id)
-                  }
-                >
-                  <Filter className="h-3.5 w-3.5" />
-                  <span>
-                    {isFiltered ? 'Filter aktiv' : 'Im Transkript filtern'}
-                  </span>
-                </Button>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </div>
+      <Table<SourceRow>
+        idKey="provider_source_id"
+        density="balanced"
+        dividers="rows"
+        hasHover
+        data={sources as SourceRow[]}
+        columns={columns}
+      />
+    </VStack>
   );
 }

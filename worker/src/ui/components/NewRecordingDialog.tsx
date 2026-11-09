@@ -1,5 +1,19 @@
 import React, { useEffect, useState } from 'react';
 import { CalendarPlus, Link2, Upload, Video } from 'lucide-react';
+import { Dialog, DialogHeader } from '@astryxdesign/core/Dialog';
+import { FormLayout } from '@astryxdesign/core/FormLayout';
+import {
+  SegmentedControl,
+  SegmentedControlItem,
+} from '@astryxdesign/core/SegmentedControl';
+import { TextInput } from '@astryxdesign/core/TextInput';
+import { TextArea } from '@astryxdesign/core/TextArea';
+import { Selector } from '@astryxdesign/core/Selector';
+import { Button } from '@astryxdesign/core/Button';
+import { Banner } from '@astryxdesign/core/Banner';
+import { HStack } from '@astryxdesign/core/HStack';
+import { VStack } from '@astryxdesign/core/VStack';
+import { Text } from '@astryxdesign/core/Text';
 import {
   createRecording,
   detectProviderFromUrl,
@@ -7,19 +21,7 @@ import {
   importCalendarPayload,
 } from '../api';
 import type { RecordingSummary } from '../types';
-import {
-  Button,
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-  ProviderBadge,
-  Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
-} from './ui/primitives';
+import { ProviderBadge } from './ui/primitives';
 
 export interface NewRecordingDialogProps {
   open: boolean;
@@ -29,6 +31,18 @@ export interface NewRecordingDialogProps {
   onCreatedRecording: (recordingId: string) => void;
   onImportedCalendar: (recordingId: string | null) => void;
 }
+
+const JOIN_MODE_OPTIONS = [
+  { value: 'live', label: 'Sofort beitreten (Live)' },
+  { value: 'scheduled', label: 'Zeitfenster planen' },
+];
+
+const DURATION_OPTIONS = [
+  { value: '30', label: '30 Minuten' },
+  { value: '60', label: '60 Minuten' },
+  { value: '90', label: '90 Minuten' },
+  { value: '120', label: '120 Minuten' },
+];
 
 export function NewRecordingDialog({
   open,
@@ -45,6 +59,7 @@ export function NewRecordingDialog({
       setTab(initialTab);
     }
   }, [open, initialTab]);
+
   const [meetingUrl, setMeetingUrl] = useState('');
   const [title, setTitle] = useState('');
   const [guestName, setGuestName] = useState('');
@@ -130,250 +145,212 @@ export function NewRecordingDialog({
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-xl">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2 text-lg font-semibold text-white">
-            <Video className="h-5 w-5 text-sky-400" />
-            <span>Bot in ein Meeting schicken</span>
-          </DialogTitle>
-          <DialogDescription className="text-xs text-slate-400">
-            Starten Sie einen Bot sofort per Meeting-Link oder importieren Sie
-            eine Kalendereinladung (.ics / .eml).
-          </DialogDescription>
-        </DialogHeader>
+    <Dialog
+      isOpen={open}
+      onOpenChange={onOpenChange}
+      width={560}
+      purpose="form"
+    >
+      <DialogHeader
+        title="Bot in ein Meeting schicken"
+        subtitle="Starten Sie einen Bot sofort per Meeting-Link oder importieren Sie eine Kalendereinladung (.ics / .eml)."
+        onOpenChange={onOpenChange}
+      />
 
-        <Tabs value={tab} onValueChange={(v) => setTab(v as 'link' | 'ics')}>
-          <TabsList className="mb-4 w-full justify-start">
-            <TabsTrigger value="link" className="flex-1 justify-center">
-              <Link2 className="h-3.5 w-3.5" />
-              <span>Meeting-Link (Ad-hoc / Geplant)</span>
-            </TabsTrigger>
-            <TabsTrigger value="ics" className="flex-1 justify-center">
-              <CalendarPlus className="h-3.5 w-3.5" />
-              <span>Kalendereinladung (.ics / .eml)</span>
-            </TabsTrigger>
-          </TabsList>
+      <VStack gap={3}>
+        <SegmentedControl
+          size="sm"
+          layout="fill"
+          label="Startmethode"
+          value={tab}
+          onChange={(v) => setTab(v as 'link' | 'ics')}
+        >
+          <SegmentedControlItem
+            value="link"
+            label="Meeting-Link (Ad-hoc / Geplant)"
+            icon={<Link2 className="h-3.5 w-3.5" />}
+          />
+          <SegmentedControlItem
+            value="ics"
+            label="Kalendereinladung (.ics / .eml)"
+            icon={<CalendarPlus className="h-3.5 w-3.5" />}
+          />
+        </SegmentedControl>
 
-          {error && (
-            <div className="mb-4 rounded-lg border border-red-800/80 bg-red-950/60 p-3 text-xs text-red-200">
-              {error}
-            </div>
-          )}
+        {error && (
+          <Banner
+            status="error"
+            container="card"
+            title={error}
+            isDismissable
+            onDismiss={() => setError(null)}
+          />
+        )}
 
-          <TabsContent value="link">
-            <form
-              id="modal-dispatch-form"
-              onSubmit={handleDispatchSubmit}
-              className="space-y-4"
-            >
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <label
-                    htmlFor="modal-meeting-url"
-                    className="text-xs font-semibold uppercase tracking-wider text-slate-400"
-                  >
-                    Meeting-Link (Meet, Teams oder Webex)
-                  </label>
-                  {detectedProvider && (
-                    <ProviderBadge provider={detectedProvider} />
-                  )}
-                </div>
-                <input
-                  id="modal-meeting-url"
+        {tab === 'link' ? (
+          <form id="modal-dispatch-form" onSubmit={handleDispatchSubmit}>
+            <FormLayout direction="vertical">
+              <VStack gap={1}>
+                <TextInput
                   type="url"
-                  required
+                  label="Meeting-Link (Google Meet, Microsoft Teams oder Webex)"
+                  isRequired
                   value={meetingUrl}
-                  onChange={(e) => setMeetingUrl(e.target.value)}
-                  placeholder="https://meet.google.com/... oder https://teams.microsoft.com/meet/..."
-                  className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-sky-500 focus:outline-none"
+                  onChange={setMeetingUrl}
+                  placeholder="https://meet.google.com/... oder https://teams.microsoft.com/..."
+                  startIcon={<Video className="h-4 w-4" />}
+                />
+                {detectedProvider && (
+                  <HStack gap={1.5} vAlign="center">
+                    <Text type="supporting" color="secondary">
+                      Erkanntes System:
+                    </Text>
+                    <ProviderBadge provider={detectedProvider} />
+                  </HStack>
+                )}
+              </VStack>
+
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <TextInput
+                  type="text"
+                  label="Meeting-Titel"
+                  isOptional
+                  value={title}
+                  onChange={setTitle}
+                  placeholder="z. B. Architektur-Sync"
+                />
+                <TextInput
+                  type="text"
+                  label="Bot-Anzeigename"
+                  isOptional
+                  value={guestName}
+                  onChange={setGuestName}
+                  placeholder={instance.assistantName}
                 />
               </div>
 
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <div className="space-y-1.5">
-                  <label
-                    htmlFor="modal-meeting-title"
-                    className="block text-xs font-semibold uppercase tracking-wider text-slate-400"
-                  >
-                    Meeting-Titel (optional)
-                  </label>
-                  <input
-                    id="modal-meeting-title"
-                    type="text"
-                    maxLength={200}
-                    value={title}
-                    onChange={(e) => setTitle(e.target.value)}
-                    placeholder="z. B. Architektur-Sync"
-                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-sky-500 focus:outline-none"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <label
-                    htmlFor="modal-guest-name"
-                    className="block text-xs font-semibold uppercase tracking-wider text-slate-400"
-                  >
-                    Bot-Anzeigename (optional)
-                  </label>
-                  <input
-                    id="modal-guest-name"
-                    type="text"
-                    maxLength={120}
-                    value={guestName}
-                    onChange={(e) => setGuestName(e.target.value)}
-                    placeholder="wortlaut"
-                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white placeholder-slate-500 focus:border-sky-500 focus:outline-none"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <div className="space-y-1.5">
-                  <label
-                    htmlFor="modal-join-mode"
-                    className="block text-xs font-semibold uppercase tracking-wider text-slate-400"
-                  >
-                    Start-Modus
-                  </label>
-                  <select
-                    id="modal-join-mode"
-                    value={joinMode}
-                    onChange={(e) =>
-                      setJoinMode(e.target.value as 'live' | 'scheduled')
-                    }
-                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white focus:border-sky-500 focus:outline-none"
-                  >
-                    <option value="live">Sofort beitreten (Live)</option>
-                    <option value="scheduled">Zeitfenster planen</option>
-                  </select>
-                </div>
-
+                <Selector
+                  label="Start-Modus"
+                  options={JOIN_MODE_OPTIONS}
+                  value={joinMode}
+                  onChange={(v) => setJoinMode(v as 'live' | 'scheduled')}
+                />
                 {joinMode === 'live' && (
-                  <div className="space-y-1.5" id="modal-duration-field">
-                    <label
-                      htmlFor="modal-duration-min"
-                      className="block text-xs font-semibold uppercase tracking-wider text-slate-400"
-                    >
-                      Maximale Aufnahmedauer
-                    </label>
-                    <select
-                      id="modal-duration-min"
+                  <div id="modal-duration-field">
+                    <Selector
+                      label="Maximale Aufnahmedauer"
+                      options={DURATION_OPTIONS}
                       value={durationMin}
-                      onChange={(e) => setDurationMin(e.target.value)}
-                      className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white focus:border-sky-500 focus:outline-none"
-                    >
-                      <option value="30">30 Minuten</option>
-                      <option value="60">60 Minuten</option>
-                      <option value="90">90 Minuten</option>
-                      <option value="120">120 Minuten</option>
-                    </select>
+                      onChange={setDurationMin}
+                    />
                   </div>
                 )}
               </div>
 
               {joinMode === 'scheduled' && (
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  <div className="space-y-1.5" id="modal-start-field">
-                    <label
-                      htmlFor="modal-starts-at"
-                      className="block text-xs font-semibold uppercase tracking-wider text-slate-400"
-                    >
+                  <VStack gap={1} id="modal-start-field">
+                    <Text as="label" type="supporting" weight="semibold">
                       Startzeit
-                    </label>
+                    </Text>
                     <input
                       id="modal-starts-at"
                       type="datetime-local"
                       value={startsAt}
                       onChange={(e) => setStartsAt(e.target.value)}
-                      className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white focus:border-sky-500 focus:outline-none"
+                      className="w-full rounded-md border border-[var(--color-border)] bg-[var(--color-background-surface)] px-3 py-2 text-sm text-[var(--color-text-primary)]"
                     />
-                  </div>
-                  <div className="space-y-1.5" id="modal-end-field">
-                    <label
-                      htmlFor="modal-ends-at"
-                      className="block text-xs font-semibold uppercase tracking-wider text-slate-400"
-                    >
+                  </VStack>
+                  <VStack gap={1} id="modal-end-field">
+                    <Text as="label" type="supporting" weight="semibold">
                       Endzeit
-                    </label>
+                    </Text>
                     <input
                       id="modal-ends-at"
                       type="datetime-local"
                       value={endsAt}
                       onChange={(e) => setEndsAt(e.target.value)}
-                      className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white focus:border-sky-500 focus:outline-none"
+                      className="w-full rounded-md border border-[var(--color-border)] bg-[var(--color-background-surface)] px-3 py-2 text-sm text-[var(--color-text-primary)]"
                     />
-                  </div>
+                  </VStack>
                 </div>
               )}
 
-              <div className="flex justify-end gap-2 pt-2">
+              <HStack justify="end" gap={2}>
                 <Button
                   type="button"
                   variant="ghost"
+                  label="Abbrechen"
                   onClick={() => onOpenChange(false)}
-                >
-                  Abbrechen
-                </Button>
-                <Button type="submit" variant="primary" disabled={submitting}>
-                  {submitting ? 'Wird gestartet…' : 'Bot starten'}
-                </Button>
-              </div>
-            </form>
-          </TabsContent>
-
-          <TabsContent value="ics">
-            <form onSubmit={handleIcsSubmit} className="space-y-4">
+                />
+                <Button
+                  type="submit"
+                  variant="primary"
+                  isLoading={submitting}
+                  label={submitting ? 'Wird gestartet…' : 'Bot starten'}
+                />
+              </HStack>
+            </FormLayout>
+          </form>
+        ) : (
+          <form onSubmit={handleIcsSubmit}>
+            <FormLayout direction="vertical">
               {instance.mail.allowedDomains.length > 0 && (
-                <div className="rounded-lg border border-slate-800 bg-slate-950/70 px-3 py-2 text-[11px] text-slate-400">
+                <Text type="supporting" color="secondary">
                   Hinweis: Der in der <code>.ics</code>-Datei eingetragene{' '}
                   <code>ORGANIZER</code> muss zu einer freigeschalteten Domain
-                  gehören ({instance.mail.allowedDomains.map((d) => `@${d}`).join(', ')}
+                  gehören (
+                  {instance.mail.allowedDomains.map((d) => `@${d}`).join(', ')}
                   ). Für externe Kundentermine nutzen Sie bitte den Reiter{' '}
                   <strong>Meeting-Link</strong>.
-                </div>
+                </Text>
               )}
-              <div className="space-y-2">
-                <label className="flex cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed border-slate-700 bg-slate-950/60 p-4 text-center hover:border-sky-500/80">
-                  <Upload className="mb-1.5 h-5 w-5 text-sky-400" />
-                  <span className="text-xs font-medium text-slate-200">
-                    .ics- oder .eml-Datei auswählen
-                  </span>
-                  <span className="text-[11px] text-slate-400">
-                    Oder Inhalt direkt in das Textfeld unten einfügen
-                  </span>
-                  <input
-                    type="file"
-                    accept=".ics,.eml,text/calendar,message/rfc822"
-                    onChange={handleFileChange}
-                    className="hidden"
-                  />
-                </label>
 
-                <textarea
-                  rows={6}
-                  value={icsText}
-                  onChange={(e) => setIcsText(e.target.value)}
-                  placeholder="BEGIN:VCALENDAR..."
-                  className="w-full rounded-lg border border-slate-700 bg-slate-950 p-3 font-mono text-xs text-slate-200 placeholder-slate-500 focus:border-sky-500 focus:outline-none"
+              <label className="flex cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed border-[var(--color-border)] bg-[var(--color-background-muted)]/40 p-4 text-center hover:border-[var(--color-text-accent)] transition-colors">
+                <Upload className="mb-1.5 h-5 w-5 text-[var(--color-text-accent)]" />
+                <Text type="supporting" weight="medium" color="primary">
+                  .ics- oder .eml-Datei auswählen
+                </Text>
+                <Text type="supporting" color="secondary">
+                  Oder Inhalt direkt in das Textfeld unten einfügen
+                </Text>
+                <input
+                  type="file"
+                  accept=".ics,.eml,text/calendar,message/rfc822"
+                  onChange={handleFileChange}
+                  className="hidden"
                 />
-              </div>
+              </label>
 
-              <div className="flex justify-end gap-2">
+              <TextArea
+                label="iCalendar / E-Mail-Inhalt"
+                rows={6}
+                value={icsText}
+                onChange={setIcsText}
+                placeholder="BEGIN:VCALENDAR..."
+              />
+
+              <HStack justify="end" gap={2}>
                 <Button
                   type="button"
                   variant="ghost"
+                  label="Abbrechen"
                   onClick={() => onOpenChange(false)}
-                >
-                  Abbrechen
-                </Button>
-                <Button type="submit" variant="primary" disabled={submitting}>
-                  {submitting ? 'Importiere…' : 'Einladung importieren'}
-                </Button>
-              </div>
-            </form>
-          </TabsContent>
-        </Tabs>
-      </DialogContent>
+                />
+                <Button
+                  type="submit"
+                  variant="primary"
+                  isLoading={submitting}
+                  label={
+                    submitting ? 'Importiere…' : 'Einladung importieren'
+                  }
+                />
+              </HStack>
+            </FormLayout>
+          </form>
+        )}
+      </VStack>
     </Dialog>
   );
 }

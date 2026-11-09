@@ -1,19 +1,45 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
-  AlertTriangle,
   ArrowRight,
-  Clock,
+  CalendarPlus,
   FolderOpen,
+  Play,
   Plus,
   Search,
+  Tag,
+  Video,
 } from 'lucide-react';
+import { Layout, LayoutContent, LayoutHeader } from '@astryxdesign/core/Layout';
+import { Heading } from '@astryxdesign/core/Heading';
+import { Text } from '@astryxdesign/core/Text';
+import { HStack } from '@astryxdesign/core/HStack';
+import { VStack } from '@astryxdesign/core/VStack';
+import { Button } from '@astryxdesign/core/Button';
+import { TextInput } from '@astryxdesign/core/TextInput';
+import { Selector } from '@astryxdesign/core/Selector';
 import {
+  SegmentedControl,
+  SegmentedControlItem,
+} from '@astryxdesign/core/SegmentedControl';
+import {
+  Table,
+  pixel,
+  proportional,
+  type TableColumn,
+} from '@astryxdesign/core/Table';
+import { Banner } from '@astryxdesign/core/Banner';
+import { EmptyState } from '@astryxdesign/core/EmptyState';
+import { Divider } from '@astryxdesign/core/Divider';
+import {
+  createRecording,
+  detectProviderFromUrl,
   formatDurationHuman,
   formatRecordingTitle,
   getFailureReasons,
+  getInstanceInfo,
 } from '../api';
 import type { RecordingSummary } from '../types';
-import { Button, ProviderBadge, StatusBadge, cn } from './ui/primitives';
+import { ProviderBadge, StatusBadge } from './ui/primitives';
 
 export type QuickStatusFilter =
   | 'all'
@@ -23,6 +49,7 @@ export type QuickStatusFilter =
   | 'failed';
 
 export interface RecordingSidebarProps {
+  token?: string;
   recordings: RecordingSummary[];
   selectedId: string | null;
   onSelectRecording: (id: string) => void;
@@ -33,20 +60,23 @@ export interface RecordingSidebarProps {
   titleSearch: string;
   onTitleSearchChange: (q: string) => void;
   onOpenNewRecording: () => void;
+  onOpenIcsImport?: () => void;
+  onCreatedRecording?: (id: string) => void;
   isLoading: boolean;
 }
 
-const QUICK_FILTERS: Array<{ id: QuickStatusFilter; label: string }> = [
-  { id: 'all', label: 'Alle Meetings' },
-  { id: 'active', label: 'Live & Warteraum' },
-  { id: 'scheduled', label: 'Geplant' },
-  { id: 'completed', label: 'Transkript fertig' },
-  { id: 'failed', label: 'Mit Hinweis / Fehler' },
+type RecordingRow = RecordingSummary & Record<string, unknown>;
+
+const PROVIDER_OPTIONS = [
+  { value: 'all', label: 'Alle Konferenzsysteme' },
+  { value: 'google_meet', label: 'Google Meet' },
+  { value: 'teams', label: 'Microsoft Teams' },
+  { value: 'webex', label: 'Cisco Webex' },
 ];
 
 export function RecordingSidebar({
+  token = '',
   recordings,
-  selectedId,
   onSelectRecording,
   providerFilter,
   onProviderFilterChange,
@@ -55,219 +85,396 @@ export function RecordingSidebar({
   titleSearch,
   onTitleSearchChange,
   onOpenNewRecording,
+  onOpenIcsImport,
+  onCreatedRecording,
   isLoading,
 }: RecordingSidebarProps) {
+  const instance = getInstanceInfo();
   const failureReasons = getFailureReasons();
+
+  const [meetingUrl, setMeetingUrl] = useState('');
+  const [title, setTitle] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [quickJoinError, setQuickJoinError] = useState<string | null>(null);
+
+  const detectedProvider = detectProviderFromUrl(meetingUrl);
+
   const hasActiveFilter =
     Boolean(providerFilter) ||
     quickFilter !== 'all' ||
     Boolean(titleSearch.trim());
 
-  return (
-    <div className="mx-auto max-w-6xl space-y-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-bold text-white">Alle Meetings</h1>
-          <p className="text-xs text-slate-400">
-            Durchsuchen und filtern Sie vergangene Transkripte, laufende
-            Aufzeichnungen und geplante Termine.
-          </p>
-        </div>
-        <Button variant="primary" size="md" onClick={onOpenNewRecording}>
-          <Plus className="h-4 w-4" />
-          <span>Meeting aufzeichnen</span>
-        </Button>
-      </div>
+  const lobbyRecordings = recordings.filter(
+    (r) => r.participation === 'waiting_admission'
+  );
 
-      {/* Filter Bar */}
-      <div className="rounded-xl border border-slate-800 bg-slate-900/75 p-4 space-y-3">
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="relative flex-1 min-w-[240px]">
-            <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-500" />
-            <input
-              id="title-search"
-              type="search"
-              value={titleSearch}
-              onChange={(e) => onTitleSearchChange(e.target.value)}
-              placeholder="Titel, Sprecher oder Transkript-Inhalt suchen…"
-              className="w-full rounded-lg border border-slate-700 bg-slate-950 pl-9 pr-3 py-2 text-xs text-slate-100 placeholder-slate-500 focus:border-sky-500 focus:outline-none"
-            />
-          </div>
+  const handleQuickStart = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!meetingUrl.trim() || !token) return;
+    setQuickJoinError(null);
+    setSubmitting(true);
+    try {
+      const now = new Date();
+      const startIso = now.toISOString();
+      const endIso = new Date(now.getTime() + 60 * 60000).toISOString();
+      const created = await createRecording(token, {
+        meeting_url: meetingUrl.trim(),
+        starts_at: startIso,
+        ends_at: endIso,
+        title: title.trim() || null,
+        guest_name: null,
+      });
+      setMeetingUrl('');
+      setTitle('');
+      if (onCreatedRecording) {
+        onCreatedRecording(created.id);
+      } else {
+        onSelectRecording(created.id);
+      }
+    } catch (err) {
+      setQuickJoinError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
-          <select
-            id="provider-filter"
-            aria-label="Provider filtern"
-            value={providerFilter}
-            onChange={(e) => onProviderFilterChange(e.target.value)}
-            className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-200 focus:border-sky-500 focus:outline-none"
-          >
-            <option value="">Alle Konferenzsysteme</option>
-            <option value="google_meet">Google Meet</option>
-            <option value="teams">Microsoft Teams</option>
-            <option value="webex">Webex</option>
-          </select>
-        </div>
+  const columns: TableColumn<RecordingRow>[] = [
+    {
+      key: 'participation',
+      header: 'Status',
+      width: pixel(185),
+      renderCell: (row) => {
+        const reason = row.participation_reason;
+        const samples = row.quality?.durable_sample_count || 0;
+        const isNormalEnd =
+          !reason ||
+          reason === 'normal' ||
+          reason === 'room_empty' ||
+          ((reason === 'cancelled' || reason === 'deadline') && samples > 0);
+        const hasError =
+          row.processing === 'failed' ||
+          (row.participation === 'ended' && !isNormalEnd);
+        return (
+          <StatusBadge
+            participation={row.participation}
+            processing={row.processing}
+            hasError={hasError}
+          />
+        );
+      },
+    },
+    {
+      key: 'title',
+      header: 'Besprechung',
+      width: proportional(2.5, { minWidth: 240 }),
+      renderCell: (row) => {
+        const reason = row.participation_reason;
+        const samples = row.quality?.durable_sample_count || 0;
+        const isNormalEnd =
+          !reason ||
+          reason === 'normal' ||
+          reason === 'room_empty' ||
+          ((reason === 'cancelled' || reason === 'deadline') && samples > 0);
+        const reasonHint =
+          !isNormalEnd && reason && failureReasons[reason]
+            ? failureReasons[reason]
+            : reason && !isNormalEnd
+              ? reason
+              : null;
 
-        <div
-          id="participation-filter"
-          className="flex flex-wrap items-center gap-1.5"
-          role="tablist"
-          aria-label="Status-Schnellfilter"
-        >
-          {QUICK_FILTERS.map((f) => (
+        return (
+          <VStack gap={0.5} hAlign="start">
             <button
-              key={f.id}
               type="button"
-              onClick={() => onQuickFilterChange(f.id)}
-              className={cn(
-                'rounded-full px-3 py-1 text-xs font-medium transition-colors cursor-pointer border',
-                quickFilter === f.id
-                  ? 'border-sky-500/80 bg-sky-950/90 text-sky-300'
-                  : 'border-slate-800 bg-slate-950/60 text-slate-400 hover:border-slate-700 hover:text-slate-200'
-              )}
+              onClick={() => onSelectRecording(row.id)}
+              className="text-left font-semibold text-[var(--color-text-primary)] hover:text-[var(--color-text-accent)] cursor-pointer transition-colors"
             >
-              {f.label}
+              {formatRecordingTitle(row)}
             </button>
-          ))}
-        </div>
-      </div>
+            {row.participation === 'waiting_admission' && (
+              <Text type="supporting" color="secondary">
+                Wartet im Warteraum — bitte Bot im Meeting zulassen
+              </Text>
+            )}
+            {reasonHint && (
+              <Text type="supporting" color="secondary">
+                {reasonHint}
+              </Text>
+            )}
+          </VStack>
+        );
+      },
+    },
+    {
+      key: 'provider',
+      header: 'Konferenzsystem',
+      width: pixel(150),
+      renderCell: (row) => <ProviderBadge provider={row.provider} />,
+    },
+    {
+      key: 'starts_at',
+      header: 'Zeitpunkt',
+      width: pixel(155),
+      renderCell: (row) => (
+        <Text type="supporting" color="secondary" hasTabularNumbers>
+          {new Date(row.starts_at).toLocaleString('de-DE', {
+            day: '2-digit',
+            month: '2-digit',
+            year: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+          })}
+        </Text>
+      ),
+    },
+    {
+      key: 'duration',
+      header: 'Audio',
+      width: pixel(95),
+      renderCell: (row) => {
+        const samples = row.quality?.durable_sample_count || 0;
+        const audioSec = Math.round(samples / 16000);
+        return (
+          <Text type="supporting" color="secondary" hasTabularNumbers>
+            {audioSec > 0 ? formatDurationHuman(audioSec) : '–'}
+          </Text>
+        );
+      },
+    },
+    {
+      key: 'actions',
+      header: '',
+      width: pixel(110),
+      align: 'end',
+      renderCell: (row) => (
+        <Button
+          variant="ghost"
+          size="sm"
+          label="Öffnen"
+          endContent={<ArrowRight className="h-3.5 w-3.5" />}
+          onClick={() => onSelectRecording(row.id)}
+        />
+      ),
+    },
+  ];
 
-      {/* Meetings List */}
-      <div
-        id="recordings-list"
-        className="overflow-hidden rounded-xl border border-slate-800 bg-slate-900/75 divide-y divide-slate-800/80"
-      >
-        {isLoading && recordings.length === 0 ? (
-          <div className="py-12 text-center text-xs text-slate-400">
-            Lade Meetings…
-          </div>
-        ) : recordings.length === 0 ? (
-          <div className="p-12 text-center space-y-3">
-            <FolderOpen className="mx-auto h-8 w-8 text-slate-600" />
-            <div className="text-sm font-medium text-slate-300">
-              {hasActiveFilter
-                ? 'Keine Meetings für diesen Filter gefunden'
-                : 'Noch keine Meetings aufgezeichnet'}
-            </div>
-            <p className="text-xs text-slate-500">
-              {hasActiveFilter
-                ? 'Setzen Sie die Filter zurück oder passen Sie Ihren Suchbegriff an.'
-                : 'Starten Sie Ihre erste Aufzeichnung per Meeting-Link oder Kalendereinladung.'}
-            </p>
-            <div className="flex items-center justify-center gap-2">
-              {hasActiveFilter && (
+  return (
+    <Layout
+      height="fill"
+      header={
+        <LayoutHeader hasDivider>
+          <VStack gap={3}>
+            <HStack justify="between" vAlign="center" wrap="wrap" gap={2}>
+              <VStack gap={0.5}>
+                <Heading level={1}>Aufnahmen</Heading>
+                <Text type="supporting" color="secondary">
+                  Sofort-Aufzeichnung per Meeting-Link sowie Übersicht aller
+                  laufenden, geplanten und transkribierten Besprechungen (Bot: „
+                  {instance.assistantName}“).
+                </Text>
+              </VStack>
+
+              <HStack gap={1.5} vAlign="center" wrap="wrap">
+                {onOpenIcsImport && (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    icon={<CalendarPlus className="h-3.5 w-3.5" />}
+                    label=".ics / .eml importieren"
+                    onClick={onOpenIcsImport}
+                  />
+                )}
                 <Button
                   variant="secondary"
                   size="sm"
-                  onClick={() => {
-                    onProviderFilterChange('');
-                    onQuickFilterChange('all');
-                    onTitleSearchChange('');
-                  }}
-                >
-                  <span>Filter zurücksetzen</span>
-                </Button>
-              )}
-              <Button variant="primary" size="sm" onClick={onOpenNewRecording}>
-                <Plus className="h-3.5 w-3.5" />
-                <span>Bot in Meeting schicken</span>
-              </Button>
-            </div>
-          </div>
-        ) : (
-          recordings.map((item) => {
-            const isSelected = item.id === selectedId;
-            const reason = item.participation_reason;
-            const samples = item.quality?.durable_sample_count || 0;
-            const isNormalEnd =
-              !reason ||
-              reason === 'normal' ||
-              reason === 'room_empty' ||
-              ((reason === 'cancelled' || reason === 'deadline') && samples > 0);
-            const hasError =
-              item.processing === 'failed' ||
-              (item.participation === 'ended' && !isNormalEnd);
-            const reasonHint =
-              !isNormalEnd && reason && failureReasons[reason]
-                ? failureReasons[reason]
-                : reason && !isNormalEnd
-                  ? reason
-                  : null;
-            const audioSec = Math.round(samples / 16000);
-            const startFormatted = new Date(item.starts_at).toLocaleString(
-              'de-DE',
-              {
-                day: '2-digit',
-                month: '2-digit',
-                year: 'numeric',
-                hour: '2-digit',
-                minute: '2-digit',
-              }
-            );
+                  icon={<Plus className="h-3.5 w-3.5" />}
+                  label="Erweitert planen…"
+                  onClick={onOpenNewRecording}
+                />
+              </HStack>
+            </HStack>
 
-            return (
-              <div
-                key={item.id}
-                onClick={() => onSelectRecording(item.id)}
-                className={cn(
-                  'group flex flex-wrap items-center justify-between gap-4 px-5 py-4 transition-colors cursor-pointer',
-                  isSelected
-                    ? 'bg-sky-950/30 hover:bg-sky-950/40'
-                    : 'hover:bg-slate-800/50'
-                )}
-              >
-                <div className="min-w-0 flex-1 space-y-1.5">
-                  <div className="flex flex-wrap items-center gap-2.5">
-                    <ProviderBadge provider={item.provider} />
-                    <span className="text-sm font-semibold text-slate-100 group-hover:text-sky-300 transition-colors">
-                      {formatRecordingTitle(item)}
-                    </span>
+            {/* Inline Quick-Join Bar */}
+            {token && (
+              <form id="dispatch-form" onSubmit={handleQuickStart}>
+                <HStack gap={2} vAlign="center" wrap="wrap">
+                  <div className="flex-1 min-w-[260px]" id="meeting-url-wrap">
+                    <TextInput
+                      type="url"
+                      size="sm"
+                      label="Meeting-Link"
+                      isLabelHidden
+                      value={meetingUrl}
+                      onChange={setMeetingUrl}
+                      placeholder="Meeting-Link einfügen (https://meet.google.com/… oder Teams / Webex)…"
+                      startIcon={<Video className="h-3.5 w-3.5" />}
+                      hasClear
+                    />
                   </div>
-
-                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-400">
-                    <span className="inline-flex items-center gap-1">
-                      <Clock className="h-3.5 w-3.5 text-slate-500" />
-                      {startFormatted}
-                    </span>
-                    {audioSec > 0 && (
-                      <span>Dauer: {formatDurationHuman(audioSec)}</span>
-                    )}
-                    {item.guest_name && <span>Bot: {item.guest_name}</span>}
+                  <div className="w-56">
+                    <TextInput
+                      type="text"
+                      size="sm"
+                      label="Titel (optional)"
+                      isLabelHidden
+                      value={title}
+                      onChange={setTitle}
+                      placeholder="Titel (optional, z. B. Weekly)"
+                      startIcon={<Tag className="h-3.5 w-3.5" />}
+                    />
                   </div>
-
-                  {item.participation === 'waiting_admission' && (
-                    <div className="inline-flex items-center gap-1.5 rounded-md bg-amber-950/70 px-2.5 py-1 text-xs font-medium text-amber-200 border border-amber-800/60">
-                      <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-400" />
-                      <span>
-                        Wartet im Warteraum — bitte Bot im Meeting zulassen
-                      </span>
-                    </div>
+                  {detectedProvider && (
+                    <ProviderBadge provider={detectedProvider} />
                   )}
-
-                  {reasonHint && (
-                    <div className="flex items-start gap-1.5 text-xs text-red-300">
-                      <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-red-400" />
-                      <span>{reasonHint}</span>
-                    </div>
-                  )}
-                </div>
-
-                <div className="flex items-center gap-3">
-                  <StatusBadge
-                    participation={item.participation}
-                    processing={item.processing}
-                    hasError={hasError}
+                  <Button
+                    type="submit"
+                    variant="primary"
+                    size="sm"
+                    isLoading={submitting}
+                    isDisabled={!meetingUrl.trim()}
+                    icon={<Play className="h-3.5 w-3.5" />}
+                    label="Jetzt aufzeichnen (60 Min.)"
                   />
-                  <span className="inline-flex items-center gap-1 text-xs font-medium text-slate-400 group-hover:text-sky-400 transition-colors">
-                    <span className="hidden sm:inline">Öffnen</span>
-                    <ArrowRight className="h-4 w-4" />
-                  </span>
-                </div>
+                </HStack>
+                {quickJoinError && (
+                  <div className="mt-2">
+                    <Banner
+                      status="error"
+                      container="card"
+                      title={quickJoinError}
+                      isDismissable
+                      onDismiss={() => setQuickJoinError(null)}
+                    />
+                  </div>
+                )}
+              </form>
+            )}
+
+            <Divider variant="subtle" />
+
+            {/* Filter & Search Toolbar */}
+            <HStack justify="between" vAlign="center" wrap="wrap" gap={2}>
+              <div id="participation-filter">
+                <SegmentedControl
+                  size="sm"
+                  label="Status-Schnellfilter"
+                  value={quickFilter}
+                  onChange={(v) => onQuickFilterChange(v as QuickStatusFilter)}
+                >
+                  <SegmentedControlItem value="all" label="Alle" />
+                  <SegmentedControlItem value="active" label="Live & Warteraum" />
+                  <SegmentedControlItem value="scheduled" label="Geplant" />
+                  <SegmentedControlItem value="completed" label="Fertig" />
+                  <SegmentedControlItem value="failed" label="Hinweis" />
+                </SegmentedControl>
               </div>
-            );
-          })
-        )}
-      </div>
-    </div>
+
+              <HStack gap={2} vAlign="center" wrap="wrap">
+                <div id="provider-filter" className="w-48">
+                  <Selector
+                    size="sm"
+                    label="Konferenzsystem filtern"
+                    isLabelHidden
+                    options={PROVIDER_OPTIONS}
+                    value={providerFilter || 'all'}
+                    onChange={(val) =>
+                      onProviderFilterChange(val === 'all' ? '' : val)
+                    }
+                  />
+                </div>
+                <div id="title-search" className="w-64">
+                  <TextInput
+                    type="search"
+                    size="sm"
+                    label="Suche"
+                    isLabelHidden
+                    value={titleSearch}
+                    onChange={onTitleSearchChange}
+                    hasClear
+                    placeholder="Titel, Sprecher oder Text suchen…"
+                    startIcon={<Search className="h-3.5 w-3.5" />}
+                  />
+                </div>
+              </HStack>
+            </HStack>
+          </VStack>
+        </LayoutHeader>
+      }
+      content={
+        <LayoutContent>
+          <VStack gap={3} id="recordings-list">
+            {lobbyRecordings.map((rec) => (
+              <Banner
+                key={rec.id}
+                status="warning"
+                container="card"
+                title={`Bot „${rec.guest_name || instance.assistantName}“ wartet im Warteraum: ${formatRecordingTitle(rec)}`}
+                description="Bitte lassen Sie den Bot jetzt im Konferenzfenster zu, damit die Aufzeichnung starten kann."
+                endContent={
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    label="Live-Ansicht öffnen"
+                    onClick={() => onSelectRecording(rec.id)}
+                  />
+                }
+              />
+            ))}
+
+            {isLoading && recordings.length === 0 ? (
+              <Text type="body" color="secondary">
+                Lade Aufnahmen…
+              </Text>
+            ) : recordings.length === 0 ? (
+              <EmptyState
+                icon={<FolderOpen className="h-8 w-8" />}
+                title={
+                  hasActiveFilter
+                    ? 'Keine Aufnahmen für diesen Filter gefunden'
+                    : 'Noch keine Besprechungen aufgezeichnet'
+                }
+                description={
+                  hasActiveFilter
+                    ? 'Setzen Sie die Filter zurück oder passen Sie Ihren Suchbegriff an.'
+                    : 'Fügen Sie oben einen Google Meet-, Microsoft Teams- oder Webex-Link ein oder verbinden Sie Ihren Kalender.'
+                }
+                actions={
+                  <HStack gap={2}>
+                    {hasActiveFilter && (
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        label="Filter zurücksetzen"
+                        onClick={() => {
+                          onProviderFilterChange('');
+                          onQuickFilterChange('all');
+                          onTitleSearchChange('');
+                        }}
+                      />
+                    )}
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      icon={<Plus className="h-3.5 w-3.5" />}
+                      label="Meeting aufzeichnen"
+                      onClick={onOpenNewRecording}
+                    />
+                  </HStack>
+                }
+              />
+            ) : (
+              <Table<RecordingRow>
+                idKey="id"
+                density="balanced"
+                dividers="rows"
+                hasHover
+                data={recordings as RecordingRow[]}
+                columns={columns}
+              />
+            )}
+          </VStack>
+        </LayoutContent>
+      }
+    />
   );
 }

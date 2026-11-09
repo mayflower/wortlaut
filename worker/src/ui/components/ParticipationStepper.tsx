@@ -1,42 +1,45 @@
 import React from 'react';
+import { RotateCcw } from 'lucide-react';
+import { Stepper, Step } from '@astryxdesign/core/Stepper';
 import {
-  AlertTriangle,
-  Check,
-  Loader2,
-  Mic,
-  RotateCcw,
-  ShieldAlert,
-  Sparkles,
-  Users,
-} from 'lucide-react';
+  MetadataList,
+  MetadataListItem,
+} from '@astryxdesign/core/MetadataList';
+import { ProgressBar } from '@astryxdesign/core/ProgressBar';
+import { Divider } from '@astryxdesign/core/Divider';
+import { Heading } from '@astryxdesign/core/Heading';
+import { Text } from '@astryxdesign/core/Text';
+import { VStack } from '@astryxdesign/core/VStack';
+import { HStack } from '@astryxdesign/core/HStack';
+import { Button } from '@astryxdesign/core/Button';
+import { Token } from '@astryxdesign/core/Token';
 import {
+  DELIVERY_STATUS_LABELS,
+  SOURCE_COVERAGE_LABELS,
   formatDurationHuman,
   getFailureReasons,
   getInstanceInfo,
 } from '../api';
-import type { RecordingDetail } from '../types';
-import { Button, cn } from './ui/primitives';
+import type { RecordingDetail, SourceSummary, TranscriptExport } from '../types';
 
 export interface ParticipationStepperProps {
   recording: RecordingDetail;
+  transcript?: TranscriptExport;
   isOperator: boolean;
   onRejoin: () => void;
   rejoining: boolean;
+  selectedSourceFilter?: string;
+  onSelectSourceFilter?: (sourceId: string) => void;
 }
-
-const STEPS = [
-  { key: 'scheduled', label: '1. Eingeplant' },
-  { key: 'joining', label: '2. Browser startet' },
-  { key: 'lobby', label: '3. Warteraum / Einlass' },
-  { key: 'capturing', label: '4. Zeichnet auf' },
-  { key: 'completed', label: '5. Transkript bereit' },
-];
 
 export function ParticipationStepper({
   recording,
+  transcript,
   isOperator,
   onRejoin,
   rejoining,
+  selectedSourceFilter = '',
+  onSelectSourceFilter,
 }: ParticipationStepperProps) {
   const failureReasons = getFailureReasons();
   const instance = getInstanceInfo();
@@ -48,7 +51,6 @@ export function ParticipationStepper({
   const reason =
     recording.participation_reason || lastAttempt?.end_reason || '';
   const explanation = reason ? failureReasons[reason] || '' : '';
-  const live = recording.live_status;
   const sampleSec = Math.round(
     (recording.ingest?.durable_sample_count || 0) / 16000
   );
@@ -76,152 +78,195 @@ export function ParticipationStepper({
     Boolean(reason) &&
     reason !== 'normal';
 
+  const sources: SourceSummary[] = transcript?.sources_summary || [];
+  const totalSpeechSec = Math.max(
+    1,
+    sources.reduce((acc, s) => acc + (s.speech_seconds || 0), 0)
+  );
+
+  const startFormatted = new Date(recording.starts_at).toLocaleString('de-DE', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+
+  const endFormatted = new Date(recording.ends_at).toLocaleTimeString('de-DE', {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+
   return (
-    <div className="space-y-3 rounded-xl border border-slate-800 bg-slate-950/75 p-4">
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
-        {STEPS.map((step, idx) => {
-          const isPast = idx < activeIndex && !isFailedJoin;
-          const isCurrent = idx === activeIndex;
-          const isCompletedEnd =
-            idx === 4 &&
-            recording.participation === 'ended' &&
-            recording.processing === 'completed' &&
-            !isFailedJoin;
-
-          return (
-            <div
-              key={step.key}
-              className={cn(
-                'flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-medium transition-all',
-                isCompletedEnd || isPast
-                  ? 'border-emerald-800/70 bg-emerald-950/40 text-emerald-300'
-                  : isCurrent && isFailedJoin
-                    ? 'border-red-800/80 bg-red-950/50 text-red-200'
-                    : isCurrent &&
-                        recording.participation === 'waiting_admission'
-                      ? 'border-amber-600/90 bg-amber-950/70 text-amber-200 shadow-xs'
-                      : isCurrent
-                        ? 'border-sky-600/80 bg-sky-950/60 text-sky-200'
-                        : 'border-slate-800/80 bg-slate-900/40 text-slate-500'
-              )}
-            >
-              <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-current text-[10px]">
-                {isCompletedEnd || isPast ? (
-                  <Check className="h-3 w-3" />
-                ) : isCurrent &&
-                  (recording.participation === 'joining' ||
-                    recording.participation === 'capturing' ||
-                    (recording.participation === 'ended' &&
-                      recording.processing !== 'completed' &&
-                      recording.processing !== 'failed')) ? (
-                  <Loader2 className="h-3 w-3 animate-spin" />
-                ) : (
-                  idx + 1
-                )}
-              </span>
-              <span className="truncate">{step.label}</span>
-            </div>
-          );
-        })}
-      </div>
-
-      {(recording.participation === 'starting' ||
-        recording.participation === 'preparing' ||
-        recording.participation === 'joining') && (
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-sky-800/80 bg-sky-950/50 px-4 py-3 text-xs text-sky-100">
-          <div className="flex items-center gap-2.5">
-            <Loader2 className="h-4 w-4 shrink-0 text-sky-400 animate-spin" />
-            <div>
-              <strong>Bot tritt dem Meeting bei (Dauer ca. 15–30 Sek.):</strong>{' '}
-              Der isolierte Browser-Worker startet und erscheint stummgeschaltet
-              als <strong>„{botName}“</strong> im Meeting. Falls ein Warteraum
-              aktiv ist, lassen Sie ihn dort bitte als Gast zu.
-            </div>
-          </div>
-        </div>
-      )}
-
-      {recording.participation === 'waiting_admission' && (
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-600/80 bg-amber-950/60 px-4 py-3 text-xs text-amber-100">
-          <div className="flex items-center gap-2.5">
-            <AlertTriangle className="h-4 w-4 shrink-0 text-amber-400" />
-            <div>
-              <strong>Warteraum aktiv:</strong> Der Bot wartet im
-              Meeting-Warteraum auf Einlass durch den Host (max.{' '}
-              {Math.round(instance.limits.lobbyTimeoutSeconds / 60)} Min.).
-              Bitte lassen Sie <strong>„{botName}“</strong> jetzt im
-              Meeting-Fenster zu.
-            </div>
-          </div>
-        </div>
-      )}
-
-      {live?.is_active && recording.participation === 'capturing' && (
-        <div
-          id="live-status-banner"
-          className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-emerald-800/80 bg-emerald-950/40 px-4 py-2.5 text-xs text-emerald-200"
+    <VStack gap={4}>
+      <VStack gap={2}>
+        <Heading level={4}>Ablauf &amp; Status</Heading>
+        <Stepper
+          orientation="vertical"
+          density="compact"
+          activeStep={activeIndex}
+          label="Aufzeichnungsfortschritt"
         >
-          <div className="flex flex-wrap items-center gap-4">
-            <span className="inline-flex items-center gap-1.5 font-semibold text-emerald-300">
-              <Mic className="h-3.5 w-3.5 animate-pulse" />
-              Live-Aufnahme läuft
-            </span>
-            <span className="inline-flex items-center gap-1">
-              <Users className="h-3.5 w-3.5 text-emerald-400" />
-              Teilnehmer:{' '}
-              <strong>{live.dom_or_signaled_participants ?? 0}</strong> (gebundene
-              Sprecher: <strong>{live.bound_named_receivers ?? 0}</strong>/
-              {live.total_receivers ?? 0})
-            </span>
-            <span>
-              Aktive Sprache:{' '}
-              <strong>{formatDurationHuman(live.active_audio_seconds || 0)}</strong>{' '}
-              ({formatDurationHuman(live.audio_seconds || 0)} Audio gesamt)
-            </span>
-          </div>
-          <span className="text-[11px] text-emerald-300/80">
-            Streams: {live.active_streams ?? 0} · ASR offen:{' '}
-            {recording.asr?.pending ?? 0}
-          </span>
-        </div>
-      )}
+          <Step
+            step={0}
+            label="Eingeplant"
+            description={`${startFormatted} – ${endFormatted}`}
+          />
+          <Step
+            step={1}
+            label="Browser-Worker startet"
+            description={`Stummer Beitritt als „${botName}“`}
+          />
+          <Step
+            step={2}
+            label="Warteraum / Einlass"
+            status={
+              recording.participation === 'waiting_admission'
+                ? 'warning'
+                : undefined
+            }
+            description={
+              recording.participation === 'waiting_admission'
+                ? 'Wartet auf Zulassung im Meeting'
+                : 'Zugang zum Konferenzraum'
+            }
+          />
+          <Step
+            step={3}
+            label="Einzelspur-Aufnahme"
+            status={
+              recording.participation === 'capturing' ? 'success' : undefined
+            }
+            description={
+              sampleSec > 0
+                ? `${formatDurationHuman(sampleSec)} Audio erfasst`
+                : 'WebRTC-Empfang vor dem Mix'
+            }
+          />
+          <Step
+            step={4}
+            label="Transkript bereit"
+            status={
+              isFailedJoin || recording.processing === 'failed'
+                ? 'error'
+                : recording.participation === 'ended' &&
+                    recording.processing === 'completed'
+                  ? 'success'
+                  : undefined
+            }
+            description={
+              isFailedJoin
+                ? explanation || reason
+                : recording.processing === 'completed'
+                  ? `${transcript?.segments?.length || 0} Segmente fertig`
+                  : 'Parakeet-GPU-Spracherkennung'
+            }
+          />
+        </Stepper>
 
-      {(explanation || (reason && reason !== 'normal')) && (
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-red-800/80 bg-red-950/50 px-4 py-3 text-xs text-red-200">
-          <div className="flex items-start gap-2.5">
-            <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
-            <div>
-              <strong className="text-red-100">{reason}:</strong>{' '}
-              {explanation ||
-                'Die Sitzung wurde vorzeitig oder mit Hinweis beendet.'}
-            </div>
-          </div>
-          {isOperator && recording.participation === 'ended' && (
+        {isOperator && recording.participation === 'ended' && (
+          <span id="rejoin-rec-btn" className="contents">
             <Button
-              variant="primary"
+              variant="secondary"
               size="sm"
+              width="fill"
+              isLoading={rejoining}
+              icon={<RotateCcw className="h-3.5 w-3.5" />}
+              label="Bot erneut ins Meeting schicken"
               onClick={onRejoin}
-              disabled={rejoining}
-            >
-              <RotateCcw className="h-3.5 w-3.5" />
-              <span>{rejoining ? 'Plane ein…' : 'Jetzt erneut beitreten'}</span>
-            </Button>
-          )}
-        </div>
-      )}
-
-      {recording.participation === 'ended' &&
-        recording.processing !== 'completed' &&
-        recording.processing !== 'failed' && (
-          <div className="flex items-center gap-2 rounded-lg border border-sky-800/70 bg-sky-950/40 px-4 py-2.5 text-xs text-sky-200">
-            <Sparkles className="h-4 w-4 text-sky-400 animate-pulse" />
-            <span>
-              <strong>Spracherkennung arbeitet:</strong> Noch{' '}
-              {recording.asr?.pending ?? 0} Segmente in Verarbeitung (
-              {Math.round(recording.asr?.pending_source_seconds ?? 0)}s Audio).
-            </span>
-          </div>
+            />
+          </span>
         )}
-    </div>
+      </VStack>
+
+      <Divider variant="subtle" />
+
+      <VStack gap={2}>
+        <Heading level={4}>Sitzungsdaten</Heading>
+        <MetadataList columns="single">
+          <MetadataListItem label="Zeitfenster">
+            {startFormatted} – {endFormatted}
+          </MetadataListItem>
+          <MetadataListItem label="Bot-Name">{botName}</MetadataListItem>
+          <MetadataListItem label="Erfasstes Audio">
+            {formatDurationHuman(sampleSec)}
+          </MetadataListItem>
+          {transcript?.quality?.source_coverage && (
+            <MetadataListItem label="Spurbindung">
+              {SOURCE_COVERAGE_LABELS[transcript.quality.source_coverage] ||
+                transcript.quality.source_coverage}
+            </MetadataListItem>
+          )}
+          {recording.delivery?.status && (
+            <MetadataListItem label="E-Mail-Versand">
+              {DELIVERY_STATUS_LABELS[recording.delivery.status] ||
+                recording.delivery.status}
+            </MetadataListItem>
+          )}
+          {reason && reason !== 'normal' && (
+            <MetadataListItem label="Endgrund">
+              <Token size="sm" color="orange" label={reason} />
+            </MetadataListItem>
+          )}
+        </MetadataList>
+      </VStack>
+
+      {sources.length > 0 && (
+        <>
+          <Divider variant="subtle" />
+          <VStack gap={2}>
+            <HStack justify="between" vAlign="center">
+              <Heading level={4}>Sprecheranteile ({sources.length})</Heading>
+              {selectedSourceFilter && onSelectSourceFilter && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  label="Alle zeigen"
+                  onClick={() => onSelectSourceFilter('')}
+                />
+              )}
+            </HStack>
+
+            <VStack gap={2}>
+              {sources.map((src) => {
+                const isSelected =
+                  selectedSourceFilter === src.provider_source_id;
+                const pct = Math.min(
+                  100,
+                  Math.round(((src.speech_seconds || 0) / totalSpeechSec) * 100)
+                );
+                const speakerName =
+                  src.participant_name ||
+                  src.speaker_label ||
+                  src.provider_source_id;
+
+                return (
+                  <div
+                    key={src.provider_source_id}
+                    onClick={() =>
+                      onSelectSourceFilter?.(
+                        isSelected ? '' : src.provider_source_id
+                      )
+                    }
+                    className="cursor-pointer rounded-md p-1.5 transition-colors hover:bg-[var(--color-background-muted)]"
+                  >
+                    <ProgressBar
+                      variant={isSelected ? 'accent' : 'neutral'}
+                      label={speakerName}
+                      value={pct}
+                      max={100}
+                      hasValueLabel
+                      formatValueLabel={() =>
+                        `${formatDurationHuman(src.speech_seconds)} (${src.segment_count})`
+                      }
+                    />
+                  </div>
+                );
+              })}
+            </VStack>
+          </VStack>
+        </>
+      )}
+    </VStack>
   );
 }

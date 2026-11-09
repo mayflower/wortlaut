@@ -1,80 +1,41 @@
 import React, { useMemo, useState } from 'react';
-import {
-  Check,
-  CheckCircle2,
-  Copy,
-  FilterX,
-  MessageSquareText,
-  Search,
-  ShieldAlert,
-} from 'lucide-react';
+import { Check, Copy, FileText, Search } from 'lucide-react';
+import { HStack } from '@astryxdesign/core/HStack';
+import { VStack } from '@astryxdesign/core/VStack';
+import { Text } from '@astryxdesign/core/Text';
+import { Avatar } from '@astryxdesign/core/Avatar';
+import { Token } from '@astryxdesign/core/Token';
+import { TextInput } from '@astryxdesign/core/TextInput';
+import { Selector } from '@astryxdesign/core/Selector';
+import { IconButton } from '@astryxdesign/core/IconButton';
+import { EmptyState } from '@astryxdesign/core/EmptyState';
+import { Divider } from '@astryxdesign/core/Divider';
+import { Button } from '@astryxdesign/core/Button';
 import {
   ATTRIBUTION_STATUS_LABELS,
-  SOURCE_COVERAGE_LABELS,
   formatDurationClock,
-  formatDurationHuman,
 } from '../api';
-import type { SourceSummary, TranscriptExport, TranscriptSegment } from '../types';
-import { Button, cn } from './ui/primitives';
+import type {
+  ParticipationState,
+  ProcessingState,
+  SourceSummary,
+  TranscriptSegment,
+} from '../types';
 
 export interface TranscriptTabProps {
-  transcript: TranscriptExport;
+  recordingId: string;
+  participation: ParticipationState;
+  processing: ProcessingState;
+  segments: TranscriptSegment[];
+  sources: SourceSummary[];
   selectedSourceFilter: string;
-  onChangeSourceFilter: (sourceId: string) => void;
+  onSelectedSourceFilterChange: (sourceId: string) => void;
 }
 
-const SPEAKER_PALETTE = [
-  {
-    avatar: 'bg-sky-500/20 text-sky-300 border-sky-500/40',
-    chip: 'border-sky-700/80 bg-sky-950/70 text-sky-200',
-    name: 'text-sky-300',
-  },
-  {
-    avatar: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40',
-    chip: 'border-emerald-700/80 bg-emerald-950/70 text-emerald-200',
-    name: 'text-emerald-300',
-  },
-  {
-    avatar: 'bg-violet-500/20 text-violet-300 border-violet-500/40',
-    chip: 'border-violet-700/80 bg-violet-950/70 text-violet-200',
-    name: 'text-violet-300',
-  },
-  {
-    avatar: 'bg-amber-500/20 text-amber-300 border-amber-500/40',
-    chip: 'border-amber-700/80 bg-amber-950/70 text-amber-200',
-    name: 'text-amber-300',
-  },
-  {
-    avatar: 'bg-rose-500/20 text-rose-300 border-rose-500/40',
-    chip: 'border-rose-700/80 bg-rose-950/70 text-rose-200',
-    name: 'text-rose-300',
-  },
-  {
-    avatar: 'bg-teal-500/20 text-teal-300 border-teal-500/40',
-    chip: 'border-teal-700/80 bg-teal-950/70 text-teal-200',
-    name: 'text-teal-300',
-  },
-];
-
-function speakerStyleIndex(label: string): number {
-  let hash = 0;
-  for (let i = 0; i < label.length; i++) {
-    hash = (hash * 31 + label.charCodeAt(i)) >>> 0;
-  }
-  return hash % SPEAKER_PALETTE.length;
-}
-
-function speakerInitials(label: string): string {
-  const cleaned = label.replace(/\(.*\)/g, '').trim();
-  const parts = cleaned.split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return '??';
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
-}
-
-interface DialogueGroup {
-  key: string;
+interface GroupedTurn {
+  id: string;
   speakerLabel: string;
+  speakerName: string | null;
   providerSourceId: string;
   attributionStatus: string;
   start: number;
@@ -82,71 +43,61 @@ interface DialogueGroup {
   segments: TranscriptSegment[];
 }
 
-function highlightSearchText(text: string, query: string): React.ReactNode {
-  const q = query.trim();
-  if (!q) return text;
-  const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const parts = text.split(new RegExp(`(${escaped})`, 'gi'));
-  if (parts.length <= 1) return text;
-  return parts.map((part, idx) =>
-    part.toLowerCase() === q.toLowerCase() ? (
-      <mark
-        key={idx}
-        className="rounded bg-amber-500/35 px-0.5 font-medium text-amber-100"
-      >
-        {part}
-      </mark>
-    ) : (
-      part
-    )
-  );
-}
-
 export function TranscriptTab({
-  transcript,
+  participation,
+  processing,
+  segments,
+  sources,
   selectedSourceFilter,
-  onChangeSourceFilter,
+  onSelectedSourceFilterChange,
 }: TranscriptTabProps) {
   const [searchQuery, setSearchQuery] = useState('');
-  const [copied, setCopied] = useState(false);
+  const [copiedTurnId, setCopiedTurnId] = useState<string | null>(null);
 
-  const sources: SourceSummary[] = transcript.sources_summary || [];
-  const rawSegments: TranscriptSegment[] = transcript.segments || [];
+  const sourceOptions = useMemo(() => {
+    return [
+      { value: 'all', label: `Alle Sprecher (${sources.length})` },
+      ...sources.map((src) => ({
+        value: src.provider_source_id,
+        label: `${src.participant_name || src.speaker_label || src.provider_source_id} (${src.segment_count})`,
+      })),
+    ];
+  }, [sources]);
 
   const filteredSegments = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    return rawSegments.filter((seg) => {
+    return segments.filter((seg) => {
       if (
         selectedSourceFilter &&
-        seg.provider_source_id !== selectedSourceFilter &&
-        seg.speaker_id !== selectedSourceFilter
+        seg.provider_source_id !== selectedSourceFilter
       ) {
         return false;
       }
       if (!q) return true;
-      return (
-        (seg.text || '').toLowerCase().includes(q) ||
-        (seg.speaker_label || '').toLowerCase().includes(q)
-      );
+      const hay =
+        `${seg.speaker_label} ${seg.speaker_name || ''} ${seg.text}`.toLowerCase();
+      return hay.includes(q);
     });
-  }, [rawSegments, selectedSourceFilter, searchQuery]);
+  }, [segments, selectedSourceFilter, searchQuery]);
 
-  const dialogueGroups = useMemo<DialogueGroup[]>(() => {
-    const groups: DialogueGroup[] = [];
+  // Merge consecutive segments from the same speaker within 8 seconds into clean editorial turns
+  const groupedTurns = useMemo<GroupedTurn[]>(() => {
+    const turns: GroupedTurn[] = [];
     for (const seg of filteredSegments) {
-      const prev = groups[groups.length - 1];
+      const prev = turns[turns.length - 1];
       if (
         prev &&
-        prev.speakerLabel === seg.speaker_label &&
         prev.providerSourceId === seg.provider_source_id &&
-        seg.start - prev.end <= 6.0
+        prev.speakerLabel === seg.speaker_label &&
+        seg.start - prev.end <= 8.0
       ) {
-        prev.end = Math.max(prev.end, seg.end);
+        prev.end = seg.end;
         prev.segments.push(seg);
       } else {
-        groups.push({
-          key: seg.segment_id,
+        turns.push({
+          id: seg.segment_id,
           speakerLabel: seg.speaker_label,
+          speakerName: seg.speaker_name,
           providerSourceId: seg.provider_source_id,
           attributionStatus: seg.attribution_status,
           start: seg.start,
@@ -155,230 +106,178 @@ export function TranscriptTab({
         });
       }
     }
-    return groups;
+    return turns;
   }, [filteredSegments]);
 
-  const handleCopyTranscript = async () => {
-    const text = dialogueGroups
-      .map((g) => {
-        const body = g.segments.map((s) => s.text.trim()).join(' ');
-        return `**[${formatDurationClock(g.start)} – ${formatDurationClock(g.end)}] ${g.speakerLabel}**\n${body}`;
-      })
-      .join('\n\n');
-    if (!text || !navigator.clipboard) return;
+  const handleCopyTurn = async (turn: GroupedTurn) => {
+    if (!navigator.clipboard) return;
+    const text = `[${formatDurationClock(turn.start)}] ${turn.speakerLabel}: ${turn.segments.map((s) => s.text).join(' ')}`;
     await navigator.clipboard.writeText(text).catch(() => {});
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1800);
+    setCopiedTurnId(turn.id);
+    setTimeout(() => setCopiedTurnId(null), 1600);
   };
 
-  const quality = transcript.quality;
-  const isCleanAttribution =
-    !quality.attribution_unknown && rawSegments.length > 0;
-  const coverageLabel =
-    SOURCE_COVERAGE_LABELS[quality.source_coverage] || quality.source_coverage;
-
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-800 bg-slate-950/60 px-3.5 py-2 text-xs">
-        <div className="flex items-center gap-2">
-          {isCleanAttribution ? (
-            <>
-              <CheckCircle2 className="h-4 w-4 text-emerald-400" />
-              <span className="text-slate-200">
-                Alle Segmente sind nachgewiesenen Provider-Teilnehmersitzungen
-                zugeordnet.
-              </span>
-            </>
-          ) : (
-            <>
-              <ShieldAlert className="h-4 w-4 text-amber-400" />
-              <span className="text-slate-300">
-                Quellenabdeckung: <strong>{coverageLabel}</strong>
-                {quality.attribution_unknown
-                  ? ' · Einzelne Segmente ohne bestätigte Teilnehmerbindung'
-                  : ''}
-              </span>
-            </>
-          )}
-        </div>
-        <span className="text-slate-400">
-          {filteredSegments.length} von {rawSegments.length} Segmenten
-        </span>
-      </div>
-
-      {sources.length > 0 && (
-        <div className="flex flex-wrap items-center gap-1.5">
-          <button
-            type="button"
-            onClick={() => onChangeSourceFilter('')}
-            className={cn(
-              'inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition-colors cursor-pointer',
-              !selectedSourceFilter
-                ? 'border-sky-500 bg-sky-950/90 text-sky-200'
-                : 'border-slate-800 bg-slate-950/60 text-slate-400 hover:border-slate-700 hover:text-slate-200'
-            )}
-          >
-            <span>Alle Sprecher ({rawSegments.length})</span>
-          </button>
-
-          {sources.map((src) => {
-            const label =
-              src.participant_name ||
-              src.speaker_label ||
-              src.signaled_participant_id ||
-              src.provider_source_id;
-            const filterKey =
-              src.signaled_participant_id || src.provider_source_id;
-            const palette = SPEAKER_PALETTE[speakerStyleIndex(label)];
-            const active =
-              selectedSourceFilter === filterKey ||
-              selectedSourceFilter === src.provider_source_id;
-            return (
-              <button
-                key={`${src.provider_source_id}:${filterKey}`}
-                type="button"
-                onClick={() =>
-                  onChangeSourceFilter(active ? '' : filterKey)
-                }
-                className={cn(
-                  'inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition-all cursor-pointer',
-                  active
-                    ? palette.chip + ' ring-1 ring-current'
-                    : 'border-slate-800 bg-slate-950/60 text-slate-300 hover:border-slate-700'
-                )}
-              >
-                <span
-                  className={cn(
-                    'h-2 w-2 rounded-full',
-                    palette.name.replace('text-', 'bg-')
-                  )}
-                />
-                <span>{label}</span>
-                <span className="text-[11px] opacity-75">
-                  · {formatDurationHuman(src.speech_seconds)}
-                </span>
-              </button>
-            );
-          })}
-
-          {selectedSourceFilter && (
-            <Button
-              variant="ghost"
-              size="sm"
-              id="clear-source-filter-btn"
-              onClick={() => onChangeSourceFilter('')}
-            >
-              <FilterX className="h-3.5 w-3.5" />
-              <span>Filter zurücksetzen</span>
-            </Button>
-          )}
-        </div>
-      )}
-
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="relative flex-1 min-w-[220px]">
-          <Search className="pointer-events-none absolute left-3 top-2.5 h-3.5 w-3.5 text-slate-500" />
-          <input
-            id="segment-search"
+    <VStack gap={3}>
+      {/* Sticky Filter & Search Toolbar */}
+      <HStack justify="between" vAlign="center" wrap="wrap" gap={2}>
+        <div id="segment-search" className="flex-1 min-w-[240px]">
+          <TextInput
             type="search"
+            size="sm"
+            label="Im Transkript suchen"
+            isLabelHidden
             value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
+            onChange={setSearchQuery}
+            hasClear
             placeholder="Im Transkript nach Begriffen oder Sprechern suchen…"
-            className="w-full rounded-lg border border-slate-700 bg-slate-950 pl-9 pr-3 py-1.5 text-xs text-slate-100 placeholder-slate-500 focus:border-sky-500 focus:outline-none"
+            startIcon={<Search className="h-3.5 w-3.5" />}
           />
         </div>
 
-        <Button
-          variant="secondary"
-          size="sm"
-          id="copy-transcript-btn"
-          onClick={handleCopyTranscript}
-          disabled={filteredSegments.length === 0}
-        >
-          {copied ? (
-            <>
-              <Check className="h-3.5 w-3.5 text-emerald-400" />
-              <span>Kopiert!</span>
-            </>
-          ) : (
-            <>
-              <Copy className="h-3.5 w-3.5" />
-              <span>Transkript kopieren</span>
-            </>
-          )}
-        </Button>
-      </div>
-
-      <div className="segments space-y-3">
-        {dialogueGroups.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-slate-800 bg-slate-950/40 p-10 text-center space-y-2">
-            <MessageSquareText className="mx-auto h-7 w-7 text-slate-600" />
-            <div className="text-sm font-medium text-slate-300">
-              Noch keine Transkript-Segmente vorhanden
-            </div>
-            <p className="text-xs text-slate-500">
-              Sobald im Meeting gesprochen wird und Segmente die lokale
-              Parakeet-Spracherkennung durchlaufen haben, erscheinen sie hier
-              automatisch.
-            </p>
+        {sources.length > 0 && (
+          <div className="w-64">
+            <Selector
+              size="sm"
+              label="Sprecher filtern"
+              isLabelHidden
+              options={sourceOptions}
+              value={selectedSourceFilter || 'all'}
+              onChange={(v) =>
+                onSelectedSourceFilterChange(v === 'all' ? '' : v)
+              }
+            />
           </div>
+        )}
+      </HStack>
+
+      <Divider variant="subtle" />
+
+      {/* Editorial Transcript Stream (no Card soup around individual turns) */}
+      <div id="transcript-view">
+        {groupedTurns.length === 0 ? (
+          <EmptyState
+            icon={<FileText className="h-8 w-8" />}
+            title={
+              segments.length === 0
+                ? participation === 'capturing'
+                  ? 'Warte auf erste gesprochene Sätze…'
+                  : processing === 'processing' || processing === 'pending'
+                    ? 'Spracherkennung verarbeitet die Audiospuren…'
+                    : 'Kein Transkript für diese Sitzung vorhanden'
+                : 'Keine Segmente für diesen Filter gefunden'
+            }
+            description={
+              segments.length === 0
+                ? 'Sobald auf einer gebundenen Teilnehmer-Audiospur Sprache erkannt wird, erscheinen die Beiträge hier chronologisch.'
+                : 'Passen Sie den Suchbegriff oder den gewählten Sprecherfilter an.'
+            }
+            actions={
+              (searchQuery || selectedSourceFilter) && (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  label="Filter zurücksetzen"
+                  onClick={() => {
+                    setSearchQuery('');
+                    onSelectedSourceFilterChange('');
+                  }}
+                />
+              )
+            }
+          />
         ) : (
-          dialogueGroups.map((group) => {
-            const palette =
-              SPEAKER_PALETTE[speakerStyleIndex(group.speakerLabel)];
-            const initials = speakerInitials(group.speakerLabel);
+          <div className="divide-y divide-[var(--color-border)]">
+            {groupedTurns.map((turn) => {
+              const isCopied = copiedTurnId === turn.id;
+              const isBound = turn.attributionStatus === 'bound';
+              const combinedText = turn.segments.map((s) => s.text).join(' ');
 
-            return (
-              <div
-                key={group.key}
-                className="segment flex gap-3.5 rounded-xl border border-slate-800/90 bg-slate-950/75 p-4 transition-colors hover:border-slate-700/80"
-              >
+              return (
                 <div
-                  className={cn(
-                    'flex h-9 w-9 shrink-0 items-center justify-center rounded-full border text-xs font-bold select-none',
-                    palette.avatar
-                  )}
+                  key={turn.id}
+                  id={`seg-${turn.id}`}
+                  className="group py-3.5 transition-colors hover:bg-[var(--color-background-muted)]/40 px-2 rounded-md"
                 >
-                  {initials}
-                </div>
-
-                <div className="min-w-0 flex-1 space-y-1.5">
-                  <div className="flex flex-wrap items-baseline justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      <span
-                        className={cn(
-                          'speaker-tag text-sm font-semibold',
-                          palette.name
-                        )}
+                  <HStack gap={3} vAlign="start">
+                    <Avatar
+                      size="sm"
+                      shape="circle"
+                      name={turn.speakerLabel}
+                    />
+                    <div className="min-w-0 flex-1">
+                      <HStack
+                        justify="between"
+                        vAlign="center"
+                        wrap="wrap"
+                        gap={2}
                       >
-                        {highlightSearchText(group.speakerLabel, searchQuery)}
-                      </span>
-                      {group.attributionStatus !== 'bound' && (
-                        <span className="rounded bg-amber-950/80 px-1.5 py-0.5 text-[10px] font-medium text-amber-300 border border-amber-800/60">
-                          {ATTRIBUTION_STATUS_LABELS[group.attributionStatus] ||
-                            group.attributionStatus}
-                        </span>
-                      )}
-                    </div>
-                    <span className="font-mono text-[11px] text-slate-500">
-                      {formatDurationClock(group.start)} –{' '}
-                      {formatDurationClock(group.end)}
-                    </span>
-                  </div>
+                        <HStack gap={2} vAlign="center" wrap="wrap">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              onSelectedSourceFilterChange(
+                                selectedSourceFilter === turn.providerSourceId
+                                  ? ''
+                                  : turn.providerSourceId
+                              )
+                            }
+                            className="font-semibold text-sm text-[var(--color-text-primary)] hover:text-[var(--color-text-accent)] cursor-pointer"
+                          >
+                            {turn.speakerLabel}
+                          </button>
+                          <Text
+                            type="supporting"
+                            color="secondary"
+                            hasTabularNumbers
+                          >
+                            {formatDurationClock(turn.start)} –{' '}
+                            {formatDurationClock(turn.end)}
+                          </Text>
+                          {!isBound && (
+                            <Token
+                              size="sm"
+                              color="orange"
+                              label={
+                                ATTRIBUTION_STATUS_LABELS[
+                                  turn.attributionStatus
+                                ] || turn.attributionStatus
+                              }
+                            />
+                          )}
+                        </HStack>
 
-                  <div className="space-y-1 text-sm leading-relaxed text-slate-100">
-                    {group.segments.map((seg) => (
-                      <p key={seg.segment_id} className="m-0">
-                        {highlightSearchText(seg.text, searchQuery)}
-                      </p>
-                    ))}
-                  </div>
+                        <div className="opacity-0 group-hover:opacity-100 transition-opacity">
+                          <IconButton
+                            variant="ghost"
+                            size="sm"
+                            label="Beitrag kopieren"
+                            tooltip={isCopied ? 'Kopiert!' : 'Beitrag kopieren'}
+                            icon={
+                              isCopied ? (
+                                <Check className="h-3.5 w-3.5" />
+                              ) : (
+                                <Copy className="h-3.5 w-3.5" />
+                              )
+                            }
+                            onClick={() => handleCopyTurn(turn)}
+                          />
+                        </div>
+                      </HStack>
+
+                      <div className="mt-1">
+                        <Text type="body" color="primary">
+                          {combinedText}
+                        </Text>
+                      </div>
+                    </div>
+                  </HStack>
                 </div>
-              </div>
-            );
-          })
+              );
+            })}
+          </div>
         )}
       </div>
-    </div>
+    </VStack>
   );
 }

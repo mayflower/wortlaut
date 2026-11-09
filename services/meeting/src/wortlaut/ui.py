@@ -7,16 +7,22 @@ from wortlaut.mail import FAILURE_REASONS
 from wortlaut.settings import get_settings
 
 PRIVACY_HTML = """<!DOCTYPE html>
-<html lang="de" class="dark">
+<html lang="de" data-theme="dark" data-astryx-theme="stone">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Datenschutz &amp; Transparenz – __ASSISTANT_NAME__</title>
   <link rel="stylesheet" href="/sdk/ui/app.css">
 </head>
-<body class="min-h-screen bg-[#0b1120] text-slate-100 antialiased">
+<body
+  class="min-h-screen bg-[var(--color-background-body,#101018)]
+         text-[var(--color-text-primary,#f0f0f9)] antialiased"
+>
   <main class="mx-auto max-w-3xl px-6 py-12 space-y-8">
-    <header class="border-b border-slate-800 pb-6 flex items-start justify-between gap-4">
+    <header
+      class="border-b border-[var(--color-border,#2e2e36)] pb-6
+             flex items-start justify-between gap-4"
+    >
       <div>
         <div
           class="inline-flex items-center gap-2 rounded-full border border-emerald-500/30
@@ -24,28 +30,32 @@ PRIVACY_HTML = """<!DOCTYPE html>
         >
           100 % Self-Hosted · Keine Cloud-Weitergabe
         </div>
-        <h1 class="text-2xl font-semibold tracking-tight text-white">
+        <h1 class="text-2xl font-semibold tracking-tight">
           Datenschutz- &amp; Transparenzhinweis (__ASSISTANT_NAME__)
         </h1>
-        <p class="mt-2 text-sm text-slate-400">
+        <p class="mt-2 text-sm text-[var(--color-text-secondary,#ababb3)]">
           Informationen zur automatisierten Meeting-Protokollierung für Teilnehmende in
           Google Meet, Microsoft Teams und Cisco Webex.
         </p>
       </div>
       <a
         href="/ui"
-        class="shrink-0 rounded-lg border border-slate-700 bg-slate-800/80
-               px-3.5 py-2 text-xs font-medium text-slate-200 hover:bg-slate-700"
+        class="shrink-0 rounded-lg border border-[var(--color-border,#2e2e36)]
+               bg-[var(--color-background-surface,#1b1b21)] px-3.5 py-2 text-xs font-medium
+               hover:bg-[var(--color-background-muted,#3a3a42)]"
       >
         Zur Web-UI →
       </a>
     </header>
 
-    <section class="rounded-xl border border-slate-800 bg-slate-900/60 p-6 space-y-3">
-      <h2 class="text-base font-semibold text-white">
+    <section
+      class="rounded-xl border border-[var(--color-border,#2e2e36)]
+             bg-[var(--color-background-surface,#1b1b21)] p-6 space-y-3"
+    >
+      <h2 class="text-base font-semibold">
         1. Warum nimmt __ASSISTANT_NAME__ an diesem Meeting teil?
       </h2>
-      <p class="text-sm leading-relaxed text-slate-300">
+      <p class="text-sm leading-relaxed text-[var(--color-text-secondary,#ababb3)]">
         Der Bot <strong>__ASSISTANT_NAME__</strong> wurde von einer am Meeting teilnehmenden
         Person gezielt eingeladen, um ein schriftliches Wortprotokoll (Transkript) der
         Besprechung zu erstellen. Beim Beitritt stellt sich der Bot im Meeting-Chat vor,
@@ -54,17 +64,23 @@ PRIVACY_HTML = """<!DOCTYPE html>
     </section>
 
     <section class="grid gap-4 sm:grid-cols-2">
-      <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-5 space-y-2">
-        <h3 class="text-sm font-semibold text-emerald-300">Keine externen KI-/Cloud-Dienste</h3>
-        <p class="text-xs leading-relaxed text-slate-300">
+      <div
+        class="rounded-xl border border-[var(--color-border,#2e2e36)]
+               bg-[var(--color-background-surface,#1b1b21)] p-5 space-y-2"
+      >
+        <h3 class="text-sm font-semibold text-emerald-400">Keine externen KI-/Cloud-Dienste</h3>
+        <p class="text-xs leading-relaxed text-[var(--color-text-secondary,#ababb3)]">
           Audioerfassung und Spracherkennung (lokales NVIDIA-Parakeet-ASR-Modell) laufen
           ausschließlich innerhalb des eigenen Kubernetes-Clusters. Es werden keine Audio- oder
           Textdaten an externe Cloud-Anbieter übertragen.
         </p>
       </div>
-      <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-5 space-y-2">
-        <h3 class="text-sm font-semibold text-emerald-300">Keine Stimmprofile &amp; kein Video</h3>
-        <p class="text-xs leading-relaxed text-slate-300">
+      <div
+        class="rounded-xl border border-[var(--color-border,#2e2e36)]
+               bg-[var(--color-background-surface,#1b1b21)] p-5 space-y-2"
+      >
+        <h3 class="text-sm font-semibold text-emerald-400">Keine Stimmprofile &amp; kein Video</h3>
+        <p class="text-xs leading-relaxed text-[var(--color-text-secondary,#ababb3)]">
           Es werden weder Kamerabilder noch Bildschirminhalte aufgezeichnet. Die
           Sprecherzuordnung erfolgt ausschließlich über die technische
           Konferenz-Teilnehmersitzung (WebRTC), niemals über biometrische Stimmprofile
@@ -73,11 +89,14 @@ PRIVACY_HTML = """<!DOCTYPE html>
       </div>
     </section>
 
-    <section class="rounded-xl border border-slate-800 bg-slate-900/60 p-6 space-y-3">
-      <h2 class="text-base font-semibold text-white">
+    <section
+      class="rounded-xl border border-[var(--color-border,#2e2e36)]
+             bg-[var(--color-background-surface,#1b1b21)] p-6 space-y-3"
+    >
+      <h2 class="text-base font-semibold">
         2. Zugriffsschutz &amp; automatische Löschfristen
       </h2>
-      <ul class="list-disc pl-5 text-sm text-slate-300 space-y-2">
+      <ul class="list-disc pl-5 text-sm text-[var(--color-text-secondary,#ababb3)] space-y-2">
         <li>
           <strong>Zugriff auf Protokolle:</strong> Standardmäßig hat nur die einladende Person
           nach Authentifizierung Zugriff auf das Protokoll (sowie Personen, denen explizit ein
@@ -100,7 +119,7 @@ PRIVACY_HTML = """<!DOCTYPE html>
       <h2 class="text-base font-semibold text-amber-200">
         3. Widerspruch &amp; Beenden der Aufzeichnung
       </h2>
-      <p class="text-sm leading-relaxed text-slate-300">
+      <p class="text-sm leading-relaxed text-[var(--color-text-secondary,#ababb3)]">
         Wenn Sie keine Protokollierung wünschen, können Sie der Aufzeichnung jederzeit
         widersprechen: Der Bot <strong>__ASSISTANT_NAME__</strong> kann direkt über die
         Teilnehmerliste von Google Meet, Microsoft Teams oder Cisco Webex aus dem Raum
@@ -115,14 +134,17 @@ PRIVACY_HTML = """<!DOCTYPE html>
 """
 
 UI_HTML = """<!DOCTYPE html>
-<html lang="de" class="dark">
+<html lang="de" data-theme="dark" data-astryx-theme="stone">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>wortlaut – Meeting-Transkription</title>
   <link rel="stylesheet" href="/sdk/ui/app.css">
 </head>
-<body class="bg-[#0b1120] text-slate-100 antialiased">
+<body
+  class="bg-[var(--color-background-body,#101018)]
+         text-[var(--color-text-primary,#f0f0f9)] antialiased"
+>
   <div id="root">
     <!-- Bot in ein Meeting schicken · title-search · participation-filter -->
     <!-- rejoin-rec-btn · copy-transcript-btn -->
