@@ -406,6 +406,25 @@ def _fetch_provider_events(
     return _parse_microsoft_items(conn, items)
 
 
+_NOTETAKER_BOT_RE = re.compile(
+    r"\b("
+    r"fireflies(\.ai)?|otter(\.ai)?|read\.ai|fathom(\.video)?|tl;dv|tldv(\.io)?|"
+    r"meetgeek(\.ai)?|fellow(\.app)?|avoma(\.com)?|sembly(\.ai)?|supernormal(\.com)?|"
+    r"grain(\.com)?|krisp(\.ai)?|tactiq(\.io)?|airgram(\.io)?|notta(\.ai)?|nyota(\.ai)?|"
+    r"circleback(\.ai)?|sonnet(\.ai)?|bluedot(\.hq)?|granola(\.ai)?|wortlaut(\.cloud)?|"
+    r"notetaker|note[\s_-]*taker|meeting[\s_-]*bot|ai[\s_-]*notetaker"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def is_notetaker_bot(email: str | None = None, display_name: str | None = None) -> bool:
+    for val in (email, display_name):
+        if val and _NOTETAKER_BOT_RE.search(val):
+            return True
+    return False
+
+
 def _parse_google_items(conn: CalendarConnection, items: list[dict]) -> list[dict]:
     parsed = []
     self_emails = {conn.owner_email.lower(), conn.account_email.lower()}
@@ -450,6 +469,9 @@ def _parse_google_items(conn: CalendarConnection, items: list[dict]) -> list[dic
             and not a.get("self")
             and not a.get("resource")
             and str(a.get("email") or "").strip().lower() not in self_emails
+            and not is_notetaker_bot(
+                str(a.get("email") or ""), str(a.get("displayName") or "")
+            )
         ]
         if is_self and not other_attendees:
             continue
@@ -526,6 +548,10 @@ def _parse_microsoft_items(conn: CalendarConnection, items: list[dict]) -> list[
             and str(a.get("type") or "").lower() != "resource"
             and str(((a.get("emailAddress") or {}).get("address")) or "").strip().lower()
             not in self_emails
+            and not is_notetaker_bot(
+                str(((a.get("emailAddress") or {}).get("address")) or ""),
+                str(((a.get("emailAddress") or {}).get("name")) or ""),
+            )
         ]
         if is_self and not other_attendees:
             continue

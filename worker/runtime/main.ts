@@ -142,9 +142,11 @@ async function run(api: string, credential: string) {
         } else {
           emptySince ??= performance.now();
           const configuredTimeout = bootstrap.empty_room_timeout_seconds ?? 300;
-          const emptyTimeoutSeconds = (maxDomParticipants >= 2 && currentDom <= 1)
-            ? Math.min(configuredTimeout, 60)
-            : configuredTimeout;
+          const emptyTimeoutSeconds = (maxDomParticipants >= 1 && currentDom === 0)
+            ? Math.min(configuredTimeout, 15)
+            : (maxDomParticipants >= 2 && currentDom <= 1)
+              ? Math.min(configuredTimeout, 60)
+              : configuredTimeout;
           if (performance.now() - emptySince >= emptyTimeoutSeconds * 1000) {
             await stop('room_empty');
             return;

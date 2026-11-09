@@ -166,6 +166,25 @@ function install(config: MeetCaptureConfig) {
     track_ids: Set<string>; stream_ids: Set<string>;
   }>();
   const domNames = new Map<string, string>();
+  const ignoredParticipantIds = new Set<string>();
+  let liveDomCount = 0;
+  const NOTETAKER_BOT_RE =
+    /\b(fireflies(\.ai)?|otter(\.ai)?|read\.ai|fathom|tl;dv|tldv|meetgeek|fellow(\.app)?|avoma|sembly|supernormal|grain|krisp|tactiq|airgram|notta|nyota|circleback|sonnet|bluedot|granola|notetaker|note[\s-]*taker|meeting[\s-]*bot|ai[\s-]*notetaker|ai[\s-]*assistant)\b/i;
+  const SELF_OR_UI_TEXT_RE =
+    /^(wortlaut(\s+fixture)?(\s*\(.*\))?|you|sie|ich)$/i;
+  const UI_CHROME_TEXT_RE =
+    /(vollständigen videofeed|full video|bildausschnitt|reframing)/i;
+
+  function isIgnoredParticipantName(name: string | null | undefined): boolean {
+    if (!name) return false;
+    const trimmed = name.trim();
+    if (!trimmed) return false;
+    return (
+      NOTETAKER_BOT_RE.test(trimmed) ||
+      SELF_OR_UI_TEXT_RE.test(trimmed) ||
+      UI_CHROME_TEXT_RE.test(trimmed)
+    );
+  }
   const sdpCnames = new Map<string, {
     audio_ssrcs: Set<number>; video_ssrcs: Set<number>;
     stream_ids: Set<string>; track_ids: Set<string>;
@@ -337,11 +356,20 @@ function install(config: MeetCaptureConfig) {
     if (typeof rawId !== 'string' || !rawId.trim() || rawId.length > 200) return false;
     const id = rawId.trim();
     if (isWebexParticipant && id === webexSelfParticipantId) return false;
+    if (ignoredParticipantIds.has(id)) return false;
     const rawName = node.participant_name ?? node.participantName ?? node.displayName ??
       details?.displayName ?? person?.name ?? person?.displayName ?? person?.primaryDisplayString ??
       domNames.get(id);
     const cleanedName = typeof rawName === 'string' && rawName.trim() && rawName.trim().length <= 200
       ? rawName.trim() : null;
+    if (isIgnoredParticipantName(cleanedName)) {
+      ignoredParticipantIds.add(id);
+      domNames.delete(id);
+      if (participants.delete(id)) {
+        totalParticipants = Math.max(0, totalParticipants - 1);
+      }
+      return false;
+    }
     if (cleanedName && (domNames.size < 256 || domNames.has(id))) {
       domNames.set(id, cleanedName);
     }
@@ -531,6 +559,7 @@ function install(config: MeetCaptureConfig) {
       if (typeof cls === 'string' && /material-icons|google-symbols/i.test(cls)) continue;
       const txt = (child.textContent || '').trim();
       if (txt && txt.length >= 2 && txt.length <= 120 && txt !== 'fixture' &&
+          !UI_CHROME_TEXT_RE.test(txt) &&
           !/^\d{1,2}:\d{2}(?::\d{2})?$/.test(txt) &&
           !/^(devices|mic|mic_off|more_vert|keep|push_pin|frame_person|visual_effects|volume_up|volume_off)$/i.test(txt)) {
         return txt;
@@ -548,6 +577,7 @@ function install(config: MeetCaptureConfig) {
   function scanDomParticipants(): boolean {
     if (!document.body) return false;
     let updated = false;
+    const seenLiveDom = new Set<string>();
     const nodes = document.querySelectorAll(
       '[data-participant-id], [data-requested-participant-id], [data-member-id], ' +
       '[data-endpoint-id], [data-user-id], [data-tid*="roster"], [data-tid*="video-tile"], ' +
@@ -561,14 +591,32 @@ function install(config: MeetCaptureConfig) {
         el.getAttribute('data-endpoint-id') ??
         el.getAttribute('data-user-id') ?? ''
       ).trim();
+      const isSelfTile = el.hasAttribute('data-self-name') || Boolean(el.querySelector('[data-self-name]'));
       const name = extractDomParticipantName(el);
+      if (isSelfTile || isIgnoredParticipantName(name)) {
+        if (rawId) {
+          ignoredParticipantIds.add(rawId);
+          domNames.delete(rawId);
+          if (participants.delete(rawId)) {
+            totalParticipants = Math.max(0, totalParticipants - 1);
+            updated = true;
+          }
+        }
+        continue;
+      }
+      if (rawId && ignoredParticipantIds.has(rawId)) continue;
       if (rawId && rawId.length <= 200 && name) {
+        seenLiveDom.add(rawId);
         if (domNames.size < 256 || domNames.has(rawId)) domNames.set(rawId, name);
         const existing = participants.get(rawId);
         if (existing && existing.participant_name !== name) {
           existing.participant_name = name;
           updated = true;
         }
+      } else if (rawId && domNames.has(rawId)) {
+        seenLiveDom.add(rawId);
+      } else if (!rawId && name) {
+        seenLiveDom.add(`name:${name}`);
       }
       const csis: number[] = [];
       const streamIds: string[] = [];
@@ -622,6 +670,7 @@ function install(config: MeetCaptureConfig) {
         })) updated = true;
       }
     }
+    liveDomCount = seenLiveDom.size;
     return updated;
   }
 
@@ -1334,7 +1383,7 @@ function install(config: MeetCaptureConfig) {
         available: participants.size > 0,
         total: totalParticipants,
         truncated: totalParticipants > 256,
-        ...(domNames.size > 0 ? {dom_participants: domNames.size} : {}),
+        ...(liveDomCount > 0 || domNames.size > 0 ? {dom_participants: liveDomCount} : {}),
         sources: [...participants.values()].slice(0, 256).map((p) => ({
           participant_id: p.participant_id,
           ...(p.participant_name ? {participant_name: p.participant_name} : {}),
