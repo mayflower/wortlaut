@@ -1283,9 +1283,49 @@ def test_oidc_dex_pkce_exchange_and_per_user_isolation(client, database, monkeyp
                             "status": "confirmed",
                             "summary": "Interner Sprint Planning",
                             "organizer": {"email": "mara.lindner@mayflower.de", "self": True},
+                            "attendees": [
+                                {
+                                    "email": "mara.lindner@mayflower.de",
+                                    "self": True,
+                                    "responseStatus": "accepted",
+                                },
+                                {
+                                    "email": "kollege@mayflower.de",
+                                    "responseStatus": "accepted",
+                                },
+                            ],
                             "start": {"dateTime": gcal_start},
                             "end": {"dateTime": gcal_end},
                             "hangoutLink": "https://meet.google.com/own-meet-xyz",
+                        },
+                        {
+                            "id": "gcal-solo-blocker",
+                            "status": "confirmed",
+                            "summary": "Fokuszeit ohne Teilnehmer",
+                            "organizer": {"email": "mara.lindner@mayflower.de", "self": True},
+                            "start": {"dateTime": gcal_start},
+                            "end": {"dateTime": gcal_end},
+                            "hangoutLink": "https://meet.google.com/sol-blck-xyz",
+                        },
+                        {
+                            "id": "gcal-unconfirmed-3",
+                            "status": "confirmed",
+                            "summary": "Latein Nachhilfe",
+                            "organizer": {"email": "mara.lindner@mayflower.de", "self": True},
+                            "attendees": [
+                                {
+                                    "email": "mara.lindner@mayflower.de",
+                                    "self": True,
+                                    "responseStatus": "accepted",
+                                },
+                                {
+                                    "email": "schueler@outlook.example",
+                                    "responseStatus": "needsAction",
+                                },
+                            ],
+                            "start": {"dateTime": gcal_start},
+                            "end": {"dateTime": gcal_end},
+                            "hangoutLink": "https://meet.google.com/lat-nach-xyz",
                         },
                         {
                             "id": "gcal-ext-2",
@@ -1337,12 +1377,17 @@ def test_oidc_dex_pkce_exchange_and_per_user_isolation(client, database, monkeyp
     assert gcal_data["connection"]["provider"] == "google"
     assert gcal_data["connection"]["account_email"] == "mara.lindner@mayflower.de"
     events_by_ext = {e["external_event_id"]: e for e in gcal_data["synced_events"]}
-    assert set(events_by_ext) == {"gcal-own-1", "gcal-ext-2"}
+    assert set(events_by_ext) == {"gcal-own-1", "gcal-unconfirmed-3", "gcal-ext-2"}
 
     own_ev = events_by_ext["gcal-own-1"]
     assert own_ev["is_self_organized"] is True
     assert own_ev["auto_record"] is True
     assert own_ev["recording_id"] is not None
+
+    unconf_ev = events_by_ext["gcal-unconfirmed-3"]
+    assert unconf_ev["is_self_organized"] is True
+    assert unconf_ev["auto_record"] is False
+    assert unconf_ev["recording_id"] is None
 
     ext_ev = events_by_ext["gcal-ext-2"]
     assert ext_ev["is_self_organized"] is False
@@ -1403,6 +1448,7 @@ def test_oidc_dex_pkce_exchange_and_per_user_isolation(client, database, monkeyp
     assert len(cal_mara["connections"]) == 1
     assert {e["external_event_id"] for e in cal_mara["synced_events"]} == {
         "gcal-own-1",
+        "gcal-unconfirmed-3",
         "gcal-ext-2",
     }
 

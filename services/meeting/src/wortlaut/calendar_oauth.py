@@ -442,6 +442,21 @@ def _parse_google_items(conn: CalendarConnection, items: list[dict]) -> list[dic
         org = item.get("organizer") or {}
         org_email = str(org.get("email") or "").strip().lower() or None
         is_self = bool(org.get("self")) or (org_email in self_emails if org_email else False)
+        raw_attendees = item.get("attendees") or []
+        other_attendees = [
+            a
+            for a in raw_attendees
+            if isinstance(a, dict)
+            and not a.get("self")
+            and not a.get("resource")
+            and str(a.get("email") or "").strip().lower() not in self_emails
+        ]
+        if is_self and not other_attendees:
+            continue
+        has_confirmed_attendee = any(
+            str(a.get("responseStatus") or "") in ("accepted", "tentative")
+            for a in other_attendees
+        )
         title = " ".join(str(item.get("summary") or "").split())[:200] or None
         parsed.append(
             {
@@ -452,6 +467,7 @@ def _parse_google_items(conn: CalendarConnection, items: list[dict]) -> list[dic
                 "ends_at": ends_at,
                 "organizer_email": org_email,
                 "is_self_organized": is_self,
+                "default_auto_record": is_self and has_confirmed_attendee,
                 "meeting_provider": meeting_provider,
                 "meeting_url": meeting_url,
                 "status": status,
@@ -502,6 +518,22 @@ def _parse_microsoft_items(conn: CalendarConnection, items: list[dict]) -> list[
         is_self = bool(item.get("isOrganizer")) or (
             org_email in self_emails if org_email else False
         )
+        raw_attendees = item.get("attendees") or []
+        other_attendees = [
+            a
+            for a in raw_attendees
+            if isinstance(a, dict)
+            and str(a.get("type") or "").lower() != "resource"
+            and str(((a.get("emailAddress") or {}).get("address")) or "").strip().lower()
+            not in self_emails
+        ]
+        if is_self and not other_attendees:
+            continue
+        has_confirmed_attendee = any(
+            str(((a.get("status") or {}).get("response")) or "")
+            in ("accepted", "tentativelyAccepted")
+            for a in other_attendees
+        )
         title = " ".join(str(item.get("subject") or "").split())[:200] or None
         parsed.append(
             {
@@ -512,6 +544,7 @@ def _parse_microsoft_items(conn: CalendarConnection, items: list[dict]) -> list[
                 "ends_at": ends_at,
                 "organizer_email": org_email,
                 "is_self_organized": is_self,
+                "default_auto_record": is_self and has_confirmed_attendee,
                 "meeting_provider": meeting_provider,
                 "meeting_url": meeting_url,
                 "status": status,
@@ -616,6 +649,7 @@ def sync_connection(
             .with_for_update()
         )
         is_self = bool(item["is_self_organized"])
+        default_auto = bool(item.get("default_auto_record", is_self))
         if ev is None:
             ev = CalendarSyncedEvent(
                 connection_id=conn.id,
@@ -633,7 +667,7 @@ def sync_connection(
                 meeting_url=item["meeting_url"],
                 status=item["status"],
                 user_override=None,
-                auto_record=is_self,
+                auto_record=default_auto,
                 updated_at=now,
             )
             db.add(ev)
@@ -649,7 +683,7 @@ def sync_connection(
             ev.meeting_url = item["meeting_url"]
             ev.status = item["status"]
             ev.auto_record = (
-                bool(ev.user_override) if ev.user_override is not None else is_self
+                bool(ev.user_override) if ev.user_override is not None else default_auto
             )
             ev.updated_at = now
         _reconcile_synced_event_recording(db, ev, now)
