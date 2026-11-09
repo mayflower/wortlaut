@@ -151,10 +151,10 @@ export function SystemView({
         <LayoutHeader hasDivider>
           <HStack justify="between" vAlign="center" wrap="wrap" gap={3}>
             <VStack gap={0.5}>
-              <Heading level={1}>System &amp; Diagnose</Heading>
+              <Heading level={1}>Hilfe &amp; Systemstatus</Heading>
               <Text type="supporting" color="secondary">
-                Plattformstatus, konfigurierte Konferenz-Provider,
-                Kapazitätsgrenzen und Aufzeichnungen mit Handlungsbedarf.
+                Ablauf einer Aufzeichnung, Datenschutzgarantien, konfigurierte
+                Konferenz-Provider und Systembereitschaft.
               </Text>
             </VStack>
 
@@ -162,11 +162,19 @@ export function SystemView({
               <Button
                 variant="secondary"
                 size="sm"
+                href="/privacy"
+                target="_blank"
+                rel="noreferrer"
+                label="Datenschutzhinweis (/privacy)"
+              />
+              <Button
+                variant="secondary"
+                size="sm"
                 href="/docs"
                 target="_blank"
                 rel="noreferrer"
                 icon={<BookOpen className="h-3.5 w-3.5" />}
-                label="OpenAPI / REST-Doku (/docs)"
+                label="REST-API (/docs)"
               />
               <Button
                 variant="secondary"
@@ -182,6 +190,33 @@ export function SystemView({
       content={
         <LayoutContent>
           <VStack gap={4}>
+            {/* User Guide: How wortlaut works */}
+            <Section variant="section">
+              <VStack gap={3}>
+                <Heading level={3}>
+                  So funktioniert {instance.assistantName} im Konferenzalltag
+                </Heading>
+                <MetadataList columns={3}>
+                  <MetadataListItem label="1. Einladen & Warteraum">
+                    Der Bot tritt automatisch zum geplanten Termin oder nach
+                    Link-Eingabe als Gast „{instance.assistantName}“ bei. Bitte
+                    lassen Sie ihn im Konferenzfenster aus dem Warteraum zu.
+                  </MetadataListItem>
+                  <MetadataListItem label="2. Echte Sprechertrennung">
+                    Jede empfangene Teilnehmerspur wird direkt über die
+                    WebRTC-Sitzung getrennt erfasst (keine Stimmprofile /
+                    Voiceprints, keine Videoaufzeichnung).
+                  </MetadataListItem>
+                  <MetadataListItem label="3. 100 % Self-Hosted & Löschfristen">
+                    Die Spracherkennung (lokales NVIDIA-Parakeet-Modell) läuft
+                    im eigenen Cluster. Roh-Audio wird nach{' '}
+                    {instance.retention.audioHours}h, Protokolle nach{' '}
+                    {instance.retention.transcriptDays}d gelöscht.
+                  </MetadataListItem>
+                </MetadataList>
+              </VStack>
+            </Section>
+
             {/* Platform Status & Limits */}
             <Section variant="section">
               <VStack gap={3}>
@@ -259,7 +294,7 @@ export function SystemView({
                     />
                     <ListItem
                       label="Cisco Webex"
-                      description="Browser-SDK / Service-Token"
+                      description="Playwright/Chromium Web-Client / Service-Token"
                       endContent={
                         <StatusIndicator
                           variant={
@@ -270,6 +305,27 @@ export function SystemView({
                             instance.providers.webex
                               ? 'Aktiviert'
                               : 'Kein Zugang hinterlegt'
+                          }
+                        />
+                      }
+                    />
+                    <ListItem
+                      label="Zoom"
+                      description={
+                        instance.providers.zoom_auth_session
+                          ? 'Playwright/Chromium Web-Client · Gespeicherte Zoom-Session aktiv'
+                          : 'Playwright/Chromium Web-Client · Anonymer Gast-Beitritt'
+                      }
+                      endContent={
+                        <StatusIndicator
+                          variant={
+                            instance.providers.zoom ? 'success' : 'neutral'
+                          }
+                          weight="medium"
+                          label={
+                            instance.providers.zoom
+                              ? 'Aktiviert'
+                              : 'Deaktiviert'
                           }
                         />
                       }

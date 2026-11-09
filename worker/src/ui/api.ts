@@ -464,6 +464,7 @@ export function getInstanceInfo(): InstanceInfo {
         google_meet_auth_session: false,
         teams: true,
         webex: false,
+        zoom: false,
       },
       mail: {
         imapEnabled: false,
@@ -529,6 +530,7 @@ export const PROVIDER_LABELS: Record<Provider, string> = {
   google_meet: 'Google Meet',
   teams: 'Microsoft Teams',
   webex: 'Webex',
+  zoom: 'Zoom',
 };
 
 export function formatApiErrorDetail(raw: unknown, status: number): string {
@@ -549,7 +551,7 @@ export function formatApiErrorDetail(raw: unknown, status: number): string {
     return 'Die Endzeit muss nach der Startzeit liegen.';
   }
   if (text.includes('Meeting URL does not match provider')) {
-    return 'Die eingegebene Meeting-URL passt nicht zum gewählten Konferenzsystem (Google Meet, Microsoft Teams oder Webex).';
+    return 'Die eingegebene Meeting-URL passt nicht zum gewählten Konferenzsystem (Google Meet, Microsoft Teams, Webex oder Zoom).';
   }
   if (text.includes('Recording duration exceeds maximum')) {
     return 'Die geplante Aufnahmedauer überschreitet das zulässige Maximum.';
@@ -571,6 +573,7 @@ export function detectProviderFromUrl(url: string): Provider | null {
     return 'teams';
   }
   if (trimmed.includes('.webex.com/')) return 'webex';
+  if (trimmed.includes('zoom.us/j/') || trimmed.includes('zoom.us/wc/')) return 'zoom';
   return null;
 }
 

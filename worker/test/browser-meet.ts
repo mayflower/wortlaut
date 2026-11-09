@@ -6,6 +6,7 @@ import {once} from 'node:events';
 import {launchBrowser, nativeMeetInput} from '../runtime/browser';
 import {TeamsBrowser} from '../runtime/teams-browser';
 import {WebexBrowser} from '../runtime/webex-browser';
+import {ZoomBrowser} from '../runtime/zoom-browser';
 import {MeetBrowser, MeetError, type MeetBootstrap} from '../runtime/meet';
 
 // Existing installed ws dependency; this fixture is never shipped in a worker.
@@ -678,6 +679,85 @@ try {
     assert.equal(await page.getByRole('button', {name: leave, exact: true}).count(), 0);
     await page.evaluate(() => (window as any).finishTeamsProducer());
     await context.close();
+  }
+
+  {
+    const zoomContext = await browser.newContext();
+    const zoomPage = await zoomContext.newPage();
+    const zoomUrl = 'https://app.zoom.us/wc/12345678901/join?pwd=fixture-passcode';
+    await zoomPage.route('https://app.zoom.us/**', route => {
+      if (route.request().url().endsWith('/zoom-roster')) {
+        return route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify({
+            participants: [{userId: 4201, userName: 'Clara Zoom', audioSsrc: 2002}],
+          }),
+        });
+      }
+      return route.fulfill({
+        contentType: 'text/html',
+        body: `<label>Your Name<input id="input-for-name"></label>
+        <button id="join-btn" class="preview-join-button">Join</button>
+        <p id="waiting"></p>
+        <script>
+        document.querySelector('#join-btn').onclick = () => {
+          document.querySelector('#join-btn').remove();
+          document.querySelector('#waiting').textContent = 'Please wait, the meeting host will let you in soon.';
+          const leave = document.createElement('button');
+          leave.textContent = 'Leave';
+          leave.onclick = () => {
+            const confirmLeave = document.createElement('button');
+            confirmLeave.textContent = 'Leave Meeting';
+            confirmLeave.onclick = () => { confirmLeave.remove(); leave.remove(); };
+            document.body.append(confirmLeave);
+          };
+          document.body.append(leave);
+          const audioBtn = document.createElement('button');
+          audioBtn.textContent = 'Join Audio by Computer';
+          audioBtn.onclick = () => {
+            audioBtn.remove();
+            void fetch('https://app.zoom.us/zoom-roster');
+          };
+          document.body.append(audioBtn);
+        };
+        </script>`,
+      });
+    });
+    const zoomAttemptId = randomUUID();
+    const zoom = new ZoomBrowser(
+      zoomPage,
+      {
+        ...bootstrap,
+        provider: 'zoom',
+        attempt_id: zoomAttemptId,
+        meeting_url: zoomUrl,
+        deadline: new Date(Date.now() + 60000).toISOString(),
+        zoom: {display_name: 'wortlaut zoom fixture', locale: 'en-US'},
+      },
+      `http://127.0.0.1:${address.port}`,
+      'fixture-node-secret',
+      randomUUID(),
+      assets,
+    );
+    await zoom.prepare();
+    await zoomPage.goto(zoomUrl);
+    await zoom.join();
+    assert.equal(await zoomPage.locator('#input-for-name').inputValue(), 'wortlaut zoom fixture');
+    assert.equal((await zoom.inspect()).participation, 'waiting_admission');
+    await zoomPage.locator('#waiting').evaluate(element => { element.textContent = ''; });
+    assert.equal((await zoom.inspect()).participation, 'capturing');
+    await zoomPage.waitForFunction(() => {
+      const inspected = window.wortlautMeet.inspect();
+      return inspected.participant_sources.available === true &&
+        inspected.participant_sources.sources.some(s => s.participant_id === '4201' && s.participant_name === 'Clara Zoom');
+    }, undefined, {timeout: 10000});
+    const zoomState = await zoom.inspect();
+    assert.equal(zoomState.capability, 'unverified');
+    assert.equal(zoomState.participant_sources.available, true);
+    await zoom.stop('normal');
+    assert.equal((await zoom.inspect()).participation, 'ended');
+    assert.equal(await zoomPage.getByRole('button', {name: 'Leave', exact: true}).count(), 0);
+    await zoomContext.close();
   }
 
   console.log(JSON.stringify({fixture: 'controlled Meet-origin DOM and native WebRTC; no provider identity proof',

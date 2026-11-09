@@ -67,6 +67,9 @@ spec:
             - secretRef:
                 name: wortlaut-teams
                 optional: true
+            - secretRef:
+                name: wortlaut-zoom
+                optional: true
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:

@@ -1,4 +1,5 @@
 import {isTeamsOrigin} from './teams-url.js';
+import {isZoomOrigin} from './zoom-url.js';
 import {AudioCapture, type AudioClock, type CaptureSink} from './capture.js';
 import type {Binding, Chunk} from './chunks.js';
 import resamplerSource from '@alexanderolsen/libsamplerate-js/dist/libsamplerate.worklet.js?raw';
@@ -6,7 +7,7 @@ import pcmSource from '../public/pcm-worklet.js?raw';
 import encodedObserverSource from '../public/encoded-audio-observer.js?raw';
 
 export type MeetCaptureConfig = {meeting_id: string; attempt_id: string; meeting_url: string;
-  provider?: 'google_meet' | 'webex' | 'teams'; teams_origins?: string[]};
+  provider?: 'google_meet' | 'webex' | 'teams' | 'zoom'; teams_origins?: string[]};
 export type MeetBridgeMessage = {attempt_id: string; type: 'control' | 'chunk';
   metadata: Record<string, unknown>; pcm?: string};
 
@@ -77,6 +78,7 @@ if (config.provider === 'webex'
   ? location.origin === 'https://web.webex.com' && /^\/(?:meeting|guest-join-meeting)$/.test(location.pathname) &&
     !location.search.includes('preload=true')
   : config.provider === 'teams' ? window === window.top && isTeamsOrigin(new URL(location.href))
+  : config.provider === 'zoom' ? window === window.top && isZoomOrigin(new URL(location.href))
   : window === window.top && location.origin === 'https://meet.google.com' &&
     location.pathname.replace(/^\/meet\//, '/') === new URL(config.meeting_url).pathname.replace(/^\/meet\//, '/')) install(config);
 
@@ -351,13 +353,23 @@ function install(config: MeetCaptureConfig) {
       person || Array.isArray(node.devices) ||
       (typeof node.url === 'string' && node.url.includes('/locus/'))
     );
-    const rawId = node.participant_id ?? node.participantId ?? node.endpointId ?? details?.id ??
-      (isWebexParticipant ? node.id : undefined);
+    const isZoomParticipant = config.provider === 'zoom' && Boolean(
+      node.userId !== undefined || node.user_id !== undefined ||
+      node.userName !== undefined || node.user_name !== undefined ||
+      node.audioSsrc !== undefined
+    );
+    const rawIdCandidate = node.participant_id ?? node.participantId ?? node.endpointId ?? details?.id ??
+      (isWebexParticipant ? node.id : undefined) ??
+      (isZoomParticipant ? (node.userId ?? node.user_id ?? node.id) : undefined);
+    const rawId = typeof rawIdCandidate === 'number' && Number.isFinite(rawIdCandidate) && isZoomParticipant
+      ? String(rawIdCandidate)
+      : rawIdCandidate;
     if (typeof rawId !== 'string' || !rawId.trim() || rawId.length > 200) return false;
     const id = rawId.trim();
     if (isWebexParticipant && id === webexSelfParticipantId) return false;
     if (ignoredParticipantIds.has(id)) return false;
     const rawName = node.participant_name ?? node.participantName ?? node.displayName ??
+      node.userName ?? node.user_name ??
       details?.displayName ?? person?.name ?? person?.displayName ?? person?.primaryDisplayString ??
       domNames.get(id);
     const cleanedName = typeof rawName === 'string' && rawName.trim() && rawName.trim().length <= 200
@@ -471,11 +483,15 @@ function install(config: MeetCaptureConfig) {
       ...(validCsi(node.csi) ? [node.csi] : []),
       ...(validCsi(node.csrc) ? [node.csrc] : []),
       ...(validCsi(node.ssrc) ? [node.ssrc] : []),
+      ...(validCsi(node.audioSsrc) ? [node.audioSsrc] : []),
+      ...(validCsi(node.audio_ssrc) ? [node.audio_ssrc] : []),
     ].filter(validCsi);
     const shareRaw = [
       ...(Array.isArray(node.share_audio_csis) ? node.share_audio_csis : []),
       ...(Array.isArray(node.shareAudioCsis) ? node.shareAudioCsis : []),
       ...(Array.isArray(node.shareSsrcs) ? node.shareSsrcs : []),
+      ...(validCsi(node.shareSsrc) ? [node.shareSsrc] : []),
+      ...(validCsi(node.share_ssrc) ? [node.share_ssrc] : []),
       ...teamsShareCsis,
       ...webexShareCsis,
     ].filter(validCsi);
@@ -541,9 +557,16 @@ function install(config: MeetCaptureConfig) {
       const aria = el.getAttribute('aria-label')?.trim();
       if (aria && aria.length >= 2 && aria.length <= 120 && aria !== 'fixture') return aria;
     }
+    if (el.hasAttribute('data-participants-row') || el.classList.contains('participants-li')) {
+      const displayNameEl = el.querySelector('.participants-item__display-name');
+      const rawDisplay = (displayNameEl?.textContent || el.getAttribute('aria-label')?.split(',')[0] || '').trim();
+      const cleaned = rawDisplay.replace(/\s*\((?:Host|Co-host|Gastgeber|Co-Gastgeber|Me|Ich)\)\s*$/i, '').trim();
+      if (cleaned && cleaned.length >= 2 && cleaned.length <= 120 && cleaned !== 'fixture') return cleaned;
+    }
     const sub = el.querySelector(
       '[data-participant-name], [data-self-name], [data-display-name], ' +
       '[data-tid="roster-person-name"], [data-tid="video-tile-name"], ' +
+      '.participants-item__display-name, ' +
       '[class*="participant-name"], [class*="participantName"], [class*="displayName"], [class*="nameplate"]'
     );
     if (sub) {
@@ -581,7 +604,8 @@ function install(config: MeetCaptureConfig) {
     const nodes = document.querySelectorAll(
       '[data-participant-id], [data-requested-participant-id], [data-member-id], ' +
       '[data-endpoint-id], [data-user-id], [data-tid*="roster"], [data-tid*="video-tile"], ' +
-      '[role="listitem"][data-participant-id], [role="listitem"][data-member-id]'
+      '[role="listitem"][data-participant-id], [role="listitem"][data-member-id], ' +
+      '.participants-li[data-participants-row]'
     );
     for (const el of Array.from(nodes).slice(0, 256)) {
       const rawId = (
@@ -591,7 +615,12 @@ function install(config: MeetCaptureConfig) {
         el.getAttribute('data-endpoint-id') ??
         el.getAttribute('data-user-id') ?? ''
       ).trim();
-      const isSelfTile = el.hasAttribute('data-self-name') || Boolean(el.querySelector('[data-self-name]'));
+      const zoomRowLabel = el.hasAttribute('data-participants-row')
+        ? (el.getAttribute('aria-label') || el.textContent || '')
+        : '';
+      const isSelfTile = el.hasAttribute('data-self-name') ||
+        Boolean(el.querySelector('[data-self-name]')) ||
+        /\((?:Me|Ich)\)/i.test(zoomRowLabel);
       const name = extractDomParticipantName(el);
       if (isSelfTile || isIgnoredParticipantName(name)) {
         if (rawId) {
@@ -866,7 +895,7 @@ function install(config: MeetCaptureConfig) {
             if (parseJsonText(b64Val, stat)) updated = true;
           }
         }
-        for (const key of ['participants', 'participant', 'locus', 'sources', 'roster', 'members', 'endpoints', 'data', 'payload', 'mediaNegotiation']) {
+        for (const key of ['participants', 'participant', 'locus', 'sources', 'roster', 'members', 'endpoints', 'data', 'payload', 'mediaNegotiation', 'result', 'entitys', 'entities']) {
           const child = record[key];
           if (child && typeof child === 'object') {
             queue.push(child);

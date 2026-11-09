@@ -1,4 +1,4 @@
-export type Provider = 'google_meet' | 'teams' | 'webex';
+export type Provider = 'google_meet' | 'teams' | 'webex' | 'zoom';
 
 export type ParticipationState =
   | 'scheduled'
@@ -249,6 +249,8 @@ export interface InstanceInfo {
     google_meet_auth_session: boolean;
     teams: boolean;
     webex: boolean;
+    zoom?: boolean;
+    zoom_auth_session?: boolean;
   };
   mail: {
     imapEnabled: boolean;

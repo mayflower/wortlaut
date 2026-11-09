@@ -324,3 +324,99 @@ def test_teams_calendar_invite(client, monkeypatch, url):
     event = imported(client, mail(link=url))
     assert event["status"] == "accepted"
     assert event["provider"] == "teams"
+
+
+@pytest.mark.parametrize(
+    ("raw_url", "expected_url"),
+    [
+        (
+            "https://zoom.us/j/12345678901?pwd=fixture-passcode&utm_source=calendar#success",
+            "https://app.zoom.us/wc/12345678901/join?pwd=fixture-passcode",
+        ),
+        (
+            "https://us05web.zoom.us/j/123456789?pwd=fixture-passcode",
+            "https://app.zoom.us/wc/123456789/join?pwd=fixture-passcode",
+        ),
+        (
+            "https://app.zoom.us/wc/12345678901/join",
+            "https://app.zoom.us/wc/12345678901/join",
+        ),
+    ],
+)
+def test_zoom_normalizes_to_web_client_and_preserves_passcode(raw_url, expected_url):
+    assert normalize_meeting_url(raw_url) == ("zoom", expected_url)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://zoom.us/j/12345678901",
+        "https://zoom.us.attacker.example/j/12345678901",
+        "https://user@zoom.us/j/12345678901",
+        "https://zoom.us:444/j/12345678901",
+        "https://zoom.us/pricing",
+        "https://zoom.us/j/12345",
+        "https://zoom.us/j/12345678901/extra",
+    ],
+)
+def test_zoom_rejects_non_meeting_destinations(url):
+    with pytest.raises(ValueError):
+        normalize_meeting_url(url)
+
+
+def test_zoom_bootstrap_and_calendar_invite(client, database, monkeypatch):
+    from wortlaut import app as app_module
+
+    monkeypatch.setattr(app_module, "guest_token", lambda *args: pytest.fail("Webex invoked"))
+    raw_url = "https://us05web.zoom.us/j/12345678901?pwd=fixture-passcode"
+    expected_url = "https://app.zoom.us/wc/12345678901/join?pwd=fixture-passcode"
+    identifier = create(client, body={**request_body(), "meeting_url": raw_url, "provider": "zoom"})
+    with Session(database) as db:
+        rec = db.get(Recording, uuid.UUID(identifier))
+        assert rec.provider == "zoom"
+        assert rec.meeting_url == expected_url
+    attempt, credential = prepare(client, identifier)
+    client.post(f"/v1/attempts/{attempt}/claim", headers=credential, json={"worker_id": "zoom"})
+    headers = {**credential, "X-Worker-ID": "zoom"}
+    response = client.get(f"/v1/attempts/{attempt}/bootstrap", headers=headers)
+    assert response.status_code == 503
+    assert response.json()["detail"] == "zoom_not_configured"
+    monkeypatch.setenv("WORTLAUT_ENABLE_ZOOM", "true")
+    get_settings.cache_clear()
+    response = client.get(f"/v1/attempts/{attempt}/bootstrap", headers=headers)
+    assert response.status_code == 200
+    assert response.headers["Cache-Control"] == "no-store"
+    data = response.json()
+    assert data["provider"] == "zoom"
+    assert data["meeting_url"] == expected_url
+    assert data["zoom"] == {"display_name": "wortlaut", "locale": "en-US", "auth_mode": "guest"}
+    assert "guest" not in data and "sdk_page_url" not in data and "meet" not in data
+    monkeypatch.setenv("WORTLAUT_ZOOM_STORAGE_STATE_SECRET", "wortlaut-zoom-browser")
+    get_settings.cache_clear()
+    assert (
+        client.get(f"/v1/attempts/{attempt}/bootstrap", headers=headers).json()["zoom"]["auth_mode"]
+        == "account"
+    )
+    status = client.post(
+        f"/v1/attempts/{attempt}/status",
+        headers=headers,
+        json={
+            "participation": "capturing",
+            "capability": "unverified",
+            "receiver_sources": [
+                {
+                    "provider_source_id": f"zoom:{identifier}:receiver:1",
+                    "source_kind": "unknown",
+                    "capture_path": "rtc_receiver",
+                    "track_id": "audioTrack1",
+                    "signaled_participant_id": None,
+                }
+            ],
+        },
+    )
+    assert status.status_code == 200
+    configure(monkeypatch)
+    event = imported(client, mail(link=raw_url))
+    assert event["status"] == "accepted"
+    assert event["provider"] == "zoom"
+

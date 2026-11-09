@@ -1,17 +1,18 @@
 import re
 from typing import Literal
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit
 
 from wortlaut.settings import get_settings
 
-Provider = Literal["webex", "google_meet", "teams"]
+Provider = Literal["webex", "google_meet", "teams", "zoom"]
 
 
 def normalize_meeting_url(url: str) -> tuple[Provider, str]:
     if len(url) > 2048 or any(character.isspace() or ord(character) < 32 for character in url):
         raise ValueError("Invalid meeting URL")
     parts = urlsplit(url)
-    if (parts.hostname or "").lower() == "meet.google.com":
+    host = (parts.hostname or "").lower()
+    if host == "meet.google.com":
         if (
             parts.scheme != "https"
             or parts.username is not None
@@ -26,7 +27,7 @@ def normalize_meeting_url(url: str) -> tuple[Provider, str]:
         return "google_meet", urlunsplit(
             ("https", "meet.google.com", f"/{code}", "", "")
         )
-    if parts.hostname in ("teams.microsoft.com", "teams.live.com", "teams.cloud.microsoft"):
+    if host in ("teams.microsoft.com", "teams.live.com", "teams.cloud.microsoft"):
         if (
             parts.scheme != "https" or parts.username is not None
             or parts.password is not None or parts.port not in (None, 443)
@@ -36,7 +37,28 @@ def normalize_meeting_url(url: str) -> tuple[Provider, str]:
         ):
             raise ValueError("Meeting URL must be an HTTPS Teams meeting link")
         return "teams", urlunsplit(
-            ("https", parts.hostname, parts.path.rstrip("/"), parts.query, "")
+            ("https", host, parts.path.rstrip("/"), parts.query, "")
+        )
+    if host == "zoom.us" or host.endswith(".zoom.us"):
+        match = re.fullmatch(r"/(?:j|wc)/([0-9]{9,11})(?:/(?:join|start))?/?", parts.path)
+        if (
+            parts.scheme != "https"
+            or parts.username is not None
+            or parts.password is not None
+            or parts.port not in (None, 443)
+            or not match
+        ):
+            raise ValueError("Meeting URL must be an HTTPS Zoom meeting link")
+        meeting_id = match.group(1)
+        pwd_values = parse_qs(parts.query, keep_blank_values=False).get("pwd", [])
+        query = ""
+        if pwd_values:
+            pwd = pwd_values[0]
+            if not re.fullmatch(r"[A-Za-z0-9._-]+", pwd) or len(pwd) > 256:
+                raise ValueError("Meeting URL has an invalid Zoom passcode")
+            query = urlencode({"pwd": pwd})
+        return "zoom", urlunsplit(
+            ("https", "app.zoom.us", f"/wc/{meeting_id}/join", query, "")
         )
     return "webex", validate_webex_url(url)
 

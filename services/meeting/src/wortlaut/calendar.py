@@ -115,7 +115,7 @@ def meeting_link(event, mail_text):
             # Webex meeting URLs: personal rooms, modern MTID links and the
             # legacy meeting-center endpoint. Help/account links are not joins.
             if (
-                provider in ("google_meet", "teams")
+                provider in ("google_meet", "teams", "zoom")
                 or path.startswith(("/meet/", "/m/", "/join/", "/wbxmjs/"))
                 or re.match(r"^/webappng/sites/[^/]+/meeting/", path)
                 or path.endswith("/j.php")

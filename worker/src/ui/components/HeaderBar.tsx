@@ -1,12 +1,12 @@
 import React from 'react';
 import {
-  Activity,
   Calendar,
-  FolderOpen,
+  CalendarPlus,
+  HelpCircle,
   Home,
   KeyRound,
+  LayoutDashboard,
   Moon,
-  Plus,
   RefreshCw,
   Search,
   ShieldCheck,
@@ -46,6 +46,7 @@ export interface HeaderBarProps {
   recordingsCount: number;
   activeLiveCount: number;
   calendarCount: number;
+  calendarConnectedCount?: number;
   livePoll: boolean;
   onToggleLivePoll: (enabled: boolean) => void;
   onManualRefresh: () => void;
@@ -159,6 +160,7 @@ export function HeaderBar({
   recordingsCount,
   activeLiveCount,
   calendarCount,
+  calendarConnectedCount = 0,
   livePoll,
   onToggleLivePoll,
   onManualRefresh,
@@ -192,17 +194,17 @@ export function HeaderBar({
           <VStack gap={1.5} paddingInline={2} paddingBlockEnd={1}>
             <span id="open-dispatch-modal-btn" className="contents">
               <Button
-                variant="primary"
-                size="md"
+                variant="secondary"
+                size="sm"
                 width="fill"
-                icon={<Plus className="h-4 w-4" />}
-                label="Meeting aufzeichnen"
+                icon={<CalendarPlus className="h-3.5 w-3.5" />}
+                label="Meeting planen / .ics"
                 onClick={onOpenNewRecording}
               />
             </span>
             {onOpenCommandPalette && (
               <Button
-                variant="secondary"
+                variant="ghost"
                 size="sm"
                 width="fill"
                 icon={<Search className="h-3.5 w-3.5" />}
@@ -295,8 +297,8 @@ export function HeaderBar({
       {authMode.kind === 'operator' && (
         <SideNavSection title="Navigation" isHeaderHidden>
           <SideNavItem
-            label="Aufnahmen"
-            icon={<FolderOpen className="h-4 w-4" />}
+            label="Übersicht & Aufnahmen"
+            icon={<LayoutDashboard className="h-4 w-4" />}
             isSelected={isMeetingsActive}
             onClick={() => onChangeNav('home')}
             endContent={
@@ -313,19 +315,28 @@ export function HeaderBar({
             }
           />
           <SideNavItem
-            label="Kalender"
+            label="Kalender-Automatik"
             icon={<Calendar className="h-4 w-4" />}
             isSelected={activeNav === 'calendar'}
             onClick={() => onChangeNav('calendar')}
             endContent={
-              <span id="calendar-count">
-                <Token size="sm" label={String(calendarCount)} />
-              </span>
+              <HStack gap={1} vAlign="center">
+                {calendarConnectedCount > 0 && (
+                  <StatusDot
+                    variant="success"
+                    label="Kalender verbunden"
+                    tooltip="Kalender-Synchronisation aktiv"
+                  />
+                )}
+                <span id="calendar-count">
+                  <Token size="sm" label={String(calendarCount)} />
+                </span>
+              </HStack>
             }
           />
           <SideNavItem
-            label="System & Diagnose"
-            icon={<Activity className="h-4 w-4" />}
+            label="Hilfe & Systemstatus"
+            icon={<HelpCircle className="h-4 w-4" />}
             isSelected={activeNav === 'system'}
             onClick={() => onChangeNav('system')}
           />

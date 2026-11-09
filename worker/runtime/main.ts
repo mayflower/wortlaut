@@ -5,6 +5,8 @@ import {MeetBrowser, MeetError} from './meet.js';
 import {TeamsBrowser} from './teams-browser.js';
 import {isTeamsMeeting} from '../src/teams-url.js';
 import {WebexBrowser} from './webex-browser.js';
+import {ZoomBrowser} from './zoom-browser.js';
+import {isZoomMeeting} from '../src/zoom-url.js';
 import {launchBrowser, nativeMeetInput} from './browser.js';
 
 const api = process.env.WORTLAUT_API_URL;
@@ -26,28 +28,36 @@ async function run(api: string, credential: string) {
   await request(`/v1/attempts/${attemptId}/claim`, 'POST', {worker_id: workerId});
   claimed = true;
   const bootstrap = await request(`/v1/attempts/${attemptId}/bootstrap`);
-  if (!['webex', 'google_meet', 'teams'].includes(bootstrap.provider)) throw new Error('Unknown provider');
+  if (!['webex', 'google_meet', 'teams', 'zoom'].includes(bootstrap.provider)) throw new Error('Unknown provider');
   const isTeams = bootstrap.provider === 'teams';
   const isMeet = bootstrap.provider === 'google_meet';
+  const isZoom = bootstrap.provider === 'zoom';
   const isWebexBrowser = bootstrap.provider === 'webex' && Boolean(bootstrap.webex_browser);
-  const pageUrl = new URL(isMeet || isTeams || isWebexBrowser ? bootstrap.meeting_url : bootstrap.sdk_page_url);
+  const pageUrl = new URL(isMeet || isTeams || isZoom || isWebexBrowser ? bootstrap.meeting_url : bootstrap.sdk_page_url);
   if (isWebexBrowser && (!pageUrl.hostname.endsWith('.webex.com') || pageUrl.port)) {
     throw new Error('Invalid Webex URL');
   }
   const deadline = Date.parse(bootstrap.deadline);
   sessionDeadline = deadline;
-  if (pageUrl.protocol !== 'https:' || pageUrl.username || pageUrl.password || (!isTeams && pageUrl.search) ||
+  if (pageUrl.protocol !== 'https:' || pageUrl.username || pageUrl.password || (!isTeams && !isZoom && pageUrl.search) ||
       !Number.isFinite(deadline)) {
     throw new Error('Provider page requires trusted HTTPS and a valid deadline');
   }
   if (isMeet && (pageUrl.hostname !== 'meet.google.com' || pageUrl.port ||
       !/^\/(?:meet\/)?[a-z]{3}-[a-z]{4}-[a-z]{3}$/.test(pageUrl.pathname))) throw new Error('Invalid Meet URL');
   if (isTeams && !isTeamsMeeting(pageUrl)) throw new Error('Invalid Teams URL');
+  if (isZoom && !isZoomMeeting(pageUrl)) throw new Error('Invalid Zoom URL');
   // No ignoreHTTPSErrors, device capture, foreign page selectors or disabled sandbox.
-  const browser = await launchBrowser(bootstrap.provider, isMeet ? bootstrap.meet.locale : isTeams ? bootstrap.teams.locale : undefined, isWebexBrowser);
+  const browser = await launchBrowser(
+    bootstrap.provider,
+    isMeet ? bootstrap.meet.locale : isTeams ? bootstrap.teams.locale : isZoom ? bootstrap.zoom.locale : undefined,
+    isWebexBrowser,
+  );
   startupBrowser = browser;
   const context = await browser.newContext({permissions: [],
     ...(isTeams ? {viewport: null, locale: bootstrap.teams.locale} : {}),
+    ...(isZoom ? {viewport: null, locale: bootstrap.zoom.locale,
+      ...(bootstrap.zoom.auth_mode === 'account' ? {storageState: '/run/zoom/storage-state.json'} : {})} : {}),
     ...(isWebexBrowser ? {viewport: null, locale: 'en-US'} : {}),
     ...(isMeet ? {viewport: null, locale: bootstrap.meet.locale,
       ...(bootstrap.meet.auth_mode === 'account' ? {storageState: '/run/meet/storage-state.json'} : {})} : {}),
@@ -58,6 +68,7 @@ async function run(api: string, credential: string) {
   }
   const meet = isMeet ? new MeetBrowser(page, bootstrap, api, credential, workerId, undefined, nativeMeetInput(page))
     : isTeams ? new TeamsBrowser(page, bootstrap, api, credential, workerId)
+    : isZoom ? new ZoomBrowser(page, bootstrap, api, credential, workerId)
     : isWebexBrowser ? new WebexBrowser(page, bootstrap, api, credential, workerId) : undefined;
   let stopping: Promise<void> | undefined;
   let endReason = 'normal';

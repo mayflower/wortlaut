@@ -193,11 +193,11 @@ export function NewRecordingDialog({
               <VStack gap={1}>
                 <TextInput
                   type="url"
-                  label="Meeting-Link (Google Meet, Microsoft Teams oder Webex)"
+                  label="Meeting-Link (Google Meet, Microsoft Teams, Webex oder Zoom)"
                   isRequired
                   value={meetingUrl}
                   onChange={setMeetingUrl}
-                  placeholder="https://meet.google.com/... oder https://teams.microsoft.com/..."
+                  placeholder="https://meet.google.com/..., https://teams.microsoft.com/... oder https://zoom.us/j/..."
                   startIcon={<Video className="h-4 w-4" />}
                 />
                 {detectedProvider && (

@@ -1,4 +1,5 @@
 import {execFile, spawn, type ChildProcess} from 'node:child_process';
+import {existsSync} from 'node:fs';
 import {mkdtemp, rm} from 'node:fs/promises';
 import {createServer} from 'node:net';
 import {tmpdir} from 'node:os';
@@ -112,7 +113,7 @@ export function nativeMeetInput(page: Page): MeetInput {
   }};
 }
 
-export async function launchBrowser(provider: 'google_meet' | 'webex' | 'teams', locale = 'en-US', webexBrowser = false) {
+export async function launchBrowser(provider: 'google_meet' | 'webex' | 'teams' | 'zoom', locale = 'en-US', webexBrowser = false) {
   if (provider === 'webex' && !webexBrowser) return chromium.launch({headless: true, chromiumSandbox: true,
     args: ['--autoplay-policy=no-user-gesture-required']});
 
@@ -151,7 +152,9 @@ export async function launchBrowser(provider: 'google_meet' | 'webex' | 'teams',
         server.close((error) => error ? reject(error) : resolve(port));
       });
     });
-    chromiumProcess = spawn(chromium.executablePath(), [
+    const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ||
+      (existsSync(chromium.executablePath()) ? chromium.executablePath() : '/usr/bin/chromium');
+    chromiumProcess = spawn(executablePath, [
       `--remote-debugging-port=${port}`, '--remote-debugging-address=127.0.0.1',
       `--user-data-dir=${profile}`, '--no-first-run', '--no-default-browser-check',
       '--force-device-scale-factor=1', `--lang=${locale}`, '--autoplay-policy=no-user-gesture-required', 'about:blank',

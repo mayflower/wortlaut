@@ -92,12 +92,13 @@ export function WelcomeLandingView({
               )}
               {instance.providers.teams && <ProviderBadge provider="teams" />}
               {instance.providers.webex && <ProviderBadge provider="webex" />}
+              {instance.providers.zoom && <ProviderBadge provider="zoom" />}
             </HStack>
 
             <Heading level={1}>Sprechergetrennte Meeting-Protokolle</Heading>
             <Text type="body" color="secondary">
               <strong>{instance.assistantName}</strong> tritt Besprechungen in
-              Google Meet, Microsoft Teams und Webex als stummer Teilnehmer bei,
+              Google Meet, Microsoft Teams, Webex und Zoom als stummer Teilnehmer bei,
               zeichnet die einzelnen Tonspuren vor dem Audio-Mix getrennt auf
               und transkribiert sie lokal auf dem Cluster.
             </Text>

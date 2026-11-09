@@ -35,10 +35,11 @@ export function ProviderBadge({
   provider: Provider;
   size?: 'sm' | 'md' | 'lg';
 }) {
-  const colorMap: Record<Provider, 'green' | 'purple' | 'blue'> = {
+  const colorMap: Record<Provider, 'green' | 'purple' | 'blue' | 'cyan'> = {
     google_meet: 'green',
     teams: 'purple',
     webex: 'blue',
+    zoom: 'cyan',
   };
   return (
     <Token

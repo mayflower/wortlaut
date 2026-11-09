@@ -170,6 +170,7 @@ def _build_instance_info() -> dict:
                 "google_meet_auth_session": False,
                 "teams": True,
                 "webex": False,
+                "zoom": False,
             },
             "mail": {
                 "imapEnabled": False,
@@ -216,6 +217,8 @@ def _build_instance_info() -> dict:
             "google_meet_auth_session": bool(s.meet_storage_state_secret),
             "teams": bool(s.enable_teams),
             "webex": bool(s.webex_service_token) or bool(s.enable_webex_browser),
+            "zoom": bool(s.enable_zoom),
+            "zoom_auth_session": bool(s.zoom_storage_state_secret),
         },
         "mail": {
             "imapEnabled": bool(s.enable_imap),

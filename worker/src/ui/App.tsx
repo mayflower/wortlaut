@@ -481,6 +481,7 @@ export function App() {
               ? calendarSyncedEvents.length
               : calendarEvents.length
           }
+          calendarConnectedCount={calendarConnections.length}
           livePoll={livePoll}
           onToggleLivePoll={setLivePoll}
           onManualRefresh={handleManualRefresh}
@@ -530,6 +531,9 @@ export function App() {
         <RecordingSidebar
           token={token}
           recordings={filteredRecordings}
+          totalRecordingsCount={rawRecordings.length}
+          calendarConnections={calendarConnections}
+          calendarSyncedEvents={calendarSyncedEvents}
           selectedId={selectedId}
           onSelectRecording={handleOpenRecording}
           providerFilter={providerFilter}
@@ -540,6 +544,13 @@ export function App() {
           onTitleSearchChange={setTitleSearch}
           onOpenNewRecording={() => handleOpenNewModal('link')}
           onOpenIcsImport={() => handleOpenNewModal('ics')}
+          onNavigateCalendar={() => {
+            setSelectedId(null);
+            setActiveNav('calendar');
+          }}
+          onRefreshCalendar={() =>
+            queryClient.invalidateQueries({ queryKey: ['calendar'] })
+          }
           onCreatedRecording={(id) => {
             handleManualRefresh();
             handleOpenRecording(id);

@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     enable_google_meet: bool = False
     enable_teams: bool = False
     teams_locale: str = "en-US"
+    enable_zoom: bool = False
+    zoom_locale: str = "en-US"
+    zoom_storage_state_secret: str | None = None
     meet_storage_state_secret: str | None = None
     meet_locale: str = "de-DE"
     enable_imap: bool = False

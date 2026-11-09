@@ -1477,6 +1477,17 @@ def bootstrap(
         return {**common, "teams": {
             "display_name": display_name, "locale": settings.teams_locale,
         }}
+    if recording.provider == "zoom":
+        if not settings.enable_zoom:
+            raise HTTPException(503, "zoom_not_configured")
+        return {
+            **common,
+            "zoom": {
+                "display_name": display_name,
+                "locale": settings.zoom_locale,
+                "auth_mode": "account" if settings.zoom_storage_state_secret else "guest",
+            },
+        }
     if settings.enable_webex_browser:
         return {**common, "webex_browser": {"display_name": display_name}}
     issued_request_started = datetime.now(UTC)

@@ -6,6 +6,7 @@ import type {MeetBridgeMessage, MeetCaptureConfig} from '../src/meet-page.js';
 import type {MeetInput} from './browser.js';
 import {AudioTransport} from '../src/transport.js';
 import {isTeamsOrigin, teamsOrigins} from '../src/teams-url.js';
+import {isZoomOrigin} from '../src/zoom-url.js';
 
 export type MeetBootstrap = {provider: 'google_meet'; meeting_id: string; attempt_id: string;
   meeting_url: string; deadline: string; lobby_timeout_seconds: number;
@@ -19,7 +20,7 @@ export class MeetError extends Error {
 const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 
 export async function installMeetCapture(page: Page, bootstrap: Pick<MeetBootstrap, 'meeting_id' | 'attempt_id' | 'meeting_url'>, sink: CaptureSink,
-  assets = new URL('../../dist/meet/', import.meta.url), provider: 'google_meet' | 'webex' | 'teams' = 'google_meet') {
+  assets = new URL('../../dist/meet/', import.meta.url), provider: 'google_meet' | 'webex' | 'teams' | 'zoom' = 'google_meet') {
   const bundle = await readFile(new URL('capture.js', assets), 'utf8');
   const active = new Set<string>();
   let captureFrame: Frame | undefined = provider !== 'webex' ? page.mainFrame() : undefined;
@@ -29,6 +30,7 @@ export async function installMeetCapture(page: Page, bootstrap: Pick<MeetBootstr
         (provider === 'webex' ? url.origin !== 'https://web.webex.com' || !/^\/(?:meeting|guest-join-meeting)$/.test(url.pathname) ||
           url.search.includes('preload=true')
           : provider === 'teams' ? !isTeamsOrigin(url)
+          : provider === 'zoom' ? !isZoomOrigin(url)
           : url.origin !== 'https://meet.google.com' ||
             url.pathname.replace(/^\/meet\//, '/') !== new URL(bootstrap.meeting_url).pathname.replace(/^\/meet\//, '/')) ||
         !raw || raw.attempt_id !== bootstrap.attempt_id || !['control', 'chunk'].includes(raw.type)) {
@@ -95,9 +97,13 @@ export async function installMeetCapture(page: Page, bootstrap: Pick<MeetBootstr
   // Only the small native hook belongs in every new document. The local WASM
   // bundle is loaded once in the main Meet document, before clicking join.
   await page.addInitScript((config: MeetCaptureConfig) => {
+    (globalThis as Record<string, unknown>).__name ??= (fn: unknown) => fn;
+    const isZoomHost = location.protocol === 'https:' && !location.port &&
+      (location.hostname === 'zoom.us' || location.hostname.endsWith('.zoom.us'));
     if (config.provider === 'webex'
       ? location.origin !== 'https://web.webex.com' || !/^\/(?:meeting|guest-join-meeting)$/.test(location.pathname)
       : config.provider === 'teams' ? window !== window.top || !config.teams_origins?.includes(location.origin)
+      : config.provider === 'zoom' ? window !== window.top || !isZoomHost
       : window !== window.top || location.origin !== 'https://meet.google.com' ||
         location.pathname.replace(/^\/meet\//, '/') !== new URL(config.meeting_url).pathname.replace(/^\/meet\//, '/')) return;
     window.wortlautMeetConfig = config;
@@ -237,6 +243,26 @@ export async function installMeetCapture(page: Page, bootstrap: Pick<MeetBootstr
         },
       });
     }
+    if (config.provider === 'zoom' && typeof window.Worker === 'function') {
+      window.Worker = new Proxy(window.Worker, {construct(target, workerArgs, newTarget) {
+        const worker = Reflect.construct(target, workerArgs, newTarget) as Worker;
+        worker.addEventListener('message', (event) => {
+          const d = event.data;
+          if (!d) return;
+          if (typeof d === 'string' && d.length > 0 && d.length <= 262144) {
+            pushDataMessage({__wortlautChannel: 'worker:zoom', readyState: 'open', data: d});
+          } else if (typeof d === 'object' && !(d instanceof ArrayBuffer) && !ArrayBuffer.isView(d)) {
+            try {
+              const txt = JSON.stringify(d);
+              if (txt.length > 2 && txt.length <= 262144) {
+                pushDataMessage({__wortlautChannel: 'worker:zoom', readyState: 'open', data: txt});
+              }
+            } catch {}
+          }
+        });
+        return worker;
+      }});
+    }
   }, config);
   return async () => {
     const url = new URL(page.url());
@@ -249,6 +275,8 @@ export async function installMeetCapture(page: Page, bootstrap: Pick<MeetBootstr
       captureFrame = frames[frames.length - 1];
     } else if (provider === 'teams') {
       if (!isTeamsOrigin(url)) throw new MeetError('unexpected_browser_origin');
+    } else if (provider === 'zoom') {
+      if (!isZoomOrigin(url)) throw new MeetError('unexpected_browser_origin');
     } else if (url.origin !== 'https://meet.google.com' ||
         url.pathname.replace(/^\/meet\//, '/') !== new URL(bootstrap.meeting_url).pathname.replace(/^\/meet\//, '/')) {
       throw new MeetError('unexpected_browser_origin');

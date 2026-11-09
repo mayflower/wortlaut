@@ -82,6 +82,18 @@ def job_body(recording, attempt):
                 },
             }
         )
+    if recording.provider == "zoom" and settings.zoom_storage_state_secret:
+        mounts.append({"name": "zoom-browser", "mountPath": "/run/zoom", "readOnly": True})
+        volumes.append(
+            {
+                "name": "zoom-browser",
+                "secret": {
+                    "secretName": settings.zoom_storage_state_secret,
+                    "defaultMode": 0o440,
+                    "items": [{"key": "storage-state.json", "path": "storage-state.json"}],
+                },
+            }
+        )
     return {
         "apiVersion": "batch/v1",
         "kind": "Job",
@@ -474,6 +486,7 @@ def controller_pass(engine, apis=None):
             ("webex", settings.enable_webex_browser or bool(settings.webex_service_token)),
             ("google_meet", settings.enable_google_meet),
             ("teams", settings.enable_teams),
+            ("zoom", settings.enable_zoom),
         ):
             if configured:
                 enabled.append(provider)
@@ -544,6 +557,10 @@ def controller_pass(engine, apis=None):
                 continue
             if recording.provider == "teams" and not settings.enable_teams:
                 recording.participation_reason = "teams_not_configured"
+                db.commit()
+                continue
+            if recording.provider == "zoom" and not settings.enable_zoom:
+                recording.participation_reason = "zoom_not_configured"
                 db.commit()
                 continue
             attempt, token = new_attempt(db, recording, now)

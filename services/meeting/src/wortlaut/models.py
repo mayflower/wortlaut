@@ -29,7 +29,7 @@ class Recording(Base):
     __table_args__ = (
         UniqueConstraint("calendar_entry_id", "recurrence_key"),
         CheckConstraint(
-            "provider IN ('webex', 'google_meet', 'teams')", name="recordings_provider"
+            "provider IN ('webex', 'google_meet', 'teams', 'zoom')", name="recordings_provider"
         ),
         Index("ix_recordings_start_id", "starts_at", "id"),
     )
@@ -277,7 +277,7 @@ class CalendarSyncedEvent(Base):
             name="calendar_synced_events_cal_provider",
         ),
         CheckConstraint(
-            "meeting_provider IN ('webex', 'google_meet', 'teams')",
+            "meeting_provider IN ('webex', 'google_meet', 'teams', 'zoom')",
             name="calendar_synced_events_mtg_provider",
         ),
     )

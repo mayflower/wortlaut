@@ -31,6 +31,13 @@ FAILURE_REASONS = {
     ),
     "teams_verification_required": "Microsoft Teams verlangt einen Bestätigungscode",
     "teams_prejoin_timeout": "Microsoft Teams Beitrittsseite hat nicht rechtzeitig geladen",
+    "zoom_auth_required": (
+        "Zoom verlangt eine Konto-Anmeldung oder E-Mail-Registrierung "
+        "(anonymer Gastbeitritt nicht erlaubt)"
+    ),
+    "zoom_passcode_required": "Zoom verlangt einen Meeting-Kenncode (Passcode fehlt oder ungültig)",
+    "zoom_web_client_disabled": "Der Beitritt über den Zoom Web-Client ist vom Host deaktiviert",
+    "zoom_prejoin_timeout": "Zoom Beitrittsseite hat nicht rechtzeitig geladen",
     "auth_session_missing": "Anmeldesitzung fehlt oder ist abgelaufen",
     "join_button_missing": "Beitrittsschaltfläche auf der Meeting-Seite nicht gefunden",
     "guest_name_missing": "Gast-Namensfeld auf der Meeting-Seite nicht verfügbar",

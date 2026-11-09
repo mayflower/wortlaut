@@ -59,7 +59,7 @@ def decrypt_secret(token: str) -> str:
 
 
 def extract_conference_target(texts: list[str]) -> tuple[str, str] | None:
-    """Find the first valid Google Meet, Microsoft Teams, or Cisco Webex join link."""
+    """Find the first valid Google Meet, Microsoft Teams, Cisco Webex, or Zoom join link."""
     for content in texts:
         if not content:
             continue
@@ -71,7 +71,7 @@ def extract_conference_target(texts: list[str]) -> tuple[str, str] | None:
                 continue
             path = urlsplit(target).path.lower()
             if (
-                provider in ("google_meet", "teams")
+                provider in ("google_meet", "teams", "zoom")
                 or path.startswith(("/meet/", "/m/", "/join/", "/wbxmjs/"))
                 or re.match(r"^/webappng/sites/[^/]+/meeting/", path)
                 or path.endswith("/j.php")
