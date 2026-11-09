@@ -3,51 +3,34 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>wortlaut.cloud — Souveräne Open-Source-Besprechungsprotokolle im eigenen Kubernetes-Cluster</title>
-  <meta name="description" content="wortlaut erfasst Konferenz-Audio in Google Meet, Microsoft Teams, Cisco Webex und Zoom als getrennte WebRTC-Einzelspuren vor dem Mix und transkribiert lokal auf Ihrer NVIDIA-GPU. Open Source unter AGPL-3.0." />
+  <title>wortlaut.cloud — Automatische Wortprotokolle für deine Meetings. 100 % selbst gehostet.</title>
+  <meta name="description" content="wortlaut erstellt verlässliche, nach Sprechern getrennte Wortprotokolle für Google Meet, Microsoft Teams, Cisco Webex und Zoom – komplett auf eurer eigenen Infrastruktur unter GNU AGPLv3." />
   <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
   <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>
 
-  <!-- Top Compliance & Open-Source Bar -->
-  <div class="top-banner">
-    <div class="container top-banner-inner">
-      <div class="top-banner-left">
-        <span class="pulse-dot" aria-hidden="true"></span>
-        <span data-i18n="banner_text">Open Source unter GNU AGPLv3 · 100 % Self-Hosted auf Kubernetes · Keine biometrischen Stimmprofile (Voiceprints)</span>
-      </div>
-      <div class="top-banner-links">
-        <a href="https://github.com/mayflower/wortlaut" target="_blank" rel="noopener noreferrer" data-i18n="banner_repo">GitHub Repository →</a>
-        <a href="https://github.com/mayflower/wortlaut/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">GNU AGPLv3</a>
-      </div>
-    </div>
-  </div>
-
-  <!-- Sticky Navigation Header -->
+  <!-- Sticky Header -->
   <header class="site-header">
     <div class="container header-inner">
-      <a href="#top" class="brand-link" aria-label="wortlaut.cloud Startseite">
+      <a href="#top" class="brand-link" aria-label="wortlaut.cloud">
         <span class="brand-mark" aria-hidden="true">
-          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
             <path d="M2 10v3M6 6v11M10 3v18M14 8v7M18 5v13M22 10v3"/>
           </svg>
         </span>
         <span>wortlaut<span class="brand-domain">.cloud</span></span>
-        <span class="license-pill">AGPL-3.0</span>
       </a>
 
       <nav class="main-nav" aria-label="Hauptnavigation">
-        <a href="#contrast" data-i18n="nav_why">Warum wortlaut?</a>
-        <a href="#personas" data-i18n="nav_personas">Personas &amp; Rundgang</a>
-        <a href="#providers" data-i18n="nav_providers">Plattformen</a>
+        <a href="#how-it-works" data-i18n="nav_how">So funktioniert’s</a>
+        <a href="#features" data-i18n="nav_features">Funktionen</a>
         <a href="#privacy" data-i18n="nav_privacy">Datenschutz</a>
-        <a href="#architecture" data-i18n="nav_arch">Architektur</a>
-        <a href="#quickstart" data-i18n="nav_quickstart">Quickstart</a>
+        <a href="#self-hosting" data-i18n="nav_selfhost">Selbst hosten</a>
       </nav>
 
       <div class="header-actions">
-        <div class="lang-switch" role="group" aria-label="Sprachauswahl / Language">
+        <div class="lang-switch" role="group" aria-label="Sprache / Language">
           <button type="button" class="lang-btn active" data-lang="de">DE</button>
           <button type="button" class="lang-btn" data-lang="en">EN</button>
         </div>
@@ -57,220 +40,130 @@
           </svg>
           <span data-i18n="cta_github">GitHub</span>
         </a>
-        <a href="#quickstart" class="btn btn-primary" data-i18n="cta_selfhost">Selbst hosten</a>
+        <a href="#self-hosting" class="btn btn-primary" data-i18n="cta_install">Jetzt installieren</a>
       </div>
     </div>
   </header>
 
   <main id="top">
-    <!-- SECTION 1: HERO -->
+    <!-- 1. HERO -->
     <section class="hero-section">
       <div class="container">
         <div class="hero-top">
           <div class="eyebrow-badge">
             <span class="pulse-dot" aria-hidden="true"></span>
-            <span data-i18n="hero_eyebrow">OPEN SOURCE (AGPL-3.0) · KUBERNETES-NATIV · LOKALE NVIDIA-PARAKEET-GPU</span>
+            <span data-i18n="hero_badge">Open Source (AGPLv3) · 100 % Self-Hosted · DSGVO-konform</span>
           </div>
 
           <h1 class="hero-title" data-i18n-html="hero_title_html">
-            Besprechungsprotokolle im eigenen Cluster.<br>
-            <span class="highlight">Nach Sprechern getrennt – noch bevor das Audio gemischt wird.</span>
+            Automatische Wortprotokolle für deine Meetings.<br>
+            <span class="highlight">Auf deiner eigenen Infrastruktur.</span>
           </h1>
 
           <p class="hero-subtitle" data-i18n="hero_subtitle">
-            wortlaut nimmt als transparenter, rein passiver Browser-Teilnehmer an Google Meet, Microsoft Teams, Cisco Webex und Zoom teil, greift jede empfangene WebRTC-Audiospur einzeln vor dem Mix ab und transkribiert lokal auf Ihrer eigenen GPU. Ohne US-Cloud-Abfluss, ohne Voiceprints und ohne halluzinierte KI-Zusammenfassungen.
+            wortlaut nimmt als stiller Zuhörer an Besprechungen in Google Meet, Microsoft Teams, Cisco Webex und Zoom teil, erkennt zuverlässig, wer spricht, und liefert direkt nach dem Gespräch ein durchsuchbares Wortprotokoll – ohne dass vertrauliche Gespräche in fremde Clouds abfließen.
           </p>
 
           <div class="hero-cta-row">
-            <a href="#quickstart" class="btn btn-primary btn-lg" data-i18n="hero_cta_primary">In 3 Schritten installieren</a>
-            <a href="#personas" class="btn btn-outline btn-lg" data-i18n="hero_cta_secondary">Interaktiven Persona-Rundgang starten</a>
+            <a href="#self-hosting" class="btn btn-primary btn-lg" data-i18n="hero_cta_primary">Kostenlos selbst hosten</a>
+            <a href="#how-it-works" class="btn btn-outline btn-lg" data-i18n="hero_cta_secondary">So funktioniert’s ansehen</a>
           </div>
 
-          <div class="clone-pill">
-            <code id="hero-clone-cmd">git clone https://github.com/mayflower/wortlaut.git &amp;&amp; cd wortlaut &amp;&amp; make setup</code>
-            <button type="button" data-copy-target="#hero-clone-cmd" data-i18n="copy_btn">Kopieren</button>
-          </div>
-
-          <div class="provider-strip">
-            <span style="font-size: 12.5px; color: var(--stone-500); font-weight: 500;" data-i18n="pill_parallel">
-              Parallel in einer Instanz ohne globalen Umschalter:
+          <div class="platform-row">
+            <span style="font-size: 13px; color: var(--stone-500); font-weight: 500;" data-i18n="platforms_label">
+              Funktioniert einheitlich mit:
             </span>
-            <span class="provider-pill">
-              <span class="provider-dot" style="background: #059669;"></span>
-              Google Meet
-            </span>
-            <span class="provider-pill">
-              <span class="provider-dot" style="background: #4F46E5;"></span>
-              Microsoft Teams
-            </span>
-            <span class="provider-pill">
-              <span class="provider-dot" style="background: #0891B2;"></span>
-              Cisco Webex
-            </span>
-            <span class="provider-pill">
-              <span class="provider-dot" style="background: #2563EB;"></span>
-              Zoom
-            </span>
+            <span class="platform-chip"><span class="platform-dot" style="background:#059669;"></span>Google Meet</span>
+            <span class="platform-chip"><span class="platform-dot" style="background:#4F46E5;"></span>Microsoft Teams</span>
+            <span class="platform-chip"><span class="platform-dot" style="background:#0891B2;"></span>Cisco Webex</span>
+            <span class="platform-chip"><span class="platform-dot" style="background:#2563EB;"></span>Zoom</span>
           </div>
         </div>
 
-        <!-- Split-Screen Interactive Stage -->
-        <div class="hero-stage">
-          <!-- Left: Single-Track Pre-Mix Pipeline -->
-          <div class="stage-card stage-card-dark">
-            <div class="stage-header">
-              <div class="window-dots" aria-hidden="true"><span></span><span></span><span></span></div>
-              <span data-i18n="stage_left_title">WebRTC Einzelspur-Capture (vor dem Audio-Mix)</span>
-              <span style="color: #6EE7B7;" data-i18n="stage_left_badge">4 isolierte RTCRtpReceiver → 1 lokale GPU</span>
-            </div>
-            <div class="stage-body">
-              <div class="receiver-list">
-                <div class="receiver-row">
-                  <div class="receiver-meta">
-                    <span class="receiver-name">
-                      <span class="provider-dot" style="background: #10B981;"></span>
-                      Mara Becker
-                    </span>
-                    <span class="receiver-id">Google Meet · csi:482910 · ssrc:1940281</span>
-                  </div>
-                  <div class="waveform-bars" aria-hidden="true">
-                    <span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span>
-                  </div>
-                  <span class="asr-badge" data-i18n="stage_asr_tag">Parakeet GPU · Spur #1</span>
-                </div>
-
-                <div class="receiver-row">
-                  <div class="receiver-meta">
-                    <span class="receiver-name">
-                      <span class="provider-dot" style="background: #6366F1;"></span>
-                      Lukas Weber
-                    </span>
-                    <span class="receiver-id">MS Teams · ssrc:9182734 · msid:audio-2</span>
-                  </div>
-                  <div class="waveform-bars" aria-hidden="true">
-                    <span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span>
-                  </div>
-                  <span class="asr-badge" data-i18n="stage_asr_tag2">Parakeet GPU · Spur #2</span>
-                </div>
-
-                <div class="receiver-row">
-                  <div class="receiver-meta">
-                    <span class="receiver-name">
-                      <span class="provider-dot" style="background: #06B6D4;"></span>
-                      Dr. Thomas Kern
-                    </span>
-                    <span class="receiver-id">Cisco Webex · pane:remote-03 · csi:10492</span>
-                  </div>
-                  <div class="waveform-bars" aria-hidden="true">
-                    <span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span>
-                  </div>
-                  <span class="asr-badge" data-i18n="stage_asr_tag3">Parakeet GPU · Spur #3</span>
-                </div>
-
-                <div class="receiver-row">
-                  <div class="receiver-meta">
-                    <span class="receiver-name">
-                      <span class="provider-dot" style="background: #3B82F6;"></span>
-                      Nina Hartmann
-                    </span>
-                    <span class="receiver-id">Zoom Web · userId:16778240 · pcm:16kHz</span>
-                  </div>
-                  <div class="waveform-bars" aria-hidden="true">
-                    <span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span>
-                  </div>
-                  <span class="asr-badge" data-i18n="stage_asr_tag4">Parakeet GPU · Spur #4</span>
-                </div>
-              </div>
-
-              <div class="pipeline-footer">
-                <span data-i18n="stage_left_footer_left">Kein Audio-Mix · Keine KI-Diarisierung · Keine Voiceprints</span>
-                <span class="mono" style="color: #6EE7B7;" data-i18n="stage_left_footer_right">Roh-Audio TTL: 24h (S3)</span>
-              </div>
-            </div>
+        <!-- Clean Product Interface Preview -->
+        <div class="app-showcase">
+          <div class="app-window-bar">
+            <div class="window-dots" aria-hidden="true"><span></span><span></span><span></span></div>
+            <span class="window-url">wortlaut · Besprechungsprotokoll</span>
+            <span class="badge-pill" data-i18n="ui_badge_done">Protokoll fertig</span>
           </div>
 
-          <!-- Right: Authentic Astryx Stone UI Preview -->
-          <div class="stage-card">
-            <div class="stage-header">
-              <div class="window-dots" aria-hidden="true"><span></span><span></span><span></span></div>
-              <span data-i18n="stage_right_title">wortlaut Web-UI · Astryx Stone Editorial Interface</span>
-              <span class="mono" style="color: var(--emerald-700); font-weight: 600;">/ui#view=meetings</span>
+          <div class="app-layout">
+            <div class="app-sidebar">
+              <div>
+                <div style="display:flex;align-items:center;gap:8px;font-weight:700;font-size:14.5px;padding:4px 8px 16px;">
+                  <span class="brand-mark" style="width:24px;height:24px;border-radius:6px;">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+                      <path d="M2 10v3M6 6v11M10 3v18M14 8v7M18 5v13M22 10v3"/>
+                    </svg>
+                  </span>
+                  wortlaut
+                </div>
+                <div class="app-nav-list">
+                  <div class="app-nav-item" data-i18n="ui_nav_home">Startseite</div>
+                  <div class="app-nav-item active">
+                    <span data-i18n="ui_nav_rec">Aufnahmen</span>
+                    <span class="mono" style="font-size:11px;background:var(--stone-100);padding:1px 7px;border-radius:99px;">14</span>
+                  </div>
+                  <div class="app-nav-item" data-i18n="ui_nav_cal">Kalender</div>
+                  <div class="app-nav-item" data-i18n="ui_nav_sys">System &amp; Hilfe</div>
+                </div>
+              </div>
+              <div style="border-top:1px solid var(--stone-200);padding-top:12px;font-size:12px;color:var(--stone-500);">
+                <div style="font-weight:700;color:var(--stone-800);">Anna Lindner</div>
+                <div>Single Sign-On</div>
+              </div>
             </div>
-            <div class="stage-body">
-              <div class="ui-shell">
-                <div class="ui-sidenav">
-                  <div>
-                    <div style="display:flex;align-items:center;gap:7px;font-weight:700;font-size:13px;padding:4px 6px 10px;">
-                      <span class="brand-mark" style="width:22px;height:22px;border-radius:5px;">
-                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
-                          <path d="M2 10v3M6 6v11M10 3v18M14 8v7M18 5v13M22 10v3"/>
-                        </svg>
-                      </span>
-                      wortlaut
-                    </div>
-                    <div class="ui-nav-items">
-                      <div class="ui-nav-item" data-i18n="ui_nav_home">Startseite</div>
-                      <div class="ui-nav-item active">
-                        <span data-i18n="ui_nav_rec">Aufnahmen</span>
-                        <span class="mono" style="font-size:10px;background:var(--stone-200);padding:1px 5px;border-radius:99px;">12</span>
-                      </div>
-                      <div class="ui-nav-item" data-i18n="ui_nav_cal">Kalender</div>
-                      <div class="ui-nav-item" data-i18n="ui_nav_sys">System &amp; Hilfe</div>
-                    </div>
+
+            <div class="app-main">
+              <div class="app-main-header">
+                <div>
+                  <h2 class="app-meeting-title" data-i18n="ui_meeting_title">Produkt- &amp; Architektur-Abstimmung Q4</h2>
+                  <div class="app-meeting-meta" data-i18n="ui_meeting_meta">Heute, 14:00 – 14:45 Uhr · Microsoft Teams · 3 Teilnehmende</div>
+                </div>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                  <span class="btn btn-outline" style="padding:6px 12px;font-size:12.5px;" data-i18n="ui_btn_share">Lese-Link teilen</span>
+                  <span class="btn btn-primary" style="padding:6px 12px;font-size:12.5px;" data-i18n="ui_btn_export">Markdown exportieren</span>
+                </div>
+              </div>
+
+              <div class="app-toolbar">
+                <div class="speaker-pills">
+                  <span class="speaker-pill"><span class="platform-dot" style="background:var(--emerald-600);"></span>Anna Lindner (46 %)</span>
+                  <span class="speaker-pill"><span class="platform-dot" style="background:var(--indigo-600);"></span>Markus Berg (34 %)</span>
+                  <span class="speaker-pill"><span class="platform-dot" style="background:var(--cyan-700);"></span>Julia Vogt (20 %)</span>
+                </div>
+              </div>
+
+              <div class="transcript-list">
+                <div class="transcript-turn">
+                  <div class="turn-meta">
+                    <span>Anna Lindner</span>
+                    <span class="turn-timestamp">14:04</span>
                   </div>
-                  <div style="font-size:11px;color:var(--stone-500);border-top:1px solid var(--stone-200);padding-top:8px;">
-                    <div style="font-weight:600;color:var(--stone-800);">Mara Becker</div>
-                    <div class="mono" style="font-size:10px;">Dex OIDC · SSO</div>
-                  </div>
+                  <p class="turn-body" data-i18n-html="ui_turn1_text_html">
+                    Wir haben die <mark>Kalender-Anbindung</mark> für Google Workspace und Microsoft 365 abgeschlossen. Eigene Termine werden automatisch protokolliert, externe Kundentermine lassen sich mit einem Klick zuschalten.
+                  </p>
                 </div>
 
-                <div class="ui-main">
-                  <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
-                    <span style="font-size:12.5px;font-weight:700;color:var(--stone-800);" data-i18n="ui_welcome">Willkommen bei wortlaut, Mara</span>
-                    <div style="display:flex;gap:4px;">
-                      <span class="license-pill">.MD</span>
-                      <span class="license-pill">.TXT</span>
-                      <span class="license-pill">.VTT</span>
-                      <span class="license-pill">.JSON</span>
-                    </div>
+                <div class="transcript-turn speaker-2">
+                  <div class="turn-meta">
+                    <span>Markus Berg</span>
+                    <span class="turn-timestamp">14:05</span>
                   </div>
+                  <p class="turn-body" data-i18n-html="ui_turn2_text_html">
+                    Sehr gut. Besonders hilfreich ist, dass die <mark>Sprechererkennung</mark> auch dann sauber bleibt, wenn zwei Personen kurz gleichzeitig sprechen.
+                  </p>
+                </div>
 
-                  <div class="ui-stepper">
-                    <span data-i18n="ui_stepper_state">LIVE · Zeichnet auf (00:18:42)</span>
-                    <span class="mono" style="font-size:11px;" data-i18n="ui_stepper_meta">4 benannte Quellen gebunden · 0 Audio-Lücken</span>
+                <div class="transcript-turn speaker-3">
+                  <div class="turn-meta">
+                    <span>Julia Vogt</span>
+                    <span class="turn-timestamp">14:07</span>
                   </div>
-
-                  <div class="ui-transcript-box">
-                    <div class="turn-card">
-                      <div class="turn-header">
-                        <span>Mara Becker (Projekt-Lead)</span>
-                        <span class="turn-time">00:14:08 – 00:14:29 · csi:482910</span>
-                      </div>
-                      <p class="turn-text" data-i18n-html="ui_turn1_text_html">
-                        Wir haben den <mark>Kalender-Sync</mark> für Google Workspace und Microsoft 365 freigegeben. Externe Kundentermine lassen sich jetzt mit einem Klick zuschalten.
-                      </p>
-                    </div>
-
-                    <div class="turn-card turn-2">
-                      <div class="turn-header">
-                        <span>Lukas Weber (Tech-Lead)</span>
-                        <span class="turn-time">00:14:30 – 00:14:51 · ssrc:9182734</span>
-                      </div>
-                      <p class="turn-text" data-i18n-html="ui_turn2_text_html">
-                        Perfekt. Und weil jede <mark>WebRTC-Empfangsspur</mark> vor dem Mix getrennt in Parakeet läuft, bleiben auch überlappende Wortmeldungen sauber getrennt.
-                      </p>
-                    </div>
-
-                    <div class="turn-card turn-3">
-                      <div class="turn-header">
-                        <span>Dr. Thomas Kern (Datenschutz / Host)</span>
-                        <span class="turn-time">00:14:52 – 00:15:14 · csi:10492</span>
-                      </div>
-                      <p class="turn-text" data-i18n-html="ui_turn3_text_html">
-                        Aus Datenschutzsicht entscheidend: Der Bot stellt sich im Chat mit Einladender und öffentlichem <code>/privacy</code>-Link vor und speichert keinerlei Stimmprofile.
-                      </p>
-                    </div>
-                  </div>
+                  <p class="turn-body" data-i18n-html="ui_turn3_text_html">
+                    Für unsere Kunden ist entscheidend, dass alle Aufnahmen auf unseren eigenen Servern bleiben und im Meeting-Chat sofort transparent angezeigt wird, wer das Protokoll gestartet hat.
+                  </p>
                 </div>
               </div>
             </div>
@@ -279,93 +172,300 @@
       </div>
     </section>
 
-    <!-- SECTION 2: ARCHITECTURAL CONTRAST -->
-    <section id="contrast" class="section section-dark">
+    <!-- 2. HOW IT WORKS -->
+    <section id="how-it-works" class="section">
       <div class="container">
         <div class="section-header">
-          <span class="section-kicker" data-i18n="contrast_kicker">DER ARCHITEKTUR-UNTERSCHIED</span>
-          <h2 class="section-title" data-i18n="contrast_title">
-            Warum wir Audio vor dem Mix abgreifen – statt im Nachhinein Stimmen zu erraten
+          <span class="section-kicker" data-i18n="how_kicker">SO FUNKTIONIERT’S</span>
+          <h2 class="section-title" data-i18n="how_title">
+            In drei einfachen Schritten vom Gespräch zum fertigen Protokoll
           </h2>
-          <p class="section-desc" data-i18n="contrast_desc">
-            Herkömmliche SaaS-Meeting-Bots mischen alle Teilnehmenden in einen einzigen Audiostrom und versuchen anschließend per biometrischer Stimmprofil-Diarisierung in der Cloud zu rekonstruieren, wer gesprochen hat. wortlaut löst das Problem an der Wurzel.
+          <p class="section-desc" data-i18n="how_desc">
+            Keine komplizierte Einrichtung für Teilnehmende, keine Browser-Plugins und kein manuelles Mitschreiben.
           </p>
         </div>
 
-        <div class="pillars-grid">
-          <div class="pillar-card">
-            <div class="pillar-icon">01</div>
-            <h3 data-i18n="pillar1_title">Einzelspur vor dem Mix</h3>
-            <p data-i18n="pillar1_desc">
-              Jeder empfangene WebRTC-Track (RTCRtpReceiver / AudioWorklet) wird im isolierten Chromium-Worker separat abgegriffen und über das Konferenz-Signaling (csi, ssrc, Teilnehmer-Roster) exakt an die echte Provider-Teilnehmersitzung gebunden.
+        <div class="steps-grid">
+          <div class="step-card">
+            <span class="step-number">01</span>
+            <h3 data-i18n="step1_title">1. Termin verbinden oder Link einfügen</h3>
+            <p data-i18n="step1_desc">
+              Verknüpfe einmalig deinen Google- oder Microsoft-365-Kalender, leite eine Termineinladung per E-Mail weiter oder füge spontan den Link eines laufenden Meetings in der Web-Oberfläche ein.
             </p>
           </div>
 
-          <div class="pillar-card">
-            <div class="pillar-icon">02</div>
-            <h3 data-i18n="pillar2_title">Lokale Parakeet-GPU statt Cloud-STT</h3>
-            <p data-i18n="pillar2_desc">
-              Ein gemeinsam geladenes lokales NVIDIA-Parakeet-Modell (services/asr) transkribiert alle Einzelspuren im eigenen Cluster. Kein einziges Audio-Paket verlässt Ihr Netzwerk in Richtung Deepgram, OpenAI oder US-SaaS-Clouds.
+          <div class="step-card">
+            <span class="step-number">02</span>
+            <h3 data-i18n="step2_title">2. Entspannt sprechen</h3>
+            <p data-i18n="step2_desc">
+              wortlaut tritt dem Meeting als rein passiver Audio-Zuhörer bei, stellt sich im Konferenz-Chat transparent mit dem Namen der einladenden Person vor und erfasst jeden Redebeitrag getrennt nach Sprecher.
             </p>
           </div>
 
-          <div class="pillar-card">
-            <div class="pillar-icon">03</div>
-            <h3 data-i18n="pillar3_title">4 Plattformen parallel</h3>
-            <p data-i18n="pillar3_desc">
-              Google Meet, Microsoft Teams, Cisco Webex und Zoom werden gleichzeitig in derselben Instanz unterstützt. Der Provider wird pro Aufnahme automatisch erkannt – ohne globalen Umschalter.
+          <div class="step-card">
+            <span class="step-number">03</span>
+            <h3 data-i18n="step3_title">3. Nachlesen, suchen &amp; teilen</h3>
+            <p data-i18n="step3_desc">
+              Direkt nach Gesprächsende erhältst du das fertige Wortprotokoll per E-Mail und in der Web-Oberfläche. Durchsuche alle Gespräche im Volltext, teile einen geschützten Lese-Link mit dem Team oder exportiere den Text.
+            </p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 3. INTERACTIVE FEATURES -->
+    <section id="features" class="section section-alt">
+      <div class="container">
+        <div class="section-header">
+          <span class="section-kicker" data-i18n="feat_kicker">FUNKTIONEN IM ÜBERBLICK</span>
+          <h2 class="section-title" data-i18n="feat_title">
+            Alles, was Teams für verlässliche Besprechungsprotokolle brauchen
+          </h2>
+          <p class="section-desc" data-i18n="feat_desc">
+            Entwickelt für den täglichen Einsatz in Kundenprojekten, internen Abstimmungen und technischen Reviews.
+          </p>
+        </div>
+
+        <div class="feature-tabs-nav" role="tablist">
+          <button type="button" class="feature-tab-btn active" data-ftab="cal">
+            <span data-i18n="ftab1_title">Kalender-Automatik</span>
+            <span class="sub" data-i18n="ftab1_sub">Google &amp; Microsoft 365</span>
+          </button>
+          <button type="button" class="feature-tab-btn" data-ftab="adhoc">
+            <span data-i18n="ftab2_title">Spontane Aufnahme</span>
+            <span class="sub" data-i18n="ftab2_sub">In 10 Sekunden im Call</span>
+          </button>
+          <button type="button" class="feature-tab-btn" data-ftab="share">
+            <span data-i18n="ftab3_title">Teilen &amp; Exportieren</span>
+            <span class="sub" data-i18n="ftab3_sub">Lese-Links, Markdown &amp; API</span>
+          </button>
+          <button type="button" class="feature-tab-btn" data-ftab="speaker">
+            <span data-i18n="ftab4_title">Präzise Sprecher</span>
+            <span class="sub" data-i18n="ftab4_sub">Saubere Trennung ohne Stimmprofile</span>
+          </button>
+        </div>
+
+        <!-- Feature Panel 1: Calendar -->
+        <div class="feature-panel active" data-fpanel="cal">
+          <div>
+            <h3 data-i18n="f1_title">Deine Termine automatisch protokolliert – Kundentermine mit einem Klick</h3>
+            <p class="lead" data-i18n="f1_lead">
+              Verbinde deinen Google- oder Microsoft-365-Kalender einmalig per Klick. Du behältst jederzeit die volle Kontrolle darüber, bei welchen Gesprächen wortlaut dabei ist:
+            </p>
+            <ul class="check-list">
+              <li><span class="check-icon">✓</span><span data-i18n="f1_li1">Selbst organisierte Termine mit Videokonferenz-Link werden automatisch eingeplant (jederzeit mit einem Klick abwählbar).</span></li>
+              <li><span class="check-icon">✓</span><span data-i18n="f1_li2">Externe Kundentermine erscheinen übersichtlich in deinem Kalender und können bei Bedarf mit einem einzigen Klick zugeschaltet werden – ohne einen Bot in die fremde Einladungsliste einzutragen.</span></li>
+              <li><span class="check-icon">✓</span><span data-i18n="f1_li3">Terminverschiebungen, Serien-Ausnahmen und Absagen werden automatisch übernommen.</span></li>
+            </ul>
+          </div>
+
+          <div class="preview-box">
+            <div style="font-size:12.5px;font-weight:600;color:var(--stone-600);" data-i18n="f1_demo_label">
+              Kalender-Übersicht (Klicke auf den Schalter zum Testen):
+            </div>
+            <div class="cal-row">
+              <div>
+                <div style="font-weight:700;font-size:14px;" data-i18n="f1_ev1_title">Wöchentliches Team-Sync (Google Meet)</div>
+                <div style="font-size:12px;color:var(--stone-500);" data-i18n="f1_ev1_meta">10:00 – 10:45 Uhr · Automatisch aktiv (eigener Termin)</div>
+              </div>
+              <span class="toggle-btn" data-i18n="toggle_on">● Aufzeichnen: An</span>
+            </div>
+            <div class="cal-row" style="border-color:var(--emerald-500);box-shadow:var(--shadow-xs);">
+              <div>
+                <div style="font-weight:700;font-size:14px;" data-i18n="f1_ev2_title">Projektabstimmung mit Kunden (Microsoft Teams)</div>
+                <div style="font-size:12px;color:var(--stone-500);" data-i18n="f1_ev2_meta">14:00 – 15:00 Uhr · Externer Termin · Per Klick zuschaltbar</div>
+              </div>
+              <button type="button" id="demo-external-toggle" class="toggle-btn" data-i18n="toggle_on">● Aufzeichnen: An</button>
+            </div>
+            <div class="cal-row">
+              <div>
+                <div style="font-weight:700;font-size:14px;" data-i18n="f1_ev3_title">Sprint-Review (Zoom)</div>
+                <div style="font-size:12px;color:var(--stone-500);" data-i18n="f1_ev3_meta">16:30 – 17:15 Uhr · Automatisch aktiv (eigene Serie)</div>
+              </div>
+              <span class="toggle-btn" data-i18n="toggle_on">● Aufzeichnen: An</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Feature Panel 2: Ad-hoc -->
+        <div class="feature-panel" data-fpanel="adhoc">
+          <div>
+            <h3 data-i18n="f2_title">Spontan in laufende Besprechungen holen – und sofort durchsuchen</h3>
+            <p class="lead" data-i18n="f2_lead">
+              Oft ergibt sich erst mitten im Gespräch, dass wichtige Entscheidungen festgehalten werden sollten. Mit wortlaut startest du die Aufzeichnung jederzeit spontan:
+            </p>
+            <ul class="check-list">
+              <li><span class="check-icon">✓</span><span data-i18n="f2_li1">Meeting-Link für Google Meet, Teams, Webex oder Zoom einfügen, gewünschte Dauer wählen und sofort starten.</span></li>
+              <li><span class="check-icon">✓</span><span data-i18n="f2_li2">Live-Statusanzeige in Echtzeit: Auf einen Blick sehen, ob der Bot noch im Warteraum wartet oder bereits mitschreibt.</span></li>
+              <li><span class="check-icon">✓</span><span data-i18n="f2_li3">Schon während des laufenden Gesprächs erscheint das Protokoll Absatz für Absatz im Browser und lässt sich sofort nach Stichworten durchsuchen.</span></li>
+            </ul>
+          </div>
+
+          <div class="preview-box">
+            <div style="font-weight:700;font-size:14.5px;" data-i18n="f2_demo_title">Spontane Aufzeichnung starten</div>
+            <div style="background:#ffffff;border:1px solid var(--stone-300);border-radius:var(--radius-sm);padding:10px 12px;font-family:var(--font-mono);font-size:12.5px;color:var(--stone-700);">
+              https://meet.google.com/abc-defg-hij
+            </div>
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
+              <div style="display:flex;gap:6px;">
+                <span class="speaker-pill">30 Min.</span>
+                <span class="speaker-pill" style="background:var(--stone-900);color:#ffffff;">60 Min.</span>
+                <span class="speaker-pill">90 Min.</span>
+              </div>
+              <span class="btn btn-primary" style="padding:7px 14px;font-size:13px;" data-i18n="f2_demo_btn">Jetzt aufzeichnen</span>
+            </div>
+            <div style="background:var(--emerald-50);border:1px solid var(--emerald-100);color:var(--emerald-800);border-radius:var(--radius-sm);padding:10px 12px;font-size:13px;font-weight:600;display:flex;align-items:center;gap:8px;">
+              <span class="pulse-dot"></span>
+              <span data-i18n="f2_demo_status">LIVE · Im Gespräch (3 aktive Teilnehmende erkannt)</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Feature Panel 3: Share & Export -->
+        <div class="feature-panel" data-fpanel="share">
+          <div>
+            <h3 data-i18n="f3_title">Sicher im Team teilen und nahtlos weiterverarbeiten</h3>
+            <p class="lead" data-i18n="f3_lead">
+              wortlaut erfindet keine unkontrollierten KI-Zusammenfassungen, sondern liefert ein verlässliches, unverfälschtes Wortprotokoll als Grundlage für deine Arbeit:
+            </p>
+            <ul class="check-list">
+              <li><span class="check-icon">✓</span><span data-i18n="f3_li1">Geschützte Lese-Links: Teile ein einzelnes Protokoll per Klick mit Kolleginnen und Kollegen – ohne dass externe Gäste im Meeting-Chat unbefugt mitlesen können.</span></li>
+              <li><span class="check-icon">✓</span><span data-i18n="f3_li2">Automatischer E-Mail-Versand: Nach dem Termin landen Protokoll und Lese-Link automatisch im Posteingang der einladenden Person.</span></li>
+              <li><span class="check-icon">✓</span><span data-i18n="f3_li3">Offene Exportformate &amp; REST-API: Lade Protokolle als Markdown (.md), Text (.txt), Untertitel (.vtt) oder strukturiertes JSON herunter – ideal für Confluence, Jira, GitLab oder eigene lokale KI-Modelle.</span></li>
+            </ul>
+          </div>
+
+          <div class="preview-box">
+            <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px;">
+              <div style="background:#ffffff;border:1px solid var(--stone-200);border-radius:var(--radius-md);padding:14px;">
+                <div class="mono" style="font-size:12px;font-weight:700;color:var(--emerald-700);">Markdown (.md)</div>
+                <div style="font-size:13px;color:var(--stone-600);margin-top:4px;">Für Wikis, Notion, Confluence, GitLab &amp; lokale KI-Assistenten</div>
+              </div>
+              <div style="background:#ffffff;border:1px solid var(--stone-200);border-radius:var(--radius-md);padding:14px;">
+                <div class="mono" style="font-size:12px;font-weight:700;color:var(--emerald-700);">WebVTT (.vtt)</div>
+                <div style="font-size:13px;color:var(--stone-600);margin-top:4px;">Zeitgenaue Untertitel mit Sprechernamen</div>
+              </div>
+              <div style="background:#ffffff;border:1px solid var(--stone-200);border-radius:var(--radius-md);padding:14px;">
+                <div class="mono" style="font-size:12px;font-weight:700;color:var(--emerald-700);">Text (.txt)</div>
+                <div style="font-size:13px;color:var(--stone-600);margin-top:4px;">Sofort lesbares Protokoll für E-Mails &amp; Aktennotizen</div>
+              </div>
+              <div style="background:#ffffff;border:1px solid var(--stone-200);border-radius:var(--radius-md);padding:14px;">
+                <div class="mono" style="font-size:12px;font-weight:700;color:var(--emerald-700);">JSON &amp; REST-API</div>
+                <div style="font-size:13px;color:var(--stone-600);margin-top:4px;">Für automatisierte Workflows &amp; eigene Integrationen</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Feature Panel 4: Speaker Attribution -->
+        <div class="feature-panel" data-fpanel="speaker">
+          <div>
+            <h3 data-i18n="f4_title">Klare Sprecherzuordnung – ganz ohne biometrische Stimmprofile</h3>
+            <p class="lead" data-i18n="f4_lead">
+              Herkömmliche Cloud-Dienste mischen alle Stimmen zusammen und versuchen nachträglich per Stimmprofil zu erraten, wer gesprochen hat. wortlaut geht einen besseren Weg:
+            </p>
+            <ul class="check-list">
+              <li><span class="check-icon">✓</span><span data-i18n="f4_li1">Jede Tonspur wird bereits während der Konferenz getrennt erfasst und direkt dem jeweiligen Teilnehmernamen im Meeting zugeordnet.</span></li>
+              <li><span class="check-icon">✓</span><span data-i18n="f4_li2">Auch wenn mehrere Personen kurz gleichzeitig sprechen oder sich ins Wort fallen, bleiben die Aussagen sauber getrennt.</span></li>
+              <li><span class="check-icon">✓</span><span data-i18n="f4_li3">Es werden keinerlei biometrische Stimmprofile (Voiceprints) angelegt oder gespeichert.</span></li>
+            </ul>
+          </div>
+
+          <div class="preview-box">
+            <div class="cal-row">
+              <span style="font-weight:700;font-size:13.5px;">Anna Lindner</span>
+              <span class="badge-pill">Eigene Tonspur → Klare Zuordnung</span>
+            </div>
+            <div class="cal-row">
+              <span style="font-weight:700;font-size:13.5px;">Markus Berg</span>
+              <span class="badge-pill">Eigene Tonspur → Klare Zuordnung</span>
+            </div>
+            <div class="cal-row">
+              <span style="font-weight:700;font-size:13.5px;">Julia Vogt</span>
+              <span class="badge-pill">Eigene Tonspur → Klare Zuordnung</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 4. PRIVACY & TRUST -->
+    <section id="privacy" class="section">
+      <div class="container">
+        <div class="section-header">
+          <span class="section-kicker" data-i18n="priv_kicker">DATENSCHUTZ &amp; VERTRAUEN</span>
+          <h2 class="section-title" data-i18n="priv_title">
+            Gebaut für vertrauliche Gespräche und strenge Datenschutz-Anforderungen
+          </h2>
+          <p class="section-desc" data-i18n="priv_desc">
+            Warum Unternehmen, Kanzleien, Beratungen und öffentliche Auftraggeber wortlaut statt kommerzieller US-Cloud-Bots einsetzen.
+          </p>
+        </div>
+
+        <div class="trust-grid">
+          <div class="trust-card">
+            <h3 data-i18n="trust1_title">100 % auf euren eigenen Servern</h3>
+            <p data-i18n="trust1_desc">
+              Sowohl die Gesprächsannahme als auch die Spracherkennung laufen vollständig in eurem eigenen Cluster. Keine einzige Sekunde Audio wird an externe Cloud-Anbieter übertragen.
             </p>
           </div>
 
-          <div class="pillar-card">
-            <div class="pillar-icon">04</div>
-            <h3 data-i18n="pillar4_title">Wortprotokoll statt Halluzination</h3>
-            <p data-i18n="pillar4_desc">
-              wortlaut verzichtet bewusst auf ungeprüfte Cloud-LLM-Prosa und liefert ein präzises Wortprotokoll (.md, .txt, .vtt, .json) inkl. maschinenlesbarer Qualitätsmetriken (sources_summary, has_audio_gaps) für Ihre eigenen lokalen LLMs.
+          <div class="trust-card">
+            <h3 data-i18n="trust2_title">Transparent &amp; respektvoll im Meeting</h3>
+            <p data-i18n="trust2_desc">
+              wortlaut zeichnet niemals Kamerabilder oder Bildschirminhalte auf. Beim Beitritt stellt sich der Bot im Chat mit dem Namen der einladenden Person und einem Link zur öffentlichen Datenschutz-Erklärung vor.
+            </p>
+          </div>
+
+          <div class="trust-card">
+            <h3 data-i18n="trust3_title">Automatische Löschfristen &amp; 1-Klick-Löschung</h3>
+            <p data-i18n="trust3_desc">
+              Roh-Audiodaten werden nach 24 Stunden automatisch gelöscht, schriftliche Protokolle nach 30 Tagen. Vertrauliche Besprechungen lassen sich zudem jederzeit sofort mit einem Klick restlos entfernen.
+            </p>
+          </div>
+
+          <div class="trust-card">
+            <h3 data-i18n="trust4_title">Mandantentrennung &amp; Single Sign-On</h3>
+            <p data-i18n="trust4_desc">
+              Über Single Sign-On (OIDC) sieht jede Person standardmäßig nur ihre eigenen Aufnahmen und Kalendereinträge – geschützt vor unbefugtem Zugriff.
             </p>
           </div>
         </div>
 
-        <div class="comparison-table-wrap">
+        <div class="comparison-wrap">
           <table class="comparison-table">
             <thead>
               <tr>
-                <th data-i18n="comp_th_feature">Architekturmerkmal</th>
-                <th data-i18n="comp_th_saas">US-SaaS-Bots (Fireflies, Otter, Read.ai)</th>
-                <th data-i18n="comp_th_baas">Cloud-BaaS &amp; STT-Wrapper (Recall / Attendee)</th>
-                <th class="col-wortlaut" data-i18n="comp_th_wortlaut">wortlaut (Open Source · AGPL-3.0)</th>
+                <th data-i18n="comp_th_crit">Kriterium</th>
+                <th data-i18n="comp_th_cloud">Kommerzielle US-Cloud-Notetaker</th>
+                <th class="highlight-col" data-i18n="comp_th_wortlaut">wortlaut (Open Source &amp; Self-Hosted)</th>
               </tr>
             </thead>
             <tbody>
               <tr>
-                <td class="mono" data-i18n="comp_r1_f">Sprecherzuordnung</td>
-                <td data-i18n="comp_r1_s">Gemischtes Audio + biometrische Stimmprofile (Voiceprints)</td>
-                <td data-i18n="comp_r1_b">Meist gemischter Stream oder plattformabhängige Cloud-Diarisierung</td>
-                <td class="col-wortlaut" data-i18n="comp_r1_w">Getrennte Empfangsspuren vor dem Mix + echte Provider-Sitzungsbindung (csi/ssrc)</td>
+                <td data-i18n="comp_r1_c">Wo werden Gespräche verarbeitet?</td>
+                <td data-i18n="comp_r1_cloud">In fremden Hersteller-Clouds (oft USA)</td>
+                <td class="highlight-col" data-i18n="comp_r1_w">100 % auf deiner eigenen Infrastruktur</td>
               </tr>
               <tr>
-                <td class="mono" data-i18n="comp_r2_f">Spracherkennung (ASR)</td>
-                <td data-i18n="comp_r2_s">Proprietäre US-Cloud-Verarbeitung</td>
-                <td data-i18n="comp_r2_b">Externe Cloud-STT-APIs (Deepgram, Gladia, OpenAI) als Standard</td>
-                <td class="col-wortlaut" data-i18n="comp_r2_w">100 % lokal im eigenen Cluster auf gemeinsamem NVIDIA-Parakeet-GPU-Dienst</td>
+                <td data-i18n="comp_r2_c">Wie werden Sprecher erkannt?</td>
+                <td data-i18n="comp_r2_cloud">Über biometrische Stimmprofile (Voiceprints)</td>
+                <td class="highlight-col" data-i18n="comp_r2_w">Direkt über die Teilnehmersitzung – ohne Stimmprofile</td>
               </tr>
               <tr>
-                <td class="mono" data-i18n="comp_r3_f">Unterstützte Konferenzsysteme</td>
-                <td data-i18n="comp_r3_s">Plattformabhängig, oft mit Account-Zwang für Gäste</td>
-                <td data-i18n="comp_r3_b">Webex häufig ohne Einzelspur; separate Konfigurationen</td>
-                <td class="col-wortlaut" data-i18n="comp_r3_w">Google Meet, Microsoft Teams, Cisco Webex &amp; Zoom parallel in einer Instanz</td>
+                <td data-i18n="comp_r3_c">Wird Video aufgezeichnet?</td>
+                <td data-i18n="comp_r3_cloud">Häufig kompletter Video- &amp; Bildschirm-Mitschnitt</td>
+                <td class="highlight-col" data-i18n="comp_r3_w">Rein passives Audio – niemals Kamera- oder Bildschirmaufnahme</td>
               </tr>
               <tr>
-                <td class="mono" data-i18n="comp_r4_f">Datenschutz &amp; Host-Transparenz</td>
-                <td data-i18n="comp_r4_s">Zeichnet oft Video mit auf; intransparente Cloud-Aufbewahrung</td>
-                <td data-i18n="comp_r4_b">Keine integrierte öffentliche /privacy-Transparenzseite oder Chat-Vorstellung</td>
-                <td class="col-wortlaut" data-i18n="comp_r4_w">Rein passives Audio (kein Video), Chat-Intro mit Einladender + öffentlichem /privacy-Link, 24h Roh-Audio-TTL</td>
+                <td data-i18n="comp_r4_c">Unterstützte Plattformen</td>
+                <td data-i18n="comp_r4_cloud">Oft Abo-gebunden je Nutzer &amp; Plattform</td>
+                <td class="highlight-col" data-i18n="comp_r4_w">Google Meet, Microsoft Teams, Cisco Webex &amp; Zoom inklusive</td>
               </tr>
               <tr>
-                <td class="mono" data-i18n="comp_r5_f">Endnutzer-UI, SSO &amp; Kalender-Sync</td>
-                <td data-i18n="comp_r5_s">Geschlossenes SaaS-Portal mit Hersteller-Login</td>
-                <td data-i18n="comp_r5_b">Reine Entwickler-API ohne fertige Endnutzer-Oberfläche</td>
-                <td class="col-wortlaut" data-i18n="comp_r5_w">Integrierte Astryx-Web-UI mit Dex-OIDC-SSO, Google/M365-OAuth2-Kalender, IMAP/.ics &amp; Mail-Versand</td>
+                <td data-i18n="comp_r5_c">Lizenz &amp; Kosten</td>
+                <td data-i18n="comp_r5_cloud">Monatliche Lizenzkosten pro Sitzplatz</td>
+                <td class="highlight-col" data-i18n="comp_r5_w">Freie Open-Source-Software unter GNU AGPLv3</td>
               </tr>
             </tbody>
           </table>
@@ -373,706 +473,87 @@
       </div>
     </section>
 
-    <!-- SECTION 3: INTERACTIVE 6-PERSONA TOUR -->
-    <section id="personas" class="section">
+    <!-- 5. SELF-HOSTING & QUICKSTART -->
+    <section id="self-hosting" class="section section-dark">
       <div class="container">
         <div class="section-header">
-          <span class="section-kicker" data-i18n="personas_kicker">FÜR JEDE ROLLE IM UNTERNEHMEN GEBAUT</span>
-          <h2 class="section-title" data-i18n="personas_title">
-            Ein System, sechs Perspektiven – vom Account-Lead bis zum Datenschutzbeauftragten
-          </h2>
-          <p class="section-desc" data-i18n="personas_desc">
-            Klicken Sie durch die sechs Kern-Personas von wortlaut und testen Sie die interaktiven UI-Komponenten direkt im Browser.
-          </p>
-        </div>
-
-        <div class="persona-tabs-nav" role="tablist" aria-label="wortlaut Personas">
-          <button type="button" class="persona-tab-btn active" role="tab" aria-selected="true" data-persona="mara">
-            <span class="persona-tab-role" data-i18n="tab1_role">Account &amp; Projekt</span>
-            <span class="persona-tab-name" data-i18n="tab1_name">1. Mara</span>
-          </button>
-          <button type="button" class="persona-tab-btn" role="tab" aria-selected="false" data-persona="lukas">
-            <span class="persona-tab-role" data-i18n="tab2_role">Tech-Lead &amp; Ad-hoc</span>
-            <span class="persona-tab-name" data-i18n="tab2_name">2. Lukas</span>
-          </button>
-          <button type="button" class="persona-tab-btn" role="tab" aria-selected="false" data-persona="thomas">
-            <span class="persona-tab-role" data-i18n="tab3_role">Host &amp; Datenschutz</span>
-            <span class="persona-tab-name" data-i18n="tab3_name">3. Dr. Thomas</span>
-          </button>
-          <button type="button" class="persona-tab-btn" role="tab" aria-selected="false" data-persona="nina">
-            <span class="persona-tab-role" data-i18n="tab4_role">Team &amp; Leserin</span>
-            <span class="persona-tab-name" data-i18n="tab4_name">4. Nina</span>
-          </button>
-          <button type="button" class="persona-tab-btn" role="tab" aria-selected="false" data-persona="svenja">
-            <span class="persona-tab-role" data-i18n="tab5_role">Platform &amp; DevOps</span>
-            <span class="persona-tab-name" data-i18n="tab5_name">5. Svenja</span>
-          </button>
-          <button type="button" class="persona-tab-btn" role="tab" aria-selected="false" data-persona="tim">
-            <span class="persona-tab-role" data-i18n="tab6_role">API &amp; Integration</span>
-            <span class="persona-tab-name" data-i18n="tab6_name">6. Tim</span>
-          </button>
-        </div>
-
-        <!-- Panel 1: Mara -->
-        <div class="persona-panel active" data-persona-panel="mara" role="tabpanel">
-          <div>
-            <h3 style="margin:0;font-size:22px;font-weight:800;" data-i18n="p1_title">
-              Mara – Projekt- &amp; Account-Lead (OAuth2-Kalender &amp; E-Mail-Workflow)
-            </h3>
-            <blockquote class="persona-quote" data-i18n="p1_quote">
-              „Ich wechsle täglich zwischen Kunden-Calls in Teams, Meet, Webex und Zoom. US-Cloud-Bots sind bei uns verboten – ich brauche eigene Termine automatisch protokolliert und externe Kundentermine per 1-Klick zuschaltbar, ohne den Bot in fremde Einladungen einzutragen.“
-            </blockquote>
-            <ul class="feature-checklist">
-              <li>
-                <span class="check-badge">✓</span>
-                <span data-i18n-html="p1_li1_html"><strong>Google Calendar &amp; Microsoft 365 parallel per OAuth2:</strong> Read-Only-Anbindung (<code>calendar.readonly</code> &amp; <code>Calendars.Read</code>) ergänzend zu IMAP-Einladungen und <code>.ics</code>-Upload.</span>
-              </li>
-              <li>
-                <span class="check-badge">✓</span>
-                <span data-i18n-html="p1_li2_html"><strong>Klare Regel ohne Überraschungen:</strong> Selbst organisierte Termine werden automatisch eingeplant (mit 1-Klick-Opt-out); externe Kundentermine schaltet Mara bei Bedarf mit einem einzigen Klick zu.</span>
-              </li>
-              <li>
-                <span class="check-badge">✓</span>
-                <span data-i18n-html="p1_li3_html"><strong>Automatischer Ergebnisversand &amp; 1-Klick-Löschung:</strong> Nach dem Gespräch kommen <code>.txt</code>, <code>.md</code>, <code>.vtt</code> und <code>.json</code> samt Lese-Link per E-Mail; vertrauliche Aufnahmen löscht Mara sofort per Klick (Right to Erasure).</span>
-              </li>
-            </ul>
-          </div>
-
-          <div class="persona-preview-card">
-            <div style="display:flex;align-items:center;justify-content:space-between;font-size:12px;font-family:var(--font-mono);color:var(--stone-600);">
-              <span data-i18n="p1_demo_header">Interaktive Vorschau · Kalender-Arbeitsbereich (OAuth2 Sync aktiv)</span>
-              <span class="license-pill">Google + M365</span>
-            </div>
-            <div style="font-size:12.5px;color:var(--stone-600);" data-i18n="p1_demo_hint">
-              Klicken Sie auf den Schalter beim externen Kundentermin:
-            </div>
-
-            <div class="cal-event-row">
-              <div>
-                <div style="font-weight:700;font-size:13.5px;" data-i18n="p1_ev1_title">Architektur-Sync (Eigener Termin · Google Meet)</div>
-                <div class="mono" style="font-size:11.5px;color:var(--stone-500);" data-i18n="p1_ev1_meta">10:00 – 10:45 · Organisatorin: mara@mayflower.de</div>
-              </div>
-              <span class="toggle-pill" data-i18n="toggle_on">● Aufzeichnen: An</span>
-            </div>
-
-            <div class="cal-event-row" style="border-color:var(--emerald-500);box-shadow:var(--shadow-xs);">
-              <div>
-                <div style="font-weight:700;font-size:13.5px;" data-i18n="p1_ev2_title">Kunden-Workshop FinTech AG (Externer Termin · MS Teams)</div>
-                <div class="mono" style="font-size:11.5px;color:var(--stone-500);" data-i18n="p1_ev2_meta">14:00 – 15:00 · Externer Host · Kein Bot in fremder Einladungsliste</div>
-              </div>
-              <button type="button" id="demo-external-toggle" class="toggle-pill" data-i18n="toggle_on">● Aufzeichnen: An</button>
-            </div>
-
-            <div class="cal-event-row">
-              <div>
-                <div style="font-weight:700;font-size:13.5px;" data-i18n="p1_ev3_title">Quartals-Review (Eigene Serie · Zoom)</div>
-                <div class="mono" style="font-size:11.5px;color:var(--stone-500);" data-i18n="p1_ev3_meta">16:30 – 17:15 · Serien-Ausnahmen &amp; Verschiebungen automatisch synchronisiert</div>
-              </div>
-              <span class="toggle-pill" data-i18n="toggle_on">● Aufzeichnen: An</span>
-            </div>
-          </div>
-        </div>
-
-        <!-- Panel 2: Lukas -->
-        <div class="persona-panel" data-persona-panel="lukas" role="tabpanel">
-          <div>
-            <h3 style="margin:0;font-size:22px;font-weight:800;" data-i18n="p2_title">
-              Lukas – Consultant &amp; Tech-Lead (Ad-hoc-Start &amp; Live-Volltextsuche)
-            </h3>
-            <blockquote class="persona-quote" data-i18n="p2_quote">
-              „In spontanen Incident- oder Architektur-Calls entscheide ich oft erst im laufenden Gespräch, dass wir ein präzises Wortprotokoll für Jira, GitLab oder unser lokales LLM brauchen – ohne erfundene KI-Zusammenfassungen.“
-            </blockquote>
-            <ul class="feature-checklist">
-              <li>
-                <span class="check-badge">✓</span>
-                <span data-i18n-html="p2_li1_html"><strong>Ad-hoc-Dispatch in 10 Sekunden:</strong> Meeting-Link einfügen, Dauer wählen (30–180 Min.) und Bot direkt in das laufende Gespräch schicken.</span>
-              </li>
-              <li>
-                <span class="check-badge">✓</span>
-                <span data-i18n-html="p2_li2_html"><strong>Transparenter Live-Status-Stepper:</strong> Sofort sehen, ob der Bot beitritt (<code>joining</code>), im Warteraum wartet (<code>waiting_admission</code>) oder aktiv Einzelspuren aufzeichnet (<code>capturing</code>).</span>
-              </li>
-              <li>
-                <span class="check-badge">✓</span>
-                <span data-i18n-html="p2_li3_html"><strong>Konsekutiv gruppiertes Live-Transkript &amp; Export:</strong> Aufeinanderfolgende Sätze desselben Sprechers werden automatisch zu lesbaren Absätzen zusammengefasst – inklusive Live-Suche mit <code>&lt;mark&gt;</code>-Hervorhebung und sauberem Markdown-Export.</span>
-              </li>
-            </ul>
-          </div>
-
-          <div class="persona-preview-card">
-            <div style="display:flex;align-items:center;justify-content:space-between;font-size:12px;font-family:var(--font-mono);color:var(--stone-600);">
-              <span data-i18n="p2_demo_header">Interaktive Vorschau · Live-Transkript &amp; Schnellfilter</span>
-              <span class="license-pill">Markdown / JSON</span>
-            </div>
-            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
-              <span style="font-size:12px;color:var(--stone-600);" data-i18n="p2_search_label">Stichwort im Protokoll hervorheben:</span>
-              <button type="button" class="lang-btn active demo-search-chip" data-term="Kubernetes">Kubernetes</button>
-              <button type="button" class="lang-btn demo-search-chip" data-term="Parakeet">Parakeet</button>
-              <button type="button" class="lang-btn demo-search-chip" data-term="WebRTC">WebRTC</button>
-              <button type="button" class="lang-btn demo-search-chip" data-term="">Alle</button>
-            </div>
-            <div class="ui-transcript-box">
-              <div class="turn-card">
-                <div class="turn-header">
-                  <span>Lukas Weber</span>
-                  <span class="turn-time">00:03:12 – 00:03:44</span>
-                </div>
-                <p class="turn-text lukas-turn-text">Wir starten pro Aufnahme genau einen isolierten Kubernetes-Job, der den WebRTC-Stream vor dem Mix abgreift.</p>
-              </div>
-              <div class="turn-card turn-2">
-                <div class="turn-header">
-                  <span>Svenja Lindner</span>
-                  <span class="turn-time">00:03:45 – 00:04:10</span>
-                </div>
-                <p class="turn-text lukas-turn-text">Und das lokale Parakeet-Modell im Kubernetes-Cluster transkribiert jede WebRTC-Spur ohne externe API-Aufrufe.</p>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Panel 3: Dr. Thomas -->
-        <div class="persona-panel" data-persona-panel="thomas" role="tabpanel">
-          <div>
-            <h3 style="margin:0;font-size:22px;font-weight:800;" data-i18n="p3_title">
-              Dr. Thomas – Externer Host &amp; Datenschutzbeauftragter (Compliance &amp; Transparenz)
-            </h3>
-            <blockquote class="persona-quote" data-i18n="p3_quote">
-              „Als Gastgeber und DSB lehne ich Blackbox-Bots ab, die ungefragt Video aufzeichnen, Stimmprofile anlegen oder sich nach dem Entfernen wieder einklinken. Bei wortlaut sehe ich sofort, wer den Bot geschickt hat und wie die Daten geschützt sind.“
-            </blockquote>
-            <ul class="feature-checklist">
-              <li>
-                <span class="check-badge">✓</span>
-                <span data-i18n-html="p3_li1_html"><strong>Aktive Vorstellung im Konferenz-Chat &amp; öffentliches <code>/privacy</code>:</strong> Direkt nach dem Einlass nennt der Bot die einladende Person (<code>invited_by</code>) und verlinkt die ohne Login erreichbare Datenschutz- &amp; Widerspruchsseite.</span>
-              </li>
-              <li>
-                <span class="check-badge">✓</span>
-                <span data-i18n-html="p3_li2_html"><strong>Rein passives Audio – kein Video, keine Biometrie:</strong> Kamera und Mikrofon sind bis auf WebRTC-Sender-Ebene deaktiviert. Keine Stimmprofile (Voiceprints), keine KI-Diarisierung.</span>
-              </li>
-              <li>
-                <span class="check-badge">✓</span>
-                <span data-i18n-html="p3_li3_html"><strong>Respektierte Grenzen &amp; automatische Löschfristen:</strong> Kein Umgehen von CAPTCHAs oder Warteräumen, kein Rejoin nach Rauswurf (<code>removed</code>), automatisches Verlassen nach 5 Min. Stille (<code>room_empty</code>), Roh-Audio-Löschung nach 24 Stunden.</span>
-              </li>
-            </ul>
-          </div>
-
-          <div class="persona-preview-card">
-            <div style="display:flex;align-items:center;justify-content:space-between;font-size:12px;font-family:var(--font-mono);color:var(--stone-600);">
-              <span data-i18n="p3_demo_header">Original-Vorschau · Automatische Vorstellung im Meeting-Chat &amp; /privacy</span>
-              <span class="license-pill">DSGVO / GDPR</span>
-            </div>
-            <div style="background:#ffffff;border:1px solid var(--stone-200);border-radius:var(--radius-md);padding:14px;font-size:13px;line-height:1.6;color:var(--stone-800);" data-i18n-html="p3_chat_msg_html">
-              <strong>wortlaut (Gast):</strong> Hallo! Ich zeichne dieses Gespräch zur Erstellung eines schriftlichen Wortprotokolls im Auftrag von <code>mara@mayflower.de</code> auf.<br>• Es wird ausschließlich Audio erfasst (kein Video, keine Stimmprofile), verarbeitet auf eigener Infrastruktur.<br>• Protokoll (für Berechtigte): <code>https://wortlaut.example.org/ui#view=meetings&amp;id=9f8a…</code><br>• Datenschutz, Speicherfristen (24h Roh-Audio / 30 Tage Text) &amp; Widerspruch (ohne Login): <code>https://wortlaut.example.org/privacy</code>
-            </div>
-            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;text-align:center;font-family:var(--font-mono);font-size:11.5px;">
-              <div style="background:#ffffff;border:1px solid var(--stone-200);padding:8px;border-radius:6px;">
-                <strong style="color:var(--emerald-700);display:block;">0 Video-Frames</strong>
-                Audio-Only Receiver
-              </div>
-              <div style="background:#ffffff;border:1px solid var(--stone-200);padding:8px;border-radius:6px;">
-                <strong style="color:var(--emerald-700);display:block;">24h TTL</strong>
-                Roh-Audio in S3
-              </div>
-              <div style="background:#ffffff;border:1px solid var(--stone-200);padding:8px;border-radius:6px;">
-                <strong style="color:var(--emerald-700);display:block;">0 Voiceprints</strong>
-                Session-Bindung
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Panel 4: Nina -->
-        <div class="persona-panel" data-persona-panel="nina" role="tabpanel">
-          <div>
-            <h3 style="margin:0;font-size:22px;font-weight:800;" data-i18n="p4_title">
-              Nina – Eingeladene Teilnehmerin &amp; Protokoll-Leserin (Sichere Kollaboration)
-            </h3>
-            <blockquote class="persona-quote" data-i18n="p4_quote">
-              „Ich möchte nach dem Termin schnell nachlesen, was besprochen wurde – aber externe Gäste im Meeting-Chat dürfen nicht unbefugt mitlesen, und ein geteilter Lese-Link darf meine eigene SSO-Sitzung nicht überschreiben.“
-            </blockquote>
-            <ul class="feature-checklist">
-              <li>
-                <span class="check-badge">✓</span>
-                <span data-i18n-html="p4_li1_html"><strong>Geschützter Chat-Link ohne offenen Token:</strong> Der automatisch im Meeting-Chat gepostete Link enthält keinen Lese-Token, sodass externe Gäste ohne explizite Freigabe keinen Zugriff erhalten.</span>
-              </li>
-              <li>
-                <span class="check-badge">✓</span>
-                <span data-i18n-html="p4_li2_html"><strong>Gezielte Read-Only-Freigabe (<code>#token=wortlaut-read-…</code>):</strong> Erst wenn Mara oder Lukas aktiv einen Lese-Link teilen, kann Nina das Protokoll ohne eigenen Account im aufgeräumten Lesemodus öffnen.</span>
-              </li>
-              <li>
-                <span class="check-badge">✓</span>
-                <span data-i18n-html="p4_li3_html"><strong>Isolierter <code>sessionStorage</code> statt Konto-Überschreibung:</strong> Hat Nina selbst ein SSO-Konto, bleibt ihre Sitzung erhalten; über <em>„Zurück zu meinem Konto“</em> wechselt sie jederzeit zu ihren eigenen Aufnahmen.</span>
-              </li>
-            </ul>
-          </div>
-
-          <div class="persona-preview-card">
-            <div style="display:flex;align-items:center;justify-content:space-between;font-size:12px;font-family:var(--font-mono);color:var(--stone-600);">
-              <span data-i18n="p4_demo_header">Vorschau · Aufgeräumter Lese-Modus (Reader View mit Redeanteilen)</span>
-              <span class="license-pill">wortlaut-read-…</span>
-            </div>
-            <div style="background:#ffffff;border:1px solid var(--stone-200);border-radius:var(--radius-md);padding:14px;display:flex;flex-direction:column;gap:10px;">
-              <div style="display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--stone-200);padding-bottom:8px;">
-                <span style="font-weight:700;font-size:13px;">Lese-Ansicht · Sprint-Planung Q4</span>
-                <span class="mono" style="font-size:11px;background:var(--stone-100);padding:3px 8px;border-radius:4px;border:1px solid var(--stone-300);">← Zurück zu meinem Konto</span>
-              </div>
-              <div style="font-size:12px;color:var(--stone-600);">
-                <div style="display:flex;justify-content:space-between;margin-bottom:3px;"><span>Mara Becker</span><span class="mono">48 % (14 Min.)</span></div>
-                <div style="height:6px;background:var(--stone-100);border-radius:99px;overflow:hidden;"><div style="width:48%;height:100%;background:var(--emerald-600);"></div></div>
-              </div>
-              <div style="font-size:12px;color:var(--stone-600);">
-                <div style="display:flex;justify-content:space-between;margin-bottom:3px;"><span>Nina Hartmann</span><span class="mono">34 % (10 Min.)</span></div>
-                <div style="height:6px;background:var(--stone-100);border-radius:99px;overflow:hidden;"><div style="width:34%;height:100%;background:var(--indigo-600);"></div></div>
-              </div>
-              <div style="font-size:12px;color:var(--stone-600);">
-                <div style="display:flex;justify-content:space-between;margin-bottom:3px;"><span>Lukas Weber</span><span class="mono">18 % (5 Min.)</span></div>
-                <div style="height:6px;background:var(--stone-100);border-radius:99px;overflow:hidden;"><div style="width:18%;height:100%;background:var(--cyan-700);"></div></div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Panel 5: Svenja -->
-        <div class="persona-panel" data-persona-panel="svenja" role="tabpanel">
-          <div>
-            <h3 style="margin:0;font-size:22px;font-weight:800;" data-i18n="p5_title">
-              Svenja – Platform- &amp; DevOps-Engineer (Self-Hosted Kubernetes Operator)
-            </h3>
-            <blockquote class="persona-quote" data-i18n="p5_quote">
-              „Ich brauche keine fragile Microservice-Landschaft aus 12 Containern und externen Cloud-Keys, sondern gehärtete Images, isolierte kurzlebige Browser-Jobs pro Meeting, klare Kapazitätsgrenzen und native OTLP-Telemetrie.“
-            </blockquote>
-            <ul class="feature-checklist">
-              <li>
-                <span class="check-badge">✓</span>
-                <span data-i18n-html="p5_li1_html"><strong>Kurzlebige, isolierte Kubernetes-Worker-Jobs:</strong> Pro Aufnahme startet genau ein Kubernetes-Job mit frischem Chromium-Profil (<code>runAsNonRoot: true</code>, <code>allowPrivilegeEscalation: false</code>); Bootstrap-Secrets werden erst nach beobachteter Pod-Terminierung gelöscht.</span>
-              </li>
-              <li>
-                <span class="check-badge">✓</span>
-                <span data-i18n-html="p5_li2_html"><strong>Deterministisches Backpressure:</strong> Harte Obergrenzen für gleichzeitige Meetings, unsegmentierte Audio-Samples, S3-Speicher und offene ASR-Jobs verhindern GPU-OOMs und DB-Spitzen.</span>
-              </li>
-              <li>
-                <span class="check-badge">✓</span>
-                <span data-i18n-html="p5_li3_html"><strong>Native OpenTelemetry- &amp; Grafana-Observability:</strong> Strukturierte Spans (<code>wortlaut.worker.status</code>) zeigen gebundene Receiver, Signaling-Kanäle und präzise Endgründe (z. B. <code>lobby_timeout</code>, <code>human_verification_required</code>).</span>
-              </li>
-            </ul>
-          </div>
-
-          <div class="persona-preview-card">
-            <div style="display:flex;align-items:center;justify-content:space-between;font-size:12px;font-family:var(--font-mono);color:var(--stone-600);">
-              <span data-i18n="p5_demo_header">Vorschau · System &amp; Kapazitäts-Überwachung (Backpressure &amp; OTLP)</span>
-              <span class="license-pill">Kubernetes + OTLP</span>
-            </div>
-            <div style="background:#ffffff;border:1px solid var(--stone-200);border-radius:var(--radius-md);padding:14px;display:flex;flex-direction:column;gap:10px;font-family:var(--font-mono);font-size:12px;">
-              <div>
-                <div style="display:flex;justify-content:space-between;margin-bottom:4px;"><span>active_meetings</span><span>3 / 15</span></div>
-                <div style="height:7px;background:var(--stone-100);border-radius:99px;overflow:hidden;"><div style="width:20%;height:100%;background:var(--emerald-600);"></div></div>
-              </div>
-              <div>
-                <div style="display:flex;justify-content:space-between;margin-bottom:4px;"><span>open_asr_jobs (Parakeet GPU)</span><span>42 / 8192</span></div>
-                <div style="height:7px;background:var(--stone-100);border-radius:99px;overflow:hidden;"><div style="width:8%;height:100%;background:var(--emerald-600);"></div></div>
-              </div>
-              <div>
-                <div style="display:flex;justify-content:space-between;margin-bottom:4px;"><span>stored_audio_bytes (S3 24h Buffer)</span><span>1.2 GB / 8.0 GB</span></div>
-                <div style="height:7px;background:var(--stone-100);border-radius:99px;overflow:hidden;"><div style="width:15%;height:100%;background:var(--emerald-600);"></div></div>
-              </div>
-              <div style="padding-top:6px;border-top:1px solid var(--stone-200);color:var(--stone-600);font-size:11px;">
-                OTLP Trace: <code>wortlaut.worker.status</code> · bound_named_receiver_count=4 · dom_participant_count=4
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Panel 6: Tim -->
-        <div class="persona-panel" data-persona-panel="tim" role="tabpanel">
-          <div>
-            <h3 style="margin:0;font-size:22px;font-weight:800;" data-i18n="p6_title">
-              Tim – Workflow- &amp; Integrations-Entwickler (Idempotente REST-API)
-            </h3>
-            <blockquote class="persona-quote" data-i18n="p6_quote">
-              „Für unsere internen Ticket- und Wiki-Pipelines brauche ich eine idempotente REST-API, die mir neben zeitgestempelten Segmenten auch ehrlich meldet, ob es Audio-Lücken oder ungebundene Quellen gab.“
-            </blockquote>
-            <ul class="feature-checklist">
-              <li>
-                <span class="check-badge">✓</span>
-                <span data-i18n-html="p6_li1_html"><strong>Idempotente Steuerung &amp; OpenAPI (<code>/docs</code>):</strong> Sicheres Anlegen über <code>POST /v1/recordings</code> mit <code>Idempotency-Key</code> (<code>HTTP 409</code> bei abweichendem Payload) und scoped Reader-Tokens.</span>
-              </li>
-              <li>
-                <span class="check-badge">✓</span>
-                <span data-i18n-html="p6_li2_html"><strong>Maschinenlesbare Qualitätsindikatoren:</strong> Der JSON-Export liefert <code>sources_summary</code>, <code>has_audio_gaps</code>, <code>attribution_unknown</code>, <code>unprocessed_audio</code> und <code>failed_asr_ranges</code> für verlässliche nachgelagerte LLM-Pipelines.</span>
-              </li>
-              <li>
-                <span class="check-badge">✓</span>
-                <span data-i18n-html="p6_li3_html"><strong>Vier Exportformate auf Abruf:</strong> <code>/exports/json</code>, <code>/exports/md</code>, <code>/exports/vtt</code> (WebVTT) und <code>/exports/txt</code>.</span>
-              </li>
-            </ul>
-          </div>
-
-          <div class="persona-preview-card">
-            <div style="display:flex;align-items:center;justify-content:space-between;font-size:12px;font-family:var(--font-mono);color:var(--stone-600);">
-              <span data-i18n="p6_demo_header">Echter API-Ausschnitt · JSON-Export mit Qualitätsmetriken</span>
-              <span class="license-pill">GET /v1/recordings/{id}/exports/json</span>
-            </div>
-            <pre style="margin:0;background:var(--stone-950);color:var(--stone-100);padding:14px;border-radius:var(--radius-md);font-size:11.5px;overflow-x:auto;"><code>{
-  "recording_id": "9f8a21c0-4b12-4e8a-9c11-7d8e9a0b1c2d",
-  "provider": "google_meet",
-  "quality": {
-    "has_audio_gaps": false,
-    "attribution_unknown": false,
-    "unprocessed_audio": false,
-    "failed_asr_ranges": []
-  },
-  "sources_summary": [
-    {
-      "source_id": "webrtc-recv-1",
-      "participant_id": "spaces/k8x/devices/482910",
-      "participant_name": "Mara Becker",
-      "binding_proven": true
-    }
-  ]
-}</code></pre>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <!-- SECTION 4: 4 CONFERENCE PROVIDERS IN PARALLEL -->
-    <section id="providers" class="section section-alt">
-      <div class="container">
-        <div class="section-header">
-          <span class="section-kicker" data-i18n="providers_kicker">VIER KONFERENZSYSTEME PARALLEL</span>
-          <h2 class="section-title" data-i18n="providers_title">
-            Google Meet, Microsoft Teams, Cisco Webex und Zoom in einer einzigen Instanz
-          </h2>
-          <p class="section-desc" data-i18n="providers_desc">
-            Keine globale Provider-Umschaltung: wortlaut erkennt die Plattform automatisch anhand der Meeting-URL oder Kalendereinladung und nutzt für jedes System den optimalen Einzelspur-Erfassungspfad.
-          </p>
-        </div>
-
-        <div class="providers-grid">
-          <div class="provider-card">
-            <div>
-              <div class="provider-card-header">
-                <h3>Google Meet</h3>
-                <span class="provider-dot" style="background:#059669;"></span>
-              </div>
-              <p class="mono" style="font-size:11.5px;color:var(--emerald-700);margin:6px 0 14px;" data-i18n="prov_meet_mode">
-                Playwright/Chromium · Direkte WebRTC-Einzelspur
-              </p>
-              <ul class="provider-spec-list">
-                <li data-i18n-html="prov_meet_li1_html"><strong>Audio-Erfassung:</strong> Abgriff jedes <code>RTCRtpReceiver</code>-Tracks vor dem Mix über einen WebRTC-Hook im Browser-Kontext.</li>
-                <li data-i18n-html="prov_meet_li2_html"><strong>Sprecherbindung:</strong> Zuordnung über <code>csi</code>/<code>ssrc</code> aus SDP, RTCDataChannel, Fetch/WebSocket-Roster und DOM-Kacheln.</li>
-                <li data-i18n-html="prov_meet_li3_html"><strong>Zugang:</strong> Anonymer Gast-Beitritt oder optionale gespeicherte Host-/Browser-Session (<code>storage-state.json</code>).</li>
-              </ul>
-            </div>
-            <div class="mono" style="font-size:11px;color:var(--stone-500);border-top:1px solid var(--stone-200);padding-top:10px;">
-              worker/src/meet/capture.ts
-            </div>
-          </div>
-
-          <div class="provider-card">
-            <div>
-              <div class="provider-card-header">
-                <h3>Microsoft Teams</h3>
-                <span class="provider-dot" style="background:#4F46E5;"></span>
-              </div>
-              <p class="mono" style="font-size:11.5px;color:var(--indigo-600);margin:6px 0 14px;" data-i18n="prov_teams_mode">
-                Playwright/Chromium · WebRTC Receiver + Signaling
-              </p>
-              <ul class="provider-spec-list">
-                <li data-i18n-html="prov_teams_li1_html"><strong>Audio-Erfassung:</strong> Getrennte eingehende WebRTC-Audiospuren mit strikter Prüfung, dass kein eigenes Sendegerät aktiv ist.</li>
-                <li data-i18n-html="prov_teams_li2_html"><strong>Sprecherbindung:</strong> Verknüpfung von Media-Streams mit den im Teams-Roster und Signaling gemeldeten Teilnehmeridentitäten.</li>
-                <li data-i18n-html="prov_teams_li3_html"><strong>Zugang:</strong> Direkter Gast-Beitritt über Meeting-Join-Links im isolierten Worker-Job.</li>
-              </ul>
-            </div>
-            <div class="mono" style="font-size:11px;color:var(--stone-500);border-top:1px solid var(--stone-200);padding-top:10px;">
-              worker/runtime/teams-browser.ts
-            </div>
-          </div>
-
-          <div class="provider-card">
-            <div>
-              <div class="provider-card-header">
-                <h3>Cisco Webex</h3>
-                <span class="provider-dot" style="background:#0891B2;"></span>
-              </div>
-              <p class="mono" style="font-size:11.5px;color:var(--cyan-700);margin:6px 0 14px;" data-i18n="prov_webex_mode">
-                Browser-SDK / WebRTC · Multistream vor dem Mix
-              </p>
-              <ul class="provider-spec-list">
-                <li data-i18n-html="prov_webex_li1_html"><strong>Audio-Erfassung:</strong> Parallele Einzelspur-Erfassung aller entfernten Audio-Panele vor dem Mischen.</li>
-                <li data-i18n-html="prov_webex_li2_html"><strong>Sprecherbindung:</strong> Direkte Bindung an die verifizierte Webex-Mitgliedssitzung inkl. Statuswechseln.</li>
-                <li data-i18n-html="prov_webex_li3_html"><strong>Zugang:</strong> Gast-Token/Service-App oder anonymer Web-Client-Beitritt je nach Raumrichtlinie.</li>
-              </ul>
-            </div>
-            <div class="mono" style="font-size:11px;color:var(--stone-500);border-top:1px solid var(--stone-200);padding-top:10px;">
-              worker/runtime/webex-browser.ts
-            </div>
-          </div>
-
-          <div class="provider-card">
-            <div>
-              <div class="provider-card-header">
-                <h3>Zoom</h3>
-                <span class="provider-dot" style="background:#2563EB;"></span>
-              </div>
-              <p class="mono" style="font-size:11.5px;color:var(--blue-600);margin:6px 0 14px;" data-i18n="prov_zoom_mode">
-                100 % Anonymer Browser-Beitritt · WebAudio/Worklet
-              </p>
-              <ul class="provider-spec-list">
-                <li data-i18n-html="prov_zoom_li1_html"><strong>Audio-Erfassung:</strong> Erfassung über den Zoom-Webclient (<code>/wc/&lt;id&gt;/join</code>) mit Pre-Mix-Audio-Hooks.</li>
-                <li data-i18n-html="prov_zoom_li2_html"><strong>Sprecherbindung:</strong> Auswertung des WebSocket-/Roster-Signalings und der aktiven Teilnehmer-Metadaten.</li>
-                <li data-i18n-html="prov_zoom_li3_html"><strong>Zugang:</strong> Komplett ohne Zoom-Marketplace-App oder SDK-Keys direkt per Meeting-Link nutzbar.</li>
-              </ul>
-            </div>
-            <div class="mono" style="font-size:11px;color:var(--stone-500);border-top:1px solid var(--stone-200);padding-top:10px;">
-              worker/runtime/zoom-browser.ts
-            </div>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <!-- SECTION 5: PRIVACY & COMPLIANCE BY DESIGN -->
-    <section id="privacy" class="section">
-      <div class="container">
-        <div class="section-header">
-          <span class="section-kicker" data-i18n="privacy_kicker">COMPLIANCE &amp; DATENSCHUTZ BY DESIGN</span>
-          <h2 class="section-title" data-i18n="privacy_title">
-            Gebaut für strenge Betriebsrats-, DSB- und Geheimhaltungs-Anforderungen
-          </h2>
-          <p class="section-desc" data-i18n="privacy_desc">
-            wortlaut versteckt sich nicht. Jede Funktion ist darauf ausgelegt, die berechtigten Anforderungen von Gastgebern, Teilnehmenden und Datenschutzbeauftragten technisch durchzusetzen.
-          </p>
-        </div>
-
-        <div class="arch-grid">
-          <div class="arch-fact-card">
-            <div class="mono" style="font-size:11.5px;color:var(--emerald-700);font-weight:700;margin-bottom:6px;">TRANSPARENZ · /privacy</div>
-            <h4 data-i18n="priv_card1_title">Öffentliche /privacy-Seite &amp; Chat-Transparenz</h4>
-            <p data-i18n="priv_card1_desc">
-              Beim Betreten eines Raums postet wortlaut automatisch die E-Mail-Adresse der einladenden Person sowie den Link auf /privacy. Diese Seite ist ohne Login erreichbar und dokumentiert Verarbeitungszweck, lokale Architektur, Löschfristen und Widerspruchsmöglichkeiten.
-            </p>
-          </div>
-
-          <div class="arch-fact-card">
-            <div class="mono" style="font-size:11.5px;color:var(--emerald-700);font-weight:700;margin-bottom:6px;">DATENSPARSAMKEIT · 24H / 30D TTL</div>
-            <h4 data-i18n="priv_card2_title">Keine Biometrie &amp; automatische Löschfristen</h4>
-            <p data-i18n="priv_card2_desc">
-              Da Sprecher über die technische Konferenzsitzung statt über Stimmprofile zugeordnet werden, entstehen keinerlei biometrische Daten. Roh-Audio wird nach 24 Stunden automatisch aus S3 gelöscht, Transkripte nach 30 Tagen – oder sofort per Klick durch die einladende Person.
-            </p>
-          </div>
-
-          <div class="arch-fact-card">
-            <div class="mono" style="font-size:11.5px;color:var(--emerald-700);font-weight:700;margin-bottom:6px;">RESPEKTIERTE GRENZEN · NO BYPASS</div>
-            <h4 data-i18n="priv_card3_title">Strikte Achtung von Zutrittsgrenzen</h4>
-            <p data-i18n="priv_card3_desc">
-              wortlaut umgeht niemals CAPTCHAs (human_verification_required), wartet geduldig im Warteraum, tritt nach einem Entfernen durch den Host (removed) nicht erneut bei und verlässt leere Räume nach 5 Minuten automatisch (room_empty).
-            </p>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <!-- SECTION 6: KUBERNETES ARCHITECTURE -->
-    <section id="architecture" class="section section-alt">
-      <div class="container">
-        <div class="section-header">
-          <span class="section-kicker" data-i18n="arch_kicker">KUBERNETES-ARCHITEKTUR</span>
-          <h2 class="section-title" data-i18n="arch_title">
-            Drei klar getrennte Komponenten – ohne Microservice-Wildwuchs
-          </h2>
-          <p class="section-desc" data-i18n="arch_desc">
-            Der gesamte Stack besteht aus dem zentralen Meeting-Dienst, einem gemeinsam genutzten GPU-ASR-Dienst und kurzlebigen Kubernetes-Jobs für die Browser-Aufnahme.
-          </p>
-        </div>
-
-        <div class="arch-diagram-card">
-          <svg viewBox="0 0 1080 310" style="width:100%;height:auto;display:block;" role="img" aria-label="wortlaut Kubernetes Architecture Diagram">
-            <defs>
-              <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-                <path d="M 0 1 L 10 5 L 0 9 z" fill="#047857" />
-              </marker>
-            </defs>
-
-            <!-- Outer Cluster Box -->
-            <rect x="240" y="12" width="825" height="286" rx="14" fill="#FAFAF9" stroke="#D6D3D1" stroke-dasharray="6 4" stroke-width="1.5"/>
-            <text x="260" y="36" font-family="JetBrains Mono, monospace" font-size="11.5" font-weight="700" fill="#57534E">KUBERNETES NAMESPACE (SELF-HOSTED)</text>
-
-            <!-- Left Column: Inputs -->
-            <rect x="16" y="42" width="185" height="64" rx="9" fill="#FFFFFF" stroke="#D6D3D1"/>
-            <text x="32" y="68" font-family="Plus Jakarta Sans, sans-serif" font-size="13" font-weight="700" fill="#1C1917">Web-UI &amp; Dex OIDC</text>
-            <text x="32" y="88" font-family="JetBrains Mono, monospace" font-size="11" fill="#78716C">/ui · /privacy · Reader</text>
-
-            <rect x="16" y="124" width="185" height="64" rx="9" fill="#FFFFFF" stroke="#D6D3D1"/>
-            <text x="32" y="150" font-family="Plus Jakarta Sans, sans-serif" font-size="13" font-weight="700" fill="#1C1917">OAuth2 &amp; IMAP Sync</text>
-            <text x="32" y="170" font-family="JetBrains Mono, monospace" font-size="11" fill="#78716C">Google · M365 · .ics</text>
-
-            <rect x="16" y="206" width="185" height="64" rx="9" fill="#FFFFFF" stroke="#D6D3D1"/>
-            <text x="32" y="232" font-family="Plus Jakarta Sans, sans-serif" font-size="13" font-weight="700" fill="#1C1917">REST-API &amp; OpenAPI</text>
-            <text x="32" y="252" font-family="JetBrains Mono, monospace" font-size="11" fill="#78716C">POST /v1/recordings</text>
-
-            <!-- Center: wortlaut-meeting -->
-            <rect x="268" y="62" width="250" height="190" rx="12" fill="#1C1917" stroke="#047857" stroke-width="2"/>
-            <text x="288" y="92" font-family="JetBrains Mono, monospace" font-size="13.5" font-weight="700" fill="#6EE7B7">wortlaut-meeting</text>
-            <text x="288" y="114" font-family="Plus Jakarta Sans, sans-serif" font-size="12" fill="#E7E5E4">• FastAPI + Astryx Web-UI</text>
-            <text x="288" y="134" font-family="Plus Jakarta Sans, sans-serif" font-size="12" fill="#E7E5E4">• K8s Job Reconciler &amp; Scheduler</text>
-            <text x="288" y="154" font-family="Plus Jakarta Sans, sans-serif" font-size="12" fill="#E7E5E4">• Einzelspur-Ingest &amp; Segmente</text>
-            <text x="288" y="174" font-family="Plus Jakarta Sans, sans-serif" font-size="12" fill="#E7E5E4">• Exporte (.md/.txt/.vtt/.json)</text>
-            <text x="288" y="194" font-family="Plus Jakarta Sans, sans-serif" font-size="12" fill="#E7E5E4">• SMTP-Versand &amp; OTLP-Traces</text>
-            <text x="288" y="226" font-family="JetBrains Mono, monospace" font-size="10.5" fill="#A8A29E">services/meeting (Python 3.12)</text>
-
-            <!-- Right Top: Ephemeral Worker Job -->
-            <rect x="576" y="48" width="248" height="106" rx="10" fill="#ECFDF5" stroke="#059669" stroke-width="1.5"/>
-            <text x="594" y="74" font-family="JetBrains Mono, monospace" font-size="12.5" font-weight="700" fill="#065F46">batch/v1 Job: wortlaut-worker</text>
-            <text x="594" y="95" font-family="Plus Jakarta Sans, sans-serif" font-size="12" fill="#1C1917">1 Job je Meeting · Playwright/Chromium</text>
-            <text x="594" y="114" font-family="Plus Jakarta Sans, sans-serif" font-size="12" fill="#1C1917">WebRTC Einzelspur vor dem Mix</text>
-            <text x="594" y="134" font-family="JetBrains Mono, monospace" font-size="10.5" fill="#047857">runAsNonRoot · Secret TTL Cleanup</text>
-
-            <!-- Right Bottom: GPU ASR -->
-            <rect x="576" y="174" width="248" height="96" rx="10" fill="#1C1917" stroke="#44403C" stroke-width="1.5"/>
-            <text x="594" y="200" font-family="JetBrains Mono, monospace" font-size="12.5" font-weight="700" fill="#6EE7B7">wortlaut-asr (GPU Service)</text>
-            <text x="594" y="222" font-family="Plus Jakarta Sans, sans-serif" font-size="12" fill="#E7E5E4">Gemeinsames lokales Parakeet-Modell</text>
-            <text x="594" y="242" font-family="JetBrains Mono, monospace" font-size="10.5" fill="#A8A29E">services/asr · NVIDIA GPU</text>
-
-            <!-- Far Right: Storage & Providers -->
-            <rect x="866" y="48" width="178" height="66" rx="9" fill="#FFFFFF" stroke="#D6D3D1"/>
-            <text x="882" y="75" font-family="Plus Jakarta Sans, sans-serif" font-size="12.5" font-weight="700" fill="#1C1917">Meet · Teams · Webex · Zoom</text>
-            <text x="882" y="95" font-family="JetBrains Mono, monospace" font-size="10.5" fill="#78716C">WebRTC Media &amp; Roster</text>
-
-            <rect x="866" y="132" width="178" height="62" rx="9" fill="#FFFFFF" stroke="#D6D3D1"/>
-            <text x="882" y="158" font-family="Plus Jakarta Sans, sans-serif" font-size="12.5" font-weight="700" fill="#1C1917">PostgreSQL 16+</text>
-            <text x="882" y="176" font-family="JetBrains Mono, monospace" font-size="10.5" fill="#78716C">30d Transkripte &amp; State</text>
-
-            <rect x="866" y="210" width="178" height="62" rx="9" fill="#FFFFFF" stroke="#D6D3D1"/>
-            <text x="882" y="236" font-family="Plus Jakarta Sans, sans-serif" font-size="12.5" font-weight="700" fill="#1C1917">S3 (RustFS / MinIO)</text>
-            <text x="882" y="254" font-family="JetBrains Mono, monospace" font-size="10.5" fill="#78716C">24h Roh-Audio-Puffer</text>
-
-            <!-- Arrows -->
-            <line x1="201" y1="74" x2="262" y2="115" stroke="#047857" stroke-width="1.8" marker-end="url(#arrow)"/>
-            <line x1="201" y1="156" x2="262" y2="156" stroke="#047857" stroke-width="1.8" marker-end="url(#arrow)"/>
-            <line x1="201" y1="238" x2="262" y2="195" stroke="#047857" stroke-width="1.8" marker-end="url(#arrow)"/>
-
-            <line x1="518" y1="115" x2="570" y2="96" stroke="#047857" stroke-width="1.8" marker-end="url(#arrow)"/>
-            <line x1="576" y1="118" x2="524" y2="136" stroke="#047857" stroke-width="1.8" marker-end="url(#arrow)"/>
-            <line x1="518" y1="205" x2="570" y2="218" stroke="#047857" stroke-width="1.8" marker-end="url(#arrow)"/>
-
-            <line x1="824" y1="82" x2="860" y2="82" stroke="#047857" stroke-width="1.8" marker-end="url(#arrow)"/>
-            <line x1="518" y1="162" x2="860" y2="162" stroke="#047857" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#arrow)"/>
-            <line x1="518" y1="240" x2="860" y2="240" stroke="#047857" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#arrow)"/>
-          </svg>
-        </div>
-      </div>
-    </section>
-
-    <!-- SECTION 7: OPEN-SOURCE QUICKSTART -->
-    <section id="quickstart" class="section section-dark">
-      <div class="container">
-        <div class="section-header">
-          <span class="section-kicker" data-i18n="qs_kicker">OPEN-SOURCE-INSTALLATION (AGPL-3.0)</span>
+          <span class="section-kicker" data-i18n="qs_kicker">SELBST HOSTEN (OPEN SOURCE)</span>
           <h2 class="section-title" data-i18n="qs_title">
-            In drei Schritten im eigenen Kubernetes-Cluster starten
+            In wenigen Minuten im eigenen Cluster starten
           </h2>
           <p class="section-desc" data-i18n="qs_desc">
-            Klone das Repository von GitHub, starte die Entwicklungsumgebung lokal per Tilt oder rolle wortlaut per Kustomize / ArgoCD in deinem Produktions-Cluster aus.
+            wortlaut ist freie Software unter der GNU AGPLv3. Installiere das System auf eurem Kubernetes-Cluster oder starte es direkt zur Evaluierung.
           </p>
         </div>
 
-        <div class="quickstart-layout">
-          <div class="code-window">
-            <div class="code-tabs">
-              <div class="code-tab-buttons">
-                <button type="button" class="code-tab-btn active" data-code-tab="dev" data-i18n="qs_tab_dev">1. Schnellstart (Tilt / Dev)</button>
-                <button type="button" class="code-tab-btn" data-code-tab="k8s" data-i18n="qs_tab_k8s">2. Kubernetes (Kustomize / Prod)</button>
-                <button type="button" class="code-tab-btn" data-code-tab="api" data-i18n="qs_tab_api">3. REST-API (cURL)</button>
+        <div class="quickstart-grid">
+          <div class="code-card">
+            <div class="code-card-header">
+              <div class="code-tabs">
+                <button type="button" class="code-tab active" data-ctab="install" data-i18n="qs_tab1">Schnellstart (Installation)</button>
+                <button type="button" class="code-tab" data-ctab="k8s" data-i18n="qs_tab2">Kubernetes-Konfiguration</button>
+                <button type="button" class="code-tab" data-ctab="api" data-i18n="qs_tab3">REST-API Beispiel</button>
               </div>
-              <button type="button" class="copy-code-btn" data-copy-target="active-code-pane" data-i18n="copy_btn">Kopieren</button>
+              <button type="button" class="copy-btn" data-copy="true" data-i18n="copy_btn">Kopieren</button>
             </div>
 
-            <pre class="code-pane active" data-code-pane="dev"><code># 1. Repository klonen
+            <pre class="code-pane active" data-cpane="install"><code># 1. Repository von GitHub klonen
 git clone https://github.com/mayflower/wortlaut.git
 cd wortlaut
 
-# 2. Lokale Abhängigkeiten (.venv, worker, .dev/kubeconfig) einrichten
+# 2. Lokale Umgebung vorbereiten
 make setup
 
-# 3. Vollständigen Stack im Kubernetes-Cluster starten (Tilt)
+# 3. Vollständigen Stack im Kubernetes-Cluster starten
 make dev
 
-# Web-UI öffnen:       http://127.0.0.1:34601/ui
-# OpenAPI / Swagger:   http://127.0.0.1:34601/docs
-# Datenschutz-Seite:   http://127.0.0.1:34601/privacy</code></pre>
+# Web-Oberfläche:  http://127.0.0.1:34601/ui
+# API-Übersicht:   http://127.0.0.1:34601/docs</code></pre>
 
-            <pre class="code-pane" data-code-pane="k8s"><code># Produktions-Konfiguration (ConfigMap Ausschnitt für Kustomize / ArgoCD)
+            <pre class="code-pane" data-cpane="k8s"><code># Beispiel-ConfigMap für den Betrieb in Kubernetes
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: wortlaut-config
-  namespace: wortlaut
 data:
-  WORTLAUT_NAMESPACE: wortlaut
   WORTLAUT_API_URL: https://wortlaut.example.org/
   WORTLAUT_SDK_PAGE_URL: https://wortlaut.example.org/sdk/
   WORTLAUT_ENABLE_CONTROLLER: 'true'
   WORTLAUT_ENABLE_MEET: 'true'
   WORTLAUT_ENABLE_TEAMS: 'true'
-  WORTLAUT_ENABLE_ZOOM: 'true'
-  WORTLAUT_ZOOM_LOCALE: 'en-US'
-  WORTLAUT_MAX_ACTIVE_MEETINGS: '15'
-  WORTLAUT_MAX_OPEN_ASR_JOBS: '8192'
+  WORTLAUT_ENABLE_ZOOM: 'true'</code></pre>
 
-# Manifeste rendern &amp; prüfen:
-# make render</code></pre>
-
-            <pre class="code-pane" data-code-pane="api"><code># Ad-hoc- oder geplante Aufnahme idempotent über die REST-API starten
+            <pre class="code-pane" data-cpane="api"><code># Besprechung automatisiert über die REST-API starten
 curl -X POST https://wortlaut.example.org/v1/recordings \
   -H "Authorization: Bearer $WORTLAUT_API_TOKEN" \
-  -H "Idempotency-Key: arch-sync-2026-11-09" \
   -H "Content-Type: application/json" \
   -d '{
     "provider": "zoom",
-    "meeting_target": "https://us05web.zoom.us/j/3722611153",
-    "title": "Architektur-Sync",
-    "guest_name": "wortlaut",
+    "meeting_target": "https://zoom.us/j/1234567890",
+    "title": "Projekt-Abstimmung",
     "starts_at": "2026-11-09T14:00:00Z",
     "ends_at": "2026-11-09T15:00:00Z"
-  }'
-
-# Nach Abschluss Markdown- oder JSON-Wortprotokoll abrufen:
-curl -H "Authorization: Bearer $WORTLAUT_API_TOKEN" \
-  https://wortlaut.example.org/v1/recordings/&lt;recording_id&gt;/exports/md</code></pre>
+  }'</code></pre>
           </div>
 
-          <div style="display:flex;flex-direction:column;gap:16px;">
-            <div class="prereq-card">
-              <h3 data-i18n="qs_prereq_title">Systemvoraussetzungen</h3>
-              <ul class="feature-checklist" style="color:var(--stone-300);">
-                <li style="color:var(--stone-200);">
-                  <span class="check-badge">✓</span>
-                  <span data-i18n="qs_prereq_li1">Kubernetes-Cluster (linux/amd64) mit Berechtigung für Jobs/Pods/Secrets im Namespace</span>
-                </li>
-                <li style="color:var(--stone-200);">
-                  <span class="check-badge">✓</span>
-                  <span data-i18n="qs_prereq_li2">1× NVIDIA-GPU-Node für den gemeinsamen Parakeet-ASR-Dienst (services/asr)</span>
-                </li>
-                <li style="color:var(--stone-200);">
-                  <span class="check-badge">✓</span>
-                  <span data-i18n="qs_prereq_li3">PostgreSQL 16+ &amp; S3-kompatibler Objektspeicher (z. B. RustFS oder MinIO)</span>
-                </li>
-                <li style="color:var(--stone-200);">
-                  <span class="check-badge">✓</span>
-                  <span data-i18n="qs_prereq_li4">Optional: Dex OIDC für SSO, Google/M365 OAuth2-Credentials, SMTP/IMAP-Postfach</span>
-                </li>
+          <div style="display:flex;flex-direction:column;gap:18px;">
+            <div class="info-box">
+              <h3 data-i18n="qs_req_title">Was du für den Betrieb brauchst</h3>
+              <ul class="check-list">
+                <li style="color:var(--stone-200);"><span class="check-icon">✓</span><span data-i18n="qs_req_1">Einen Kubernetes-Cluster (Linux amd64)</span></li>
+                <li style="color:var(--stone-200);"><span class="check-icon">✓</span><span data-i18n="qs_req_2">Einen GPU-Knoten (NVIDIA) für die lokale Spracherkennung</span></li>
+                <li style="color:var(--stone-200);"><span class="check-icon">✓</span><span data-i18n="qs_req_3">PostgreSQL-Datenbank &amp; S3-kompatiblen Speicher (z. B. MinIO oder RustFS)</span></li>
+                <li style="color:var(--stone-200);"><span class="check-icon">✓</span><span data-i18n="qs_req_4">Optional: OIDC-Anbindung für Single Sign-On, E-Mail-Postfach (SMTP/IMAP) &amp; OAuth-Zugang für Google/Microsoft-Kalender</span></li>
               </ul>
             </div>
 
-            <div class="prereq-card" style="border-color:rgba(16,185,129,0.35);">
-              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
-                <h3 style="margin:0;" data-i18n="qs_license_box_title">Freie Software unter GNU AGPLv3</h3>
-                <span class="license-pill">AGPL-3.0</span>
-              </div>
-              <p style="margin:0 0 16px;font-size:13.5px;color:var(--stone-300);line-height:1.55;" data-i18n="qs_license_box_desc">
-                Der vollständige Quellcode inklusive Meeting-Service, GPU-ASR-Service, Playwright-Workern, Astryx-Web-UI und Kubernetes-Manifesten steht unter der GNU Affero General Public License v3.0 auf GitHub bereit.
+            <div class="info-box" style="border-color:rgba(16,185,129,0.35);">
+              <h3 data-i18n="qs_oss_title">Quelloffen auf GitHub</h3>
+              <p style="margin:0 0 16px;font-size:14px;color:var(--stone-300);" data-i18n="qs_oss_desc">
+                Der gesamte Quellcode, die Dokumentation und alle Kubernetes-Manifeste stehen frei unter der GNU Affero General Public License v3.0 bereit.
               </p>
-              <a href="https://github.com/mayflower/wortlaut" target="_blank" rel="noopener noreferrer" class="btn btn-primary" style="width:100%;">
-                github.com/mayflower/wortlaut →
+              <a href="https://github.com/mayflower/wortlaut" target="_blank" rel="noopener noreferrer" class="btn btn-primary" style="width:100%;" data-i18n="qs_oss_btn">
+                Zum GitHub-Repository →
               </a>
             </div>
           </div>
@@ -1084,55 +565,33 @@ curl -H "Authorization: Bearer $WORTLAUT_API_TOKEN" \
   <!-- FOOTER -->
   <footer class="site-footer">
     <div class="container">
-      <div class="footer-grid">
-        <div class="footer-col">
-          <div style="display:flex;align-items:center;gap:10px;color:#ffffff;font-weight:700;font-size:17px;margin-bottom:10px;">
-            <span class="brand-mark" style="background:var(--emerald-700);">
-              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+      <div class="footer-inner">
+        <div>
+          <div style="display:flex;align-items:center;gap:10px;color:#ffffff;font-weight:700;font-size:17px;margin-bottom:6px;">
+            <span class="brand-mark" style="background:var(--emerald-700);width:28px;height:28px;border-radius:7px;">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
                 <path d="M2 10v3M6 6v11M10 3v18M14 8v7M18 5v13M22 10v3"/>
               </svg>
             </span>
             wortlaut.cloud
           </div>
-          <p style="margin:0;line-height:1.6;max-width:340px;" data-i18n="footer_tagline">
-            Souveräne Open-Source-Besprechungstranskription mit echter Einzelspur-Sprecherbindung vor dem Mix und lokaler NVIDIA-Parakeet-GPU.
+          <p style="margin:0;max-width:480px;" data-i18n="footer_tagline">
+            Automatische, sprechergetrennte Wortprotokolle für Google Meet, Microsoft Teams, Cisco Webex und Zoom – 100 % selbst gehostet.
           </p>
         </div>
 
-        <div class="footer-col">
-          <h4 data-i18n="footer_col_product">Produkt &amp; Architektur</h4>
-          <ul class="footer-links">
-            <li><a href="#contrast" data-i18n="nav_why">Warum wortlaut?</a></li>
-            <li><a href="#providers" data-i18n="nav_providers">Plattformen (Meet, Teams, Webex, Zoom)</a></li>
-            <li><a href="#privacy" data-i18n="nav_privacy">Datenschutz &amp; /privacy</a></li>
-            <li><a href="#architecture" data-i18n="nav_arch">Kubernetes-Architektur</a></li>
-          </ul>
-        </div>
-
-        <div class="footer-col">
-          <h4 data-i18n="footer_col_personas">Personas</h4>
-          <ul class="footer-links">
-            <li><a href="#personas">1. Mara (Kalender &amp; Account-Lead)</a></li>
-            <li><a href="#personas">2. Lukas (Tech-Lead &amp; Ad-hoc)</a></li>
-            <li><a href="#personas">3. Dr. Thomas (Host &amp; DSB)</a></li>
-            <li><a href="#personas">4. Nina · 5. Svenja · 6. Tim</a></li>
-          </ul>
-        </div>
-
-        <div class="footer-col">
-          <h4 data-i18n="footer_col_oss">Open Source</h4>
-          <ul class="footer-links">
-            <li><a href="https://github.com/mayflower/wortlaut" target="_blank" rel="noopener noreferrer">GitHub Repository</a></li>
-            <li><a href="https://github.com/mayflower/wortlaut/blob/main/README.md" target="_blank" rel="noopener noreferrer">README &amp; Dokumentation</a></li>
-            <li><a href="https://github.com/mayflower/wortlaut/blob/main/personas.md" target="_blank" rel="noopener noreferrer">Nutzerpersonas (personas.md)</a></li>
-            <li><a href="https://github.com/mayflower/wortlaut/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">Lizenz: GNU AGPLv3</a></li>
-          </ul>
+        <div class="footer-links">
+          <a href="#how-it-works" data-i18n="nav_how">So funktioniert’s</a>
+          <a href="#features" data-i18n="nav_features">Funktionen</a>
+          <a href="#privacy" data-i18n="nav_privacy">Datenschutz</a>
+          <a href="https://github.com/mayflower/wortlaut" target="_blank" rel="noopener noreferrer">GitHub</a>
+          <a href="https://github.com/mayflower/wortlaut/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">AGPLv3</a>
         </div>
       </div>
 
       <div class="footer-bottom">
-        <span data-i18n="footer_copy">© 2026 Mayflower GmbH · Veröffentlicht unter GNU AGPLv3 · wortlaut.cloud</span>
-        <span class="mono">Google Meet · Microsoft Teams · Cisco Webex · Zoom</span>
+        <span data-i18n="footer_copy">© 2026 Mayflower GmbH · Freie Software unter GNU AGPLv3 · wortlaut.cloud</span>
+        <span>Google Meet · Microsoft Teams · Cisco Webex · Zoom</span>
       </div>
     </div>
   </footer>
