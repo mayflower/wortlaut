@@ -189,28 +189,33 @@ def exchange_calendar_oauth_code(
             "redirect_uri": redirect_uri,
         }
     elif provider == "microsoft":
-        if (
-            not settings.microsoft_calendar_client_id
-            or not settings.microsoft_calendar_client_secret
-        ):
+        if not settings.microsoft_calendar_client_id:
             raise HTTPException(503, "microsoft_calendar_oauth_not_configured")
         token_url = _microsoft_token_url(settings.microsoft_calendar_tenant_id)
         form = {
             "grant_type": "authorization_code",
             "client_id": settings.microsoft_calendar_client_id,
-            "client_secret": settings.microsoft_calendar_client_secret.get_secret_value(),
             "code": code,
             "code_verifier": code_verifier,
             "redirect_uri": redirect_uri,
         }
+        if settings.microsoft_calendar_client_secret:
+            form["client_secret"] = (
+                settings.microsoft_calendar_client_secret.get_secret_value()
+            )
     else:
         raise HTTPException(400, "Unsupported calendar OAuth provider")
+
+    req_headers = {"Accept": "application/json"}
+    if provider == "microsoft" and not settings.microsoft_calendar_client_secret:
+        origin = f"{urlsplit(redirect_uri).scheme}://{urlsplit(redirect_uri).netloc}"
+        req_headers["Origin"] = origin
 
     try:
         resp = httpx.post(
             token_url,
             data=form,
-            headers={"Accept": "application/json"},
+            headers=req_headers,
             timeout=10.0,
         )
     except httpx.HTTPError as exc:
@@ -219,7 +224,15 @@ def exchange_calendar_oauth_code(
         ) from None
 
     if resp.status_code != 200:
-        raise HTTPException(401, "Calendar OAuth code exchange rejected")
+        err_msg = "Calendar OAuth code exchange rejected"
+        try:
+            err_body = resp.json()
+            desc = err_body.get("error_description") or err_body.get("error")
+            if isinstance(desc, str) and desc.strip():
+                err_msg = f"{err_msg}: {desc.strip()[:240]}"
+        except Exception:
+            pass
+        raise HTTPException(401, err_msg)
 
     token_data = resp.json()
     access_token = token_data.get("access_token")
@@ -322,18 +335,18 @@ def _ensure_access_token(conn: CalendarConnection, now: datetime) -> str:
             "refresh_token": refresh_token,
         }
     else:
-        if (
-            not settings.microsoft_calendar_client_id
-            or not settings.microsoft_calendar_client_secret
-        ):
+        if not settings.microsoft_calendar_client_id:
             raise ValueError("microsoft_calendar_oauth_not_configured")
         token_url = _microsoft_token_url(settings.microsoft_calendar_tenant_id)
         form = {
             "grant_type": "refresh_token",
             "client_id": settings.microsoft_calendar_client_id,
-            "client_secret": settings.microsoft_calendar_client_secret.get_secret_value(),
             "refresh_token": refresh_token,
         }
+        if settings.microsoft_calendar_client_secret:
+            form["client_secret"] = (
+                settings.microsoft_calendar_client_secret.get_secret_value()
+            )
 
     resp = httpx.post(
         token_url,

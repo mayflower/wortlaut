@@ -220,9 +220,7 @@ def _build_instance_info() -> dict:
             "googleEnabled": bool(
                 s.google_calendar_client_id and s.google_calendar_client_secret
             ),
-            "microsoftEnabled": bool(
-                s.microsoft_calendar_client_id and s.microsoft_calendar_client_secret
-            ),
+            "microsoftEnabled": bool(s.microsoft_calendar_client_id),
             "googleClientId": s.google_calendar_client_id or "",
             "microsoftClientId": s.microsoft_calendar_client_id or "",
             "microsoftTenantId": s.microsoft_calendar_tenant_id or "common",
