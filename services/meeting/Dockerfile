@@ -14,6 +14,7 @@ RUN uv sync --frozen --no-dev --no-install-project --no-cache
 COPY services/meeting/ ./
 RUN uv sync --frozen --no-dev --no-cache && rm -f /usr/local/bin/uv && useradd --uid 10001 --create-home wortlaut
 COPY --from=sdk /worker/dist ./sdk
+COPY site ./site
 ENV PATH="/app/.venv/bin:$PATH" PYTHONDONTWRITEBYTECODE=1
 USER 10001
 EXPOSE 8000

@@ -139,6 +139,8 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="wortlaut", lifespan=lifespan)
 if get_settings().sdk_directory.is_dir():
     app.mount("/sdk", StaticFiles(directory=get_settings().sdk_directory, html=True), name="sdk")
+if get_settings().site_directory.is_dir():
+    app.mount("/site", StaticFiles(directory=get_settings().site_directory, html=True), name="site")
 Db = Annotated[Session, Depends(session)]
 
 
