@@ -1,17 +1,18 @@
-FROM node:22-bookworm-slim AS sdk
+FROM node:24-trixie-slim AS sdk
 WORKDIR /worker
 COPY worker/package.json worker/package-lock.json ./
 RUN npm ci
 COPY worker/ ./
 RUN npm run build
 
-FROM python:3.12-slim-bookworm
+FROM python:3.12-slim-trixie
+RUN apt-get update && apt-get upgrade -y --no-install-recommends && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-COPY --from=ghcr.io/astral-sh/uv:0.12.23 /uv /usr/local/bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.13.7 /uv /usr/local/bin/uv
 COPY services/meeting/pyproject.toml services/meeting/uv.lock ./
-RUN uv sync --frozen --no-dev --no-install-project
+RUN uv sync --frozen --no-dev --no-install-project --no-cache
 COPY services/meeting/ ./
-RUN uv sync --frozen --no-dev && useradd --uid 10001 --create-home wortlaut
+RUN uv sync --frozen --no-dev --no-cache && rm -f /usr/local/bin/uv && useradd --uid 10001 --create-home wortlaut
 COPY --from=sdk /worker/dist ./sdk
 ENV PATH="/app/.venv/bin:$PATH" PYTHONDONTWRITEBYTECODE=1
 USER 10001
