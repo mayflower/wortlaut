@@ -57,7 +57,12 @@ import type {
   CalendarSyncedEventInfo,
   RecordingSummary,
 } from '../types';
-import { ProviderBadge, StatusBadge, StatusIndicator } from './ui/primitives';
+import {
+  LiveWaveform,
+  ProviderBadge,
+  StatusBadge,
+  StatusIndicator,
+} from './ui/primitives';
 
 export type QuickStatusFilter =
   | 'all'
@@ -178,6 +183,7 @@ export function RecordingSidebar({
 
   const [meetingUrl, setMeetingUrl] = useState('');
   const [title, setTitle] = useState('');
+  const [quickDurationMin, setQuickDurationMin] = useState<number>(60);
   const [submitting, setSubmitting] = useState(false);
   const [quickJoinError, setQuickJoinError] = useState<string | null>(null);
   const [copiedMail, setCopiedMail] = useState(false);
@@ -212,6 +218,13 @@ export function RecordingSidebar({
 
   const lobbyRecordings = recordings.filter(
     (r) => r.participation === 'waiting_admission'
+  );
+  const activeCapturingRecordings = recordings.filter(
+    (r) =>
+      r.participation === 'capturing' ||
+      r.participation === 'starting' ||
+      r.participation === 'preparing' ||
+      r.participation === 'joining'
   );
 
   // Upcoming synced calendar meetings (not cancelled, ending in the future)
@@ -290,7 +303,9 @@ export function RecordingSidebar({
     try {
       const now = new Date();
       const startIso = now.toISOString();
-      const endIso = new Date(now.getTime() + 60 * 60000).toISOString();
+      const endIso = new Date(
+        now.getTime() + quickDurationMin * 60000
+      ).toISOString();
       const created = await createRecording(token, {
         meeting_url: meetingUrl.trim(),
         starts_at: startIso,
@@ -417,9 +432,12 @@ export function RecordingSidebar({
         }
         if (row.participation === 'capturing') {
           return (
-            <Text type="supporting" color="primary" weight="medium">
-              Live
-            </Text>
+            <HStack gap={1.5} vAlign="center">
+              <LiveWaveform />
+              <Text type="supporting" color="primary" weight="semibold">
+                Live
+              </Text>
+            </HStack>
           );
         }
         const plannedMin = Math.max(
@@ -609,10 +627,39 @@ export function RecordingSidebar({
               </HStack>
             </HStack>
 
-            {/* Primary Action on Startseite: Inline Ad-hoc Join Bar + 3-Step Mental Model */}
+            {/* Primary Action on Startseite: Elevated Ad-hoc Join Hero Card + 3-Step Mental Model */}
             {token && isHomeView && (
-              <form id="dispatch-form" onSubmit={handleQuickStart}>
+              <form
+                id="dispatch-form"
+                onSubmit={handleQuickStart}
+                className="wl-dispatch-hero wl-fade-in"
+              >
                 <VStack gap={2}>
+                  <HStack justify="between" vAlign="center" wrap="wrap" gap={2}>
+                    <HStack gap={2} vAlign="center" wrap="wrap">
+                      <Heading level={4}>Sofort-Aufnahme starten</Heading>
+                      {detectedProvider ? (
+                        <span className="wl-fade-in">
+                          <ProviderBadge provider={detectedProvider} size="sm" />
+                        </span>
+                      ) : (
+                        <Text type="supporting" color="secondary">
+                          Link einfügen — Konferenzsystem wird automatisch erkannt
+                        </Text>
+                      )}
+                    </HStack>
+                    <SegmentedControl
+                      size="sm"
+                      label="Aufnahmedauer"
+                      value={String(quickDurationMin)}
+                      onChange={(v) => setQuickDurationMin(Number(v) || 60)}
+                    >
+                      <SegmentedControlItem value="30" label="30 Min." />
+                      <SegmentedControlItem value="60" label="60 Min." />
+                      <SegmentedControlItem value="90" label="90 Min." />
+                    </SegmentedControl>
+                  </HStack>
+
                   <HStack gap={2} vAlign="center" wrap="wrap">
                     <div
                       ref={urlWrapRef}
@@ -626,7 +673,7 @@ export function RecordingSidebar({
                         isLabelHidden
                         value={meetingUrl}
                         onChange={setMeetingUrl}
-                        placeholder="Sofort-Start: Meeting-Link hier einfügen (Google Meet, Teams, Webex oder Zoom)…"
+                        placeholder="Meeting-Link hier einfügen (Google Meet, Teams, Webex oder Zoom)…"
                         startIcon={<Video className="h-3.5 w-3.5" />}
                         hasClear
                       />
@@ -643,9 +690,6 @@ export function RecordingSidebar({
                         startIcon={<Tag className="h-3.5 w-3.5" />}
                       />
                     </div>
-                    {detectedProvider && (
-                      <ProviderBadge provider={detectedProvider} />
-                    )}
                     <Button
                       type="submit"
                       variant="primary"
@@ -653,7 +697,7 @@ export function RecordingSidebar({
                       isLoading={submitting}
                       isDisabled={!meetingUrl.trim()}
                       icon={<Play className="h-3.5 w-3.5" />}
-                      label="Jetzt beitreten (60 Min.)"
+                      label={`Jetzt aufzeichnen (${quickDurationMin} Min.)`}
                     />
                   </HStack>
 
@@ -672,7 +716,7 @@ export function RecordingSidebar({
                       <Token
                         size="sm"
                         color="orange"
-                        label={`2. Bot „${instance.assistantName}“ im Meeting-Warteraum zulassen`}
+                        label={`2. Zuhörer „${instance.assistantName}“ im Warteraum zulassen`}
                       />
                       <Text type="supporting" color="secondary">
                         →
@@ -680,7 +724,7 @@ export function RecordingSidebar({
                       <Token
                         size="sm"
                         color="green"
-                        label="3. Sprechergetrenntes Protokoll hier & per E-Mail erhalten"
+                        label="3. Wortprotokoll live mitlesen & per E-Mail erhalten"
                       />
                     </HStack>
 
@@ -715,22 +759,75 @@ export function RecordingSidebar({
           <VStack gap={4} id="recordings-list">
             {/* Active Waiting Room Admission Alerts */}
             {lobbyRecordings.map((rec) => (
-              <Banner
-                key={rec.id}
-                status="warning"
-                container="card"
-                title={`Bot „${rec.guest_name || instance.assistantName}“ wartet im Warteraum: ${formatRecordingTitle(rec)}`}
-                description="Bitte lassen Sie den Bot jetzt im Konferenzfenster zu, damit die Aufzeichnung starten kann."
-                endContent={
+              <div key={rec.id} className="wl-lobby-card p-3.5 wl-fade-in">
+                <HStack justify="between" vAlign="center" wrap="wrap" gap={3}>
+                  <VStack gap={0.5}>
+                    <HStack gap={2} vAlign="center" wrap="wrap">
+                      <ProviderBadge provider={rec.provider} size="sm" />
+                      <StatusBadge participation={rec.participation} />
+                      <Text type="body" weight="bold">
+                        {formatRecordingTitle(rec)}
+                      </Text>
+                    </HStack>
+                    <Text type="supporting" color="secondary">
+                      Zuhörer „{rec.guest_name || instance.assistantName}“ wartet im Konferenz-Warteraum — bitte jetzt im Meeting-Fenster zulassen.
+                    </Text>
+                  </VStack>
                   <Button
                     variant="primary"
                     size="sm"
                     label="Live-Ansicht öffnen"
+                    endContent={<ArrowRight className="h-3.5 w-3.5" />}
                     onClick={() => onSelectRecording(rec.id)}
                   />
-                }
-              />
+                </HStack>
+              </div>
             ))}
+
+            {/* Active Capturing / Joining Live Radar Cards */}
+            {activeCapturingRecordings.map((rec) => {
+              const isCapturing = rec.participation === 'capturing';
+              const audioSec = Math.round(
+                (rec.quality?.durable_sample_count || 0) / 16000
+              );
+              return (
+                <div
+                  key={rec.id}
+                  className={
+                    isCapturing
+                      ? 'wl-live-card p-3.5 wl-fade-in'
+                      : 'wl-joining-card p-3.5 wl-fade-in'
+                  }
+                >
+                  <VStack gap={2}>
+                    <HStack justify="between" vAlign="center" wrap="wrap" gap={3}>
+                      <VStack gap={0.5}>
+                        <HStack gap={2} vAlign="center" wrap="wrap">
+                          <ProviderBadge provider={rec.provider} size="sm" />
+                          <StatusBadge participation={rec.participation} />
+                          <Text type="body" weight="bold">
+                            {formatRecordingTitle(rec)}
+                          </Text>
+                        </HStack>
+                        <Text type="supporting" color="secondary">
+                          {isCapturing
+                            ? `Live im Gespräch · ${audioSec > 0 ? `${formatDurationHuman(audioSec)} Audio erfasst` : 'Hört zu & transkribiert in Echtzeit'}`
+                            : `Zuhörer „${rec.guest_name || instance.assistantName}“ verbindet sich mit dem Konferenzraum…`}
+                        </Text>
+                      </VStack>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        label="Live-Protokoll öffnen"
+                        endContent={<ArrowRight className="h-3.5 w-3.5" />}
+                        onClick={() => onSelectRecording(rec.id)}
+                      />
+                    </HStack>
+                    {!isCapturing && <div className="wl-shimmer-bar" />}
+                  </VStack>
+                </div>
+              );
+            })}
 
             {/* 1. First-Time User Orientation / 3-Way Setup Guide */}
             {showOnboardingGuide && (

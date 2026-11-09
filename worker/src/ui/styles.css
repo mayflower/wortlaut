@@ -32,3 +32,207 @@
     --container-padding-inline-end: 0px;
   }
 }
+
+@keyframes wlWaveBounce {
+  0%,
+  100% {
+    transform: scaleY(0.28);
+    opacity: 0.65;
+  }
+  50% {
+    transform: scaleY(1);
+    opacity: 1;
+  }
+}
+
+@keyframes wlPulseRing {
+  0% {
+    box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.38);
+  }
+  70% {
+    box-shadow: 0 0 0 8px rgba(245, 158, 11, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(245, 158, 11, 0);
+  }
+}
+
+@keyframes wlLiveRing {
+  0% {
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.34);
+  }
+  70% {
+    box-shadow: 0 0 0 8px rgba(16, 185, 129, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
+  }
+}
+
+@keyframes wlShimmerSlide {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+@keyframes wlFadeSlideUp {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.wl-fade-in {
+  animation: wlFadeSlideUp 0.24s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.wl-waveform {
+  display: inline-flex;
+  align-items: center;
+  gap: 2.5px;
+  height: 14px;
+  vertical-align: middle;
+}
+
+.wl-wave-bar {
+  width: 2.5px;
+  height: 100%;
+  border-radius: 999px;
+  background-color: currentColor;
+  transform-origin: center bottom;
+  animation: wlWaveBounce 1s ease-in-out infinite;
+}
+
+.wl-wave-bar:nth-child(1) {
+  animation-delay: 0s;
+  height: 75%;
+}
+.wl-wave-bar:nth-child(2) {
+  animation-delay: 0.18s;
+  height: 100%;
+}
+.wl-wave-bar:nth-child(3) {
+  animation-delay: 0.34s;
+  height: 65%;
+}
+.wl-wave-bar:nth-child(4) {
+  animation-delay: 0.52s;
+  height: 90%;
+}
+
+.wl-lobby-card {
+  border-radius: 12px;
+  border: 1px solid rgba(245, 158, 11, 0.55);
+  background: linear-gradient(
+    135deg,
+    rgba(245, 158, 11, 0.12) 0%,
+    rgba(245, 158, 11, 0.03) 100%
+  );
+  animation: wlPulseRing 2.4s infinite;
+}
+
+.wl-live-card {
+  border-radius: 12px;
+  border: 1px solid rgba(16, 185, 129, 0.5);
+  background: linear-gradient(
+    135deg,
+    rgba(16, 185, 129, 0.11) 0%,
+    rgba(16, 185, 129, 0.02) 100%
+  );
+  animation: wlLiveRing 2.6s infinite;
+}
+
+.wl-joining-card {
+  border-radius: 12px;
+  border: 1px solid rgba(59, 130, 246, 0.45);
+  background: linear-gradient(
+    135deg,
+    rgba(59, 130, 246, 0.1) 0%,
+    rgba(59, 130, 246, 0.02) 100%
+  );
+}
+
+.wl-shimmer-bar {
+  height: 3px;
+  width: 100%;
+  border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    rgba(59, 130, 246, 0.15) 0%,
+    rgba(59, 130, 246, 0.85) 50%,
+    rgba(59, 130, 246, 0.15) 100%
+  );
+  background-size: 200% 100%;
+  animation: wlShimmerSlide 1.8s linear infinite;
+}
+
+.wl-dispatch-hero {
+  border-radius: 14px;
+  border: 1px solid var(--color-border);
+  background: linear-gradient(
+    180deg,
+    var(--color-background-surface) 0%,
+    var(--color-background-muted, rgba(255, 255, 255, 0.02)) 100%
+  );
+  padding: 16px 18px;
+  box-shadow: 0 4px 20px -6px rgba(0, 0, 0, 0.18);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.wl-dispatch-hero:focus-within {
+  border-color: var(--color-text-accent, #3b82f6);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15), 0 8px 24px -6px rgba(0, 0, 0, 0.22);
+}
+
+.wl-speaker-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 11px;
+  border-radius: 999px;
+  font-size: 12.5px;
+  font-weight: 600;
+  border: 1px solid var(--color-border);
+  background: var(--color-background-surface);
+  color: var(--color-text-primary);
+  cursor: pointer;
+  transition: all 0.16s ease;
+}
+
+.wl-speaker-chip:hover {
+  transform: translateY(-1px);
+  border-color: var(--color-text-accent, #3b82f6);
+}
+
+.wl-speaker-chip.active {
+  border-color: var(--color-text-accent, #3b82f6);
+  background: rgba(59, 130, 246, 0.14);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.18);
+}
+
+.wl-turn-row {
+  border-radius: 10px;
+  padding: 12px 10px;
+  margin-inline: -10px;
+  transition: background-color 0.15s ease;
+}
+
+.wl-turn-row:hover {
+  background-color: var(--color-background-muted, rgba(255, 255, 255, 0.03));
+}
+
+mark.wl-search-hit {
+  background-color: rgba(245, 158, 11, 0.28);
+  color: inherit;
+  border-radius: 3px;
+  padding: 0 3px;
+  font-weight: 600;
+}
+

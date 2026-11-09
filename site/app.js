@@ -434,11 +434,28 @@
     });
   }
 
+  function initSpeakerFilterDemo() {
+    const pills = Array.from(document.querySelectorAll("[data-speaker-filter]"));
+    const turns = Array.from(document.querySelectorAll("[data-speaker-turn]"));
+    if (!pills.length || !turns.length) return;
+    pills.forEach((pill) => {
+      pill.addEventListener("click", () => {
+        const target = pill.getAttribute("data-speaker-filter");
+        pills.forEach((p) => p.classList.toggle("active", p === pill));
+        turns.forEach((t) => {
+          const match = target === "all" || t.getAttribute("data-speaker-turn") === target;
+          t.style.display = match ? "" : "none";
+        });
+      });
+    });
+  }
+
   document.addEventListener("DOMContentLoaded", () => {
     initLanguageSwitcher();
     initFeatureTabs();
     initCalendarToggle();
     initCodeTabs();
     initCopyButtons();
+    initSpeakerFilterDemo();
   });
 })();

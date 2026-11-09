@@ -115,8 +115,8 @@ export function ParticipationStepper({
           />
           <Step
             step={1}
-            label="Browser-Worker startet"
-            description={`Stummer Beitritt als „${botName}“`}
+            label="Tritt dem Meeting bei"
+            description={`Stiller Beitritt als „${botName}“`}
           />
           <Step
             step={2}
@@ -128,25 +128,25 @@ export function ParticipationStepper({
             }
             description={
               recording.participation === 'waiting_admission'
-                ? 'Wartet auf Zulassung im Meeting'
+                ? 'Bitte im Meeting-Fenster zulassen'
                 : 'Zugang zum Konferenzraum'
             }
           />
           <Step
             step={3}
-            label="Einzelspur-Aufnahme"
+            label="Zeichnet Gespräche auf"
             status={
               recording.participation === 'capturing' ? 'success' : undefined
             }
             description={
               sampleSec > 0
-                ? `${formatDurationHuman(sampleSec)} Audio erfasst`
-                : 'WebRTC-Empfang vor dem Mix'
+                ? `${formatDurationHuman(sampleSec)} Gespräch erfasst`
+                : 'Sprechergetrennte Tonaufnahme'
             }
           />
           <Step
             step={4}
-            label="Transkript bereit"
+            label="Wortprotokoll bereit"
             status={
               isFailedJoin || recording.processing === 'failed'
                 ? 'error'
@@ -159,8 +159,8 @@ export function ParticipationStepper({
               isFailedJoin
                 ? explanation || reason
                 : recording.processing === 'completed'
-                  ? `${transcript?.segments?.length || 0} Segmente fertig`
-                  : 'Parakeet-GPU-Spracherkennung'
+                  ? `${transcript?.segments?.length || 0} Wortbeiträge fertig`
+                  : 'Lokale Spracherkennung läuft'
             }
           />
         </Stepper>
@@ -193,7 +193,7 @@ export function ParticipationStepper({
             {formatDurationHuman(sampleSec)}
           </MetadataListItem>
           {transcript?.quality?.source_coverage && (
-            <MetadataListItem label="Spurbindung">
+            <MetadataListItem label="Sprecher-Zuordnung">
               {SOURCE_COVERAGE_LABELS[transcript.quality.source_coverage] ||
                 transcript.quality.source_coverage}
             </MetadataListItem>

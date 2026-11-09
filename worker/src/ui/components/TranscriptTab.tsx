@@ -21,6 +21,23 @@ import type {
   SourceSummary,
   TranscriptSegment,
 } from '../types';
+import { LiveWaveform } from './ui/primitives';
+
+function renderHighlightedText(text: string, query: string): React.ReactNode {
+  const q = query.trim();
+  if (!q) return text;
+  const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const parts = text.split(new RegExp(`(${escaped})`, 'gi'));
+  return parts.map((part, idx) =>
+    part.toLowerCase() === q.toLowerCase() ? (
+      <mark key={idx} className="wl-search-hit">
+        {part}
+      </mark>
+    ) : (
+      part
+    )
+  );
+}
 
 export interface TranscriptTabProps {
   recordingId: string;
@@ -142,8 +159,55 @@ export function TranscriptTab({
     setTimeout(() => setCopiedTurnId(null), 1600);
   };
 
+  const totalSpeechSec = useMemo(() => {
+    return Math.max(
+      1,
+      sources.reduce((acc, s) => acc + (s.speech_seconds || 0), 0)
+    );
+  }, [sources]);
+
   return (
     <VStack gap={3}>
+      {/* Interactive Speaker Filter Chips */}
+      {sources.length > 0 && (
+        <HStack gap={2} wrap="wrap" vAlign="center">
+          <button
+            type="button"
+            onClick={() => onSelectedSourceFilterChange('')}
+            className={`wl-speaker-chip ${!selectedSourceFilter ? 'active' : ''}`}
+          >
+            <span>Alle Sprecher ({sources.length})</span>
+          </button>
+          {sources.map((src) => {
+            const isSelected = selectedSourceFilter === src.provider_source_id;
+            const pct = Math.min(
+              100,
+              Math.round(((src.speech_seconds || 0) / totalSpeechSec) * 100)
+            );
+            const name =
+              src.participant_name ||
+              src.speaker_label ||
+              src.provider_source_id;
+            return (
+              <button
+                key={src.provider_source_id}
+                type="button"
+                onClick={() =>
+                  onSelectedSourceFilterChange(
+                    isSelected ? '' : src.provider_source_id
+                  )
+                }
+                className={`wl-speaker-chip ${isSelected ? 'active' : ''}`}
+              >
+                <Avatar size="sm" shape="circle" name={name} />
+                <span>{name}</span>
+                <span className="opacity-70 tabular-nums">({pct} %)</span>
+              </button>
+            );
+          })}
+        </HStack>
+      )}
+
       {/* Sticky Filter & Search Toolbar */}
       <HStack justify="between" vAlign="center" wrap="wrap" gap={2}>
         <div id="segment-search" className="flex-1 min-w-[240px]">
@@ -182,19 +246,25 @@ export function TranscriptTab({
       <div id="transcript-view">
         {groupedTurns.length === 0 ? (
           <EmptyState
-            icon={<FileText className="h-8 w-8" />}
+            icon={
+              participation === 'capturing' ? (
+                <LiveWaveform />
+              ) : (
+                <FileText className="h-8 w-8" />
+              )
+            }
             title={
               segments.length === 0
                 ? participation === 'capturing'
-                  ? 'Warte auf erste gesprochene Sätze…'
+                  ? 'Hört zu — warte auf erste gesprochene Sätze…'
                   : processing === 'processing' || processing === 'pending'
-                    ? 'Spracherkennung verarbeitet die Audiospuren…'
+                    ? 'Spracherkennung erstellt das Wortprotokoll…'
                     : 'Kein Transkript für diese Sitzung vorhanden'
                 : 'Keine Segmente für diesen Filter gefunden'
             }
             description={
               segments.length === 0
-                ? 'Sobald auf einer gebundenen Teilnehmer-Audiospur Sprache erkannt wird, erscheinen die Beiträge hier chronologisch.'
+                ? 'Sobald im Gespräch gesprochen wird, erscheinen die Wortbeiträge hier automatisch nach Sprechern getrennt.'
                 : 'Passen Sie den Suchbegriff oder den gewählten Sprecherfilter an.'
             }
             actions={
@@ -221,7 +291,7 @@ export function TranscriptTab({
                 <div
                   key={turn.id}
                   id={`seg-${turn.id}`}
-                  className="group py-3.5"
+                  className="group wl-turn-row wl-fade-in"
                 >
                   <HStack gap={3} vAlign="start">
                     <Avatar
@@ -302,7 +372,7 @@ export function TranscriptTab({
                               </Text>
                             )}
                             <Text type="body" color="primary">
-                              {para.text}
+                              {renderHighlightedText(para.text, searchQuery)}
                             </Text>
                           </div>
                         ))}
@@ -312,6 +382,13 @@ export function TranscriptTab({
                 </div>
               );
             })}
+
+            {participation === 'capturing' && (
+              <div className="py-3.5 px-2 flex items-center gap-2.5 text-sm text-[var(--color-text-secondary)]">
+                <LiveWaveform />
+                <span>Hört aktiv zu — neue Wortbeiträge erscheinen hier automatisch…</span>
+              </div>
+            )}
           </div>
         )}
       </div>

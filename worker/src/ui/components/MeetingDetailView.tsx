@@ -45,7 +45,7 @@ import { DiagnosticsTab } from './DiagnosticsTab';
 import { ParticipationStepper } from './ParticipationStepper';
 import { SourcesTab } from './SourcesTab';
 import { TranscriptTab } from './TranscriptTab';
-import { ProviderBadge, StatusBadge } from './ui/primitives';
+import { LiveWaveform, ProviderBadge, StatusBadge } from './ui/primitives';
 
 export interface MeetingDetailViewProps {
   authMode: AuthMode;
@@ -480,31 +480,45 @@ export function MeetingDetailView({
               {(recording.participation === 'starting' ||
                 recording.participation === 'preparing' ||
                 recording.participation === 'joining') && (
-                <Banner
-                  status="info"
-                  container="card"
-                  title={`Bot „${botName}“ tritt dem Meeting bei (Dauer ca. 15–30 Sek.)`}
-                  description="Der isolierte Browser-Worker startet und erscheint stummgeschaltet im Konferenzraum. Falls ein Warteraum aktiv ist, lassen Sie ihn dort bitte als Gast zu."
-                />
+                <div className="wl-joining-card p-3.5 wl-fade-in">
+                  <VStack gap={2}>
+                    <Banner
+                      status="info"
+                      container="card"
+                      title={`Zuhörer „${botName}“ tritt dem Meeting bei (Dauer ca. 15–30 Sek.)`}
+                      description="Der Konferenz-Zuhörer verbindet sich stummgeschaltet mit dem Raum. Falls ein Warteraum aktiv ist, lassen Sie ihn dort bitte kurz zu."
+                    />
+                    <div className="wl-shimmer-bar" />
+                  </VStack>
+                </div>
               )}
 
               {recording.participation === 'waiting_admission' && (
-                <Banner
-                  status="warning"
-                  container="card"
-                  title={`Warteraum aktiv: Bitte „${botName}“ jetzt im Meeting zulassen`}
-                  description={`Der Bot wartet im Konferenz-Warteraum auf Einlass durch den Host (max. ${Math.round(instance.limits.lobbyTimeoutSeconds / 60)} Min.).`}
-                />
+                <div className="wl-lobby-card p-3.5 wl-fade-in">
+                  <Banner
+                    status="warning"
+                    container="card"
+                    title={`Warteraum aktiv: Bitte „${botName}“ jetzt im Meeting zulassen`}
+                    description={`Der Zuhörer wartet im Konferenz-Warteraum auf Einlass durch den Host (max. ${Math.round(instance.limits.lobbyTimeoutSeconds / 60)} Min.).`}
+                  />
+                </div>
               )}
 
               {live?.is_active && recording.participation === 'capturing' && (
-                <div id="live-status-banner">
-                  <Banner
-                    status="success"
-                    container="card"
-                    title="Live-Aufnahme läuft"
-                    description={`Erkannte Teilnehmer: ${live.dom_or_signaled_participants ?? 0} · Gebundene Sprecher: ${live.bound_named_receivers ?? 0}/${live.total_receivers ?? 0} · Aktive Sprache: ${formatDurationHuman(live.active_audio_seconds || 0)} (${formatDurationHuman(live.audio_seconds || 0)} Audio gesamt)`}
-                  />
+                <div id="live-status-banner" className="wl-live-card p-3.5 wl-fade-in">
+                  <HStack justify="between" vAlign="center" wrap="wrap" gap={3}>
+                    <HStack gap={2} vAlign="center" wrap="wrap">
+                      <LiveWaveform />
+                      <VStack gap={0.5}>
+                        <Text type="body" weight="bold">
+                          Live-Aufnahme läuft — Wortprotokoll aktualisiert sich automatisch
+                        </Text>
+                        <Text type="supporting" color="secondary">
+                          Erkannte Teilnehmende: {live.dom_or_signaled_participants ?? 0} · Zugeordnete Sprecher: {live.bound_named_receivers ?? 0}/{live.total_receivers ?? 0} · Erfasste Sprache: {formatDurationHuman(live.active_audio_seconds || 0)} ({formatDurationHuman(live.audio_seconds || 0)} gesamt)
+                        </Text>
+                      </VStack>
+                    </HStack>
+                  </HStack>
                 </div>
               )}
 

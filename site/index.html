@@ -227,15 +227,20 @@
               </div>
 
               <div class="app-toolbar">
-                <div class="speaker-pills">
-                  <span class="speaker-pill"><span class="platform-dot" style="background:var(--emerald-600);"></span>Anna Lindner (46 %)</span>
-                  <span class="speaker-pill"><span class="platform-dot" style="background:var(--indigo-600);"></span>Markus Berg (34 %)</span>
-                  <span class="speaker-pill"><span class="platform-dot" style="background:var(--cyan-700);"></span>Julia Vogt (20 %)</span>
+                <div class="speaker-pills" role="group" aria-label="Sprecher filtern">
+                  <button type="button" class="speaker-pill active" data-speaker-filter="all">Alle (3)</button>
+                  <button type="button" class="speaker-pill" data-speaker-filter="1"><span class="platform-dot" style="background:var(--emerald-600);"></span>Anna Lindner (46 %)</button>
+                  <button type="button" class="speaker-pill" data-speaker-filter="2"><span class="platform-dot" style="background:var(--indigo-600);"></span>Markus Berg (34 %)</button>
+                  <button type="button" class="speaker-pill" data-speaker-filter="3"><span class="platform-dot" style="background:var(--cyan-700);"></span>Julia Vogt (20 %)</button>
+                </div>
+                <div class="site-live-pill">
+                  <span class="site-waveform" aria-hidden="true"><span></span><span></span><span></span><span></span></span>
+                  <span>3 Spuren gebunden</span>
                 </div>
               </div>
 
               <div class="transcript-list">
-                <div class="transcript-turn">
+                <div class="transcript-turn" data-speaker-turn="1">
                   <div class="turn-meta">
                     <span>Anna Lindner</span>
                     <span class="turn-timestamp">14:04</span>
@@ -245,7 +250,7 @@
                   </p>
                 </div>
 
-                <div class="transcript-turn speaker-2">
+                <div class="transcript-turn speaker-2" data-speaker-turn="2">
                   <div class="turn-meta">
                     <span>Markus Berg</span>
                     <span class="turn-timestamp">14:05</span>
@@ -255,7 +260,7 @@
                   </p>
                 </div>
 
-                <div class="transcript-turn speaker-3">
+                <div class="transcript-turn speaker-3" data-speaker-turn="3">
                   <div class="turn-meta">
                     <span>Julia Vogt</span>
                     <span class="turn-timestamp">14:07</span>
@@ -428,8 +433,8 @@
               </div>
               <span class="btn btn-primary" style="padding:7px 14px;font-size:13px;" data-i18n="f2_demo_btn">Jetzt aufzeichnen</span>
             </div>
-            <div style="background:var(--emerald-50);border:1px solid var(--emerald-100);color:var(--emerald-800);border-radius:var(--radius-sm);padding:10px 12px;font-size:13px;font-weight:600;display:flex;align-items:center;gap:8px;">
-              <span class="pulse-dot"></span>
+            <div style="background:var(--emerald-50);border:1px solid var(--emerald-100);color:var(--emerald-800);border-radius:var(--radius-sm);padding:10px 12px;font-size:13px;font-weight:600;display:flex;align-items:center;gap:10px;">
+              <span class="site-waveform" aria-hidden="true"><span></span><span></span><span></span><span></span></span>
               <span data-i18n="f2_demo_status">LIVE · Im Gespräch (3 aktive Teilnehmende erkannt)</span>
             </div>
           </div>

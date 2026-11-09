@@ -15,7 +15,7 @@ import { Divider } from '@astryxdesign/core/Divider';
 import { List, ListItem } from '@astryxdesign/core/List';
 import { Avatar } from '@astryxdesign/core/Avatar';
 import { getInstanceInfo } from '../api';
-import { ProviderBadge } from './ui/primitives';
+import { LiveWaveform, ProviderBadge } from './ui/primitives';
 
 export interface WelcomeLandingViewProps {
   healthy: boolean;
@@ -37,21 +37,21 @@ function extractTokenInput(raw: string): string {
 const EXAMPLE_LINES = [
   {
     time: '00:00:14',
-    speaker: 'Mara Lindner',
-    source: 'Teams · Stream 1',
+    speaker: 'Anna Lindner',
+    share: '46 % Redeanteil',
     text: 'Lass uns kurz die offenen Punkte für das Release am Donnerstag durchgehen.',
   },
   {
     time: '00:00:23',
-    speaker: 'Thomas Berg',
-    source: 'Teams · Stream 2',
-    text: 'Die Migration auf dem Datenbank-Cluster ist abgeschlossen, es fehlt nur noch der Abnahmetest.',
+    speaker: 'Markus Berg',
+    share: '34 % Redeanteil',
+    text: 'Die Migration auf dem Datenbank-Cluster ist abgeschlossen, es fehlt nur noch der gemeinsame Abnahmetest.',
   },
   {
     time: '00:00:35',
-    speaker: 'Mara Lindner',
-    source: 'Teams · Stream 1',
-    text: 'Gut, dann planen wir den Testlauf für morgen um zehn Uhr ein und schicken danach das Protokoll herum.',
+    speaker: 'Julia Vogt',
+    share: '20 % Redeanteil',
+    text: 'Perfekt, dann planen wir den Testlauf für morgen um zehn Uhr ein und teilen danach direkt das Protokoll.',
   },
 ];
 
@@ -95,12 +95,12 @@ export function WelcomeLandingView({
               {instance.providers.zoom && <ProviderBadge provider="zoom" />}
             </HStack>
 
-            <Heading level={1}>Sprechergetrennte Meeting-Protokolle</Heading>
+            <Heading level={1}>Automatische Wortprotokolle für Ihre Meetings</Heading>
             <Text type="body" color="secondary">
-              <strong>{instance.assistantName}</strong> tritt Besprechungen in
-              Google Meet, Microsoft Teams, Webex und Zoom als stummer Teilnehmer bei,
-              zeichnet die einzelnen Tonspuren vor dem Audio-Mix getrennt auf
-              und transkribiert sie lokal auf dem Cluster.
+              <strong>{instance.assistantName}</strong> nimmt als stiller Zuhörer an
+              Besprechungen in Google Meet, Microsoft Teams, Cisco Webex und Zoom teil,
+              ordnet jeden Redebeitrag zuverlässig der sprechenden Person zu und
+              erstellt Ihr Protokoll komplett auf eigener Infrastruktur.
             </Text>
           </VStack>
 
@@ -224,21 +224,22 @@ export function WelcomeLandingView({
         </VStack>
 
         {/* Right column: Editorial transcript specimen */}
-        <div className="lg:col-span-6">
+        <div className="lg:col-span-6 wl-fade-in">
           <Section variant="section">
             <VStack gap={3}>
-              <HStack justify="between" vAlign="center">
-                <Heading level={4}>Beispiel-Protokoll</Heading>
-                <Text type="supporting" color="secondary">
-                  MD · TXT · VTT · JSON
-                </Text>
+              <HStack justify="between" vAlign="center" wrap="wrap" gap={2}>
+                <HStack gap={2} vAlign="center">
+                  <LiveWaveform />
+                  <Heading level={4}>Beispiel-Protokoll</Heading>
+                </HStack>
+                <ProviderBadge provider="teams" size="sm" />
               </HStack>
 
               <Divider variant="subtle" />
 
               <div className="divide-y divide-[var(--color-border)]">
                 {EXAMPLE_LINES.map((line) => (
-                  <div key={line.time} className="py-3">
+                  <div key={line.time} className="py-3 wl-turn-row">
                     <HStack gap={2} vAlign="start">
                       <Avatar size="sm" shape="circle" name={line.speaker} />
                       <VStack gap={0.5} className="flex-1">
@@ -247,7 +248,7 @@ export function WelcomeLandingView({
                             {line.speaker}
                           </Text>
                           <Text type="supporting" color="secondary" hasTabularNumbers>
-                            {line.source} · {line.time}
+                            {line.share} · {line.time}
                           </Text>
                         </HStack>
                         <Text type="body" color="primary">
