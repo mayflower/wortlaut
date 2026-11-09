@@ -247,8 +247,9 @@ export function WelcomeLandingView({
                   </strong>{' '}
                   <span className="text-slate-400">
                     Der Bot tritt ohne Kamera und Mikrofon als „
-                    {instance.assistantName}“ bei. Sobald er im Meeting
-                    zugelassen wird, läuft das Live-Transkript mit.
+                    {instance.assistantName}“ bei, stellt sich im Meeting-Chat
+                    mit Protokoll- und Datenschutz-Link vor und schreibt das
+                    Live-Transkript mit.
                   </span>
                 </div>
               </li>
@@ -313,7 +314,13 @@ export function WelcomeLandingView({
                 Lokale Spracherkennung (Parakeet-GPU) · Keine Cloud-Weitergabe
               </span>
               <span>
-                Roh-Audio nach {instance.retention.audioHours}h gelöscht
+                Roh-Audio nach {instance.retention.audioHours}h gelöscht ·{' '}
+                <a
+                  href="/privacy"
+                  className="text-sky-400 hover:text-sky-300 underline"
+                >
+                  Datenschutz-Info
+                </a>
               </span>
             </div>
           </div>

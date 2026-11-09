@@ -9,7 +9,7 @@ import {isTeamsOrigin, teamsOrigins} from '../src/teams-url.js';
 
 export type MeetBootstrap = {provider: 'google_meet'; meeting_id: string; attempt_id: string;
   meeting_url: string; deadline: string; lobby_timeout_seconds: number;
-  empty_room_timeout_seconds?: number;
+  empty_room_timeout_seconds?: number; chat_intro?: string | null;
   meet: {display_name: string; locale: string; auth_mode: 'guest' | 'account'}};
 
 export class MeetError extends Error {
@@ -309,6 +309,7 @@ export class MeetBrowser {
   private readonly transport: AudioTransport;
   private drained = false;
   private joinSent = false;
+  private chatSent = false;
   private rosterOpened = false;
   private initialize?: () => Promise<void>;
 
@@ -436,6 +437,34 @@ export class MeetBrowser {
     this.joinSent = true;
   }
 
+  private async sendChatIntro() {
+    const text = this.bootstrap.chat_intro?.trim();
+    if (!text) return;
+    try {
+      const chatBox = this.page.getByRole('textbox', {
+        name: /send a message|nachricht.*senden|chat/i,
+      }).or(this.page.locator('textarea[aria-label*="Nachricht" i], textarea[aria-label*="message" i]'));
+      if (!await visible(chatBox)) {
+        const chatToggle = this.page.getByRole('button', {
+          name: /^(?:Chat with everyone|Chat|Nachricht an alle|In-call messages|Nachrichten im Anruf)(?:\b|\s|$)/i,
+        }).and(this.page.locator('[aria-expanded="false"], [aria-pressed="false"], :not([aria-expanded="true"]):not([aria-pressed="true"])')).first();
+        if (!await visible(chatToggle)) return;
+        await this.input.click(chatToggle).catch(() => {});
+        await chatBox.first().waitFor({state: 'visible', timeout: 2500}).catch(() => {});
+      }
+      if (!await visible(chatBox)) return;
+      await this.input.fill(chatBox.first(), text);
+      const sendBtn = this.page.getByRole('button', {
+        name: /^(?:Send a message|Send message|Send|Nachricht senden|Senden)(?:\b|\s|$)/i,
+      }).first();
+      if (await visible(sendBtn) && await sendBtn.isEnabled().catch(() => false)) {
+        await this.input.click(sendBtn).catch(() => {});
+      } else {
+        await chatBox.first().press('Enter', {timeout: 2000}).catch(() => {});
+      }
+    } catch { /* chat intro is non-critical */ }
+  }
+
   async inspect() {
     let state;
     try { state = await this.page.evaluate(() => window.wortlautMeet?.inspect()); }
@@ -458,6 +487,10 @@ export class MeetBrowser {
           await visible(this.page.getByRole('button', {name: actions.leave})) &&
           await this.page.locator('[data-self-name], [data-participant-id]').count()) {
         this.participation = 'capturing';
+        if (!this.chatSent) {
+          this.chatSent = true;
+          await this.sendChatIntro();
+        }
         if (!this.rosterOpened) {
           this.rosterOpened = true;
           const toggle = this.page.getByRole('button', {

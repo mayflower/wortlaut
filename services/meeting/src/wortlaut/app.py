@@ -69,7 +69,7 @@ from wortlaut.retention import retention_pass
 from wortlaut.settings import get_settings
 from wortlaut.storage import get_storage
 from wortlaut.telemetry import record_worker_status_telemetry
-from wortlaut.ui import render_ui
+from wortlaut.ui import render_privacy, render_ui
 from wortlaut.validation import Provider, normalize_meeting_url
 from wortlaut.webex import WebexUnavailable, guest_token
 
@@ -385,6 +385,11 @@ def recording_json(recording: Recording) -> dict:
 @app.get("/auth/callback", response_class=HTMLResponse)
 def web_ui():
     return HTMLResponse(render_ui(), headers={"Cache-Control": "no-store"})
+
+
+@app.get("/privacy", response_class=HTMLResponse)
+def privacy_page():
+    return HTMLResponse(render_privacy(), headers={"Cache-Control": "no-store"})
 
 
 @app.post("/v1/auth/oidc/exchange")
@@ -1195,6 +1200,36 @@ def claim(
     return {"claimed": True}
 
 
+def _recording_inviter(db: Session, recording: Recording) -> str | None:
+    if recording.owner_email:
+        return recording.owner_email
+    if recording.calendar_entry_id:
+        entry = db.get(CalendarEntry, recording.calendar_entry_id)
+        if entry and entry.organizer:
+            return entry.organizer
+    return None
+
+
+def build_chat_intro(
+    display_name: str,
+    inviter: str | None,
+    recording_id: uuid.UUID,
+    settings,
+) -> str | None:
+    if not settings.enable_chat_intro:
+        return None
+    base_url = settings.api_url.rstrip("/")
+    recording_url = f"{base_url}/ui#view=meetings&id={recording_id}"
+    privacy_url = settings.privacy_url or f"{base_url}/privacy"
+    bot_label = display_name.strip() or "wortlaut"
+    who = inviter.strip() if inviter and inviter.strip() else "einem Teilnehmenden"
+    return (
+        f"Hallo! Ich bin {bot_label} und wurde von {who} eingeladen, "
+        f"dieses Meeting zu protokollieren. "
+        f"Protokoll: {recording_url} | Datenschutz-Info: {privacy_url}"
+    )
+
+
 @app.get("/v1/attempts/{attempt_id}/bootstrap")
 def bootstrap(
     attempt_id: uuid.UUID,
@@ -1216,6 +1251,8 @@ def bootstrap(
     settings = get_settings()
     response.headers["Cache-Control"] = "no-store"
     display_name = recording.guest_name or settings.assistant_name
+    inviter = _recording_inviter(db, recording)
+    chat_intro = build_chat_intro(display_name, inviter, recording.id, settings)
     common = {
         "provider": recording.provider,
         "meeting_id": str(recording.id),
@@ -1224,6 +1261,8 @@ def bootstrap(
         "deadline": min(recording.ends_at, attempt.credential_expires_at - timedelta(seconds=30)),
         "lobby_timeout_seconds": settings.lobby_timeout_seconds,
         "empty_room_timeout_seconds": settings.empty_room_timeout_seconds,
+        "invited_by": inviter,
+        "chat_intro": chat_intro,
     }
     if recording.provider == "google_meet":
         if not settings.enable_google_meet:

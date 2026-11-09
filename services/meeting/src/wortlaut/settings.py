@@ -55,6 +55,8 @@ class Settings(BaseSettings):
     mail_attachment_limit_bytes: int = Field(default=10 * 1024**2, ge=1)
     mail_max_attempts: int = Field(default=3, ge=1)
     assistant_name: str = "wortlaut"
+    enable_chat_intro: bool = True
+    privacy_url: str | None = None
     allowed_webex_hosts: list[str] = ["*.webex.com"]
     sdk_page_url: str = "https://wortlaut-johann.data.mayflower.zone/sdk/"
     bootstrap_lifetime_seconds: int = Field(default=0, ge=0)

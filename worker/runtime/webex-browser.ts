@@ -4,7 +4,7 @@ import {installMeetCapture, MeetError} from './meet.js';
 
 export type WebexBrowserBootstrap = {provider: 'webex'; meeting_id: string; attempt_id: string;
   meeting_url: string; deadline: string; lobby_timeout_seconds: number;
-  empty_room_timeout_seconds?: number;
+  empty_room_timeout_seconds?: number; chat_intro?: string | null;
   webex_browser: {display_name: string}};
 
 // Webex's join-service page embeds the web meeting client at this exact origin.
@@ -15,6 +15,7 @@ export class WebexBrowser {
   private stopping?: Promise<void>;
   private reason = '';
   private joined = false;
+  private chatSent = false;
   private rosterOpened = false;
   private drained: boolean | null = null;
 
@@ -97,6 +98,27 @@ export class WebexBrowser {
     this.joined = true;
   }
 
+  private async sendChatIntro(frame: Frame) {
+    const text = this.bootstrap.chat_intro?.trim();
+    if (!text) return;
+    try {
+      const chatBox = frame.getByRole('textbox', {
+        name: /write a message|send a message|enter message|nachricht.*eingeben|nachricht.*schreiben|chat/i,
+      }).or(frame.locator('textarea[placeholder*="message" i], textarea[placeholder*="Nachricht" i]'));
+      if (!await chatBox.first().isVisible().catch(() => false)) {
+        const chatToggle = frame.getByRole('button', {
+          name: /^(?:Chat|Open chat|Show chat|Chat öffnen|Chatbereich öffnen|Chat anzeigen)(?:\b|\s|$)/i,
+        }).and(frame.locator(':not([aria-expanded="true"]):not([aria-pressed="true"])')).first();
+        if (!await chatToggle.isVisible().catch(() => false)) return;
+        await this.click(chatToggle).catch(() => {});
+        await chatBox.first().waitFor({state: 'visible', timeout: 2500}).catch(() => {});
+      }
+      if (!await chatBox.first().isVisible().catch(() => false)) return;
+      await chatBox.first().fill(text, {timeout: 2500});
+      await chatBox.first().press('Enter', {timeout: 2000}).catch(() => {});
+    } catch { /* chat intro is non-critical */ }
+  }
+
   async inspect() {
     const frame = this.frame();
     const state = await frame?.evaluate(() => window.wortlautMeet?.inspect()).catch(() => undefined);
@@ -109,6 +131,10 @@ export class WebexBrowser {
       name: /^(Leave meeting|Leave|Meeting verlassen|Meeting verlassen oder Meeting für alle beenden|Verlassen)(?:\s|$)/i,
     }).first().isVisible()) {
       participation = 'capturing';
+      if (!this.chatSent) {
+        this.chatSent = true;
+        await this.sendChatIntro(frame);
+      }
       if (!this.rosterOpened) {
         this.rosterOpened = true;
         const toggle = frame.getByRole('button', {

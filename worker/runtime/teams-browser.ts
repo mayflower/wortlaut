@@ -5,7 +5,7 @@ import {isTeamsOrigin} from '../src/teams-url.js';
 
 export type TeamsBootstrap = {provider: 'teams'; meeting_id: string; attempt_id: string;
   meeting_url: string; deadline: string; lobby_timeout_seconds: number;
-  empty_room_timeout_seconds?: number;
+  empty_room_timeout_seconds?: number; chat_intro?: string | null;
   teams: {display_name: string; locale: string}};
 
 const browserLabel = /^(Continue on this browser|Join on the web instead|In diesem Browser fortfahren|Stattdessen im Web teilnehmen)$/i;
@@ -21,6 +21,7 @@ export class TeamsBrowser {
   private reason = '';
   private joined = false;
   private browserClicked = false;
+  private chatSent = false;
   private rosterOpened = false;
   private drained: boolean | null = null;
 
@@ -133,6 +134,34 @@ export class TeamsBrowser {
     if (!this.stopping) throw new MeetError('teams_prejoin_timeout');
   }
 
+  private async sendChatIntro() {
+    const text = this.bootstrap.chat_intro?.trim();
+    if (!text) return;
+    try {
+      const chatBox = this.page.getByRole('textbox', {
+        name: /type a message|send a message|nachricht.*eingeben|nachricht.*senden|chat/i,
+      }).or(this.page.locator('[data-tid="ckeditor"], div[contenteditable="true"][role="textbox"]'));
+      if (!await chatBox.first().isVisible().catch(() => false)) {
+        const chatToggle = this.page.getByRole('button', {
+          name: /^(?:Chat|Show conversation|Unterhaltung anzeigen)(?:\b|\s|$)/i,
+        }).and(this.page.locator('[aria-expanded="false"], [aria-pressed="false"], :not([aria-expanded="true"]):not([aria-pressed="true"])')).first();
+        if (!await chatToggle.isVisible().catch(() => false)) return;
+        await chatToggle.click({timeout: 2000}).catch(() => {});
+        await chatBox.first().waitFor({state: 'visible', timeout: 2500}).catch(() => {});
+      }
+      if (!await chatBox.first().isVisible().catch(() => false)) return;
+      await chatBox.first().fill(text, {timeout: 2500});
+      const sendBtn = this.page.getByRole('button', {
+        name: /^(?:Send|Send message|Senden|Nachricht senden)(?:\b|\s|$)/i,
+      }).or(this.page.locator('[data-tid="newMessageCommands-send"]')).first();
+      if (await sendBtn.isVisible().catch(() => false) && await sendBtn.isEnabled().catch(() => false)) {
+        await sendBtn.click({timeout: 2000}).catch(() => {});
+      } else {
+        await chatBox.first().press('Enter', {timeout: 2000}).catch(() => {});
+      }
+    } catch { /* chat intro is non-critical */ }
+  }
+
   async inspect() {
     const url = new URL(this.page.url());
     if (/^(login\.microsoftonline\.com|login\.live\.com)$/.test(url.hostname)) this.reason = 'teams_auth_required';
@@ -150,6 +179,10 @@ export class TeamsBrowser {
     else if (trusted && this.joined && !await this.page.getByRole('button', {name: joinLabel}).isVisible()
       && await this.page.getByRole('button', {name: leaveLabel}).first().isVisible()) {
       participation = 'capturing';
+      if (!this.chatSent) {
+        this.chatSent = true;
+        await this.sendChatIntro();
+      }
       if (!this.rosterOpened) {
         this.rosterOpened = true;
         const toggle = this.page.getByRole('button', {

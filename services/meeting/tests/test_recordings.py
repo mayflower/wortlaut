@@ -1192,3 +1192,30 @@ def test_oidc_dex_pkce_exchange_and_per_user_isolation(client, database, monkeyp
     }
     assert {rec_mara_id, rec_thomas_id} <= admin_list_ids
     assert client.get(f"/v1/recordings/{rec_thomas_id}", headers=admin_headers).status_code == 200
+
+    privacy = client.get("/privacy")
+    assert privacy.status_code == 200
+    assert "Datenschutz- &amp; Transparenzhinweis" in privacy.text
+    assert "Keine Stimmprofile" in privacy.text
+
+    monkeypatch.setenv("WORTLAUT_ENABLE_GOOGLE_MEET", "true")
+    attempt_id, attempt_headers = prepare(client, rec_mara_id)
+    assert (
+        client.post(
+            f"/v1/attempts/{attempt_id}/claim",
+            headers=attempt_headers,
+            json={"worker_id": "owner-mara"},
+        ).status_code
+        == 200
+    )
+    boot = client.get(
+        f"/v1/attempts/{attempt_id}/bootstrap",
+        headers={**attempt_headers, "X-Worker-ID": "owner-mara"},
+    )
+    assert boot.status_code == 200
+    boot_data = boot.json()
+    assert boot_data["invited_by"] == "mara.lindner@mayflower.de"
+    assert "mara.lindner@mayflower.de" in boot_data["chat_intro"]
+    assert f"/ui#view=meetings&id={rec_mara_id}" in boot_data["chat_intro"]
+    assert "/privacy" in boot_data["chat_intro"]
+
