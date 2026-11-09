@@ -305,24 +305,112 @@ code, pre, .mono {
 
 .platform-row {
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 10px;
+  gap: 12px;
+}
+
+.platform-row-label {
+  font-size: 13px;
+  color: var(--stone-500);
+  font-weight: 500;
+}
+
+.platform-logos {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
   flex-wrap: wrap;
 }
 
-.platform-chip {
+.platform-logo-card {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
-  padding: 6px 14px;
-  border-radius: 999px;
-  font-size: 13px;
-  font-weight: 600;
+  justify-content: center;
+  padding: 7px 16px;
+  border-radius: 12px;
   background: #ffffff;
   border: 1px solid var(--stone-200);
   box-shadow: var(--shadow-xs);
+  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+}
+
+.platform-logo-card:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-sm);
+  border-color: var(--stone-300);
+}
+
+.platform-logo-svg {
+  height: 30px;
+  width: auto;
+  display: block;
+}
+
+.inline-provider-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-weight: 600;
+  color: var(--stone-700);
+}
+
+.cal-row-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.cal-provider-logo {
+  width: 36px;
+  height: 36px;
+  border-radius: 9px;
+  background: var(--stone-50);
+  border: 1px solid var(--stone-200);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.table-platform-logos {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.mini-logo-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: #ffffff;
+  border: 1px solid var(--emerald-100);
+  font-size: 12.5px;
+  font-weight: 600;
   color: var(--stone-800);
+  box-shadow: var(--shadow-xs);
+}
+
+.footer-platform-logos {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.footer-logo-badge {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .platform-dot {

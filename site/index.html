@@ -9,6 +9,48 @@
   <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>
+  <!-- Reusable Platform Logo Symbols -->
+  <svg width="0" height="0" style="position:absolute;width:0;height:0;overflow:hidden;" aria-hidden="true">
+    <defs>
+      <linearGradient id="wxGradA" x1="0%" y1="0%" x2="100%" y2="100%">
+        <stop offset="0%" stop-color="#00BCEB"/>
+        <stop offset="100%" stop-color="#007AA3"/>
+      </linearGradient>
+      <linearGradient id="wxGradB" x1="0%" y1="100%" x2="100%" y2="0%">
+        <stop offset="0%" stop-color="#07C160"/>
+        <stop offset="100%" stop-color="#00BCEB"/>
+      </linearGradient>
+
+      <symbol id="logo-icon-meet" viewBox="0 0 87.5 72">
+        <path fill="#00832d" d="M49.5 36l8.53 9.75 11.47 7.33 2-17.02-2-16.64-11.69 6.44z"/>
+        <path fill="#0066da" d="M0 51.5V66c0 3.315 2.685 6 6 6h14.5l3-10.96-3-9.54-9.95-3z"/>
+        <path fill="#e94235" d="M20.5 0L0 20.5l10.55 3 9.95-3 2.95-9.41z"/>
+        <path fill="#2684fc" d="M20.5 20.5H0v31h20.5z"/>
+        <path fill="#00ac47" d="M82.6 8.68L69.5 19.42v33.66l13.16 10.79c1.97 1.54 4.85.135 4.85-2.37V11c0-2.535-2.945-3.925-4.91-2.32zM49.5 36v15.5h-29V72h43c3.315 0 6-2.685 6-6V53.08z"/>
+        <path fill="#ffba00" d="M63.5 0h-43v20.5h29V36l20-16.57V6c0-3.315-2.685-6-6-6z"/>
+      </symbol>
+
+      <symbol id="logo-icon-teams" viewBox="0 0 24 24">
+        <circle cx="19.5" cy="6.2" r="2.3" fill="#5059C9"/>
+        <path d="M16.5 10h5a1.5 1.5 0 0 1 1.5 1.5v4.2a2.8 2.8 0 0 1-2.8 2.8h-2.2v-7A1.5 1.5 0 0 0 16.5 10z" fill="#5059C9"/>
+        <circle cx="14.2" cy="4.8" r="2.8" fill="#7B83EB"/>
+        <path d="M9.5 9.5h9a2 2 0 0 1 2 2v6a4.5 4.5 0 0 1-4.5 4.5h-4A4.5 4.5 0 0 1 7.5 17.5v-6a2 2 0 0 1 2-2z" fill="#7B83EB"/>
+        <rect x="1" y="5.5" width="12" height="12" rx="2.2" fill="#4B53BC"/>
+        <path d="M4.2 8.7h5.6v1.5H7.8v5.1H6.2v-5.1H4.2V8.7z" fill="#ffffff"/>
+      </symbol>
+
+      <symbol id="logo-icon-webex" viewBox="0 0 36 28">
+        <path d="M2 6.5a3 3 0 0 1 5.5-1.6l4.8 9.2 4.3-8.2a3 3 0 0 1 5.3 0l4.3 8.2 4.8-9.2a3 3 0 1 1 5.3 2.8l-7.4 14.2a3.1 3.1 0 0 1-5.5 0l-4.2-8-4.2 8a3.1 3.1 0 0 1-5.5 0L2.1 7.7A3 3 0 0 1 2 6.5z" fill="url(#wxGradA)"/>
+        <path d="M13.6 15.9l3-5.8a3 3 0 0 1 5.3 0l4.3 8.2 4.8-9.2a3 3 0 1 1 5.3 2.8l-7.4 14.2a3.1 3.1 0 0 1-5.5 0l-4.5-8.6z" fill="url(#wxGradB)" opacity="0.9"/>
+      </symbol>
+
+      <symbol id="logo-icon-zoom" viewBox="0 0 28 28">
+        <rect x="0" y="0" width="28" height="28" rx="7.5" fill="#0B5CFF"/>
+        <rect x="4.8" y="8.5" width="11.5" height="11" rx="2.4" fill="#ffffff"/>
+        <path d="M17.5 11.6l4.5-2.7a.8.8 0 0 1 1.2.7v8.8a.8.8 0 0 1-1.2.7l-4.5-2.7v-4.8z" fill="#ffffff"/>
+      </symbol>
+    </defs>
+  </svg>
 
   <!-- Sticky Header -->
   <header class="site-header">
@@ -69,14 +111,64 @@
             <a href="#how-it-works" class="btn btn-outline btn-lg" data-i18n="hero_cta_secondary">So funktioniert’s ansehen</a>
           </div>
 
-          <div class="platform-row">
-            <span style="font-size: 13px; color: var(--stone-500); font-weight: 500;" data-i18n="platforms_label">
+          <div class="platform-row" aria-label="Unterstützte Meeting-Plattformen">
+            <span class="platform-row-label" data-i18n="platforms_label">
               Funktioniert einheitlich mit:
             </span>
-            <span class="platform-chip"><span class="platform-dot" style="background:#059669;"></span>Google Meet</span>
-            <span class="platform-chip"><span class="platform-dot" style="background:#4F46E5;"></span>Microsoft Teams</span>
-            <span class="platform-chip"><span class="platform-dot" style="background:#0891B2;"></span>Cisco Webex</span>
-            <span class="platform-chip"><span class="platform-dot" style="background:#2563EB;"></span>Zoom</span>
+            <div class="platform-logos">
+              <!-- Google Meet Logo -->
+              <div class="platform-logo-card" title="Google Meet" aria-label="Google Meet">
+                <svg class="platform-logo-svg" viewBox="0 0 152 40" role="img" aria-label="Google Meet">
+                  <g transform="translate(2, 6) scale(0.39)">
+                    <path fill="#00832d" d="M49.5 36l8.53 9.75 11.47 7.33 2-17.02-2-16.64-11.69 6.44z"/>
+                    <path fill="#0066da" d="M0 51.5V66c0 3.315 2.685 6 6 6h14.5l3-10.96-3-9.54-9.95-3z"/>
+                    <path fill="#e94235" d="M20.5 0L0 20.5l10.55 3 9.95-3 2.95-9.41z"/>
+                    <path fill="#2684fc" d="M20.5 20.5H0v31h20.5z"/>
+                    <path fill="#00ac47" d="M82.6 8.68L69.5 19.42v33.66l13.16 10.79c1.97 1.54 4.85.135 4.85-2.37V11c0-2.535-2.945-3.925-4.91-2.32zM49.5 36v15.5h-29V72h43c3.315 0 6-2.685 6-6V53.08z"/>
+                    <path fill="#ffba00" d="M63.5 0h-43v20.5h29V36l20-16.57V6c0-3.315-2.685-6-6-6z"/>
+                  </g>
+                  <text x="44" y="25.5" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="17.5" font-weight="600" fill="#3c4043" letter-spacing="-0.2">Google <tspan font-weight="500" fill="#5f6368">Meet</tspan></text>
+                </svg>
+              </div>
+
+              <!-- Microsoft Teams Logo -->
+              <div class="platform-logo-card" title="Microsoft Teams" aria-label="Microsoft Teams">
+                <svg class="platform-logo-svg" viewBox="0 0 176 40" role="img" aria-label="Microsoft Teams">
+                  <g transform="translate(2, 4) scale(1.33)">
+                    <circle cx="19.5" cy="6.2" r="2.3" fill="#5059C9"/>
+                    <path d="M16.5 10h5a1.5 1.5 0 0 1 1.5 1.5v4.2a2.8 2.8 0 0 1-2.8 2.8h-2.2v-7A1.5 1.5 0 0 0 16.5 10z" fill="#5059C9"/>
+                    <circle cx="14.2" cy="4.8" r="2.8" fill="#7B83EB"/>
+                    <path d="M9.5 9.5h9a2 2 0 0 1 2 2v6a4.5 4.5 0 0 1-4.5 4.5h-4A4.5 4.5 0 0 1 7.5 17.5v-6a2 2 0 0 1 2-2z" fill="#7B83EB"/>
+                    <rect x="1" y="5.5" width="12" height="12" rx="2.2" fill="#4B53BC"/>
+                    <path d="M4.2 8.7h5.6v1.5H7.8v5.1H6.2v-5.1H4.2V8.7z" fill="#ffffff"/>
+                  </g>
+                  <text x="40" y="25.5" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="17" font-weight="600" fill="#252423" letter-spacing="-0.2">Microsoft <tspan font-weight="600" fill="#4B53BC">Teams</tspan></text>
+                </svg>
+              </div>
+
+              <!-- Cisco Webex Logo -->
+              <div class="platform-logo-card" title="Cisco Webex" aria-label="Cisco Webex">
+                <svg class="platform-logo-svg" viewBox="0 0 108 40" role="img" aria-label="Cisco Webex">
+                  <g transform="translate(2, 6)">
+                    <path d="M3 6.5a3 3 0 0 1 5.5-1.6l4.8 9.2 4.3-8.2a3 3 0 0 1 5.3 0l4.3 8.2 4.8-9.2a3 3 0 1 1 5.3 2.8l-7.4 14.2a3.1 3.1 0 0 1-5.5 0l-4.2-8-4.2 8a3.1 3.1 0 0 1-5.5 0L3.1 7.7A3 3 0 0 1 3 6.5z" fill="url(#wxGradA)"/>
+                    <path d="M14.6 15.9l3-5.8a3 3 0 0 1 5.3 0l4.3 8.2 4.8-9.2a3 3 0 1 1 5.3 2.8l-7.4 14.2a3.1 3.1 0 0 1-5.5 0l-4.5-8.6z" fill="url(#wxGradB)" opacity="0.9"/>
+                  </g>
+                  <text x="46" y="25.5" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="18.5" font-weight="700" fill="#0f172a" letter-spacing="-0.4">webex</text>
+                </svg>
+              </div>
+
+              <!-- Zoom Logo -->
+              <div class="platform-logo-card" title="Zoom" aria-label="Zoom">
+                <svg class="platform-logo-svg" viewBox="0 0 98 40" role="img" aria-label="Zoom">
+                  <g transform="translate(2, 6)">
+                    <rect x="0" y="0" width="28" height="28" rx="7.5" fill="#0B5CFF"/>
+                    <rect x="4.8" y="8.5" width="11.5" height="11" rx="2.4" fill="#ffffff"/>
+                    <path d="M17.5 11.6l4.5-2.7a.8.8 0 0 1 1.2.7v8.8a.8.8 0 0 1-1.2.7l-4.5-2.7v-4.8z" fill="#ffffff"/>
+                  </g>
+                  <text x="38" y="26.5" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="21" font-weight="800" fill="#0B5CFF" letter-spacing="-0.6">zoom</text>
+                </svg>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -119,7 +211,14 @@
               <div class="app-main-header">
                 <div>
                   <h2 class="app-meeting-title" data-i18n="ui_meeting_title">Produkt- &amp; Architektur-Abstimmung Q4</h2>
-                  <div class="app-meeting-meta" data-i18n="ui_meeting_meta">Heute, 14:00 – 14:45 Uhr · Microsoft Teams · 3 Teilnehmende</div>
+                  <div class="app-meeting-meta">
+                    <span class="inline-provider-badge" title="Microsoft Teams">
+                      <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#logo-icon-teams"/></svg>
+                      <span>Microsoft Teams</span>
+                    </span>
+                    <span>·</span>
+                    <span data-i18n="ui_meeting_meta">Heute, 14:00 – 14:45 Uhr · 3 Teilnehmende</span>
+                  </div>
                 </div>
                 <div style="display:flex;gap:8px;flex-wrap:wrap;">
                   <span class="btn btn-outline" style="padding:6px 12px;font-size:12.5px;" data-i18n="ui_btn_share">Lese-Link teilen</span>
@@ -264,23 +363,38 @@
               Kalender-Übersicht (Klicke auf den Schalter zum Testen):
             </div>
             <div class="cal-row">
-              <div>
-                <div style="font-weight:700;font-size:14px;" data-i18n="f1_ev1_title">Wöchentliches Team-Sync (Google Meet)</div>
-                <div style="font-size:12px;color:var(--stone-500);" data-i18n="f1_ev1_meta">10:00 – 10:45 Uhr · Automatisch aktiv (eigener Termin)</div>
+              <div class="cal-row-left">
+                <span class="cal-provider-logo" title="Google Meet" aria-label="Google Meet">
+                  <svg width="22" height="18" viewBox="0 0 87.5 72" role="img" aria-label="Google Meet"><use href="#logo-icon-meet"/></svg>
+                </span>
+                <div>
+                  <div style="font-weight:700;font-size:14px;" data-i18n="f1_ev1_title">Wöchentliches Team-Sync</div>
+                  <div style="font-size:12px;color:var(--stone-500);" data-i18n="f1_ev1_meta">10:00 – 10:45 Uhr · Automatisch aktiv (eigener Termin)</div>
+                </div>
               </div>
               <span class="toggle-btn" data-i18n="toggle_on">● Aufzeichnen: An</span>
             </div>
             <div class="cal-row" style="border-color:var(--emerald-500);box-shadow:var(--shadow-xs);">
-              <div>
-                <div style="font-weight:700;font-size:14px;" data-i18n="f1_ev2_title">Projektabstimmung mit Kunden (Microsoft Teams)</div>
-                <div style="font-size:12px;color:var(--stone-500);" data-i18n="f1_ev2_meta">14:00 – 15:00 Uhr · Externer Termin · Per Klick zuschaltbar</div>
+              <div class="cal-row-left">
+                <span class="cal-provider-logo" title="Microsoft Teams" aria-label="Microsoft Teams">
+                  <svg width="22" height="22" viewBox="0 0 24 24" role="img" aria-label="Microsoft Teams"><use href="#logo-icon-teams"/></svg>
+                </span>
+                <div>
+                  <div style="font-weight:700;font-size:14px;" data-i18n="f1_ev2_title">Projektabstimmung mit Kunden</div>
+                  <div style="font-size:12px;color:var(--stone-500);" data-i18n="f1_ev2_meta">14:00 – 15:00 Uhr · Externer Termin · Per Klick zuschaltbar</div>
+                </div>
               </div>
               <button type="button" id="demo-external-toggle" class="toggle-btn" data-i18n="toggle_on">● Aufzeichnen: An</button>
             </div>
             <div class="cal-row">
-              <div>
-                <div style="font-weight:700;font-size:14px;" data-i18n="f1_ev3_title">Sprint-Review (Zoom)</div>
-                <div style="font-size:12px;color:var(--stone-500);" data-i18n="f1_ev3_meta">16:30 – 17:15 Uhr · Automatisch aktiv (eigene Serie)</div>
+              <div class="cal-row-left">
+                <span class="cal-provider-logo" title="Zoom" aria-label="Zoom">
+                  <svg width="22" height="22" viewBox="0 0 28 28" role="img" aria-label="Zoom"><use href="#logo-icon-zoom"/></svg>
+                </span>
+                <div>
+                  <div style="font-weight:700;font-size:14px;" data-i18n="f1_ev3_title">Sprint-Review</div>
+                  <div style="font-size:12px;color:var(--stone-500);" data-i18n="f1_ev3_meta">16:30 – 17:15 Uhr · Automatisch aktiv (eigene Serie)</div>
+                </div>
               </div>
               <span class="toggle-btn" data-i18n="toggle_on">● Aufzeichnen: An</span>
             </div>
@@ -460,7 +574,14 @@
               <tr>
                 <td data-i18n="comp_r4_c">Unterstützte Plattformen</td>
                 <td data-i18n="comp_r4_cloud">Oft Abo-gebunden je Nutzer &amp; Plattform</td>
-                <td class="highlight-col" data-i18n="comp_r4_w">Google Meet, Microsoft Teams, Cisco Webex &amp; Zoom inklusive</td>
+                <td class="highlight-col">
+                  <div class="table-platform-logos">
+                    <span class="mini-logo-pill" title="Google Meet"><svg width="16" height="13" viewBox="0 0 87.5 72" aria-hidden="true"><use href="#logo-icon-meet"/></svg> Meet</span>
+                    <span class="mini-logo-pill" title="Microsoft Teams"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#logo-icon-teams"/></svg> Teams</span>
+                    <span class="mini-logo-pill" title="Cisco Webex"><svg width="18" height="14" viewBox="0 0 36 28" aria-hidden="true"><use href="#logo-icon-webex"/></svg> Webex</span>
+                    <span class="mini-logo-pill" title="Zoom"><svg width="15" height="15" viewBox="0 0 28 28" aria-hidden="true"><use href="#logo-icon-zoom"/></svg> Zoom</span>
+                  </div>
+                </td>
               </tr>
               <tr>
                 <td data-i18n="comp_r5_c">Lizenz &amp; Kosten</td>
@@ -581,7 +702,12 @@ make setup &amp;&amp; make dev</code></pre>
 
       <div class="footer-bottom">
         <span data-i18n="footer_copy">© 2026 Mayflower GmbH · Freie Software unter GNU AGPLv3 · wortlaut.cloud</span>
-        <span>Google Meet · Microsoft Teams · Cisco Webex · Zoom</span>
+        <div class="footer-platform-logos" aria-label="Google Meet, Microsoft Teams, Cisco Webex, Zoom">
+          <span class="footer-logo-badge" title="Google Meet"><svg width="18" height="15" viewBox="0 0 87.5 72" role="img" aria-label="Google Meet"><use href="#logo-icon-meet"/></svg></span>
+          <span class="footer-logo-badge" title="Microsoft Teams"><svg width="18" height="18" viewBox="0 0 24 24" role="img" aria-label="Microsoft Teams"><use href="#logo-icon-teams"/></svg></span>
+          <span class="footer-logo-badge" title="Cisco Webex"><svg width="20" height="16" viewBox="0 0 36 28" role="img" aria-label="Cisco Webex"><use href="#logo-icon-webex"/></svg></span>
+          <span class="footer-logo-badge" title="Zoom"><svg width="17" height="17" viewBox="0 0 28 28" role="img" aria-label="Zoom"><use href="#logo-icon-zoom"/></svg></span>
+        </div>
       </div>
     </div>
   </footer>
