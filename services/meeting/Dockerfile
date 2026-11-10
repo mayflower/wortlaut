@@ -1,4 +1,4 @@
-FROM --platform=$BUILDPLATFORM node:24-trixie-slim AS sdk
+FROM --platform=$BUILDPLATFORM node:26-trixie-slim AS sdk
 WORKDIR /worker
 COPY worker/package.json worker/package-lock.json ./
 RUN npm ci
