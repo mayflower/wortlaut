@@ -1,6 +1,9 @@
 """Loopback-only PCM-to-WAV receiver. Test tool, never included in a service image."""
 import json
+import os
+import socket
 import struct
+import sys
 import uuid
 import wave
 from pathlib import Path
@@ -51,4 +54,11 @@ async def receive(socket: WebSocket):
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="127.0.0.1", port=34606)
+    requested_port = int(os.environ.get("WORTLAUT_RECEIVER_PORT", "0"))
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind(("127.0.0.1", requested_port))
+    bound_port = sock.getsockname()[1]
+    print(f"WORTLAUT_RECEIVER_PORT={bound_port}", file=sys.stderr, flush=True)
+    config = uvicorn.Config(app, host="127.0.0.1", port=bound_port)
+    uvicorn.Server(config).run(sockets=[sock])

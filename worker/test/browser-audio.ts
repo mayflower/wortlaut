@@ -13,24 +13,32 @@ const receiver = spawn('uv', ['run', '--directory', '../services/meeting',
   'python', '../../worker/test/receiver.py'], {stdio: ['ignore', 'ignore', 'pipe']});
 let receiverLog = '';
 receiver.stderr.on('data', (data) => { receiverLog = (receiverLog + data).slice(-4000); });
-const server = await preview({preview: {host: '127.0.0.1', port: 34605, strictPort: true}});
+const server = await preview({preview: {host: '127.0.0.1', port: 0}});
+const previewAddress = server.httpServer.address();
+assert.ok(previewAddress && typeof previewAddress === 'object');
+const previewOrigin = `http://127.0.0.1:${previewAddress.port}`;
 const browser = await chromium.launch({headless: true, chromiumSandbox: true,
   args: ['--autoplay-policy=no-user-gesture-required']});
 let socket: WebSocket | undefined;
 try {
   let ready = false;
+  let receiverPort = 0;
   for (let i = 0; i < 40; i++) {
-    try { ready = (await fetch('http://127.0.0.1:34606/docs')).ok; } catch { /* starting */ }
+    const match = receiverLog.match(/WORTLAUT_RECEIVER_PORT=(\d+)/);
+    if (match) {
+      receiverPort = Number(match[1]);
+      try { ready = (await fetch(`http://127.0.0.1:${receiverPort}/docs`)).ok; } catch { /* starting */ }
+    }
     if (ready || receiver.exitCode !== null) break;
     await delay(250);
   }
-  assert.ok(ready && receiver.exitCode === null, receiverLog);
-  socket = new WebSocket('ws://127.0.0.1:34606/audio');
+  assert.ok(ready && receiverPort > 0 && receiver.exitCode === null, receiverLog);
+  socket = new WebSocket(`ws://127.0.0.1:${receiverPort}/audio`);
   await once(socket, 'open');
   const page = await browser.newPage();
   const pageErrors: string[] = [];
   page.on('pageerror', (error) => { pageErrors.push(error.message); });
-  await page.goto('http://127.0.0.1:34605/sdk/');
+  await page.goto(`${previewOrigin}/sdk/`);
   const results = await page.evaluate(() => window.wortlautAudioTest(0.5));
   assert.equal(results.length, 2);
   const identities = results.map((result) => result.parts[0].metadata.stream_id);
@@ -158,7 +166,7 @@ try {
         connection.send(JSON.stringify({type: 'ack', id}));
       });
     });
-    await lifecyclePage.goto('http://127.0.0.1:34605/sdk/');
+    await lifecyclePage.goto(`${previewOrigin}/sdk/`);
     await lifecyclePage.evaluate("globalThis.__name = (target, value) => Object.defineProperty(target, 'name', {value, configurable: true})");
     await lifecyclePage.evaluate(async ({meetingId, attemptId, lobby}) => {
       const events = new Map<string, Set<(...args: any[]) => void>>();
