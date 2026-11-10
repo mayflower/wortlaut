@@ -1,10 +1,30 @@
 """Self-contained operator and transcript web UI served directly by the meeting service."""
 
+import hashlib
 import html
 import json
+from functools import lru_cache
+from pathlib import Path
 
 from wortlaut.mail import FAILURE_REASONS
 from wortlaut.settings import get_settings
+
+
+@lru_cache(maxsize=1)
+def _asset_version() -> str:
+    digest = hashlib.sha256()
+    found = False
+    for candidate in (
+        Path("/app/sdk/ui/app.js"),
+        Path("/app/sdk/ui/app.css"),
+        Path(__file__).resolve().parents[4] / "worker/dist/ui/app.js",
+        Path(__file__).resolve().parents[4] / "worker/dist/ui/app.css",
+    ):
+        if candidate.is_file():
+            digest.update(candidate.read_bytes())
+            found = True
+    return digest.hexdigest()[:12] if found else "1"
+
 
 PRIVACY_HTML = """<!DOCTYPE html>
 <html lang="de" data-theme="dark" data-astryx-theme="stone">
@@ -12,7 +32,7 @@ PRIVACY_HTML = """<!DOCTYPE html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Datenschutz &amp; Transparenz – __ASSISTANT_NAME__</title>
-  <link rel="stylesheet" href="/sdk/ui/app.css">
+  <link rel="stylesheet" href="/sdk/ui/app.css?v=__ASSET_VERSION__">
 </head>
 <body
   class="min-h-screen bg-[var(--color-background-body,#101018)]
@@ -139,7 +159,7 @@ UI_HTML = """<!DOCTYPE html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>wortlaut – Meeting-Transkription</title>
-  <link rel="stylesheet" href="/sdk/ui/app.css">
+  <link rel="stylesheet" href="/sdk/ui/app.css?v=__ASSET_VERSION__">
 </head>
 <body
   class="bg-[var(--color-background-body,#101018)]
@@ -152,7 +172,7 @@ UI_HTML = """<!DOCTYPE html>
   <script>
     window.__WORTLAUT_BOOT__ = __BOOT_PAYLOAD_JSON__;
   </script>
-  <script type="module" src="/sdk/ui/app.js"></script>
+  <script type="module" src="/sdk/ui/app.js?v=__ASSET_VERSION__"></script>
 </body>
 </html>
 """
@@ -259,8 +279,9 @@ def render_ui() -> str:
         "failureReasons": FAILURE_REASONS,
         "instance": _build_instance_info(),
     }
-    return UI_HTML.replace(
-        "__BOOT_PAYLOAD_JSON__", json.dumps(payload, ensure_ascii=False)
+    return (
+        UI_HTML.replace("__BOOT_PAYLOAD_JSON__", json.dumps(payload, ensure_ascii=False))
+        .replace("__ASSET_VERSION__", _asset_version())
     )
 
 
@@ -278,5 +299,6 @@ def render_privacy() -> str:
         PRIVACY_HTML.replace("__ASSISTANT_NAME__", html.escape(assistant_name))
         .replace("__AUDIO_HOURS__", str(audio_hours))
         .replace("__TRANSCRIPT_DAYS__", str(transcript_days))
+        .replace("__ASSET_VERSION__", _asset_version())
     )
 
