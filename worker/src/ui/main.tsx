@@ -7,6 +7,7 @@ import { Theme } from '@astryxdesign/core/theme';
 import { stoneTheme } from '@astryxdesign/theme-stone/built';
 import { App } from './App';
 import { ThemeModeContext, type ThemeMode } from './components/ui/primitives';
+import { I18nProvider } from './i18n';
 
 const THEME_STORAGE_KEY = 'wortlaut_theme_mode';
 
@@ -45,11 +46,13 @@ function Root() {
 
   return (
     <ThemeModeContext.Provider value={{ mode, setMode }}>
-      <Theme theme={stoneTheme} mode={mode}>
-        <QueryClientProvider client={queryClient}>
-          <App />
-        </QueryClientProvider>
-      </Theme>
+      <I18nProvider>
+        <Theme theme={stoneTheme} mode={mode}>
+          <QueryClientProvider client={queryClient}>
+            <App />
+          </QueryClientProvider>
+        </Theme>
+      </I18nProvider>
     </ThemeModeContext.Provider>
   );
 }

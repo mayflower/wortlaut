@@ -33,11 +33,16 @@ def load_model():
         device = "cpu"
     else:
         raise RuntimeError("Parakeet service requires an NVIDIA GPU")
-    repo = os.environ.get("WORTLAUT_ASR_MODEL_REPO", DEFAULT_MODEL_REPO)
-    name = os.environ.get("WORTLAUT_ASR_MODEL_FILENAME", DEFAULT_MODEL_FILENAME)
-    revision = os.environ.get("WORTLAUT_ASR_MODEL_REVISION", DEFAULT_MODEL_REVISION)
-    filename = hf_hub_download(repo, name, revision=revision)
-    loaded = nemo_asr.models.ASRModel.restore_from(filename, map_location=device)
+    repo = os.environ.get("WORTLAUT_ASR_MODEL_REPO", DEFAULT_MODEL_REPO).strip()
+    explicit_name = os.environ.get("WORTLAUT_ASR_MODEL_FILENAME", "").strip()
+    explicit_rev = os.environ.get("WORTLAUT_ASR_MODEL_REVISION", "").strip()
+    if repo == DEFAULT_MODEL_REPO or explicit_name:
+        name = explicit_name or DEFAULT_MODEL_FILENAME
+        revision = explicit_rev or (DEFAULT_MODEL_REVISION if repo == DEFAULT_MODEL_REPO else None)
+        filename = hf_hub_download(repo, name, revision=revision)
+        loaded = nemo_asr.models.ASRModel.restore_from(filename, map_location=device)
+    else:
+        loaded = nemo_asr.models.ASRModel.from_pretrained(model_name=repo, map_location=device)
     loaded.freeze()
     loaded.eval()
     return loaded

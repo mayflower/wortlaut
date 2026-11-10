@@ -3,11 +3,11 @@ kind: ConfigMap
 metadata:
   name: wortlaut-config
 data:
-  WORTLAUT_SDK_PAGE_URL: https://wortlaut-dev.data.mayflower.zone/sdk/
+  WORTLAUT_SDK_PAGE_URL: https://wortlaut-dev.example.org/sdk/
   WORTLAUT_S3_CREATE_BUCKET: 'true'
   WORTLAUT_ENABLE_CONTROLLER: 'true'
   WORTLAUT_NAMESPACE: wortlaut-dev
-  WORTLAUT_API_URL: https://wortlaut-dev.data.mayflower.zone/
+  WORTLAUT_API_URL: https://wortlaut-dev.example.org/
   WORTLAUT_OTLP_ENDPOINT: http://monitoring-stack-alloy.monitoring.svc.cluster.local:4318/v1/traces
 ---
 apiVersion: v1
@@ -108,10 +108,10 @@ metadata:
 spec:
   ingressClassName: traefik
   tls:
-    - hosts: [wortlaut-dev.data.mayflower.zone]
+    - hosts: [wortlaut-dev.example.org]
       secretName: wortlaut-tls
   rules:
-    - host: wortlaut-dev.data.mayflower.zone
+    - host: wortlaut-dev.example.org
       http:
         paths:
           - path: /

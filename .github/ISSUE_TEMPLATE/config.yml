@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a Security Vulnerability
+    url: https://github.com/mayflower/wortlaut/security/advisories/new
+    about: Privately report security vulnerabilities without exposing details publicly.
+  - name: Self-Hosting & Architecture Discussions
+    url: https://github.com/mayflower/wortlaut/discussions
+    about: Ask questions about Docker Compose, Helm/Kubernetes, GPU sizing, or OIDC setup.

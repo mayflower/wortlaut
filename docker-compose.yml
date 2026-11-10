@@ -3,6 +3,8 @@ name: wortlaut
 networks:
   wortlaut:
     name: wortlaut
+  docker-control:
+    internal: true
 
 volumes:
   postgres-data:
@@ -39,6 +41,7 @@ services:
       - rustfs-data:/data
 
   asr:
+    image: ghcr.io/mayflower/wortlaut-asr:${WORTLAUT_IMAGE_TAG:-latest}
     build:
       context: .
       dockerfile: services/asr/Dockerfile
@@ -47,39 +50,67 @@ services:
     environment:
       WORTLAUT_ASR_TOKEN: ${WORTLAUT_ASR_TOKEN:-wortlaut-local-asr-token}
       WORTLAUT_ASR_ALLOW_CPU: ${WORTLAUT_ASR_ALLOW_CPU:-true}
+      WORTLAUT_ASR_MODEL_REPO: ${WORTLAUT_ASR_MODEL_REPO:-primeline/parakeet-primeline}
     volumes:
       - model-cache:/model-cache
 
   worker-image:
+    image: ghcr.io/mayflower/wortlaut-worker:${WORTLAUT_IMAGE_TAG:-latest}
     build:
       context: .
       dockerfile: services/worker/Dockerfile
-    image: wortlaut-worker:local
     entrypoint: ["true"]
 
+  docker-proxy:
+    image: ghcr.io/tecnativa/docker-socket-proxy:v0.4.2
+    restart: unless-stopped
+    networks: [docker-control]
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      CONTAINERS: "1"
+      POST: "1"
+      ALLOW_START: "1"
+      ALLOW_STOP: "1"
+      PRIVILEGED: "0"
+      VOLUMES: "0"
+      EXEC: "0"
+      AUTH: "0"
+      SECRETS: "0"
+      SWARM: "0"
+      SYSTEM: "0"
+      IMAGES: "0"
+      NETWORKS: "0"
+
   meeting:
+    image: ghcr.io/mayflower/wortlaut-meeting:${WORTLAUT_IMAGE_TAG:-latest}
     build:
       context: .
       dockerfile: services/meeting/Dockerfile
     restart: unless-stopped
-    networks: [wortlaut]
-    user: "0:0"
+    networks: [wortlaut, docker-control]
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     depends_on:
       postgres:
         condition: service_healthy
       rustfs:
         condition: service_started
+      docker-proxy:
+        condition: service_started
       worker-image:
         condition: service_completed_successfully
     ports:
       - "${WORTLAUT_PORT:-34601}:8000"
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
     environment:
       WORTLAUT_DATABASE_URL: postgresql+psycopg://wortlaut:${WORTLAUT_POSTGRES_PASSWORD:-wortlaut-local-db}@postgres:5432/wortlaut
       WORTLAUT_API_TOKEN: ${WORTLAUT_API_TOKEN:-wortlaut-local-admin-token}
-      WORTLAUT_API_URL: http://meeting:8000/
-      WORTLAUT_SDK_PAGE_URL: http://meeting:8000/sdk/
+      WORTLAUT_API_URL: ${WORTLAUT_API_URL:-http://meeting:8000/}
+      WORTLAUT_SDK_PAGE_URL: ${WORTLAUT_SDK_PAGE_URL:-http://meeting:8000/sdk/}
       WORTLAUT_S3_ENDPOINT: http://rustfs:9000
       WORTLAUT_S3_ACCESS_KEY: ${WORTLAUT_S3_ACCESS_KEY:-wortlaut-s3}
       WORTLAUT_S3_SECRET_KEY: ${WORTLAUT_S3_SECRET_KEY:-wortlaut-s3-secret}
@@ -88,9 +119,23 @@ services:
       WORTLAUT_ASR_TOKEN: ${WORTLAUT_ASR_TOKEN:-wortlaut-local-asr-token}
       WORTLAUT_ENABLE_CONTROLLER: "true"
       WORTLAUT_CONTROLLER_BACKEND: "docker"
+      WORTLAUT_DOCKER_HOST: "tcp://docker-proxy:2375"
       WORTLAUT_DOCKER_NETWORK: "wortlaut"
-      WORTLAUT_WORKER_IMAGE: "wortlaut-worker:local"
+      WORTLAUT_WORKER_IMAGE: "ghcr.io/mayflower/wortlaut-worker:${WORTLAUT_IMAGE_TAG:-latest}"
       WORTLAUT_ENABLE_GOOGLE_MEET: ${WORTLAUT_ENABLE_GOOGLE_MEET:-true}
       WORTLAUT_ENABLE_TEAMS: ${WORTLAUT_ENABLE_TEAMS:-true}
       WORTLAUT_ENABLE_ZOOM: ${WORTLAUT_ENABLE_ZOOM:-true}
       WORTLAUT_ZOOM_LOCALE: ${WORTLAUT_ZOOM_LOCALE:-en-US}
+      WORTLAUT_DEFAULT_LOCALE: ${WORTLAUT_DEFAULT_LOCALE:-en}
+      WORTLAUT_OIDC_ISSUER: ${WORTLAUT_OIDC_ISSUER:-}
+      WORTLAUT_OIDC_CLIENT_ID: ${WORTLAUT_OIDC_CLIENT_ID:-wortlaut}
+      WORTLAUT_OIDC_ALLOWED_DOMAINS: ${WORTLAUT_OIDC_ALLOWED_DOMAINS:-[]}
+      WORTLAUT_OIDC_ADMIN_EMAILS: ${WORTLAUT_OIDC_ADMIN_EMAILS:-[]}
+      WORTLAUT_GOOGLE_CALENDAR_CLIENT_ID: ${WORTLAUT_GOOGLE_CALENDAR_CLIENT_ID:-}
+      WORTLAUT_GOOGLE_CALENDAR_CLIENT_SECRET: ${WORTLAUT_GOOGLE_CALENDAR_CLIENT_SECRET:-}
+      WORTLAUT_MICROSOFT_CALENDAR_CLIENT_ID: ${WORTLAUT_MICROSOFT_CALENDAR_CLIENT_ID:-}
+      WORTLAUT_MICROSOFT_CALENDAR_CLIENT_SECRET: ${WORTLAUT_MICROSOFT_CALENDAR_CLIENT_SECRET:-}
+      WORTLAUT_MICROSOFT_CALENDAR_TENANT_ID: ${WORTLAUT_MICROSOFT_CALENDAR_TENANT_ID:-common}
+      WORTLAUT_ENABLE_LLM_SUMMARY: ${WORTLAUT_ENABLE_LLM_SUMMARY:-false}
+      WORTLAUT_OLLAMA_URL: ${WORTLAUT_OLLAMA_URL:-}
+      WORTLAUT_OLLAMA_MODEL: ${WORTLAUT_OLLAMA_MODEL:-qwen3.8:latest}

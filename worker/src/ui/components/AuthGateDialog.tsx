@@ -12,6 +12,7 @@ import { HStack } from '@astryxdesign/core/HStack';
 import { VStack } from '@astryxdesign/core/VStack';
 import { Text } from '@astryxdesign/core/Text';
 import { getInstanceInfo } from '../api';
+import { useI18n } from '../i18n';
 import type { AuthMode } from '../types';
 
 export interface AuthGateDialogProps {
@@ -33,6 +34,7 @@ export function AuthGateDialog({
   onSaveToken,
   onStartOidcLogin,
 }: AuthGateDialogProps) {
+  const { tr } = useI18n();
   const instance = getInstanceInfo();
   const oidcEnabled = Boolean(instance.oidc?.enabled);
   const currentUser = authMode.kind === 'operator' ? authMode.user : undefined;
@@ -61,8 +63,11 @@ export function AuthGateDialog({
         height="auto"
         header={
           <DialogHeader
-            title="Anmeldung & Zugang"
-            subtitle="Melden Sie sich per Mayflower-SSO (Dex) an oder verwenden Sie einen Lese-Token bzw. API-Schlüssel."
+            title={tr('Anmeldung & Zugang', 'Sign in & Access')}
+            subtitle={tr(
+              'Melden Sie sich per Single Sign-On (OIDC) an oder verwenden Sie einen Lese-Token bzw. API-Schlüssel.',
+              'Sign in via Single Sign-On (OIDC) or enter a read-only share token or API key.'
+            )}
             onOpenChange={onOpenChange}
           />
         }
@@ -93,7 +98,7 @@ export function AuthGateDialog({
                       variant="destructive"
                       size="sm"
                       icon={<LogOut className="h-3.5 w-3.5" />}
-                      label="Abmelden"
+                      label={tr('Abmelden', 'Sign out')}
                       onClick={() => {
                         setValue('');
                         onSaveToken('');
@@ -113,8 +118,14 @@ export function AuthGateDialog({
                   icon={<LogIn className="h-4 w-4" />}
                   label={
                     currentUser
-                      ? 'SSO-Sitzung erneuern / Konto wechseln'
-                      : 'Mit Mayflower-Account anmelden (SSO)'
+                      ? tr(
+                          'SSO-Sitzung erneuern / Konto wechseln',
+                          'Renew SSO session / switch account'
+                        )
+                      : tr(
+                          'Mit SSO anmelden (OIDC)',
+                          'Sign in with SSO (OIDC)'
+                        )
                   }
                   onClick={onStartOidcLogin}
                 />
@@ -127,11 +138,20 @@ export function AuthGateDialog({
                   <div id="api-token-field">
                     <TextInput
                       type="password"
-                      label="Alternativ: Lese-Token (wortlaut-read-…) oder API-Schlüssel"
-                      description="Wird ausschließlich lokal in Ihrem Browser gespeichert."
+                      label={tr(
+                        'Alternativ: Lese-Token (wortlaut-read-…) oder API-Schlüssel',
+                        'Alternative: Read-only token (wortlaut-read-…) or API key'
+                      )}
+                      description={tr(
+                        'Wird ausschließlich lokal in Ihrem Browser gespeichert.',
+                        'Stored exclusively in your local browser storage.'
+                      )}
                       value={value}
                       onChange={setValue}
-                      placeholder="Token hier einfügen…"
+                      placeholder={tr(
+                        'Token hier einfügen…',
+                        'Paste token here…'
+                      )}
                       startIcon={<KeyRound className="h-4 w-4" />}
                     />
                   </div>
@@ -143,7 +163,7 @@ export function AuthGateDialog({
                         variant="destructive"
                         size="sm"
                         icon={<Trash2 className="h-3.5 w-3.5" />}
-                        label="Abmelden / Löschen"
+                        label={tr('Abmelden / Löschen', 'Sign out / Clear')}
                         onClick={() => {
                           setValue('');
                           onSaveToken('');
@@ -158,7 +178,7 @@ export function AuthGateDialog({
                         type="button"
                         variant="ghost"
                         size="sm"
-                        label="Schließen"
+                        label={tr('Schließen', 'Close')}
                         onClick={() => onOpenChange(false)}
                       />
                       <span id="save-token">
@@ -167,7 +187,7 @@ export function AuthGateDialog({
                           variant={oidcEnabled ? 'secondary' : 'primary'}
                           size="sm"
                           isDisabled={!value.trim()}
-                          label="Token übernehmen"
+                          label={tr('Token übernehmen', 'Apply token')}
                         />
                       </span>
                     </HStack>

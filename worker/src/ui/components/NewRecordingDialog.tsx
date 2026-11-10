@@ -21,6 +21,7 @@ import {
   getInstanceInfo,
   importCalendarPayload,
 } from '../api';
+import { useI18n } from '../i18n';
 import type { RecordingSummary } from '../types';
 import { ProviderBadge } from './ui/primitives';
 
@@ -33,18 +34,6 @@ export interface NewRecordingDialogProps {
   onImportedCalendar: (recordingId: string | null) => void;
 }
 
-const JOIN_MODE_OPTIONS = [
-  { value: 'live', label: 'Sofort beitreten (Live)' },
-  { value: 'scheduled', label: 'Zeitfenster planen' },
-];
-
-const DURATION_OPTIONS = [
-  { value: '30', label: '30 Minuten' },
-  { value: '60', label: '60 Minuten' },
-  { value: '90', label: '90 Minuten' },
-  { value: '120', label: '120 Minuten' },
-];
-
 export function NewRecordingDialog({
   open,
   onOpenChange,
@@ -53,6 +42,7 @@ export function NewRecordingDialog({
   onCreatedRecording,
   onImportedCalendar,
 }: NewRecordingDialogProps) {
+  const { tr } = useI18n();
   const [tab, setTab] = useState<'link' | 'ics'>(initialTab);
 
   useEffect(() => {
@@ -75,6 +65,24 @@ export function NewRecordingDialog({
   const detectedProvider = detectProviderFromUrl(meetingUrl);
   const instance = getInstanceInfo();
 
+  const joinModeOptions = [
+    {
+      value: 'live',
+      label: tr('Sofort beitreten (Live)', 'Join immediately (live)'),
+    },
+    {
+      value: 'scheduled',
+      label: tr('Zeitfenster planen', 'Schedule time window'),
+    },
+  ];
+
+  const durationOptions = [
+    { value: '30', label: tr('30 Minuten', '30 minutes') },
+    { value: '60', label: tr('60 Minuten', '60 minutes') },
+    { value: '90', label: tr('90 Minuten', '90 minutes') },
+    { value: '120', label: tr('120 Minuten', '120 minutes') },
+  ];
+
   const handleDispatchSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -89,12 +97,22 @@ export function NewRecordingDialog({
         endIso = new Date(now.getTime() + mins * 60000).toISOString();
       } else {
         if (!startsAt || !endsAt) {
-          throw new Error('Bitte Start- und Endzeit angeben.');
+          throw new Error(
+            tr(
+              'Bitte Start- und Endzeit angeben.',
+              'Please specify both start and end times.'
+            )
+          );
         }
         const startDate = new Date(startsAt);
         const endDate = new Date(endsAt);
         if (endDate <= startDate) {
-          throw new Error('Die Endzeit muss nach der Startzeit liegen.');
+          throw new Error(
+            tr(
+              'Die Endzeit muss nach der Startzeit liegen.',
+              'End time must be after start time.'
+            )
+          );
         }
         startIso = startDate.toISOString();
         endIso = endDate.toISOString();
@@ -120,7 +138,12 @@ export function NewRecordingDialog({
   const handleIcsSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!icsText.trim()) {
-      setError('Bitte eine .ics- oder .eml-Einladung einfügen oder auswählen.');
+      setError(
+        tr(
+          'Bitte eine .ics- oder .eml-Einladung einfügen oder auswählen.',
+          'Please paste or select an .ics or .eml calendar invitation.'
+        )
+      );
       return;
     }
     setError(null);
@@ -156,206 +179,240 @@ export function NewRecordingDialog({
         height="auto"
         header={
           <DialogHeader
-            title="Bot in ein Meeting schicken"
-            subtitle="Starten Sie einen Bot sofort per Meeting-Link oder importieren Sie eine Kalendereinladung (.ics / .eml)."
+            title={tr(
+              'Bot in ein Meeting schicken',
+              'Send Bot to a Meeting'
+            )}
+            subtitle={tr(
+              'Starten Sie einen Bot sofort per Meeting-Link oder importieren Sie eine Kalendereinladung (.ics / .eml).',
+              'Dispatch an assistant immediately via meeting URL or import a calendar invitation (.ics / .eml).'
+            )}
             onOpenChange={onOpenChange}
           />
         }
         content={
           <LayoutContent>
             <VStack gap={3}>
-        <SegmentedControl
-          size="sm"
-          layout="fill"
-          label="Startmethode"
-          value={tab}
-          onChange={(v) => setTab(v as 'link' | 'ics')}
-        >
-          <SegmentedControlItem
-            value="link"
-            label="Meeting-Link (Ad-hoc / Geplant)"
-            icon={<Link2 className="h-3.5 w-3.5" />}
-          />
-          <SegmentedControlItem
-            value="ics"
-            label="Kalendereinladung (.ics / .eml)"
-            icon={<CalendarPlus className="h-3.5 w-3.5" />}
-          />
-        </SegmentedControl>
-
-        {error && (
-          <Banner
-            status="error"
-            container="card"
-            title={error}
-            isDismissable
-            onDismiss={() => setError(null)}
-          />
-        )}
-
-        {tab === 'link' ? (
-          <form id="modal-dispatch-form" onSubmit={handleDispatchSubmit}>
-            <FormLayout direction="vertical">
-              <VStack gap={1}>
-                <TextInput
-                  type="url"
-                  label="Meeting-Link (Google Meet, Microsoft Teams, Webex oder Zoom)"
-                  isRequired
-                  value={meetingUrl}
-                  onChange={setMeetingUrl}
-                  placeholder="https://meet.google.com/..., https://teams.microsoft.com/... oder https://zoom.us/j/..."
-                  startIcon={<Video className="h-4 w-4" />}
+              <SegmentedControl
+                size="sm"
+                layout="fill"
+                label={tr('Startmethode', 'Dispatch mode')}
+                value={tab}
+                onChange={(v) => setTab(v as 'link' | 'ics')}
+              >
+                <SegmentedControlItem
+                  value="link"
+                  label={tr(
+                    'Meeting-Link (Ad-hoc / Geplant)',
+                    'Meeting URL (Ad-hoc / Scheduled)'
+                  )}
+                  icon={<Link2 className="h-3.5 w-3.5" />}
                 />
-                {detectedProvider && (
-                  <HStack gap={1.5} vAlign="center">
-                    <Text type="supporting" color="secondary">
-                      Erkanntes System:
-                    </Text>
-                    <ProviderBadge provider={detectedProvider} />
-                  </HStack>
-                )}
-              </VStack>
-
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <TextInput
-                  type="text"
-                  label="Meeting-Titel"
-                  isOptional
-                  value={title}
-                  onChange={setTitle}
-                  placeholder="z. B. Architektur-Sync"
+                <SegmentedControlItem
+                  value="ics"
+                  label={tr(
+                    'Kalendereinladung (.ics / .eml)',
+                    'Calendar invite (.ics / .eml)'
+                  )}
+                  icon={<CalendarPlus className="h-3.5 w-3.5" />}
                 />
-                <TextInput
-                  type="text"
-                  label="Bot-Anzeigename"
-                  isOptional
-                  value={guestName}
-                  onChange={setGuestName}
-                  placeholder={instance.assistantName}
-                />
-              </div>
+              </SegmentedControl>
 
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <Selector
-                  label="Start-Modus"
-                  options={JOIN_MODE_OPTIONS}
-                  value={joinMode}
-                  onChange={(v) => setJoinMode(v as 'live' | 'scheduled')}
+              {error && (
+                <Banner
+                  status="error"
+                  container="card"
+                  title={error}
+                  isDismissable
+                  onDismiss={() => setError(null)}
                 />
-                {joinMode === 'live' && (
-                  <div id="modal-duration-field">
-                    <Selector
-                      label="Maximale Aufnahmedauer"
-                      options={DURATION_OPTIONS}
-                      value={durationMin}
-                      onChange={setDurationMin}
-                    />
-                  </div>
-                )}
-              </div>
-
-              {joinMode === 'scheduled' && (
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  <VStack gap={1} id="modal-start-field">
-                    <Text as="label" type="supporting" weight="semibold">
-                      Startzeit
-                    </Text>
-                    <input
-                      id="modal-starts-at"
-                      type="datetime-local"
-                      value={startsAt}
-                      onChange={(e) => setStartsAt(e.target.value)}
-                      className="w-full rounded-md border border-[var(--color-border)] bg-[var(--color-background-surface)] px-3 py-2 text-sm text-[var(--color-text-primary)]"
-                    />
-                  </VStack>
-                  <VStack gap={1} id="modal-end-field">
-                    <Text as="label" type="supporting" weight="semibold">
-                      Endzeit
-                    </Text>
-                    <input
-                      id="modal-ends-at"
-                      type="datetime-local"
-                      value={endsAt}
-                      onChange={(e) => setEndsAt(e.target.value)}
-                      className="w-full rounded-md border border-[var(--color-border)] bg-[var(--color-background-surface)] px-3 py-2 text-sm text-[var(--color-text-primary)]"
-                    />
-                  </VStack>
-                </div>
               )}
 
-              <HStack justify="end" gap={2}>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  label="Abbrechen"
-                  onClick={() => onOpenChange(false)}
-                />
-                <Button
-                  type="submit"
-                  variant="primary"
-                  isLoading={submitting}
-                  label={submitting ? 'Wird gestartet…' : 'Bot starten'}
-                />
-              </HStack>
-            </FormLayout>
-          </form>
-        ) : (
-          <form onSubmit={handleIcsSubmit}>
-            <FormLayout direction="vertical">
-              {instance.mail.allowedDomains.length > 0 && (
-                <Text type="supporting" color="secondary">
-                  Hinweis: Der in der <code>.ics</code>-Datei eingetragene{' '}
-                  <code>ORGANIZER</code> muss zu einer freigeschalteten Domain
-                  gehören (
-                  {instance.mail.allowedDomains.map((d) => `@${d}`).join(', ')}
-                  ). Für externe Kundentermine nutzen Sie bitte den Reiter{' '}
-                  <strong>Meeting-Link</strong>.
-                </Text>
+              {tab === 'link' ? (
+                <form id="modal-dispatch-form" onSubmit={handleDispatchSubmit}>
+                  <FormLayout direction="vertical">
+                    <VStack gap={1}>
+                      <TextInput
+                        type="url"
+                        label={tr(
+                          'Meeting-Link (Google Meet, Microsoft Teams, Webex oder Zoom)',
+                          'Meeting URL (Google Meet, Microsoft Teams, Webex, or Zoom)'
+                        )}
+                        isRequired
+                        value={meetingUrl}
+                        onChange={setMeetingUrl}
+                        placeholder="https://meet.google.com/..., https://teams.microsoft.com/... / https://zoom.us/j/..."
+                        startIcon={<Video className="h-4 w-4" />}
+                      />
+                      {detectedProvider && (
+                        <HStack gap={1.5} vAlign="center">
+                          <Text type="supporting" color="secondary">
+                            {tr('Erkanntes System:', 'Detected provider:')}
+                          </Text>
+                          <ProviderBadge provider={detectedProvider} />
+                        </HStack>
+                      )}
+                    </VStack>
+
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      <TextInput
+                        type="text"
+                        label={tr('Meeting-Titel', 'Meeting title')}
+                        isOptional
+                        value={title}
+                        onChange={setTitle}
+                        placeholder={tr(
+                          'z. B. Architektur-Sync',
+                          'e.g. Architecture Sync'
+                        )}
+                      />
+                      <TextInput
+                        type="text"
+                        label={tr('Bot-Anzeigename', 'Bot display name')}
+                        isOptional
+                        value={guestName}
+                        onChange={setGuestName}
+                        placeholder={instance.assistantName}
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      <Selector
+                        label={tr('Start-Modus', 'Join mode')}
+                        options={joinModeOptions}
+                        value={joinMode}
+                        onChange={(v) => setJoinMode(v as 'live' | 'scheduled')}
+                      />
+                      {joinMode === 'live' && (
+                        <div id="modal-duration-field">
+                          <Selector
+                            label={tr(
+                              'Maximale Aufnahmedauer',
+                              'Maximum recording duration'
+                            )}
+                            options={durationOptions}
+                            value={durationMin}
+                            onChange={setDurationMin}
+                          />
+                        </div>
+                      )}
+                    </div>
+
+                    {joinMode === 'scheduled' && (
+                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                        <VStack gap={1} id="modal-start-field">
+                          <Text as="label" type="supporting" weight="semibold">
+                            {tr('Startzeit', 'Start time')}
+                          </Text>
+                          <input
+                            id="modal-starts-at"
+                            type="datetime-local"
+                            value={startsAt}
+                            onChange={(e) => setStartsAt(e.target.value)}
+                            className="w-full rounded-md border border-[var(--color-border)] bg-[var(--color-background-surface)] px-3 py-2 text-sm text-[var(--color-text-primary)]"
+                          />
+                        </VStack>
+                        <VStack gap={1} id="modal-end-field">
+                          <Text as="label" type="supporting" weight="semibold">
+                            {tr('Endzeit', 'End time')}
+                          </Text>
+                          <input
+                            id="modal-ends-at"
+                            type="datetime-local"
+                            value={endsAt}
+                            onChange={(e) => setEndsAt(e.target.value)}
+                            className="w-full rounded-md border border-[var(--color-border)] bg-[var(--color-background-surface)] px-3 py-2 text-sm text-[var(--color-text-primary)]"
+                          />
+                        </VStack>
+                      </div>
+                    )}
+
+                    <HStack justify="end" gap={2}>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        label={tr('Abbrechen', 'Cancel')}
+                        onClick={() => onOpenChange(false)}
+                      />
+                      <Button
+                        type="submit"
+                        variant="primary"
+                        isLoading={submitting}
+                        label={
+                          submitting
+                            ? tr('Wird gestartet…', 'Starting…')
+                            : tr('Bot starten', 'Start bot')
+                        }
+                      />
+                    </HStack>
+                  </FormLayout>
+                </form>
+              ) : (
+                <form onSubmit={handleIcsSubmit}>
+                  <FormLayout direction="vertical">
+                    {instance.mail.allowedDomains.length > 0 && (
+                      <Text type="supporting" color="secondary">
+                        {tr(
+                          `Hinweis: Der in der .ics-Datei eingetragene ORGANIZER muss zu einer freigeschalteten Domain gehören (${instance.mail.allowedDomains.map((d) => `@${d}`).join(', ')}). Für externe Termine nutzen Sie bitte den Reiter Meeting-Link.`,
+                          `Note: The ORGANIZER in the .ics file must belong to an allowed domain (${instance.mail.allowedDomains.map((d) => `@${d}`).join(', ')}). For external calls, use the Meeting URL tab.`
+                        )}
+                      </Text>
+                    )}
+
+                    <label className="flex cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed border-[var(--color-border)] bg-[var(--color-background-muted)]/40 p-4 text-center hover:border-[var(--color-text-accent)] transition-colors">
+                      <Upload className="mb-1.5 h-5 w-5 text-[var(--color-text-accent)]" />
+                      <Text type="supporting" weight="medium" color="primary">
+                        {tr(
+                          '.ics- oder .eml-Datei auswählen',
+                          'Select .ics or .eml file'
+                        )}
+                      </Text>
+                      <Text type="supporting" color="secondary">
+                        {tr(
+                          'Oder Inhalt direkt in das Textfeld unten einfügen',
+                          'Or paste the content directly into the field below'
+                        )}
+                      </Text>
+                      <input
+                        type="file"
+                        accept=".ics,.eml,text/calendar,message/rfc822"
+                        onChange={handleFileChange}
+                        className="hidden"
+                      />
+                    </label>
+
+                    <TextArea
+                      label={tr(
+                        'iCalendar / E-Mail-Inhalt',
+                        'iCalendar / Email payload'
+                      )}
+                      rows={6}
+                      value={icsText}
+                      onChange={setIcsText}
+                      placeholder="BEGIN:VCALENDAR..."
+                    />
+
+                    <HStack justify="end" gap={2}>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        label={tr('Abbrechen', 'Cancel')}
+                        onClick={() => onOpenChange(false)}
+                      />
+                      <Button
+                        type="submit"
+                        variant="primary"
+                        isLoading={submitting}
+                        label={
+                          submitting
+                            ? tr('Importiere…', 'Importing…')
+                            : tr('Einladung importieren', 'Import invite')
+                        }
+                      />
+                    </HStack>
+                  </FormLayout>
+                </form>
               )}
-
-              <label className="flex cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed border-[var(--color-border)] bg-[var(--color-background-muted)]/40 p-4 text-center hover:border-[var(--color-text-accent)] transition-colors">
-                <Upload className="mb-1.5 h-5 w-5 text-[var(--color-text-accent)]" />
-                <Text type="supporting" weight="medium" color="primary">
-                  .ics- oder .eml-Datei auswählen
-                </Text>
-                <Text type="supporting" color="secondary">
-                  Oder Inhalt direkt in das Textfeld unten einfügen
-                </Text>
-                <input
-                  type="file"
-                  accept=".ics,.eml,text/calendar,message/rfc822"
-                  onChange={handleFileChange}
-                  className="hidden"
-                />
-              </label>
-
-              <TextArea
-                label="iCalendar / E-Mail-Inhalt"
-                rows={6}
-                value={icsText}
-                onChange={setIcsText}
-                placeholder="BEGIN:VCALENDAR..."
-              />
-
-              <HStack justify="end" gap={2}>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  label="Abbrechen"
-                  onClick={() => onOpenChange(false)}
-                />
-                <Button
-                  type="submit"
-                  variant="primary"
-                  isLoading={submitting}
-                  label={
-                    submitting ? 'Importiere…' : 'Einladung importieren'
-                  }
-                />
-              </HStack>
-            </FormLayout>
-          </form>
-        )}
             </VStack>
           </LayoutContent>
         }

@@ -47,6 +47,7 @@ import {
   retryMailDelivery,
   updateRecordingProtocol,
 } from '../api';
+import { useI18n } from '../i18n';
 import {
   formatBotDisplayName,
   type AuthMode,
@@ -80,6 +81,7 @@ export function MeetingDetailView({
   onBackToOverview,
   onNavigateHome,
 }: MeetingDetailViewProps) {
+  const { tr } = useI18n();
   const [activeTab, setActiveTab] = useState<
     'transcript' | 'sources' | 'diagnostics'
   >('transcript');
@@ -106,12 +108,20 @@ export function MeetingDetailView({
             <EmptyState
               icon={<FolderOpen className="h-8 w-8" />}
               title={
-                isLoading ? 'Lade Meeting-Details…' : 'Besprechung nicht gefunden'
+                isLoading
+                  ? tr('Lade Meeting-Details…', 'Loading meeting details…')
+                  : tr('Besprechung nicht gefunden', 'Meeting not found')
               }
               description={
                 isLoading
-                  ? 'Abruf der aktuellen Transkript- und Diagnosedaten…'
-                  : 'Wählen Sie eine Aufzeichnung aus der Übersicht oder starten Sie ein neues Meeting.'
+                  ? tr(
+                      'Abruf der aktuellen Transkript- und Diagnosedaten…',
+                      'Fetching transcript and diagnostic data…'
+                    )
+                  : tr(
+                      'Wählen Sie eine Aufzeichnung aus der Übersicht oder starten Sie ein neues Meeting.',
+                      'Select a recording from the overview or start a new meeting.'
+                    )
               }
               actions={
                 isOperator &&
@@ -119,7 +129,7 @@ export function MeetingDetailView({
                   <Button
                     variant="secondary"
                     size="sm"
-                    label="Zurück zu den Aufnahmen"
+                    label={tr('Zurück zu den Aufnahmen', 'Back to recordings')}
                     onClick={onBackToOverview}
                   />
                 )
@@ -148,13 +158,15 @@ export function MeetingDetailView({
     );
     const headerParts: string[] = [];
     if (transcript.summary?.summary) {
-      headerParts.push(`Kurzfassung:\n${transcript.summary.summary}`);
+      headerParts.push(
+        `${tr('Kurzfassung', 'Summary')}:\n${transcript.summary.summary}`
+      );
       if (transcript.summary.action_items?.length) {
         headerParts.push(
-          `Aufgaben & Beschlüsse:\n${transcript.summary.action_items
+          `${tr('Aufgaben & Beschlüsse', 'Action items')}:\n${transcript.summary.action_items
             .map(
               (item) =>
-                `- [${item.owner || 'Alle'}] ${item.task}${item.due ? ` (${item.due})` : ''}`
+                `- [${item.owner || tr('Alle', 'All')}] ${item.task}${item.due ? ` (${item.due})` : ''}`
             )
             .join('\n')}`
         );
@@ -164,7 +176,10 @@ export function MeetingDetailView({
     const body =
       lines.length > 0
         ? [...headerParts, ...lines].join('\n\n')
-        : 'Noch keine transkribierten Segmente vorhanden.';
+        : tr(
+            'Noch keine transkribierten Segmente vorhanden.',
+            'No transcribed segments yet.'
+          );
     if (navigator.clipboard) {
       await navigator.clipboard.writeText(body).catch(() => {});
       setCopiedTranscript(true);
@@ -319,8 +334,14 @@ export function MeetingDetailView({
           {
             id: 'calendar-link',
             label: transcript.calendar_link_synced_at
-              ? 'Kalender-Link im Termin aktualisieren'
-              : 'Protokoll im Kalendertermin verlinken',
+              ? tr(
+                  'Kalender-Link im Termin aktualisieren',
+                  'Update transcript link in calendar'
+                )
+              : tr(
+                  'Protokoll im Kalendertermin verlinken',
+                  'Link transcript in calendar event'
+                ),
             icon: <Link2 className="h-3.5 w-3.5" />,
             onClick: handleLinkInCalendar,
           },
@@ -330,7 +351,10 @@ export function MeetingDetailView({
       ? [
           {
             id: 'rejoin',
-            label: 'Bot erneut ins Meeting schicken',
+            label: tr(
+              'Bot erneut ins Meeting schicken',
+              'Send bot back into meeting'
+            ),
             icon: <RotateCcw className="h-3.5 w-3.5" />,
             onClick: handleRejoin,
           },
@@ -340,7 +364,7 @@ export function MeetingDetailView({
       ? [
           {
             id: 'cancel',
-            label: 'Aufzeichnung beenden',
+            label: tr('Aufzeichnung beenden', 'Stop recording'),
             icon: <Square className="h-3.5 w-3.5" />,
             onClick: handleCancel,
           },
@@ -348,7 +372,10 @@ export function MeetingDetailView({
       : []),
     {
       id: 'delete',
-      label: 'Aufnahme & Transkript löschen…',
+      label: tr(
+        'Aufnahme & Transkript löschen…',
+        'Delete recording & transcript…'
+      ),
       variant: 'destructive' as const,
       icon: <Trash2 className="h-3.5 w-3.5" />,
       onClick: () => setConfirmDeleteOpen(true),
@@ -364,15 +391,18 @@ export function MeetingDetailView({
             <div className="wl-page-container">
             <VStack gap={2}>
               {isOperator && (onBackToOverview || onNavigateHome) && (
-                <Breadcrumbs variant="supporting" label="Pfadnavigation">
+                <Breadcrumbs
+                  variant="supporting"
+                  label={tr('Pfadnavigation', 'Breadcrumb')}
+                >
                   {onNavigateHome && (
                     <BreadcrumbItem onClick={onNavigateHome}>
-                      Startseite
+                      {tr('Startseite', 'Home')}
                     </BreadcrumbItem>
                   )}
                   {onBackToOverview && (
                     <BreadcrumbItem onClick={onBackToOverview}>
-                      Aufnahmen
+                      {tr('Aufnahmen', 'Recordings')}
                     </BreadcrumbItem>
                   )}
                   <BreadcrumbItem isCurrent>
@@ -387,12 +417,12 @@ export function MeetingDetailView({
                     <HStack gap={1.5} vAlign="center">
                       <div className="w-64">
                         <TextInput
-                          label="Sitzungstitel"
+                          label={tr('Sitzungstitel', 'Meeting title')}
                           isLabelHidden
                           size="sm"
                           value={titleDraft}
                           onChange={(val) => setTitleDraft(val)}
-                          placeholder="Sitzungstitel"
+                          placeholder={tr('Sitzungstitel', 'Meeting title')}
                         />
                       </div>
                       <Button
@@ -400,14 +430,14 @@ export function MeetingDetailView({
                         size="sm"
                         isLoading={busyAction === 'title'}
                         icon={<Check className="h-3.5 w-3.5" />}
-                        label="Speichern"
+                        label={tr('Speichern', 'Save')}
                         onClick={handleSaveTitle}
                       />
                       <Button
                         variant="secondary"
                         size="sm"
                         icon={<X className="h-3.5 w-3.5" />}
-                        label="Abbrechen"
+                        label={tr('Abbrechen', 'Cancel')}
                         onClick={() => setIsEditingTitle(false)}
                       />
                     </HStack>
@@ -424,7 +454,10 @@ export function MeetingDetailView({
                             setIsEditingTitle(true);
                           }}
                           className="rounded p-1 text-slate-400 hover:bg-slate-800/60 hover:text-slate-200 transition-colors"
-                          title="Sitzungstitel bearbeiten"
+                          title={tr(
+                            'Sitzungstitel bearbeiten',
+                            'Edit meeting title'
+                          )}
                         >
                           <Edit3 className="h-3.5 w-3.5" />
                         </button>
@@ -438,7 +471,14 @@ export function MeetingDetailView({
                     hasError={hasError}
                   />
                   {transcript.calendar_link_synced_at && (
-                    <Token size="sm" color="green" label="Im Kalender verlinkt" />
+                    <Token
+                      size="sm"
+                      color="green"
+                      label={tr(
+                        'Im Kalender verlinkt',
+                        'Linked in calendar'
+                      )}
+                    />
                   )}
                 </HStack>
 
@@ -456,8 +496,8 @@ export function MeetingDetailView({
                       }
                       label={
                         copiedTranscript
-                          ? 'Transkript kopiert!'
-                          : 'Transkript kopieren'
+                          ? tr('Transkript kopiert!', 'Transcript copied!')
+                          : tr('Transkript kopieren', 'Copy transcript')
                       }
                       onClick={handleCopyTranscript}
                     />
@@ -478,8 +518,8 @@ export function MeetingDetailView({
                         }
                         label={
                           copiedShareLink
-                            ? 'Lese-Link kopiert!'
-                            : 'Lese-Link teilen'
+                            ? tr('Lese-Link kopiert!', 'Share link copied!')
+                            : tr('Lese-Link teilen', 'Share read-only link')
                         }
                         onClick={handleShareReaderLink}
                       />
@@ -497,25 +537,43 @@ export function MeetingDetailView({
                       {
                         id: 'md',
                         label: 'Markdown (.md)',
-                        description: 'Für Notion, Confluence, GitHub',
+                        description: tr(
+                          'Für Notion, Confluence, GitHub',
+                          'For Notion, Confluence, GitHub'
+                        ),
                         onClick: () => handleDownload('md'),
                       },
                       {
                         id: 'txt',
-                        label: 'Klartext (.txt)',
-                        description: 'Lesbares Protokoll mit Zeitstempeln',
+                        label: tr('Klartext (.txt)', 'Plain text (.txt)'),
+                        description: tr(
+                          'Lesbares Protokoll mit Zeitstempeln',
+                          'Readable protocol with timestamps'
+                        ),
                         onClick: () => handleDownload('txt'),
                       },
                       {
                         id: 'vtt',
-                        label: 'WebVTT Untertitel (.vtt)',
-                        description: 'Für Video-Player & Schnittprogramme',
+                        label: tr(
+                          'WebVTT Untertitel (.vtt)',
+                          'WebVTT captions (.vtt)'
+                        ),
+                        description: tr(
+                          'Für Video-Player & Schnittprogramme',
+                          'For video players & editors'
+                        ),
                         onClick: () => handleDownload('vtt'),
                       },
                       {
                         id: 'json',
-                        label: 'Strukturiertes JSON (.json)',
-                        description: 'Alle Segmente, Quellen & Qualitätsdaten',
+                        label: tr(
+                          'Strukturiertes JSON (.json)',
+                          'Structured JSON (.json)'
+                        ),
+                        description: tr(
+                          'Alle Segmente, Quellen & Qualitätsdaten',
+                          'All segments, tracks & quality metadata'
+                        ),
                         onClick: () => handleDownload('json'),
                       },
                     ]}
@@ -530,7 +588,7 @@ export function MeetingDetailView({
                             size="sm"
                             isLoading={busyAction === 'cancel'}
                             icon={<Square className="h-3.5 w-3.5" />}
-                            label="Stopp"
+                            label={tr('Stopp', 'Stop')}
                             onClick={handleCancel}
                           />
                         </span>
@@ -540,7 +598,7 @@ export function MeetingDetailView({
                           size="sm"
                           variant="secondary"
                           alignment="end"
-                          label="Weitere Aktionen"
+                          label={tr('Weitere Aktionen', 'More actions')}
                           items={operatorMenuItems}
                         />
                       </span>
@@ -560,13 +618,16 @@ export function MeetingDetailView({
               >
                 <Tab
                   value="transcript"
-                  label={`Transkript (${transcript.segments?.length || 0})`}
+                  label={`${tr('Transkript', 'Transcript')} (${transcript.segments?.length || 0})`}
                 />
                 <Tab
                   value="sources"
-                  label={`Sprecher & Spuren (${transcript.sources_summary?.length || 0})`}
+                  label={`${tr('Sprecher & Spuren', 'Speakers & Tracks')} (${transcript.sources_summary?.length || 0})`}
                 />
-                <Tab value="diagnostics" label="Technik & Diagnose" />
+                <Tab
+                  value="diagnostics"
+                  label={tr('Technik & Diagnose', 'Diagnostics')}
+                />
               </TabList>
             </VStack>
             </div>
@@ -578,7 +639,7 @@ export function MeetingDetailView({
             hasDivider
             isScrollable
             role="complementary"
-            label="Sitzungs-Inspektor"
+            label={tr('Sitzungs-Inspektor', 'Session inspector')}
           >
             <ParticipationStepper
               recording={recording}
@@ -616,8 +677,14 @@ export function MeetingDetailView({
                     <Banner
                       status="info"
                       container="card"
-                      title={`Zuhörer „${botName}“ tritt dem Meeting bei (Dauer ca. 15–30 Sek.)`}
-                      description="Der Konferenz-Zuhörer verbindet sich stummgeschaltet mit dem Raum. Falls ein Warteraum aktiv ist, lassen Sie ihn dort bitte kurz zu."
+                      title={tr(
+                        `Zuhörer „${botName}“ tritt dem Meeting bei (Dauer ca. 15–30 Sek.)`,
+                        `Assistant “${botName}” is joining the meeting (~15–30s)`
+                      )}
+                      description={tr(
+                        'Der Konferenz-Zuhörer verbindet sich stummgeschaltet mit dem Raum. Falls ein Warteraum aktiv ist, lassen Sie ihn dort bitte kurz zu.',
+                        'The assistant connects muted to the room. If a waiting room is active, please admit it in the meeting window.'
+                      )}
                     />
                     <div className="wl-shimmer-bar" />
                   </VStack>
@@ -629,8 +696,14 @@ export function MeetingDetailView({
                   <Banner
                     status="warning"
                     container="card"
-                    title={`Warteraum aktiv: Bitte „${botName}“ jetzt im Meeting zulassen`}
-                    description={`Der Zuhörer wartet im Konferenz-Warteraum auf Einlass durch den Host (max. ${Math.round(instance.limits.lobbyTimeoutSeconds / 60)} Min.).`}
+                    title={tr(
+                      `Warteraum aktiv: Bitte „${botName}“ jetzt im Meeting zulassen`,
+                      `Waiting room active: Please admit “${botName}” in the meeting`
+                    )}
+                    description={tr(
+                      `Der Zuhörer wartet im Konferenz-Warteraum auf Einlass durch den Host (max. ${Math.round(instance.limits.lobbyTimeoutSeconds / 60)} Min.).`,
+                      `The assistant is waiting in the lobby for host admission (timeout ${Math.round(instance.limits.lobbyTimeoutSeconds / 60)} min).`
+                    )}
                   />
                 </div>
               )}
@@ -642,10 +715,16 @@ export function MeetingDetailView({
                       <LiveWaveform />
                       <VStack gap={0.5}>
                         <Text type="body" weight="bold">
-                          Live-Aufnahme läuft — Wortprotokoll aktualisiert sich automatisch
+                          {tr(
+                            'Live-Aufnahme läuft — Wortprotokoll aktualisiert sich automatisch',
+                            'Recording live — transcript updates automatically'
+                          )}
                         </Text>
                         <Text type="supporting" color="secondary">
-                          Erkannte Teilnehmende: {live.dom_or_signaled_participants ?? 0} · Zugeordnete Sprecher: {live.bound_named_receivers ?? 0}/{live.total_receivers ?? 0} · Erfasste Sprache: {formatDurationHuman(live.active_audio_seconds || 0)} ({formatDurationHuman(live.audio_seconds || 0)} gesamt)
+                          {tr(
+                            `Erkannte Teilnehmende: ${live.dom_or_signaled_participants ?? 0} · Zugeordnete Sprecher: ${live.bound_named_receivers ?? 0}/${live.total_receivers ?? 0} · Erfasste Sprache: ${formatDurationHuman(live.active_audio_seconds || 0)} (${formatDurationHuman(live.audio_seconds || 0)} gesamt)`,
+                            `Participants: ${live.dom_or_signaled_participants ?? 0} · Bound speakers: ${live.bound_named_receivers ?? 0}/${live.total_receivers ?? 0} · Speech: ${formatDurationHuman(live.active_audio_seconds || 0)} (${formatDurationHuman(live.audio_seconds || 0)} total)`
+                          )}
                         </Text>
                       </VStack>
                     </HStack>
@@ -660,10 +739,16 @@ export function MeetingDetailView({
                 <Banner
                   status="error"
                   container="card"
-                  title={`Sitzungshinweis (${reason})`}
+                  title={tr(
+                    `Sitzungshinweis (${reason})`,
+                    `Session notice (${reason})`
+                  )}
                   description={
                     explanation ||
-                    'Die Sitzung wurde vorzeitig oder mit Hinweis beendet.'
+                    tr(
+                      'Die Sitzung wurde vorzeitig oder mit Hinweis beendet.',
+                      'The session ended early or with a diagnostic notice.'
+                    )
                   }
                   endContent={
                     canRejoin ? (
@@ -672,7 +757,10 @@ export function MeetingDetailView({
                         size="sm"
                         isLoading={busyAction === 'rejoin'}
                         icon={<RotateCcw className="h-3.5 w-3.5" />}
-                        label="Jetzt erneut beitreten"
+                        label={tr(
+                          'Jetzt erneut beitreten',
+                          'Rejoin meeting now'
+                        )}
                         onClick={handleRejoin}
                       />
                     ) : undefined
@@ -730,10 +818,16 @@ export function MeetingDetailView({
       <AlertDialog
         isOpen={confirmDeleteOpen}
         onOpenChange={setConfirmDeleteOpen}
-        title="Aufnahme & Transkript unwiderruflich löschen?"
-        description={`Möchten Sie die Aufzeichnung „${formatRecordingTitle(recording)}“ inklusive aller gespeicherten Audiodaten und Transkriptsegmente wirklich dauerhaft löschen?`}
-        actionLabel="Dauerhaft löschen"
-        cancelLabel="Abbrechen"
+        title={tr(
+          'Aufnahme & Transkript unwiderruflich löschen?',
+          'Permanently delete recording & transcript?'
+        )}
+        description={tr(
+          `Möchten Sie die Aufzeichnung „${formatRecordingTitle(recording)}“ inklusive aller gespeicherten Audiodaten und Transkriptsegmente wirklich dauerhaft löschen?`,
+          `Are you sure you want to permanently delete “${formatRecordingTitle(recording)}” including all stored audio tracks and transcript segments?`
+        )}
+        actionLabel={tr('Dauerhaft löschen', 'Delete permanently')}
+        cancelLabel={tr('Abbrechen', 'Cancel')}
         actionVariant="destructive"
         isActionLoading={busyAction === 'delete'}
         onAction={handleDeleteConfirmed}

@@ -7,6 +7,7 @@ import { HStack } from '@astryxdesign/core/Stack';
 import { Text } from '@astryxdesign/core/Text';
 import type { ParticipationState, Provider } from '../../types';
 import { PARTICIPATION_LABELS, PROVIDER_LABELS } from '../../api';
+import { localizeParticipation, useI18n } from '../../i18n';
 
 export function cn(...inputs: ClassValue[]): string {
   return twMerge(clsx(inputs));
@@ -207,20 +208,21 @@ export function StatusBadge({
   processing?: string;
   hasError?: boolean;
 }) {
+  const { lang, tr } = useI18n();
   let variant: 'success' | 'warning' | 'error' | 'accent' | 'neutral' = 'neutral';
   let isPulsing = false;
   let showWaveform = false;
-  let label = PARTICIPATION_LABELS[participation] || participation;
+  let label = localizeParticipation(participation, lang, PARTICIPATION_LABELS);
 
   if (participation === 'capturing') {
     variant = 'success';
     isPulsing = true;
     showWaveform = true;
-    label = 'Zeichnet live auf';
+    label = tr('Zeichnet live auf', 'Recording live');
   } else if (participation === 'waiting_admission') {
     variant = 'warning';
     isPulsing = true;
-    label = 'Im Warteraum';
+    label = tr('Im Warteraum', 'Waiting in lobby');
   } else if (
     participation === 'joining' ||
     participation === 'preparing' ||
@@ -228,21 +230,26 @@ export function StatusBadge({
   ) {
     variant = 'accent';
     isPulsing = true;
-    label = PARTICIPATION_LABELS[participation] || 'Tritt Meeting bei…';
+    label =
+      localizeParticipation(participation, lang, PARTICIPATION_LABELS) ||
+      tr('Tritt Meeting bei…', 'Joining meeting…');
   } else if (participation === 'scheduled') {
     variant = 'neutral';
-    label = 'Geplant';
+    label = tr('Geplant', 'Scheduled');
   } else if (participation === 'ended') {
     if (hasError || processing === 'failed') {
       variant = 'error';
-      label = processing === 'failed' ? 'Verarbeitungsfehler' : 'Mit Hinweis beendet';
+      label =
+        processing === 'failed'
+          ? tr('Verarbeitungsfehler', 'Processing error')
+          : tr('Mit Hinweis beendet', 'Ended with notice');
     } else if (processing === 'completed') {
       variant = 'success';
-      label = 'Protokoll fertig';
+      label = tr('Protokoll fertig', 'Transcript ready');
     } else {
       variant = 'accent';
       isPulsing = true;
-      label = 'Erstellt Protokoll…';
+      label = tr('Erstellt Protokoll…', 'Transcribing…');
     }
   }
 

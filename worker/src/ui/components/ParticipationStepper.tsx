@@ -21,6 +21,11 @@ import {
   getSourceFilterKey,
 } from '../api';
 import {
+  localizeDeliveryStatus,
+  localizeSourceCoverage,
+  useI18n,
+} from '../i18n';
+import {
   formatBotDisplayName,
   type RecordingDetail,
   type SourceSummary,
@@ -46,6 +51,7 @@ export function ParticipationStepper({
   selectedSourceFilter = '',
   onSelectSourceFilter,
 }: ParticipationStepperProps) {
+  const { lang, localeTag, tr } = useI18n();
   const failureReasons = getFailureReasons();
   const instance = getInstanceInfo();
   const botName = formatBotDisplayName(recording, instance.assistantName);
@@ -91,42 +97,53 @@ export function ParticipationStepper({
     sources.reduce((acc, s) => acc + (s.speech_seconds || 0), 0)
   );
 
-  const startFormatted = new Date(recording.starts_at).toLocaleString('de-DE', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+  const startFormatted = new Date(recording.starts_at).toLocaleString(
+    localeTag,
+    {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }
+  );
 
-  const endFormatted = new Date(recording.ends_at).toLocaleTimeString('de-DE', {
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+  const endFormatted = new Date(recording.ends_at).toLocaleTimeString(
+    localeTag,
+    {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }
+  );
 
   return (
     <VStack gap={4}>
       <VStack gap={2}>
-        <Heading level={4}>Ablauf &amp; Status</Heading>
+        <Heading level={4}>{tr('Ablauf & Status', 'Lifecycle & Status')}</Heading>
         <Stepper
           orientation="vertical"
           density="compact"
           activeStep={activeIndex}
-          label="Aufzeichnungsfortschritt"
+          label={tr('Aufzeichnungsfortschritt', 'Recording progress')}
         >
           <Step
             step={0}
-            label="Eingeplant"
+            label={tr('Eingeplant', 'Scheduled')}
             description={`${startFormatted} – ${endFormatted}`}
           />
           <Step
             step={1}
-            label="Tritt dem Meeting bei"
-            description={`Stiller Beitritt als „${botName}“`}
+            label={tr('Tritt dem Meeting bei', 'Joining meeting')}
+            description={tr(
+              `Stiller Beitritt als „${botName}“`,
+              `Silent participant “${botName}”`
+            )}
           />
           <Step
             step={2}
-            label="Warteraum / Einlass"
+            label={tr('Warteraum / Einlass', 'Lobby / Admission')}
             status={
               recording.participation === 'waiting_admission'
                 ? 'warning'
@@ -134,25 +151,34 @@ export function ParticipationStepper({
             }
             description={
               recording.participation === 'waiting_admission'
-                ? 'Bitte im Meeting-Fenster zulassen'
-                : 'Zugang zum Konferenzraum'
+                ? tr(
+                    'Bitte im Meeting-Fenster zulassen',
+                    'Please admit in the meeting window'
+                  )
+                : tr('Zugang zum Konferenzraum', 'Conference room admitted')
             }
           />
           <Step
             step={3}
-            label="Zeichnet Gespräche auf"
+            label={tr('Zeichnet Gespräche auf', 'Capturing speaker tracks')}
             status={
               recording.participation === 'capturing' ? 'success' : undefined
             }
             description={
               sampleSec > 0
-                ? `${formatDurationHuman(sampleSec)} Gespräch erfasst`
-                : 'Sprechergetrennte Tonaufnahme'
+                ? tr(
+                    `${formatDurationHuman(sampleSec)} Gespräch erfasst`,
+                    `${formatDurationHuman(sampleSec)} captured`
+                  )
+                : tr(
+                    'Sprechergetrennte Tonaufnahme',
+                    'Isolated per-speaker audio'
+                  )
             }
           />
           <Step
             step={4}
-            label="Wortprotokoll bereit"
+            label={tr('Wortprotokoll bereit', 'Transcript ready')}
             status={
               isFailedJoin || recording.processing === 'failed'
                 ? 'error'
@@ -165,8 +191,14 @@ export function ParticipationStepper({
               isFailedJoin
                 ? explanation || reason
                 : recording.processing === 'completed'
-                  ? `${transcript?.segments?.length || 0} Wortbeiträge fertig`
-                  : 'Lokale Spracherkennung läuft'
+                  ? tr(
+                      `${transcript?.segments?.length || 0} Wortbeiträge fertig`,
+                      `${transcript?.segments?.length || 0} attributed turns`
+                    )
+                  : tr(
+                      'Lokale Spracherkennung läuft',
+                      'Local GPU ASR running'
+                    )
             }
           />
         </Stepper>
@@ -179,7 +211,10 @@ export function ParticipationStepper({
               width="fill"
               isLoading={rejoining}
               icon={<RotateCcw className="h-3.5 w-3.5" />}
-              label="Bot erneut ins Meeting schicken"
+              label={tr(
+                'Bot erneut ins Meeting schicken',
+                'Send bot back into meeting'
+              )}
               onClick={onRejoin}
             />
           </span>
@@ -189,32 +224,42 @@ export function ParticipationStepper({
       <Divider variant="subtle" />
 
       <VStack gap={2}>
-        <Heading level={4}>Sitzungsdaten</Heading>
+        <Heading level={4}>{tr('Sitzungsdaten', 'Session metadata')}</Heading>
         <MetadataList columns="single">
-          <MetadataListItem label="Zeitfenster">
+          <MetadataListItem label={tr('Zeitfenster', 'Time window')}>
             {startFormatted} – {endFormatted}
           </MetadataListItem>
-          <MetadataListItem label="Bot-Name">{botName}</MetadataListItem>
-          <MetadataListItem label="Erfasstes Audio">
+          <MetadataListItem label={tr('Bot-Name', 'Bot display name')}>
+            {botName}
+          </MetadataListItem>
+          <MetadataListItem label={tr('Erfasstes Audio', 'Captured audio')}>
             {formatDurationHuman(sampleSec)}
           </MetadataListItem>
           {transcript?.quality?.source_coverage && (
-            <MetadataListItem label="Sprecher-Zuordnung">
-              {SOURCE_COVERAGE_LABELS[transcript.quality.source_coverage] ||
-                transcript.quality.source_coverage}
+            <MetadataListItem
+              label={tr('Sprecher-Zuordnung', 'Speaker attribution')}
+            >
+              {localizeSourceCoverage(
+                transcript.quality.source_coverage,
+                lang,
+                SOURCE_COVERAGE_LABELS
+              )}
             </MetadataListItem>
           )}
           {recording.delivery?.status && (
-            <MetadataListItem label="E-Mail-Versand">
-              {DELIVERY_STATUS_LABELS[recording.delivery.status] ||
-                recording.delivery.status}
+            <MetadataListItem label={tr('E-Mail-Versand', 'Email delivery')}>
+              {localizeDeliveryStatus(
+                recording.delivery.status,
+                lang,
+                DELIVERY_STATUS_LABELS
+              )}
             </MetadataListItem>
           )}
           {recording.participation === 'ended' &&
             reason &&
             reason !== 'normal' &&
             reason !== 'source_binding_unverified' && (
-            <MetadataListItem label="Endgrund">
+            <MetadataListItem label={tr('Endgrund', 'End reason')}>
               <Token size="sm" color="orange" label={reason} />
             </MetadataListItem>
           )}
@@ -226,12 +271,17 @@ export function ParticipationStepper({
           <Divider variant="subtle" />
           <VStack gap={2}>
             <HStack justify="between" vAlign="center">
-              <Heading level={4}>Sprecheranteile ({sources.length})</Heading>
+              <Heading level={4}>
+                {tr(
+                  `Sprecheranteile (${sources.length})`,
+                  `Speaking Share (${sources.length})`
+                )}
+              </Heading>
               {selectedSourceFilter && onSelectSourceFilter && (
                 <Button
                   variant="ghost"
                   size="sm"
-                  label="Alle zeigen"
+                  label={tr('Alle zeigen', 'Show all')}
                   onClick={() => onSelectSourceFilter('')}
                 />
               )}
@@ -293,7 +343,7 @@ export function ParticipationStepper({
                         hasTabularNumbers
                       >
                         <strong className="text-[var(--color-text-primary)] font-semibold">
-                          {pct} %
+                          {lang === 'en' ? `${pct}%` : `${pct} %`}
                         </strong>{' '}
                         · {formatDurationHuman(src.speech_seconds)}
                       </Text>

@@ -5,6 +5,7 @@ metadata:
   namespace: {{ .Release.Namespace }}
 data:
   WORTLAUT_NAMESPACE: {{ .Release.Namespace | quote }}
+  WORTLAUT_DEFAULT_LOCALE: {{ .Values.defaultLocale | quote }}
   WORTLAUT_API_URL: {{ printf "https://%s/" .Values.host | quote }}
   WORTLAUT_SDK_PAGE_URL: {{ printf "https://%s/sdk/" .Values.host | quote }}
   WORTLAUT_ENABLE_CONTROLLER: "true"
@@ -15,10 +16,17 @@ data:
   WORTLAUT_ENABLE_ZOOM: {{ .Values.providers.enableZoom | ternary "true" "false" | quote }}
   WORTLAUT_ZOOM_LOCALE: {{ .Values.providers.zoomLocale | quote }}
   WORTLAUT_ENABLE_WEBEX_BROWSER: {{ .Values.providers.enableWebexBrowser | ternary "true" "false" | quote }}
+  WORTLAUT_ENABLE_LLM_SUMMARY: {{ .Values.llmSummary.enabled | ternary "true" "false" | quote }}
   WORTLAUT_MAX_ACTIVE_MEETINGS: {{ .Values.capacity.maxActiveMeetings | toString | quote }}
   WORTLAUT_MAX_PENDING_SAMPLES_TOTAL: {{ .Values.capacity.maxPendingSamplesTotal | toString | quote }}
   WORTLAUT_MAX_STORED_AUDIO_BYTES: {{ .Values.capacity.maxStoredAudioBytes | toString | quote }}
   WORTLAUT_MAX_OPEN_ASR_JOBS: {{ .Values.capacity.maxOpenAsrJobs | toString | quote }}
+{{- if .Values.oidc.issuer }}
+  WORTLAUT_OIDC_ISSUER: {{ .Values.oidc.issuer | quote }}
+  WORTLAUT_OIDC_CLIENT_ID: {{ .Values.oidc.clientId | quote }}
+  WORTLAUT_OIDC_ALLOWED_DOMAINS: {{ .Values.oidc.allowedDomains | toJson | quote }}
+  WORTLAUT_OIDC_ADMIN_EMAILS: {{ .Values.oidc.adminEmails | toJson | quote }}
+{{- end }}
 {{- if .Values.otlpEndpoint }}
   WORTLAUT_OTLP_ENDPOINT: {{ .Values.otlpEndpoint | quote }}
 {{- end }}

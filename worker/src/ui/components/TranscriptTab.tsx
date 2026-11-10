@@ -36,6 +36,7 @@ import {
   matchesSourceFilter,
   updateRecordingProtocol,
 } from '../api';
+import { localizeAttributionStatus, useI18n } from '../i18n';
 import type {
   ParticipationState,
   ProcessingState,
@@ -115,6 +116,7 @@ export function TranscriptTab({
   onSelectedSourceFilterChange,
   onProtocolUpdated,
 }: TranscriptTabProps) {
+  const { lang, tr } = useI18n();
   const [searchQuery, setSearchQuery] = useState('');
   const [copiedTurnId, setCopiedTurnId] = useState<string | null>(null);
 
@@ -155,15 +157,20 @@ export function TranscriptTab({
     };
   }, []);
 
+  const allSpeakersLabel = tr(
+    `Alle Sprecher (${sources.length})`,
+    `All speakers (${sources.length})`
+  );
+
   const sourceOptions = useMemo(() => {
     return [
-      { value: 'all', label: `Alle Sprecher (${sources.length})` },
+      { value: 'all', label: allSpeakersLabel },
       ...sources.map((src) => ({
         value: getSourceFilterKey(src),
         label: `${src.participant_name || src.speaker_label || src.provider_source_id} (${src.segment_count})`,
       })),
     ];
-  }, [sources]);
+  }, [sources, allSpeakersLabel]);
 
   const filteredSegments = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -386,19 +393,24 @@ export function TranscriptTab({
 
   return (
     <VStack gap={3}>
-      {/* 1. Structured AI Protocol Summary & Action Items (opt-in via WORTLAUT_ENABLE_LLM_SUMMARY=true) */}
+      {/* 1. Structured AI Protocol Summary & Action Items */}
       {(summary || (llmSummaryEnabled && isOperator && segments.length > 0)) && (
         <Card>
           <VStack gap={3}>
             <HStack justify="between" vAlign="center" wrap="wrap" gap={2}>
               <HStack gap={2} vAlign="center" wrap="wrap">
                 <Sparkles className="h-4 w-4 text-[var(--color-text-accent)]" />
-                <Heading level={4}>Ergebnisprotokoll & Aufgaben</Heading>
+                <Heading level={4}>
+                  {tr(
+                    'Ergebnisprotokoll & Aufgaben',
+                    'Executive Summary & Action Items'
+                  )}
+                </Heading>
                 {(summary?.model || instance.llmModel) && (
                   <Token
                     size="sm"
                     color="green"
-                    label={`Lokal · ${summary?.model || instance.llmModel}`}
+                    label={`${tr('Lokal', 'Local')} · ${summary?.model || instance.llmModel}`}
                   />
                 )}
               </HStack>
@@ -411,8 +423,14 @@ export function TranscriptTab({
                   icon={<Sparkles className="h-3.5 w-3.5" />}
                   label={
                     summary
-                      ? 'Zusammenfassung aktualisieren'
-                      : 'KI-Zusammenfassung erstellen'
+                      ? tr(
+                          'Zusammenfassung aktualisieren',
+                          'Regenerate summary'
+                        )
+                      : tr(
+                          'KI-Zusammenfassung erstellen',
+                          'Generate AI summary'
+                        )
                   }
                   onClick={handleGenerateSummary}
                 />
@@ -434,7 +452,10 @@ export function TranscriptTab({
                 {summary.topics && summary.topics.length > 0 && (
                   <VStack gap={1.5}>
                     <Text type="supporting" weight="semibold" color="secondary">
-                      Besprochene Themen & Beschlüsse
+                      {tr(
+                        'Besprochene Themen & Beschlüsse',
+                        'Key Topics & Decisions'
+                      )}
                     </Text>
                     <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
                       {summary.topics.map((t, idx) => (
@@ -442,12 +463,14 @@ export function TranscriptTab({
                           key={idx}
                           className="rounded-md border border-[var(--color-border)] bg-[var(--color-background-muted)] p-2.5"
                         >
-                          <Text type="supporting" weight="semibold" color="primary">
-                            {t.title}
-                          </Text>
-                          <Text type="supporting" color="secondary">
-                            {t.details}
-                          </Text>
+                          <VStack gap={0.5}>
+                            <Text type="supporting" weight="semibold" color="primary">
+                              {t.title}
+                            </Text>
+                            <Text type="supporting" color="secondary">
+                              {t.details}
+                            </Text>
+                          </VStack>
                         </div>
                       ))}
                     </div>
@@ -457,7 +480,10 @@ export function TranscriptTab({
                 {summary.action_items && summary.action_items.length > 0 && (
                   <VStack gap={1.5}>
                     <Text type="supporting" weight="semibold" color="secondary">
-                      Aufgaben & nächste Schritte ({summary.action_items.length})
+                      {tr(
+                        `Aufgaben & nächste Schritte (${summary.action_items.length})`,
+                        `Action Items & Next Steps (${summary.action_items.length})`
+                      )}
                     </Text>
                     <VStack gap={1}>
                       {summary.action_items.map((item, idx) => (
@@ -477,7 +503,10 @@ export function TranscriptTab({
               </VStack>
             ) : (
               <Text type="supporting" color="secondary">
-                Erstellen Sie per Klick eine strukturierte Kurzfassung, Themenübersicht und Aufgabenliste auf dem lokalen Cluster-Modell (Qwen 3.8 27B).
+                {tr(
+                  'Erstellen Sie per Klick eine strukturierte Kurzfassung, Themenübersicht und Aufgabenliste auf dem lokalen Sprachmodell.',
+                  'Generate a structured executive summary, topic breakdown, and action items using your self-hosted LLM.'
+                )}
               </Text>
             )}
           </VStack>
@@ -492,7 +521,7 @@ export function TranscriptTab({
             onClick={() => onSelectedSourceFilterChange('')}
             className={`wl-speaker-chip ${!selectedSourceFilter ? 'active' : ''}`}
           >
-            <span>Alle Sprecher ({sources.length})</span>
+            <span>{allSpeakersLabel}</span>
           </button>
           {sources.map((src) => {
             const filterKey = getSourceFilterKey(src);
@@ -516,7 +545,9 @@ export function TranscriptTab({
               >
                 <Avatar size="sm" shape="circle" name={name} />
                 <span>{name}</span>
-                <span className="opacity-70 tabular-nums">({pct} %)</span>
+                <span className="opacity-70 tabular-nums">
+                  ({lang === 'en' ? `${pct}%` : `${pct} %`})
+                </span>
               </button>
             );
           })}
@@ -529,12 +560,15 @@ export function TranscriptTab({
           <TextInput
             type="search"
             size="sm"
-            label="Im Transkript suchen"
+            label={tr('Im Transkript suchen', 'Search transcript')}
             isLabelHidden
             value={searchQuery}
             onChange={setSearchQuery}
             hasClear
-            placeholder="Im Transkript nach Begriffen oder Sprechern suchen…"
+            placeholder={tr(
+              'Im Transkript nach Begriffen oder Sprechern suchen…',
+              'Search transcript by keyword or speaker…'
+            )}
             startIcon={<Search className="h-3.5 w-3.5" />}
           />
         </div>
@@ -551,8 +585,8 @@ export function TranscriptTab({
               icon={<Replace className="h-3.5 w-3.5" />}
               label={
                 activeTermEntries.length > 0
-                  ? `Begriffe korrigieren (${activeTermEntries.length})`
-                  : 'Begriffe korrigieren'
+                  ? `${tr('Begriffe korrigieren', 'Replace terms')} (${activeTermEntries.length})`
+                  : tr('Begriffe korrigieren', 'Replace terms')
               }
               onClick={() => setShowTermBar((v) => !v)}
             />
@@ -562,7 +596,7 @@ export function TranscriptTab({
             <div className="w-64">
               <Selector
                 size="sm"
-                label="Sprecher filtern"
+                label={tr('Sprecher filtern', 'Filter speaker')}
                 isLabelHidden
                 options={sourceOptions}
                 value={selectedSourceFilter || 'all'}
@@ -575,7 +609,7 @@ export function TranscriptTab({
         </HStack>
       </HStack>
 
-      {/* Term Replacement Bar (Search & Replace for Domain Vocabulary / Names) */}
+      {/* Term Replacement Bar */}
       {isOperator && (showTermBar || activeTermEntries.length > 0) && (
         <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-background-muted)] p-3">
           <VStack gap={2}>
@@ -584,16 +618,19 @@ export function TranscriptTab({
               className="flex flex-wrap items-center gap-2"
             >
               <Text type="supporting" weight="semibold" color="primary">
-                Fachbegriff / Name im gesamten Protokoll ersetzen:
+                {tr(
+                  'Fachbegriff / Name im gesamten Protokoll ersetzen:',
+                  'Replace domain term or name across entire protocol:'
+                )}
               </Text>
               <div className="w-44">
                 <TextInput
                   size="sm"
-                  label="Falsch erkannt"
+                  label={tr('Falsch erkannt', 'Misheard term')}
                   isLabelHidden
                   value={termFrom}
                   onChange={setTermFrom}
-                  placeholder="z. B. OmniSA"
+                  placeholder={tr('z. B. OmniSA', 'e.g. OmniSA')}
                 />
               </div>
               <span className="text-xs text-[var(--color-text-secondary)]">
@@ -602,11 +639,11 @@ export function TranscriptTab({
               <div className="w-44">
                 <TextInput
                   size="sm"
-                  label="Korrekte Schreibweise"
+                  label={tr('Korrekte Schreibweise', 'Correct spelling')}
                   isLabelHidden
                   value={termTo}
                   onChange={setTermTo}
-                  placeholder="z. B. OmniASR"
+                  placeholder={tr('z. B. OmniASR', 'e.g. OmniASR')}
                 />
               </div>
               <Button
@@ -615,7 +652,7 @@ export function TranscriptTab({
                 size="sm"
                 isLoading={savingTerm}
                 isDisabled={!termFrom.trim() || !termTo.trim()}
-                label="Übernehmen"
+                label={tr('Übernehmen', 'Apply')}
               />
             </form>
 
@@ -633,7 +670,7 @@ export function TranscriptTab({
                       type="button"
                       onClick={() => handleRemoveTermReplacement(fromTerm)}
                       className="ml-0.5 opacity-60 hover:opacity-100 cursor-pointer"
-                      title="Ersetzung entfernen"
+                      title={tr('Ersetzung entfernen', 'Remove replacement')}
                     >
                       <X className="h-3 w-3" />
                     </button>
@@ -661,23 +698,41 @@ export function TranscriptTab({
             title={
               segments.length === 0
                 ? participation === 'capturing'
-                  ? 'Hört zu — warte auf erste gesprochene Sätze…'
+                  ? tr(
+                      'Hört zu — warte auf erste gesprochene Sätze…',
+                      'Listening — waiting for first spoken statements…'
+                    )
                   : processing === 'processing' || processing === 'pending'
-                    ? 'Spracherkennung erstellt das Wortprotokoll…'
-                    : 'Kein Transkript für diese Sitzung vorhanden'
-                : 'Keine Segmente für diesen Filter gefunden'
+                    ? tr(
+                        'Spracherkennung erstellt das Wortprotokoll…',
+                        'Local speech recognition is transcribing…'
+                      )
+                    : tr(
+                        'Kein Transkript für diese Sitzung vorhanden',
+                        'No transcript available for this session'
+                      )
+                : tr(
+                    'Keine Segmente für diesen Filter gefunden',
+                    'No segments match this filter'
+                  )
             }
             description={
               segments.length === 0
-                ? 'Sobald im Gespräch gesprochen wird, erscheinen die Wortbeiträge hier automatisch nach Sprechern getrennt.'
-                : 'Passen Sie den Suchbegriff oder den gewählten Sprecherfilter an.'
+                ? tr(
+                    'Sobald im Gespräch gesprochen wird, erscheinen die Wortbeiträge hier automatisch nach Sprechern getrennt.',
+                    'As soon as participants speak, statements appear here automatically separated by speaker.'
+                  )
+                : tr(
+                    'Passen Sie den Suchbegriff oder den gewählten Sprecherfilter an.',
+                    'Adjust your search query or clear the active speaker filter.'
+                  )
             }
             actions={
               (searchQuery || selectedSourceFilter) && (
                 <Button
                   variant="secondary"
                   size="sm"
-                  label="Filter zurücksetzen"
+                  label={tr('Filter zurücksetzen', 'Reset filters')}
                   onClick={() => {
                     setSearchQuery('');
                     onSelectedSourceFilterChange('');
@@ -748,7 +803,10 @@ export function TranscriptTab({
                                   ? 'bg-[var(--color-background-accent-emphasis,#059669)] text-white'
                                   : 'bg-[var(--color-background-muted)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]'
                               }`}
-                              title="Originalton dieser Stelle anhören"
+                              title={tr(
+                                'Originalton dieser Stelle anhören',
+                                'Listen to isolated speaker audio snippet'
+                              )}
                             >
                               {isPlaying ? (
                                 <Pause className="h-3 w-3" />
@@ -757,10 +815,10 @@ export function TranscriptTab({
                               )}
                               <span>
                                 {isLoadingAudio
-                                  ? 'Lädt…'
+                                  ? tr('Lädt…', 'Loading…')
                                   : isPlaying
-                                    ? 'Stopp'
-                                    : 'Anhören'}
+                                    ? tr('Stopp', 'Stop')
+                                    : tr('Anhören', 'Listen')}
                               </span>
                             </button>
                           )}
@@ -769,11 +827,11 @@ export function TranscriptTab({
                             <Token
                               size="sm"
                               color="orange"
-                              label={
-                                ATTRIBUTION_STATUS_LABELS[
-                                  turn.attributionStatus
-                                ] || turn.attributionStatus
-                              }
+                              label={localizeAttributionStatus(
+                                turn.attributionStatus,
+                                lang,
+                                ATTRIBUTION_STATUS_LABELS
+                              )}
                             />
                           )}
                         </HStack>
@@ -787,8 +845,14 @@ export function TranscriptTab({
                             <IconButton
                               variant="ghost"
                               size="sm"
-                              label="Sprecher oder Text korrigieren"
-                              tooltip="Sprecher oder Text korrigieren"
+                              label={tr(
+                                'Sprecher oder Text korrigieren',
+                                'Edit speaker or text'
+                              )}
+                              tooltip={tr(
+                                'Sprecher oder Text korrigieren',
+                                'Edit speaker or text'
+                              )}
                               icon={<Edit3 className="h-3.5 w-3.5" />}
                               onClick={() => handleStartEditTurn(turn)}
                             />
@@ -796,8 +860,12 @@ export function TranscriptTab({
                           <IconButton
                             variant="ghost"
                             size="sm"
-                            label="Beitrag kopieren"
-                            tooltip={isCopied ? 'Kopiert!' : 'Beitrag kopieren'}
+                            label={tr('Beitrag kopieren', 'Copy statement')}
+                            tooltip={
+                              isCopied
+                                ? tr('Kopiert!', 'Copied!')
+                                : tr('Beitrag kopieren', 'Copy statement')
+                            }
                             icon={
                               isCopied ? (
                                 <Check className="h-3.5 w-3.5" />
@@ -816,14 +884,20 @@ export function TranscriptTab({
                             <div className="w-72">
                               <TextInput
                                 size="sm"
-                                label="Sprechername (für alle Beiträge dieser Quelle)"
+                                label={tr(
+                                  'Sprechername (für alle Beiträge dieser Quelle)',
+                                  'Speaker name (applies to all turns from this source)'
+                                )}
                                 value={editSpeakerName}
                                 onChange={setEditSpeakerName}
                               />
                             </div>
                             <div>
                               <label className="block text-xs font-medium text-[var(--color-text-secondary)] mb-1">
-                                Protokolltext dieses Beitrags
+                                {tr(
+                                  'Protokolltext dieses Beitrags',
+                                  'Statement text'
+                                )}
                               </label>
                               <textarea
                                 value={editTurnText}
@@ -839,13 +913,13 @@ export function TranscriptTab({
                                 variant="primary"
                                 size="sm"
                                 isLoading={savingEdit}
-                                label="Speichern"
+                                label={tr('Speichern', 'Save')}
                                 onClick={() => handleSaveTurnEdit(turn)}
                               />
                               <Button
                                 variant="ghost"
                                 size="sm"
-                                label="Abbrechen"
+                                label={tr('Abbrechen', 'Cancel')}
                                 onClick={() => setEditingTurnId(null)}
                               />
                             </HStack>
@@ -872,7 +946,10 @@ export function TranscriptTab({
               <div className="py-3.5 px-2 flex items-center gap-2.5 text-sm text-[var(--color-text-secondary)]">
                 <LiveWaveform />
                 <span>
-                  Hört aktiv zu — neue Wortbeiträge erscheinen hier automatisch…
+                  {tr(
+                    'Hört aktiv zu — neue Wortbeiträge erscheinen hier automatisch…',
+                    'Actively listening — new statements appear here automatically…'
+                  )}
                 </span>
               </div>
             )}

@@ -435,8 +435,8 @@ def web_ui():
 
 
 @app.get("/privacy", response_class=HTMLResponse)
-def privacy_page():
-    return HTMLResponse(render_privacy(), headers={"Cache-Control": "no-store"})
+def privacy_page(lang: str | None = None):
+    return HTMLResponse(render_privacy(lang=lang), headers={"Cache-Control": "no-store"})
 
 
 @app.post("/v1/auth/oidc/exchange")
@@ -1736,6 +1736,13 @@ def build_chat_intro(
     recording_url = f"{base_url}/ui#view=meetings&id={recording.id}{token_param}"
     privacy_url = settings.privacy_url or f"{base_url}/privacy"
     bot_label = display_name.strip() or "wortlaut"
+    if getattr(settings, "default_locale", "de") == "en":
+        who_en = inviter.strip() if inviter and inviter.strip() else "a participant"
+        return (
+            f"Hello! I am {bot_label}, invited by {who_en} to transcribe this meeting. "
+            f'If you do not want your statements recorded, simply type "no" or "opt out" in chat. '
+            f"Transcript: {recording_url} | Privacy Notice: {privacy_url}?lang=en"
+        )
     who = inviter.strip() if inviter and inviter.strip() else "einem Teilnehmenden"
     return (
         f"Hallo! Ich bin {bot_label} und wurde von {who} eingeladen, "

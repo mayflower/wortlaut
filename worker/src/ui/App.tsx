@@ -41,6 +41,7 @@ import {
 import { SystemView } from './components/SystemView';
 import { WelcomeLandingView } from './components/WelcomeLandingView';
 import { useThemeMode } from './components/ui/primitives';
+import { useI18n } from './i18n';
 
 interface CommandItem
   extends SearchableItem<{
@@ -52,6 +53,7 @@ interface CommandItem
 export function App() {
   const queryClient = useQueryClient();
   const { mode, setMode } = useThemeMode();
+  const { lang, tr } = useI18n();
 
   const [token, setToken] = useState<string>(() => loadInitialToken());
   const [authDialogOpen, setAuthDialogOpen] = useState<boolean>(false);
@@ -363,28 +365,34 @@ export function App() {
     const baseCommands: CommandItem[] = [
       {
         id: 'act:new-link',
-        label: 'Neues Meeting per Link aufzeichnen…',
+        label: tr(
+          'Neues Meeting per Link aufzeichnen…',
+          'Record a new meeting via URL…'
+        ),
         auxiliaryData: {
-          group: 'Aktionen',
+          group: tr('Aktionen', 'Actions'),
           keywords: ['start', 'bot', 'link', 'meet', 'teams', 'webex', 'zoom'],
           action: () => handleOpenNewModal('link'),
         },
       },
       {
         id: 'act:new-ics',
-        label: 'Kalendereinladung (.ics / .eml) importieren…',
+        label: tr(
+          'Kalendereinladung (.ics / .eml) importieren…',
+          'Import calendar invitation (.ics / .eml)…'
+        ),
         auxiliaryData: {
-          group: 'Aktionen',
-          keywords: ['ics', 'eml', 'kalender', 'import'],
+          group: tr('Aktionen', 'Actions'),
+          keywords: ['ics', 'eml', 'kalender', 'calendar', 'import'],
           action: () => handleOpenNewModal('ics'),
         },
       },
       {
         id: 'nav:home',
-        label: 'Zur Startseite wechseln',
+        label: tr('Zur Startseite wechseln', 'Go to Home'),
         auxiliaryData: {
           group: 'Navigation',
-          keywords: ['startseite', 'home', 'übersicht', 'willkommen'],
+          keywords: ['startseite', 'home', 'übersicht', 'overview'],
           action: () => {
             setSelectedId(null);
             setActiveNav('home');
@@ -393,10 +401,10 @@ export function App() {
       },
       {
         id: 'nav:meetings',
-        label: 'Zu Aufnahmen wechseln',
+        label: tr('Zu Aufnahmen wechseln', 'Go to Recordings'),
         auxiliaryData: {
           group: 'Navigation',
-          keywords: ['aufnahmen', 'meetings', 'archiv', 'protokolle'],
+          keywords: ['aufnahmen', 'meetings', 'archiv', 'recordings'],
           action: () => {
             setSelectedId(null);
             setActiveNav('meetings');
@@ -405,10 +413,13 @@ export function App() {
       },
       {
         id: 'nav:calendar',
-        label: 'Zu Kalender & Synchronisation wechseln',
+        label: tr(
+          'Zu Kalender & Synchronisation wechseln',
+          'Go to Calendar & Sync'
+        ),
         auxiliaryData: {
           group: 'Navigation',
-          keywords: ['kalender', 'google', 'outlook', 'microsoft', 'oauth'],
+          keywords: ['kalender', 'calendar', 'google', 'outlook', 'microsoft', 'oauth'],
           action: () => {
             setSelectedId(null);
             setActiveNav('calendar');
@@ -417,7 +428,10 @@ export function App() {
       },
       {
         id: 'nav:system',
-        label: 'Zu System & Diagnose wechseln',
+        label: tr(
+          'Zu System & Diagnose wechseln',
+          'Go to System & Diagnostics'
+        ),
         auxiliaryData: {
           group: 'Navigation',
           keywords: ['system', 'diagnose', 'status', 'gpu', 'parakeet'],
@@ -429,9 +443,12 @@ export function App() {
       },
       {
         id: 'theme:toggle',
-        label: `Darstellung wechseln (aktuell: ${mode})`,
+        label: tr(
+          `Darstellung wechseln (aktuell: ${mode})`,
+          `Toggle theme (current: ${mode})`
+        ),
         auxiliaryData: {
-          group: 'Einstellungen',
+          group: tr('Einstellungen', 'Settings'),
           keywords: ['dark', 'light', 'theme', 'hell', 'dunkel'],
           action: () => setMode(mode === 'dark' ? 'light' : 'dark'),
         },
@@ -444,14 +461,14 @@ export function App() {
         id: `rec:${r.id}`,
         label: `${formatRecordingTitle(r)} (${PROVIDER_LABELS[r.provider] || r.provider})`,
         auxiliaryData: {
-          group: 'Aufnahmen',
+          group: tr('Aufnahmen', 'Recordings'),
           keywords: [r.provider, r.participation, r.id],
           action: () => handleOpenRecording(r.id),
         },
       }));
 
     return [...baseCommands, ...recordingCommands];
-  }, [rawRecordings, mode]);
+  }, [rawRecordings, mode, lang]);
 
   const commandSearchSource = useMemo(
     () =>
@@ -646,8 +663,11 @@ export function App() {
         isOpen={commandPaletteOpen}
         onOpenChange={setCommandPaletteOpen}
         searchSource={commandSearchSource}
-        label="Schnellsuche & Befehle"
-        emptySearchText="Keine passenden Aufnahmen oder Befehle gefunden."
+        label={tr('Schnellsuche & Befehle', 'Quick Search & Commands')}
+        emptySearchText={tr(
+          'Keine passenden Aufnahmen oder Befehle gefunden.',
+          'No matching recordings or commands found.'
+        )}
         onValueChange={(id) => {
           const match = commandItems.find((item) => item.id === id);
           if (match?.auxiliaryData?.action) {

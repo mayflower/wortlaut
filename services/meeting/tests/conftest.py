@@ -59,7 +59,7 @@ def storage(client, monkeypatch):
     from wortlaut.storage import get_storage
 
     local = Path(__file__).resolve().parents[3] / ".dev/storage.env"
-    if local.exists():
+    if not os.getenv("WORTLAUT_TEST_S3_ENDPOINT") and local.exists():
         for line in local.read_text().splitlines():
             name, value = line.split("=", 1)
             monkeypatch.setenv(name, value)

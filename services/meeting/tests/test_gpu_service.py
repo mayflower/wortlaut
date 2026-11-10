@@ -116,6 +116,12 @@ def test_cpu_fallback_loads_model_on_cpu_when_enabled(monkeypatch):
             restored["map_location"] = map_location
             return DummyModel()
 
+        @staticmethod
+        def from_pretrained(model_name, map_location):
+            restored["pretrained"] = model_name
+            restored["map_location"] = map_location
+            return DummyModel()
+
     asr_models = SimpleNamespace(ASRModel=DummyASRModel)
     nemo_pkg = SimpleNamespace(
         collections=SimpleNamespace(asr=SimpleNamespace(models=asr_models))
@@ -138,6 +144,17 @@ def test_cpu_fallback_loads_model_on_cpu_when_enabled(monkeypatch):
     assert isinstance(loaded, DummyModel)
     assert restored == {
         "filename": "/tmp/2_95_WER.nemo",
+        "map_location": "cpu",
+        "frozen": True,
+        "eval": True,
+    }
+
+    restored.clear()
+    monkeypatch.setenv("WORTLAUT_ASR_MODEL_REPO", "nvidia/parakeet-tdt-0.6b-v3")
+    loaded_multilingual = asr_service.load_model()
+    assert isinstance(loaded_multilingual, DummyModel)
+    assert restored == {
+        "pretrained": "nvidia/parakeet-tdt-0.6b-v3",
         "map_location": "cpu",
         "frozen": True,
         "eval": True,

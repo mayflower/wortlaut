@@ -60,6 +60,11 @@ jobs:
       - name: Lint and behavior tests with PostgreSQL/S3
         run: |
           make lint
+          helm lint charts/wortlaut
+          helm lint charts/wortlaut --set bundled.enabled=true
+          helm template wortlaut charts/wortlaut --namespace wortlaut >/dev/null
+          helm template wortlaut charts/wortlaut --namespace wortlaut --set bundled.enabled=true >/dev/null
+          docker compose config --quiet
           make test
       - name: Build both browser capture bundles
         run: npm --prefix worker run build

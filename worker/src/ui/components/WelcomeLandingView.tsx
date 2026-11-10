@@ -12,9 +12,9 @@ import { TextInput } from '@astryxdesign/core/TextInput';
 import { Button } from '@astryxdesign/core/Button';
 import { Banner } from '@astryxdesign/core/Banner';
 import { Divider } from '@astryxdesign/core/Divider';
-import { List, ListItem } from '@astryxdesign/core/List';
 import { Avatar } from '@astryxdesign/core/Avatar';
 import { getInstanceInfo } from '../api';
+import { useI18n } from '../i18n';
 import { LiveWaveform, ProviderBadge } from './ui/primitives';
 
 export interface WelcomeLandingViewProps {
@@ -34,7 +34,7 @@ function extractTokenInput(raw: string): string {
   return trimmed;
 }
 
-const EXAMPLE_LINES = [
+const EXAMPLE_LINES_DE = [
   {
     time: '00:00:14',
     speaker: 'Anna Lindner',
@@ -55,16 +55,40 @@ const EXAMPLE_LINES = [
   },
 ];
 
+const EXAMPLE_LINES_EN = [
+  {
+    time: '00:00:14',
+    speaker: 'Anna Lindner',
+    share: '46% speaking share',
+    text: 'Let us walk through the open items for Thursday’s release.',
+  },
+  {
+    time: '00:00:23',
+    speaker: 'Markus Berg',
+    share: '34% speaking share',
+    text: 'The database cluster migration is complete—we only need the joint acceptance test.',
+  },
+  {
+    time: '00:00:35',
+    speaker: 'Julia Vogt',
+    share: '20% speaking share',
+    text: 'Great, let us schedule the test run for tomorrow at 10:00 and share the meeting protocol right after.',
+  },
+];
+
 export function WelcomeLandingView({
   authError,
   onConnectToken,
   onStartOidcLogin,
 }: WelcomeLandingViewProps) {
+  const { lang, tr } = useI18n();
   const instance = getInstanceInfo();
   const oidcEnabled = Boolean(instance.oidc?.enabled);
   const [tokenInput, setTokenInput] = useState('');
   const [showTokenForm, setShowTokenForm] = useState(!oidcEnabled);
   const [copiedMail, setCopiedMail] = useState(false);
+
+  const exampleLines = lang === 'en' ? EXAMPLE_LINES_EN : EXAMPLE_LINES_DE;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -95,23 +119,46 @@ export function WelcomeLandingView({
               {instance.providers.zoom && <ProviderBadge provider="zoom" />}
             </HStack>
 
-            <Heading level={1}>Automatische Wortprotokolle für Ihre Meetings</Heading>
+            <Heading level={1}>
+              {tr(
+                'Automatische Wortprotokolle für Ihre Meetings',
+                'Self-Hosted Meeting Transcripts & Protocols'
+              )}
+            </Heading>
             <Text type="body" color="secondary">
-              <strong>{instance.assistantName}</strong> nimmt als stiller Zuhörer an
-              Besprechungen in Google Meet, Microsoft Teams, Cisco Webex und Zoom teil,
-              ordnet jeden Redebeitrag zuverlässig der sprechenden Person zu und
-              erstellt Ihr Protokoll komplett auf eigener Infrastruktur.
+              {lang === 'en' ? (
+                <>
+                  <strong>{instance.assistantName}</strong> joins meetings in
+                  Google Meet, Microsoft Teams, Cisco Webex, and Zoom as a silent
+                  participant, attributes every statement to the verified
+                  speaker track, and runs 100% on your own infrastructure.
+                </>
+              ) : (
+                <>
+                  <strong>{instance.assistantName}</strong> nimmt als stiller
+                  Zuhörer an Besprechungen in Google Meet, Microsoft Teams,
+                  Cisco Webex und Zoom teil, ordnet jeden Redebeitrag
+                  zuverlässig der sprechenden Person zu und erstellt Ihr
+                  Protokoll komplett auf eigener Infrastruktur.
+                </>
+              )}
             </Text>
           </VStack>
 
           <Card>
             <VStack gap={3}>
               <VStack gap={0.5}>
-                <Heading level={3}>Anmelden</Heading>
+                <Heading level={3}>{tr('Anmelden', 'Sign in')}</Heading>
                 <Text type="supporting" color="secondary">
                   {oidcEnabled
-                    ? 'Melden Sie sich mit Ihrem Mayflower-Account an, um eigene Aufnahmen und Kalender-Synchronisationen zu verwalten.'
-                    : 'Geben Sie Ihren Zugangsschlüssel oder einen Lese-Token für ein freigegebenes Protokoll ein.'}
+                    ? tr(
+                        'Melden Sie sich per Single Sign-On (OIDC) an, um eigene Aufnahmen und Kalender-Synchronisationen zu verwalten.',
+                        'Sign in via Single Sign-On (OIDC) to manage your recordings and calendar integrations.'
+                      )
+                    : tr(
+                        'Geben Sie Ihren Zugangsschlüssel oder einen Lese-Token für ein freigegebenes Protokoll ein.',
+                        'Enter your API key or a read-only share token to open a meeting transcript.'
+                      )}
                 </Text>
               </VStack>
 
@@ -127,7 +174,10 @@ export function WelcomeLandingView({
                     size="md"
                     width="fill"
                     icon={<LogIn className="h-4 w-4" />}
-                    label="Mit Mayflower-Account anmelden (SSO)"
+                    label={tr(
+                      'Mit SSO anmelden (OIDC)',
+                      'Sign in with SSO (OIDC)'
+                    )}
                     onClick={onStartOidcLogin}
                   />
                 </span>
@@ -138,7 +188,10 @@ export function WelcomeLandingView({
                   type="button"
                   variant="ghost"
                   size="sm"
-                  label="Lese-Token (wortlaut-read-…) oder API-Schlüssel verwenden"
+                  label={tr(
+                    'Lese-Token (wortlaut-read-…) oder API-Schlüssel verwenden',
+                    'Use read-only token (wortlaut-read-…) or API key'
+                  )}
                   onClick={() => setShowTokenForm(true)}
                 />
               ) : (
@@ -148,10 +201,16 @@ export function WelcomeLandingView({
                     <div id="landing-token-input">
                       <TextInput
                         type="password"
-                        label="Lese-Token (wortlaut-read-…) oder API-Schlüssel"
+                        label={tr(
+                          'Lese-Token (wortlaut-read-…) oder API-Schlüssel',
+                          'Read-only token (wortlaut-read-…) or API key'
+                        )}
                         value={tokenInput}
                         onChange={setTokenInput}
-                        placeholder="Token oder Freigabe-Link einfügen…"
+                        placeholder={tr(
+                          'Token oder Freigabe-Link einfügen…',
+                          'Paste token or share URL…'
+                        )}
                       />
                     </div>
                     <Button
@@ -161,7 +220,7 @@ export function WelcomeLandingView({
                       width="fill"
                       isDisabled={!tokenInput.trim()}
                       icon={<KeyRound className="h-3.5 w-3.5" />}
-                      label="Mit Token öffnen"
+                      label={tr('Mit Token öffnen', 'Open with token')}
                     />
                   </FormLayout>
                 </form>
@@ -171,7 +230,9 @@ export function WelcomeLandingView({
 
           <VStack gap={2}>
             <HStack justify="between" vAlign="center" wrap="wrap" gap={2}>
-              <Heading level={4}>Ablauf in 3 Schritten</Heading>
+              <Heading level={4}>
+                {tr('Ablauf in 3 Schritten', 'How it works in 3 steps')}
+              </Heading>
               {instance.botEmail && (
                 <Button
                   variant="secondary"
@@ -183,7 +244,11 @@ export function WelcomeLandingView({
                       <Copy className="h-3 w-3" />
                     )
                   }
-                  label={copiedMail ? 'Kopiert' : `Bot-E-Mail: ${instance.botEmail}`}
+                  label={
+                    copiedMail
+                      ? tr('Kopiert', 'Copied')
+                      : `${tr('Bot-E-Mail', 'Bot email')}: ${instance.botEmail}`
+                  }
                   onClick={handleCopyBotMail}
                 />
               )}
@@ -192,30 +257,45 @@ export function WelcomeLandingView({
               <div className="py-2.5">
                 <VStack gap={0.5}>
                   <Text type="body" weight="semibold">
-                    1. Kalender verbinden oder Meeting-Link starten
+                    {tr(
+                      '1. Kalender verbinden oder Meeting-Link starten',
+                      '1. Connect calendar or paste a meeting link'
+                    )}
                   </Text>
                   <Text type="supporting" color="secondary">
-                    Google Calendar oder Microsoft 365 per Read-Only-OAuth2 verknüpfen, Meeting-URL direkt einfügen oder den Bot per E-Mail einladen.
+                    {tr(
+                      'Google Calendar oder Microsoft 365 per OAuth2 verknüpfen, Meeting-URL direkt einfügen oder den Bot per E-Mail einladen.',
+                      'Connect Google Calendar or Microsoft 365 via OAuth2, paste a meeting URL directly, or invite the bot via email.'
+                    )}
                   </Text>
                 </VStack>
               </div>
               <div className="py-2.5">
                 <VStack gap={0.5}>
                   <Text type="body" weight="semibold">
-                    2. Im Warteraum zulassen
+                    {tr('2. Im Warteraum zulassen', '2. Admit from the lobby')}
                   </Text>
                   <Text type="supporting" color="secondary">
-                    Der Bot tritt stummgeschaltet als „{instance.assistantName}“ bei und erfasst jede Teilnehmer-Audiospur vor dem Konferenz-Mix einzeln.
+                    {tr(
+                      `Der Bot tritt stummgeschaltet als „${instance.assistantName}“ bei und erfasst jede Teilnehmer-Audiospur vor dem Konferenz-Mix einzeln.`,
+                      `The bot joins muted as “${instance.assistantName}” and captures each participant’s audio track individually before mixing.`
+                    )}
                   </Text>
                 </VStack>
               </div>
               <div className="py-2.5">
                 <VStack gap={0.5}>
                   <Text type="body" weight="semibold">
-                    3. Protokoll lesen, teilen oder exportieren
+                    {tr(
+                      '3. Protokoll lesen, teilen oder exportieren',
+                      '3. Read, share, or export your protocol'
+                    )}
                   </Text>
                   <Text type="supporting" color="secondary">
-                    Fertige Transkripte lassen sich nach Sprechern filtern, als .md, .txt, .vtt oder .json herunterladen und per Lese-Link teilen.
+                    {tr(
+                      'Fertige Transkripte lassen sich nach Sprechern filtern, als .md, .txt, .vtt oder .json herunterladen und per Lese-Link teilen.',
+                      'Filter transcripts by speaker, download as .md, .txt, .vtt, or .json, and share read-only protocol links.'
+                    )}
                   </Text>
                 </VStack>
               </div>
@@ -230,7 +310,9 @@ export function WelcomeLandingView({
               <HStack justify="between" vAlign="center" wrap="wrap" gap={2}>
                 <HStack gap={2} vAlign="center">
                   <LiveWaveform />
-                  <Heading level={4}>Beispiel-Protokoll</Heading>
+                  <Heading level={4}>
+                    {tr('Beispiel-Protokoll', 'Sample Transcript')}
+                  </Heading>
                 </HStack>
                 <ProviderBadge provider="teams" size="sm" />
               </HStack>
@@ -238,7 +320,7 @@ export function WelcomeLandingView({
               <Divider variant="subtle" />
 
               <div className="divide-y divide-[var(--color-border)]">
-                {EXAMPLE_LINES.map((line) => (
+                {exampleLines.map((line) => (
                   <div key={line.time} className="py-3 wl-turn-row">
                     <HStack gap={2} vAlign="start">
                       <Avatar size="sm" shape="circle" name={line.speaker} />
@@ -264,15 +346,22 @@ export function WelcomeLandingView({
 
               <HStack justify="between" vAlign="center" wrap="wrap" gap={2}>
                 <Text type="supporting" color="secondary">
-                  Lokale Spracherkennung (Parakeet-GPU) · Keine Cloud-Weitergabe
+                  {tr(
+                    'Lokale Spracherkennung (Parakeet-GPU) · Keine Cloud-Weitergabe',
+                    'Local speech recognition (Parakeet GPU) · Zero cloud sharing'
+                  )}
                 </Text>
                 <Text type="supporting" color="secondary">
-                  Roh-Audio nach {instance.retention.audioHours}h gelöscht ·{' '}
+                  {tr(
+                    `Roh-Audio nach ${instance.retention.audioHours}h gelöscht`,
+                    `Raw audio deleted after ${instance.retention.audioHours}h`
+                  )}{' '}
+                  ·{' '}
                   <a
-                    href="/privacy"
+                    href={`/privacy?lang=${lang}`}
                     className="text-[var(--color-text-accent)] underline"
                   >
-                    Datenschutz-Info
+                    {tr('Datenschutz-Info', 'Privacy notice')}
                   </a>
                 </Text>
               </HStack>

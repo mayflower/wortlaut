@@ -1,0 +1,47 @@
+name: Provider Join / Audio Capture Issue
+description: Report a join, lobby, speaker binding, or chat issue with Google Meet, Teams, Webex, or Zoom
+title: "[Provider]: "
+labels: ["bug", "provider"]
+body:
+  - type: dropdown
+    id: provider
+    attributes:
+      label: Conference Provider
+      options:
+        - Google Meet (google_meet)
+        - Microsoft Teams (teams)
+        - Cisco Webex (webex)
+        - Zoom (zoom)
+    validations:
+      required: true
+  - type: dropdown
+    id: auth_mode
+    attributes:
+      label: Bot Join Mode
+      options:
+        - Guest (unauthenticated browser join)
+        - Authenticated session (storageState / service token)
+    validations:
+      required: true
+  - type: input
+    id: locale
+    attributes:
+      label: Configured Locale & Failure Reason Code
+      description: e.g. `de-DE` / `en-US` and the reported failure reason (such as `lobby_timeout`, `guest_name_input_failed`, `join_button_missing`)
+      placeholder: "de-DE / join_button_missing"
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: Observed Behavior
+      description: Describe what happened during pre-join, lobby admission, audio capture, or chat interaction. Redact any real meeting URLs or participant names!
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Deployment Mode & Image Version
+      placeholder: "Docker Compose / Helm v0.1.0 / commit SHA"
+    validations:
+      required: true

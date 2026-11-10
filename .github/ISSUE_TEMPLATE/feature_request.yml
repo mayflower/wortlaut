@@ -1,0 +1,19 @@
+name: Feature Request
+description: Propose an improvement for meeting workflows, integrations, exports, or operations
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: User Problem / Use Case
+      description: Who needs this and what concrete workflow problem does it solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed Solution
+      description: How should this work in wortlaut while respecting sovereign self-hosting and per-participant attribution?
+    validations:
+      required: true

@@ -1118,6 +1118,12 @@ def test_oidc_dex_pkce_exchange_and_per_user_isolation(client, database, monkeyp
     from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
     import wortlaut.oidc as oidc_mod
+    from wortlaut.settings import get_settings
+
+    monkeypatch.setenv("WORTLAUT_OIDC_ISSUER", "https://id.example.org")
+    monkeypatch.setenv("WORTLAUT_OIDC_ALLOWED_DOMAINS", '["mayflower.de"]')
+    monkeypatch.setenv("WORTLAUT_OIDC_ADMIN_EMAILS", '["admin@mayflower.de"]')
+    get_settings.cache_clear()
 
     private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     pub_numbers = private_key.public_key().public_numbers()
@@ -1142,7 +1148,7 @@ def test_oidc_dex_pkce_exchange_and_per_user_isolation(client, database, monkeyp
         header = {"alg": "RS256", "typ": "JWT", "kid": "test-dex-key-1"}
         now_ts = int(time.time())
         payload = {
-            "iss": "https://id.data.mayflower.tech",
+            "iss": "https://id.example.org",
             "sub": sub,
             "aud": "wortlaut",
             "exp": now_ts + 3600,
@@ -1216,8 +1222,8 @@ def test_oidc_dex_pkce_exchange_and_per_user_isolation(client, database, monkeyp
 
     next_id_token["value"] = _make_id_token(
         "sub-admin",
-        "johann-peter.hartmann@mayflower.de",
-        "Johann-Peter Hartmann",
+        "admin@mayflower.de",
+        "Platform Admin",
         "nonce-admin",
     )
     ex_admin = client.post(
@@ -1285,6 +1291,10 @@ def test_oidc_dex_pkce_exchange_and_per_user_isolation(client, database, monkeyp
     assert privacy.status_code == 200
     assert "Datenschutz- &amp; Transparenzhinweis" in privacy.text
     assert "Keine Stimmprofile" in privacy.text
+    privacy_en = client.get("/privacy?lang=en")
+    assert privacy_en.status_code == 200
+    assert "Privacy &amp; Transparency Notice" in privacy_en.text
+    assert "No Voiceprints" in privacy_en.text
 
     from wortlaut.settings import get_settings
 

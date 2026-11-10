@@ -238,20 +238,30 @@ class LocalProcessRuntime(LocalSecretStore):
 
 
 class DockerRuntime(LocalSecretStore):
-    """Spawns each worker attempt as a short-lived container via the Docker Engine socket."""
+    """Spawns each worker attempt as a short-lived container via Docker socket or TCP proxy."""
 
-    def __init__(self, root: Path | None = None, socket_path: str = "/var/run/docker.sock"):
+    def __init__(self, root: Path | None = None, socket_path: str | None = None):
         settings = get_settings()
         base = root or settings.runtime_state_dir
         base.mkdir(parents=True, exist_ok=True)
         super().__init__(base)
-        self.socket_path = socket_path
+        self.docker_host = (socket_path or settings.docker_host or "unix:///var/run/docker.sock").strip()
         self.jobs: dict[str, dict] = {}
+
+    def _open_connection(self) -> http.client.HTTPConnection:
+        target = self.docker_host
+        if target.startswith(("tcp://", "http://")):
+            parsed = urllib.parse.urlsplit(target.replace("tcp://", "http://", 1))
+            if not parsed.hostname:
+                raise ValueError(f"Invalid WORTLAUT_DOCKER_HOST: {target}")
+            return http.client.HTTPConnection(parsed.hostname, parsed.port or 2375, timeout=10.0)
+        sock_path = target.removeprefix("unix://")
+        return UnixHTTPConnection(sock_path, timeout=10.0)
 
     def _docker_request(
         self, method: str, path: str, payload: dict | None = None
     ) -> tuple[int, str]:
-        conn = UnixHTTPConnection(self.socket_path, timeout=10.0)
+        conn = self._open_connection()
         try:
             headers = {"Content-Type": "application/json"} if payload is not None else {}
             body = json.dumps(payload).encode("utf-8") if payload is not None else None

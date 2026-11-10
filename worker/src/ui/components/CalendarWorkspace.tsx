@@ -18,8 +18,8 @@ import { VStack } from '@astryxdesign/core/VStack';
 import { Card } from '@astryxdesign/core/Card';
 import { Section } from '@astryxdesign/core/Section';
 import { Button } from '@astryxdesign/core/Button';
+import { IconButton } from '@astryxdesign/core/IconButton';
 import { Switch } from '@astryxdesign/core/Switch';
-import { StatusDot } from '@astryxdesign/core/StatusDot';
 import { Token } from '@astryxdesign/core/Token';
 import { Banner } from '@astryxdesign/core/Banner';
 import { EmptyState } from '@astryxdesign/core/EmptyState';
@@ -37,6 +37,7 @@ import {
   syncCalendarConnection,
   toggleCalendarSyncedEvent,
 } from '../api';
+import { useI18n, type UiLang } from '../i18n';
 import type {
   CalendarConnectionInfo,
   CalendarEvent,
@@ -55,7 +56,7 @@ export interface CalendarWorkspaceProps {
   onNavigateHome?: () => void;
 }
 
-const CALENDAR_STATUS_LABELS: Record<string, string> = {
+const CALENDAR_STATUS_LABELS_DE: Record<string, string> = {
   accepted: 'Eingeplant',
   CONFIRMED: 'Bestätigt',
   confirmed: 'Bestätigt',
@@ -65,14 +66,26 @@ const CALENDAR_STATUS_LABELS: Record<string, string> = {
   ignored: 'Ignoriert',
 };
 
+const CALENDAR_STATUS_LABELS_EN: Record<string, string> = {
+  accepted: 'Scheduled',
+  CONFIRMED: 'Confirmed',
+  confirmed: 'Confirmed',
+  cancelled: 'Cancelled',
+  CANCELLED: 'Cancelled',
+  rejected: 'Rejected',
+  ignored: 'Ignored',
+};
+
 type SyncedEventRow = CalendarSyncedEventInfo & Record<string, unknown>;
 type IcsEventRow = CalendarEvent & { _rowKey: string } & Record<string, unknown>;
 
 function formatCalendarSlot(
   startsAt: string | null,
-  endsAt?: string | null
+  endsAt: string | null | undefined,
+  lang: UiLang
 ): string {
-  if (!startsAt) return 'Serientermin';
+  const localeTag = lang === 'en' ? 'en-US' : 'de-DE';
+  if (!startsAt) return lang === 'en' ? 'Recurring event' : 'Serientermin';
   const start = new Date(startsAt);
   const now = new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -85,26 +98,28 @@ function formatCalendarSlot(
 
   let dayPrefix: string;
   if (targetDay.getTime() === today.getTime()) {
-    dayPrefix = 'Heute';
+    dayPrefix = lang === 'en' ? 'Today' : 'Heute';
   } else if (targetDay.getTime() === tomorrow.getTime()) {
-    dayPrefix = 'Morgen';
+    dayPrefix = lang === 'en' ? 'Tomorrow' : 'Morgen';
   } else {
-    dayPrefix = start.toLocaleDateString('de-DE', {
+    dayPrefix = start.toLocaleDateString(localeTag, {
       weekday: 'short',
       day: '2-digit',
       month: '2-digit',
     });
   }
 
-  const startTime = start.toLocaleTimeString('de-DE', {
+  const startTime = start.toLocaleTimeString(localeTag, {
     hour: '2-digit',
     minute: '2-digit',
+    hour12: false,
   });
   if (endsAt) {
     const end = new Date(endsAt);
-    const endTime = end.toLocaleTimeString('de-DE', {
+    const endTime = end.toLocaleTimeString(localeTag, {
       hour: '2-digit',
       minute: '2-digit',
+      hour12: false,
     });
     return `${dayPrefix}, ${startTime} – ${endTime}`;
   }
@@ -121,6 +136,7 @@ export function CalendarWorkspace({
   onOpenImportModal,
   onNavigateHome,
 }: CalendarWorkspaceProps) {
+  const { lang, localeTag, tr } = useI18n();
   const instance = getInstanceInfo();
   const failureReasons = getFailureReasons();
   const [copiedMail, setCopiedMail] = useState(false);
@@ -132,6 +148,8 @@ export function CalendarWorkspace({
   const googleConn = connections.find((c) => c.provider === 'google') || null;
   const microsoftConn =
     connections.find((c) => c.provider === 'microsoft') || null;
+  const statusMap =
+    lang === 'en' ? CALENDAR_STATUS_LABELS_EN : CALENDAR_STATUS_LABELS_DE;
 
   const handleCopyMail = async () => {
     if (!instance.botEmail || !navigator.clipboard) return;
@@ -196,11 +214,17 @@ export function CalendarWorkspace({
   const syncedColumns: TableColumn<SyncedEventRow>[] = [
     {
       key: 'auto_record',
-      header: 'Aufzeichnen',
-      width: pixel(150),
+      header: tr('Aufzeichnen', 'Auto-record'),
+      width: pixel(120),
       renderCell: (ev) => {
         if (ev.status === 'cancelled') {
-          return <StatusIndicator variant="error" weight="medium" label="Abgesagt" />;
+          return (
+            <StatusIndicator
+              variant="error"
+              weight="medium"
+              label={tr('Abgesagt', 'Cancelled')}
+            />
+          );
         }
         const toggleBusy = oauthBusy === `toggle-${ev.id}`;
         return (
@@ -209,7 +233,7 @@ export function CalendarWorkspace({
             value={ev.auto_record}
             isLoading={toggleBusy}
             isDisabled={oauthBusy !== null}
-            label={ev.auto_record ? 'An' : 'Aus'}
+            label={ev.auto_record ? tr('An', 'On') : tr('Aus', 'Off')}
             onChange={(checked) => handleToggleSyncedEvent(ev, checked)}
           />
         );
@@ -217,7 +241,7 @@ export function CalendarWorkspace({
     },
     {
       key: 'title',
-      header: 'Termin & Konferenz',
+      header: tr('Termin & Konferenz', 'Meeting & Provider'),
       width: proportional(2, { minWidth: 240 }),
       renderCell: (ev) => (
         <HStack gap={2} vAlign="center" wrap="nowrap">
@@ -225,7 +249,7 @@ export function CalendarWorkspace({
             <ProviderBadge provider={ev.meeting_provider} />
           </span>
           <Text type="body" weight="semibold" color="primary" maxLines={1}>
-            {ev.title || 'Kalendertermin'}
+            {ev.title || tr('Kalendertermin', 'Calendar event')}
           </Text>
           <span className="shrink-0">
             <Token
@@ -239,33 +263,37 @@ export function CalendarWorkspace({
     },
     {
       key: 'organizer_email',
-      header: 'Rolle / Regel',
+      header: tr('Rolle / Regel', 'Role / Policy'),
       width: proportional(1.2, { minWidth: 180 }),
       renderCell: (ev) =>
         ev.is_self_organized ? (
-          <Token size="sm" color="blue" label="Organisator (Auto-Join)" />
+          <Token
+            size="sm"
+            color="blue"
+            label={tr('Organisator (Auto-Join)', 'Organizer (auto-join)')}
+          />
         ) : (
           <Token
             size="sm"
             color="orange"
-            label={`Gast (${ev.organizer_email || 'Extern'})`}
+            label={`${tr('Gast', 'Attendee')} (${ev.organizer_email || tr('Extern', 'External')})`}
           />
         ),
     },
     {
       key: 'starts_at',
-      header: 'Zeitfenster',
-      width: pixel(190),
+      header: tr('Zeitfenster', 'Time slot'),
+      width: pixel(160),
       renderCell: (ev) => (
         <Text type="supporting" color="secondary" hasTabularNumbers>
-          {formatCalendarSlot(ev.starts_at, ev.ends_at)}
+          {formatCalendarSlot(ev.starts_at, ev.ends_at, lang)}
         </Text>
       ),
     },
     {
       key: 'recording_id',
-      header: 'Protokoll',
-      width: pixel(240),
+      header: tr('Protokoll', 'Protocol'),
+      width: pixel(290),
       align: 'end',
       renderCell: (ev) => {
         if (!ev.recording_id) {
@@ -279,12 +307,28 @@ export function CalendarWorkspace({
         return (
           <HStack gap={1.5} vAlign="center" justify="end" wrap="nowrap">
             {ev.calendar_link_synced_at && (
-              <Token size="sm" color="green" label="Im Termin verlinkt" />
+              <span className="shrink-0">
+                <Token
+                  size="sm"
+                  color="green"
+                  label={tr('Im Termin verlinkt', 'Linked in event')}
+                />
+              </span>
             )}
             {isCompleted && ev.protocol_url && (
-              <Button
+              <IconButton
                 variant="ghost"
                 size="sm"
+                label={
+                  copiedProtocolId === ev.id
+                    ? tr('Kopiert', 'Copied')
+                    : tr('Protokoll-Link kopieren', 'Copy protocol link')
+                }
+                tooltip={
+                  copiedProtocolId === ev.id
+                    ? tr('Kopiert!', 'Copied!')
+                    : tr('Protokoll-Link kopieren', 'Copy protocol link')
+                }
                 icon={
                   copiedProtocolId === ev.id ? (
                     <Check className="h-3.5 w-3.5" />
@@ -292,7 +336,6 @@ export function CalendarWorkspace({
                     <Copy className="h-3.5 w-3.5" />
                   )
                 }
-                label={copiedProtocolId === ev.id ? 'Kopiert' : 'Link'}
                 onClick={async () => {
                   try {
                     await navigator.clipboard.writeText(ev.protocol_url!);
@@ -304,13 +347,19 @@ export function CalendarWorkspace({
                 }}
               />
             )}
-            <Button
-              variant={isCompleted ? 'secondary' : 'ghost'}
-              size="sm"
-              label={isCompleted ? 'Protokoll öffnen' : 'Öffnen'}
-              endContent={<ArrowRight className="h-3.5 w-3.5" />}
-              onClick={() => onSelectRecording(ev.recording_id!)}
-            />
+            <span className="shrink-0">
+              <Button
+                variant={isCompleted ? 'secondary' : 'ghost'}
+                size="sm"
+                label={
+                  isCompleted
+                    ? tr('Protokoll öffnen', 'Open transcript')
+                    : tr('Öffnen', 'Open')
+                }
+                endContent={<ArrowRight className="h-3.5 w-3.5" />}
+                onClick={() => onSelectRecording(ev.recording_id!)}
+              />
+            </span>
           </HStack>
         );
       },
@@ -332,7 +381,7 @@ export function CalendarWorkspace({
           ev.status === 'accepted' ||
           ev.status === 'CONFIRMED' ||
           ev.status === 'confirmed';
-        const statusLabel = CALENDAR_STATUS_LABELS[ev.status] || ev.status;
+        const statusLabel = statusMap[ev.status] || ev.status;
         const reasonText =
           ev.reason && failureReasons[ev.reason]
             ? failureReasons[ev.reason]
@@ -355,20 +404,20 @@ export function CalendarWorkspace({
     },
     {
       key: 'title',
-      header: 'Termin & Konferenzsystem',
+      header: tr('Termin & Konferenzsystem', 'Meeting & Provider'),
       width: proportional(2, { minWidth: 220 }),
       renderCell: (ev) => (
         <HStack gap={2} vAlign="center" wrap="nowrap">
           {ev.provider && <ProviderBadge provider={ev.provider} />}
           <Text type="body" weight="semibold" color="primary" maxLines={1}>
-            {ev.title || 'Kalendertermin'}
+            {ev.title || tr('Kalendertermin', 'Calendar event')}
           </Text>
         </HStack>
       ),
     },
     {
       key: 'organizer',
-      header: 'Eingeladen von',
+      header: tr('Eingeladen von', 'Organizer'),
       width: proportional(1.2, { minWidth: 160 }),
       renderCell: (ev) => (
         <Text type="supporting" color="secondary">
@@ -378,17 +427,17 @@ export function CalendarWorkspace({
     },
     {
       key: 'starts_at',
-      header: 'Geplante Zeit',
+      header: tr('Geplante Zeit', 'Scheduled slot'),
       width: pixel(190),
       renderCell: (ev) => (
         <Text type="supporting" color="secondary" hasTabularNumbers>
-          {formatCalendarSlot(ev.starts_at, ev.ends_at)}
+          {formatCalendarSlot(ev.starts_at, ev.ends_at, lang)}
         </Text>
       ),
     },
     {
       key: 'recording_id',
-      header: 'Protokoll',
+      header: tr('Protokoll', 'Protocol'),
       width: pixel(180),
       align: 'end',
       renderCell: (ev) => {
@@ -401,7 +450,11 @@ export function CalendarWorkspace({
           <Button
             variant={isCompleted ? 'secondary' : 'ghost'}
             size="sm"
-            label={isCompleted ? 'Protokoll öffnen' : 'Öffnen'}
+            label={
+              isCompleted
+                ? tr('Protokoll öffnen', 'Open transcript')
+                : tr('Öffnen', 'Open')
+            }
             endContent={<ArrowRight className="h-3.5 w-3.5" />}
             onClick={() => onSelectRecording(recId)}
           />
@@ -422,20 +475,31 @@ export function CalendarWorkspace({
           <div className="wl-page-container">
           <VStack gap={2}>
             {onNavigateHome && (
-              <Breadcrumbs variant="supporting" label="Pfadnavigation">
+              <Breadcrumbs
+                variant="supporting"
+                label={tr('Pfadnavigation', 'Breadcrumb')}
+              >
                 <BreadcrumbItem onClick={onNavigateHome}>
-                  Startseite
+                  {tr('Startseite', 'Home')}
                 </BreadcrumbItem>
-                <BreadcrumbItem isCurrent>Kalender</BreadcrumbItem>
+                <BreadcrumbItem isCurrent>
+                  {tr('Kalender', 'Calendar')}
+                </BreadcrumbItem>
               </Breadcrumbs>
             )}
             <HStack justify="between" vAlign="center" wrap="wrap" gap={3}>
               <VStack gap={0.5}>
-                <Heading level={1}>Kalender &amp; E-Mail-Einladungen</Heading>
+                <Heading level={1}>
+                  {tr(
+                    'Kalender & E-Mail-Einladungen',
+                    'Calendar & Email Invitations'
+                  )}
+                </Heading>
                 <Text type="supporting" color="secondary">
-                  Verbinden Sie Ihren Google- oder Microsoft-365-Kalender per
-                  OAuth2 (inkl. automatischer Protokoll-Verlinkung im Termin)
-                  oder laden Sie eine Kalendereinladung hoch.
+                  {tr(
+                    'Verbinden Sie Ihren Google- oder Microsoft-365-Kalender per OAuth2 (inkl. automatischer Protokoll-Verlinkung im Termin) oder laden Sie eine Kalendereinladung hoch.',
+                    'Connect your Google Calendar or Microsoft 365 account via OAuth2 (including automatic transcript writeback into the event) or upload an .ics invitation.'
+                  )}
                 </Text>
               </VStack>
 
@@ -453,8 +517,8 @@ export function CalendarWorkspace({
                   }
                   label={
                     copiedMail
-                      ? 'Bot-Adresse kopiert!'
-                      : `Bot-Adresse: ${instance.botEmail}`
+                      ? tr('Bot-Adresse kopiert!', 'Bot address copied!')
+                      : `${tr('Bot-Adresse', 'Bot address')}: ${instance.botEmail}`
                   }
                   onClick={handleCopyMail}
                 />
@@ -463,7 +527,10 @@ export function CalendarWorkspace({
                 variant="primary"
                 size="sm"
                 icon={<CalendarPlus className="h-3.5 w-3.5" />}
-                label=".ics / .eml Einladung hochladen"
+                label={tr(
+                  '.ics / .eml Einladung hochladen',
+                  'Upload .ics / .eml invite'
+                )}
                 onClick={onOpenImportModal}
               />
             </HStack>
@@ -496,7 +563,11 @@ export function CalendarWorkspace({
                   <HStack justify="between" vAlign="center">
                     <Heading level={3}>Google Calendar</Heading>
                     {googleConn ? (
-                      <StatusIndicator variant="success" weight="medium" label="Verbunden" />
+                      <StatusIndicator
+                        variant="success"
+                        weight="medium"
+                        label={tr('Verbunden', 'Connected')}
+                      />
                     ) : (
                       <Token size="sm" color="gray" label="calendar.events" />
                     )}
@@ -505,27 +576,30 @@ export function CalendarWorkspace({
                   {googleConn ? (
                     <VStack gap={0.5}>
                       <Text type="body" color="primary">
-                        Konto: <strong>{googleConn.account_email}</strong>
+                        {tr('Konto', 'Account')}:{' '}
+                        <strong>{googleConn.account_email}</strong>
                       </Text>
                       {googleConn.last_synced_at && (
                         <Text type="supporting" color="secondary">
-                          Zuletzt synchronisiert:{' '}
+                          {tr('Zuletzt synchronisiert', 'Last synced')}:{' '}
                           {new Date(googleConn.last_synced_at).toLocaleString(
-                            'de-DE'
+                            localeTag
                           )}
                         </Text>
                       )}
                       {googleConn.sync_error && (
                         <Text type="supporting" color="secondary">
-                          Sync-Fehler: {googleConn.sync_error}
+                          {tr('Sync-Fehler', 'Sync error')}:{' '}
+                          {googleConn.sync_error}
                         </Text>
                       )}
                     </VStack>
                   ) : (
                     <Text type="supporting" color="secondary">
-                      Synchronisiert automatisch Termine mit Google Meet-,
-                      Teams-, Webex- oder Zoom-Link und hinterlegt nach dem Call
-                      den Protokoll-Link direkt im Kalendereintrag.
+                      {tr(
+                        'Synchronisiert automatisch Termine mit Google Meet-, Teams-, Webex- oder Zoom-Link und hinterlegt nach dem Call den Protokoll-Link direkt im Kalendereintrag.',
+                        'Automatically syncs events with Google Meet, Teams, Webex, or Zoom links and writes a read-only transcript link back into the calendar event after the call.'
+                      )}
                     </Text>
                   )}
 
@@ -538,7 +612,7 @@ export function CalendarWorkspace({
                           isLoading={oauthBusy === `sync-${googleConn.id}`}
                           isDisabled={oauthBusy !== null}
                           icon={<RefreshCw className="h-3.5 w-3.5" />}
-                          label="Jetzt synchronisieren"
+                          label={tr('Jetzt synchronisieren', 'Sync now')}
                           onClick={() => handleSyncConnection(googleConn.id)}
                         />
                         <Button
@@ -547,7 +621,10 @@ export function CalendarWorkspace({
                           isLoading={oauthBusy === 'connect-google'}
                           isDisabled={oauthBusy !== null}
                           icon={<Link2 className="h-3.5 w-3.5" />}
-                          label="Berechtigung erneuern"
+                          label={tr(
+                            'Berechtigung erneuern',
+                            'Reconnect permissions'
+                          )}
                           onClick={() => handleConnectOAuth('google')}
                         />
                         <Button
@@ -558,7 +635,7 @@ export function CalendarWorkspace({
                           }
                           isDisabled={oauthBusy !== null}
                           icon={<Trash2 className="h-3.5 w-3.5" />}
-                          label="Trennen"
+                          label={tr('Trennen', 'Disconnect')}
                           onClick={() =>
                             handleDisconnectConnection(googleConn.id)
                           }
@@ -575,8 +652,14 @@ export function CalendarWorkspace({
                         icon={<Link2 className="h-3.5 w-3.5" />}
                         label={
                           calOAuth?.googleEnabled
-                            ? 'Google Kalender verbinden'
-                            : 'Google OAuth nicht konfiguriert'
+                            ? tr(
+                                'Google Kalender verbinden',
+                                'Connect Google Calendar'
+                              )
+                            : tr(
+                                'Google OAuth nicht konfiguriert',
+                                'Google OAuth not configured'
+                              )
                         }
                         onClick={() => handleConnectOAuth('google')}
                       />
@@ -590,7 +673,11 @@ export function CalendarWorkspace({
                   <HStack justify="between" vAlign="center">
                     <Heading level={3}>Microsoft 365 / Outlook</Heading>
                     {microsoftConn ? (
-                      <StatusIndicator variant="success" weight="medium" label="Verbunden" />
+                      <StatusIndicator
+                        variant="success"
+                        weight="medium"
+                        label={tr('Verbunden', 'Connected')}
+                      />
                     ) : (
                       <Token size="sm" color="gray" label="Calendars.ReadWrite" />
                     )}
@@ -599,27 +686,30 @@ export function CalendarWorkspace({
                   {microsoftConn ? (
                     <VStack gap={0.5}>
                       <Text type="body" color="primary">
-                        Konto: <strong>{microsoftConn.account_email}</strong>
+                        {tr('Konto', 'Account')}:{' '}
+                        <strong>{microsoftConn.account_email}</strong>
                       </Text>
                       {microsoftConn.last_synced_at && (
                         <Text type="supporting" color="secondary">
-                          Zuletzt synchronisiert:{' '}
+                          {tr('Zuletzt synchronisiert', 'Last synced')}:{' '}
                           {new Date(
                             microsoftConn.last_synced_at
-                          ).toLocaleString('de-DE')}
+                          ).toLocaleString(localeTag)}
                         </Text>
                       )}
                       {microsoftConn.sync_error && (
                         <Text type="supporting" color="secondary">
-                          Sync-Fehler: {microsoftConn.sync_error}
+                          {tr('Sync-Fehler', 'Sync error')}:{' '}
+                          {microsoftConn.sync_error}
                         </Text>
                       )}
                     </VStack>
                   ) : (
                     <Text type="supporting" color="secondary">
-                      Synchronisiert automatisch Termine mit Microsoft Teams-,
-                      Google Meet-, Webex- oder Zoom-Link und hinterlegt nach
-                      dem Call den Protokoll-Link direkt im Termin.
+                      {tr(
+                        'Synchronisiert automatisch Termine mit Microsoft Teams-, Google Meet-, Webex- oder Zoom-Link und hinterlegt nach dem Call den Protokoll-Link direkt im Termin.',
+                        'Automatically syncs events with Microsoft Teams, Google Meet, Webex, or Zoom links and writes the protocol link directly into the calendar invite after the call.'
+                      )}
                     </Text>
                   )}
 
@@ -632,7 +722,7 @@ export function CalendarWorkspace({
                           isLoading={oauthBusy === `sync-${microsoftConn.id}`}
                           isDisabled={oauthBusy !== null}
                           icon={<RefreshCw className="h-3.5 w-3.5" />}
-                          label="Jetzt synchronisieren"
+                          label={tr('Jetzt synchronisieren', 'Sync now')}
                           onClick={() => handleSyncConnection(microsoftConn.id)}
                         />
                         <Button
@@ -641,7 +731,10 @@ export function CalendarWorkspace({
                           isLoading={oauthBusy === 'connect-microsoft'}
                           isDisabled={oauthBusy !== null}
                           icon={<Link2 className="h-3.5 w-3.5" />}
-                          label="Berechtigung erneuern"
+                          label={tr(
+                            'Berechtigung erneuern',
+                            'Reconnect permissions'
+                          )}
                           onClick={() => handleConnectOAuth('microsoft')}
                         />
                         <Button
@@ -652,7 +745,7 @@ export function CalendarWorkspace({
                           }
                           isDisabled={oauthBusy !== null}
                           icon={<Trash2 className="h-3.5 w-3.5" />}
-                          label="Trennen"
+                          label={tr('Trennen', 'Disconnect')}
                           onClick={() =>
                             handleDisconnectConnection(microsoftConn.id)
                           }
@@ -669,8 +762,14 @@ export function CalendarWorkspace({
                         icon={<Link2 className="h-3.5 w-3.5" />}
                         label={
                           calOAuth?.microsoftEnabled
-                            ? 'Microsoft 365 Kalender verbinden'
-                            : 'Microsoft OAuth nicht konfiguriert'
+                            ? tr(
+                                'Microsoft 365 Kalender verbinden',
+                                'Connect Microsoft 365 Calendar'
+                              )
+                            : tr(
+                                'Microsoft OAuth nicht konfiguriert',
+                                'Microsoft OAuth not configured'
+                              )
                         }
                         onClick={() => handleConnectOAuth('microsoft')}
                       />
@@ -687,13 +786,16 @@ export function CalendarWorkspace({
                   <VStack gap={2}>
                     <HStack justify="between" vAlign="center" wrap="wrap">
                       <Heading level={3}>
-                        Synchronisierte Termine mit Konferenz-Link (
-                        {syncedEvents.length})
+                        {tr(
+                          `Synchronisierte Termine mit Konferenz-Link (${syncedEvents.length})`,
+                          `Synced Calendar Meetings (${syncedEvents.length})`
+                        )}
                       </Heading>
                       <Text type="supporting" color="secondary">
-                        Eigene Termine (mit bestätigten Gästen) starten
-                        automatisch; externe Termine per 1-Klick-Schalter
-                        zuschaltbar
+                        {tr(
+                          'Eigene Termine (mit bestätigten Gästen) starten automatisch; externe Termine per 1-Klick-Schalter zuschaltbar',
+                          'Self-organized meetings auto-join; external invites can be toggled on with 1 click'
+                        )}
                       </Text>
                     </HStack>
 
@@ -710,18 +812,22 @@ export function CalendarWorkspace({
               </div>
             )}
 
-            {/* Imported .ics / IMAP Events (shown when events exist or when no OAuth calendar is connected yet) */}
+            {/* Imported .ics / IMAP Events */}
             {(events.length > 0 || (!googleConn && !microsoftConn)) && (
               <div id="calendar-list">
                 <Section variant="section">
                   <VStack gap={2}>
                     <HStack justify="between" vAlign="center" wrap="wrap">
                       <Heading level={3}>
-                        E-Mail- &amp; .ics-Kalendereinladungen ({events.length})
+                        {tr(
+                          `E-Mail- & .ics-Kalendereinladungen (${events.length})`,
+                          `Email & .ics Calendar Invites (${events.length})`
+                        )}
                       </Heading>
                       {instance.botEmail && (
                         <Text type="supporting" color="secondary">
-                          Einladungsadresse: <code>{instance.botEmail}</code>
+                          {tr('Einladungsadresse', 'Invite address')}:{' '}
+                          <code>{instance.botEmail}</code>
                         </Text>
                       )}
                     </HStack>
@@ -730,14 +836,23 @@ export function CalendarWorkspace({
                       <EmptyState
                         isCompact
                         icon={<Mail className="h-6 w-6" />}
-                        title="Noch keine Kalendereinladungen vorhanden"
-                        description="Verbinden Sie oben Ihren Google- oder Microsoft-365-Kalender oder laden Sie eine .ics-Datei hoch."
+                        title={tr(
+                          'Noch keine Kalendereinladungen vorhanden',
+                          'No .ics calendar invites yet'
+                        )}
+                        description={tr(
+                          'Verbinden Sie oben Ihren Google- oder Microsoft-365-Kalender oder laden Sie eine .ics-Datei hoch.',
+                          'Connect your Google Calendar or Microsoft 365 account above, or upload an .ics invitation file.'
+                        )}
                         actions={
                           <Button
                             variant="secondary"
                             size="sm"
                             icon={<CalendarPlus className="h-3.5 w-3.5" />}
-                            label=".ics-Datei importieren"
+                            label={tr(
+                              '.ics-Datei importieren',
+                              'Import .ics file'
+                            )}
                             onClick={onOpenImportModal}
                           />
                         }

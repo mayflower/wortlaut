@@ -1,9 +1,10 @@
 host: wortlaut.example.org
+defaultLocale: de
 
 images:
-  meeting: registry.data.mayflower.zone/wortlaut/wortlaut-meeting:latest
-  worker: registry.data.mayflower.zone/wortlaut/wortlaut-worker:latest
-  asr: registry.data.mayflower.zone/wortlaut/wortlaut-asr:latest
+  meeting: ghcr.io/mayflower/wortlaut-meeting:latest
+  worker: ghcr.io/mayflower/wortlaut-worker:latest
+  asr: ghcr.io/mayflower/wortlaut-asr:latest
   pullPolicy: IfNotPresent
 
 providers:
@@ -12,6 +13,15 @@ providers:
   enableZoom: true
   zoomLocale: en-US
   enableWebexBrowser: false
+
+oidc:
+  issuer: ""
+  clientId: wortlaut
+  allowedDomains: []
+  adminEmails: []
+
+llmSummary:
+  enabled: false
 
 capacity:
   maxActiveMeetings: 15
@@ -23,8 +33,20 @@ asr:
   enabled: true
   allowCpu: false
   gpuCount: 1
+  # Default: German high-accuracy Parakeet ("primeline/parakeet-primeline").
+  # Set to "nvidia/parakeet-tdt-0.6b-v3" for 25-language European multilingual ASR.
+  modelRepo: primeline/parakeet-primeline
   storageClassName: ""
   cacheSize: 20Gi
+
+# Zero-dependency evaluation / homelab mode:
+# Provisions embedded PostgreSQL 17, RustFS S3, and auto-generated Secrets in-namespace.
+bundled:
+  enabled: false
+  apiToken: ""
+  storageClassName: ""
+  postgresSize: 10Gi
+  rustfsSize: 10Gi
 
 secrets:
   runtimeSecretName: wortlaut-runtime

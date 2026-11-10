@@ -729,3 +729,63 @@ def test_docker_runtime_reconciles_container_lifecycle_via_engine_api(
     with Session(database) as db:
         attempt = db.scalar(select(Attempt).where(Attempt.recording_id == uuid.UUID(recording_id)))
         assert attempt.secret_deleted_at is not None
+
+    # Verify real TCP docker-socket-proxy transport via WORTLAUT_DOCKER_HOST
+    import http.server
+    import threading
+
+    tcp_containers = {}
+
+    class ProxyHandler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *_args):
+            pass
+
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length", "0"))
+            raw_body = self.rfile.read(length).decode("utf-8") if length else ""
+            payload = json.loads(raw_body) if raw_body else None
+            status, body = fake_docker_request("POST", self.path, payload)
+            if status == 201:
+                name = self.path.split("name=", 1)[1]
+                tcp_containers[name] = payload
+            self.send_response(status)
+            self.end_headers()
+            if body:
+                self.wfile.write(body.encode("utf-8"))
+
+        def do_GET(self):
+            status, body = fake_docker_request("GET", self.path)
+            self.send_response(status)
+            self.end_headers()
+            if body:
+                self.wfile.write(body.encode("utf-8"))
+
+        def do_DELETE(self):
+            status, _ = fake_docker_request("DELETE", self.path)
+            self.send_response(status)
+            self.end_headers()
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), ProxyHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        monkeypatch.setenv("WORTLAUT_DOCKER_HOST", f"tcp://127.0.0.1:{server.server_port}")
+        get_settings.cache_clear()
+        tcp_runtime = DockerRuntime(root=tmp_path / "docker-tcp-state")
+        tcp_rec_id = create(client, "docker-tcp-proxy-recording")
+        controller_pass(database, (tcp_runtime, tcp_runtime))
+        controller_pass(database, (tcp_runtime, tcp_runtime))
+        assert len(tcp_containers) == 1
+        created_name = next(iter(tcp_containers))
+        assert tcp_containers[created_name]["HostConfig"]["CapDrop"] == ["ALL"]
+        containers[created_name]["Running"] = False
+        controller_pass(database, (tcp_runtime, tcp_runtime))
+        assert containers == {}
+        with Session(database) as db:
+            tcp_attempt = db.scalar(
+                select(Attempt).where(Attempt.recording_id == uuid.UUID(tcp_rec_id))
+            )
+            assert tcp_attempt.secret_deleted_at is not None
+    finally:
+        server.shutdown()
+        server.server_close()

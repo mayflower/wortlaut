@@ -258,6 +258,7 @@ export type AuthMode =
 
 export interface InstanceInfo {
   assistantName: string;
+  defaultLocale?: 'de' | 'en';
   botEmail: string | null;
   oidc?: {
     enabled: boolean;

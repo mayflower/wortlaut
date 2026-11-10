@@ -878,11 +878,11 @@ export async function importCalendarPayload(
   const senderEmail =
     mode.kind === 'operator' && mode.user?.email
       ? mode.user.email
-      : 'ui-import@mayflower.de';
+      : 'ui-import@wortlaut.example.org';
   const body = rawContent.includes('BEGIN:VCALENDAR') && !rawContent.toLowerCase().includes('from:')
     ? [
         `From: ${senderEmail}`,
-        'To: wortlaut@mayflower.de',
+        'To: wortlaut@wortlaut.example.org',
         `X-Wortlaut-Authenticated-Sender: ${senderEmail}`,
         'MIME-Version: 1.0',
         'Content-Type: text/calendar; charset="utf-8"; method=REQUEST',

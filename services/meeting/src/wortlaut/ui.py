@@ -217,9 +217,12 @@ PRIVACY_HTML = """<!DOCTYPE html>
           Google Meet, Microsoft Teams, Zoom und Cisco Webex.
         </p>
       </div>
-      <a href="/ui" class="priv-btn">
-        Zur Web-UI →
-      </a>
+      <div style="display: flex; align-items: center; gap: 8px;">
+        <a href="/privacy?lang=en" class="priv-btn">EN</a>
+        <a href="/ui" class="priv-btn">
+          Zur Web-UI →
+        </a>
+      </div>
     </header>
 
     <section class="priv-card">
@@ -238,8 +241,8 @@ PRIVACY_HTML = """<!DOCTYPE html>
       <div class="priv-card-sm">
         <h3>Keine externen KI-/Cloud-Dienste</h3>
         <p>
-          Audioerfassung und Spracherkennung laufen ausschließlich innerhalb des eigenen
-          Mayflower-Kubernetes-Clusters auf dedizierter GPU-Infrastruktur. Es werden keine
+          Audioerfassung und Spracherkennung laufen ausschließlich innerhalb der eigenen,
+          selbstbetriebenen Infrastruktur auf dedizierter Hardware. Es werden keine
           Audio- oder Textdaten an externe Cloud-Anbieter übertragen.
         </p>
       </div>
@@ -330,6 +333,7 @@ def _build_instance_info() -> dict:
     except Exception:
         return {
             "assistantName": "wortlaut",
+            "defaultLocale": "de",
             "botEmail": None,
             "providers": {
                 "google_meet": True,
@@ -377,6 +381,7 @@ def _build_instance_info() -> dict:
 
     return {
         "assistantName": s.assistant_name or "wortlaut",
+        "defaultLocale": s.default_locale,
         "botEmail": bot_email,
         "providers": {
             "google_meet": bool(s.enable_google_meet),
@@ -433,18 +438,181 @@ def render_ui() -> str:
     )
 
 
-def render_privacy() -> str:
+PRIVACY_HTML_EN = """<!DOCTYPE html>
+<html lang="en" data-theme="dark" data-astryx-theme="stone">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Privacy &amp; Transparency Notice – __ASSISTANT_NAME__</title>
+  <link rel="stylesheet" href="/sdk/ui/app.css?v=__ASSET_VERSION__">
+  <style>
+    :root {
+      --priv-bg: var(--color-background-body, #0f1014);
+      --priv-surface: var(--color-background-surface, #181920);
+      --priv-surface-hover: var(--color-background-muted, #23252f);
+      --priv-border: var(--color-border, #2b2d38);
+      --priv-text: var(--color-text-primary, #f2f3f8);
+      --priv-muted: var(--color-text-secondary, #a2a6b8);
+      --priv-emerald: #34d399;
+      --priv-emerald-bg: rgba(16, 185, 129, 0.10);
+      --priv-emerald-border: rgba(16, 185, 129, 0.28);
+      --priv-amber: #fbbf24;
+      --priv-amber-bg: rgba(245, 158, 11, 0.08);
+      --priv-amber-border: rgba(245, 158, 11, 0.30);
+    }
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body {
+      margin: 0; padding: 0; min-height: 100vh;
+      background-color: var(--priv-bg); color: var(--priv-text);
+      font-family: var(--font-family-body, system-ui, -apple-system, sans-serif);
+      line-height: 1.6; -webkit-font-smoothing: antialiased;
+    }
+    .priv-container {
+      max-width: 780px; margin: 0 auto; padding: 48px 24px 64px;
+      display: flex; flex-direction: column; gap: 24px;
+    }
+    .priv-header {
+      display: flex; align-items: flex-start; justify-content: space-between;
+      gap: 20px; padding-bottom: 24px; border-bottom: 1px solid var(--priv-border);
+      flex-wrap: wrap;
+    }
+    .priv-badge {
+      display: inline-flex; align-items: center; gap: 8px; padding: 4px 12px;
+      border-radius: 999px; font-size: 12px; font-weight: 600;
+      color: var(--priv-emerald); background: var(--priv-emerald-bg);
+      border: 1px solid var(--priv-emerald-border); margin-bottom: 12px;
+    }
+    .priv-title { margin: 0; font-size: 24px; font-weight: 650; letter-spacing: -0.02em; }
+    .priv-subtitle { margin: 8px 0 0; font-size: 14px; color: var(--priv-muted); }
+    .priv-btn {
+      display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px;
+      border-radius: 10px; font-size: 13px; font-weight: 500; color: var(--priv-text);
+      background: var(--priv-surface); border: 1px solid var(--priv-border); text-decoration: none;
+    }
+    .priv-card {
+      border-radius: 16px; border: 1px solid var(--priv-border);
+      background: var(--priv-surface); padding: 24px;
+    }
+    .priv-card h2 { margin: 0 0 12px; font-size: 16px; font-weight: 600; }
+    .priv-card p, .priv-list { margin: 0; font-size: 14px; color: var(--priv-muted); }
+    .priv-list { padding-left: 18px; display: flex; flex-direction: column; gap: 10px; }
+    .priv-list strong, .priv-card strong, .priv-callout strong { color: var(--priv-text); }
+    .priv-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 16px;
+    }
+    .priv-card-sm {
+      border-radius: 16px; border: 1px solid var(--priv-border);
+      background: var(--priv-surface); padding: 20px;
+    }
+    .priv-card-sm h3 { margin: 0 0 8px; font-size: 14px; font-weight: 600; }
+    .priv-card-sm p { margin: 0; font-size: 13px; color: var(--priv-muted); }
+    .priv-callout {
+      border-radius: 16px; border: 1px solid var(--priv-amber-border);
+      background: var(--priv-amber-bg); padding: 24px;
+    }
+    .priv-callout h2 {
+      margin: 0 0 8px; font-size: 16px; font-weight: 600; color: var(--priv-amber);
+    }
+    .priv-callout p { margin: 0; font-size: 14px; color: var(--priv-muted); }
+    .priv-callout a { color: var(--priv-amber); text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <main class="priv-container">
+    <header class="priv-header">
+      <div style="flex: 1; min-width: 260px;">
+        <div class="priv-badge">100% Self-Hosted · Zero External Cloud Transfer</div>
+        <h1 class="priv-title">Privacy &amp; Transparency Notice (__ASSISTANT_NAME__)</h1>
+        <p class="priv-subtitle">
+          Participant information on automated meeting transcription in Google Meet,
+          Microsoft Teams, Zoom, and Cisco Webex.
+        </p>
+      </div>
+      <div style="display: flex; align-items: center; gap: 8px;">
+        <a href="/privacy?lang=de" class="priv-btn">DE</a>
+        <a href="/ui" class="priv-btn">Open Web-UI →</a>
+      </div>
+    </header>
+    <section class="priv-card">
+      <h2>1. Why is __ASSISTANT_NAME__ joining this meeting?</h2>
+      <p>
+        The assistant <strong>__ASSISTANT_NAME__</strong> was invited by a meeting participant
+        to create a speaker-attributed written transcript of this session. Upon joining, it
+        announces itself in the meeting chat, names the inviter, and shares a direct link to the
+        transcript and this privacy notice.
+      </p>
+    </section>
+    <section class="priv-grid">
+      <div class="priv-card-sm">
+        <h3>No External Cloud AI</h3>
+        <p>
+          Audio capture and speech-to-text run exclusively on self-hosted infrastructure
+          using a local Parakeet ASR model. Zero audio or transcript data is sent to
+          third-party clouds.
+        </p>
+      </div>
+      <div class="priv-card-sm">
+        <h3>No Voiceprints &amp; No Video</h3>
+        <p>
+          Neither camera video nor screen shares are recorded. Speaker attribution relies strictly
+          on isolated WebRTC conference receiver tracks — never biometric voiceprints.
+        </p>
+      </div>
+    </section>
+    <section class="priv-card">
+      <h2>2. Access Control &amp; Automatic Retention</h2>
+      <ul class="priv-list">
+        <li>
+          <strong>Access:</strong> By default, only the inviting user and confirmed calendar guests
+          (plus holders of an explicit read-only share link) can view the transcript.
+        </li>
+        <li>
+          <strong>Raw Audio:</strong> Temporary per-speaker PCM segments are used strictly for
+          asynchronous transcription and deleted automatically after
+          <strong>__AUDIO_HOURS__ hours</strong>.
+        </li>
+        <li>
+          <strong>Transcripts &amp; Exports:</strong> Completed transcripts expire automatically
+          after <strong>__TRANSCRIPT_DAYS__ days</strong> and can be deleted immediately at
+          any time.
+        </li>
+      </ul>
+    </section>
+    <section class="priv-callout">
+      <h2>3. Individual In-Call Chat Opt-Out &amp; Stopping Recording</h2>
+      <p>
+        <strong>Exclude only your own statements (Chat Opt-Out):</strong>
+        Simply type <strong>"opt out"</strong>, <strong>"optout"</strong>, <strong>"no"</strong>,
+        or <strong>"nein"</strong> in the meeting chat at any point during the call.
+        __ASSISTANT_NAME__ immediately discards your audio track and purges any statements already
+        captured from you while continuing the transcript for everyone else.<br><br>
+        <strong>Stop the entire recording:</strong> Remove <strong>__ASSISTANT_NAME__</strong> from
+        the call roster or cancel/delete the recording in the <a href="/ui">wortlaut Web-UI</a>.
+      </p>
+    </section>
+  </main>
+</body>
+</html>
+"""
+
+
+def render_privacy(lang: str | None = None) -> str:
     try:
         s = get_settings()
         assistant_name = s.assistant_name or "wortlaut"
         audio_hours = s.audio_retention_hours
         transcript_days = s.transcript_retention_days
+        effective_lang = (lang or s.default_locale or "de").strip().lower()
     except Exception:
         assistant_name = "wortlaut"
         audio_hours = 24
         transcript_days = 30
+        effective_lang = (lang or "de").strip().lower()
+    template = PRIVACY_HTML_EN if effective_lang.startswith("en") else PRIVACY_HTML
     return (
-        PRIVACY_HTML.replace("__ASSISTANT_NAME__", html.escape(assistant_name))
+        template.replace("__ASSISTANT_NAME__", html.escape(assistant_name))
         .replace("__AUDIO_HOURS__", str(audio_hours))
         .replace("__TRANSCRIPT_DAYS__", str(transcript_days))
         .replace("__ASSET_VERSION__", _asset_version())

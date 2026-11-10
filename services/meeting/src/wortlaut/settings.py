@@ -11,15 +11,11 @@ class Settings(BaseSettings):
 
     database_url: SecretStr
     api_token: SecretStr
-    oidc_issuer: str = "https://id.data.mayflower.tech"
+    oidc_issuer: str = ""
     oidc_internal_issuer: str = ""
     oidc_client_id: str = "wortlaut"
-    oidc_allowed_domains: list[str] = ["mayflower.de"]
-    oidc_admin_emails: list[str] = [
-        "johann-peter.hartmann@mayflower.de",
-        "johann.hartmann@mayflower.de",
-        "johannhartmann@gmail.com",
-    ]
+    oidc_allowed_domains: list[str] = []
+    oidc_admin_emails: list[str] = []
     webex_service_token: SecretStr | None = None
     enable_webex_browser: bool = False
     enable_webex_refresh: bool = False
@@ -64,18 +60,20 @@ class Settings(BaseSettings):
     mail_attachment_limit_bytes: int = Field(default=10 * 1024**2, ge=1)
     mail_max_attempts: int = Field(default=3, ge=1)
     assistant_name: str = "wortlaut"
+    default_locale: Literal["de", "en"] = "de"
     enable_chat_intro: bool = True
     privacy_url: str | None = None
     allowed_webex_hosts: list[str] = ["*.webex.com"]
-    sdk_page_url: str = "https://wortlaut-johann.data.mayflower.zone/sdk/"
+    sdk_page_url: str = "https://wortlaut.example.org/sdk/"
     bootstrap_lifetime_seconds: int = Field(default=0, ge=0)
     enable_controller: bool = False
     controller_backend: Literal["kubernetes", "docker", "local"] = "kubernetes"
+    docker_host: str = "unix:///var/run/docker.sock"
     docker_network: str = "wortlaut"
     local_worker_dir: Path = Path("worker")
     runtime_state_dir: Path = Path("/tmp/wortlaut-runtime")
     namespace: str = "wortlaut-dev"
-    api_url: str = "https://wortlaut-dev.data.mayflower.zone/"
+    api_url: str = "https://wortlaut.example.org/"
     worker_image: str = "wortlaut-worker:dev"
     max_active_meetings: int = Field(default=15, ge=1)
     join_lead_seconds: int = Field(default=60, ge=0)

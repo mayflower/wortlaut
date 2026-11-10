@@ -1,0 +1,33 @@
+name: Bug Report
+description: Report a reproducible bug in the API, Web-UI, calendar sync, ASR pipeline, or Helm/Compose setup
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - Meeting Service / API (services/meeting)
+        - Web-UI (worker/src/ui)
+        - Calendar Sync / OAuth2 / IMAP (.ics)
+        - ASR Service (services/asr)
+        - Docker Compose / Helm Chart
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      placeholder: |
+        1. Configure ...
+        2. Trigger ...
+        3. Observe error ...
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant Logs or Error Output
+      description: Redact any tokens, secrets, or private URLs before pasting.
+      render: shell

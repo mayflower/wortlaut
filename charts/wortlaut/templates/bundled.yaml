@@ -1,0 +1,192 @@
+{{- if .Values.bundled.enabled }}
+{{- $existingRuntime := lookup "v1" "Secret" .Release.Namespace .Values.secrets.runtimeSecretName -}}
+{{- $existingStorage := lookup "v1" "Secret" .Release.Namespace .Values.secrets.storageSecretName -}}
+{{- $existingAsr := lookup "v1" "Secret" .Release.Namespace .Values.secrets.asrSecretName -}}
+{{- $existingPg := lookup "v1" "Secret" .Release.Namespace "wortlaut-bundled-postgres" -}}
+{{- $pgPass := randAlphaNum 32 -}}
+{{- if and $existingPg (hasKey $existingPg.data "POSTGRES_PASSWORD") -}}
+  {{- $pgPass = b64dec (index $existingPg.data "POSTGRES_PASSWORD") -}}
+{{- end -}}
+{{- $apiToken := default (randAlphaNum 32) .Values.bundled.apiToken -}}
+{{- if and (not .Values.bundled.apiToken) $existingRuntime (hasKey $existingRuntime.data "WORTLAUT_API_TOKEN") -}}
+  {{- $apiToken = b64dec (index $existingRuntime.data "WORTLAUT_API_TOKEN") -}}
+{{- end -}}
+{{- $s3Secret := randAlphaNum 32 -}}
+{{- if and $existingStorage (hasKey $existingStorage.data "WORTLAUT_S3_SECRET_KEY") -}}
+  {{- $s3Secret = b64dec (index $existingStorage.data "WORTLAUT_S3_SECRET_KEY") -}}
+{{- end -}}
+{{- $asrToken := randAlphaNum 32 -}}
+{{- if and $existingAsr (hasKey $existingAsr.data "WORTLAUT_ASR_TOKEN") -}}
+  {{- $asrToken = b64dec (index $existingAsr.data "WORTLAUT_ASR_TOKEN") -}}
+{{- end -}}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: wortlaut-bundled-postgres
+  namespace: {{ .Release.Namespace }}
+type: Opaque
+stringData:
+  POSTGRES_USER: wortlaut
+  POSTGRES_DB: wortlaut
+  POSTGRES_PASSWORD: {{ $pgPass | quote }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Values.secrets.runtimeSecretName }}
+  namespace: {{ .Release.Namespace }}
+type: Opaque
+stringData:
+  WORTLAUT_DATABASE_URL: {{ printf "postgresql+psycopg://wortlaut:%s@wortlaut-postgres:5432/wortlaut" $pgPass | quote }}
+  WORTLAUT_API_TOKEN: {{ $apiToken | quote }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Values.secrets.storageSecretName }}
+  namespace: {{ .Release.Namespace }}
+type: Opaque
+stringData:
+  WORTLAUT_S3_ENDPOINT: "http://wortlaut-rustfs:9000"
+  WORTLAUT_S3_ACCESS_KEY: "wortlaut-s3"
+  WORTLAUT_S3_SECRET_KEY: {{ $s3Secret | quote }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Values.secrets.asrSecretName }}
+  namespace: {{ .Release.Namespace }}
+type: Opaque
+stringData:
+  WORTLAUT_ASR_URL: "http://wortlaut-asr:8000"
+  WORTLAUT_ASR_TOKEN: {{ $asrToken | quote }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wortlaut-postgres
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector:
+    app: wortlaut-postgres
+  ports:
+    - port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: wortlaut-postgres
+  namespace: {{ .Release.Namespace }}
+spec:
+  serviceName: wortlaut-postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: wortlaut-postgres
+  template:
+    metadata:
+      labels:
+        app: wortlaut-postgres
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        fsGroup: 999
+      containers:
+        - name: postgres
+          image: postgres:17.9-bookworm
+          ports:
+            - containerPort: 5432
+          envFrom:
+            - secretRef:
+                name: wortlaut-bundled-postgres
+          env:
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U wortlaut -d wortlaut"]
+            periodSeconds: 5
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if .Values.bundled.storageClassName }}
+        storageClassName: {{ .Values.bundled.storageClassName | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.bundled.postgresSize }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: wortlaut-rustfs
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector:
+    app: wortlaut-rustfs
+  ports:
+    - port: 9000
+      targetPort: 9000
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: wortlaut-rustfs
+  namespace: {{ .Release.Namespace }}
+spec:
+  serviceName: wortlaut-rustfs
+  replicas: 1
+  selector:
+    matchLabels:
+      app: wortlaut-rustfs
+  template:
+    metadata:
+      labels:
+        app: wortlaut-rustfs
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+      containers:
+        - name: rustfs
+          image: rustfs/rustfs:1.0.4
+          args: ["/data"]
+          ports:
+            - containerPort: 9000
+          env:
+            - name: RUSTFS_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.storageSecretName }}
+                  key: WORTLAUT_S3_ACCESS_KEY
+            - name: RUSTFS_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secrets.storageSecretName }}
+                  key: WORTLAUT_S3_SECRET_KEY
+            - name: RUSTFS_OBS_LOG_DIRECTORY
+              value: ""
+          volumeMounts:
+            - name: data
+              mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- if .Values.bundled.storageClassName }}
+        storageClassName: {{ .Values.bundled.storageClassName | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.bundled.rustfsSize }}
+{{- end }}
