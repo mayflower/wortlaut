@@ -1,4 +1,4 @@
-FROM node:24-trixie-slim AS build
+FROM node:26-trixie-slim AS build
 WORKDIR /app/worker
 COPY worker/package.json worker/package-lock.json ./
 RUN npm ci --no-audit --no-fund
