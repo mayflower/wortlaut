@@ -173,7 +173,7 @@ function install(config: MeetCaptureConfig) {
   const NOTETAKER_BOT_RE =
     /\b(fireflies(\.ai)?|otter(\.ai)?|read\.ai|fathom|tl;dv|tldv|meetgeek|fellow(\.app)?|avoma|sembly|supernormal|grain|krisp|tactiq|airgram|notta|nyota|circleback|sonnet|bluedot|granola|notetaker|note[\s-]*taker|meeting[\s-]*bot|ai[\s-]*notetaker|ai[\s-]*assistant)\b/i;
   const SELF_OR_UI_TEXT_RE =
-    /^(wortlaut(\s+fixture)?(\s*\(.*\))?|you|sie|ich)$/i;
+    /^(wortlaut(?:\b.*)?|you|sie|ich)$/i;
   const UI_CHROME_TEXT_RE =
     /(vollständigen videofeed|full video|bildausschnitt|reframing)/i;
 

@@ -105,10 +105,15 @@ export function nativeMeetInput(page: Page): MeetInput {
       await page.waitForFunction(target => target === document.activeElement, element, {timeout: 2000})
         .catch(() => { throw new Error('Native input target did not receive focus'); });
       await run('key', '--clearmodifiers', 'ctrl+a');
-      await run('type', '--clearmodifiers', '--delay', '70', '--', text);
-      await page.waitForFunction(({target, text}) => (target as HTMLInputElement)?.value === text,
-        {target: element, text}, {timeout: 2000})
-        .catch(() => { throw new Error('Native input text was not accepted'); });
+      await run('type', '--clearmodifiers', '--delay', '25', '--', text).catch(() => {});
+      const matched = await page.waitForFunction(({target, text}) => (target as HTMLInputElement)?.value === text,
+        {target: element, text}, {timeout: 1500}).then(() => true).catch(() => false);
+      if (!matched) {
+        await locator.fill(text).catch(() => {});
+        await page.waitForFunction(({target, text}) => (target as HTMLInputElement)?.value === text,
+          {target: element, text}, {timeout: 2000})
+          .catch(() => { throw new Error('Native input text was not accepted'); });
+      }
     } finally { await element?.dispose(); }
   }};
 }

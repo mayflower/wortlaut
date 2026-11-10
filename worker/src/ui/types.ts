@@ -289,6 +289,36 @@ export interface InstanceInfo {
   llmModel?: string;
 }
 
+export function formatBotDisplayName(
+  recording: { guest_name?: string | null; owner_email?: string | null },
+  assistantName = 'wortlaut'
+): string {
+  const base = (recording.guest_name || assistantName || 'wortlaut').trim() || 'wortlaut';
+  const rawOwner = (recording.owner_email || '').trim();
+  if (!rawOwner) return base;
+  const local = rawOwner.split('@')[0].trim();
+  const tokens = local.split(/[._+]+/).filter(Boolean);
+  const inviterName = tokens.length
+    ? tokens
+        .map((tok) =>
+          tok
+            .split('-')
+            .filter(Boolean)
+            .map((seg) => seg.charAt(0).toUpperCase() + seg.slice(1).toLowerCase())
+            .join('-')
+        )
+        .join(' ')
+    : local;
+  if (!inviterName) return base;
+  if (base.toLowerCase().includes(inviterName.toLowerCase()) || base.includes('(')) {
+    return base;
+  }
+  const combined = `${base} (${inviterName})`;
+  if (combined.length <= 60) return combined;
+  const maxInviter = Math.max(1, 60 - base.length - 3);
+  return `${base} (${inviterName.slice(0, maxInviter).trimEnd()})`;
+}
+
 declare global {
   interface Window {
     __WORTLAUT_BOOT__?: {

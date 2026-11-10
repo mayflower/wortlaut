@@ -52,10 +52,11 @@ import {
   startCalendarOAuthConnect,
   toggleCalendarSyncedEvent,
 } from '../api';
-import type {
-  CalendarConnectionInfo,
-  CalendarSyncedEventInfo,
-  RecordingSummary,
+import {
+  formatBotDisplayName,
+  type CalendarConnectionInfo,
+  type CalendarSyncedEventInfo,
+  type RecordingSummary,
 } from '../types';
 import {
   LiveWaveform,
@@ -745,7 +746,7 @@ export function RecordingSidebar({
                       </Text>
                     </HStack>
                     <Text type="supporting" color="secondary">
-                      Zuhörer „{rec.guest_name || instance.assistantName}“ wartet im Konferenz-Warteraum — bitte jetzt im Meeting-Fenster zulassen.
+                      Zuhörer „{formatBotDisplayName(rec, instance.assistantName)}“ wartet im Konferenz-Warteraum — bitte jetzt im Meeting-Fenster zulassen.
                     </Text>
                   </VStack>
                   <Button
@@ -787,7 +788,7 @@ export function RecordingSidebar({
                         <Text type="supporting" color="secondary">
                           {isCapturing
                             ? `Live im Gespräch · ${audioSec > 0 ? `${formatDurationHuman(audioSec)} Audio erfasst` : 'Hört zu & transkribiert in Echtzeit'}`
-                            : `Zuhörer „${rec.guest_name || instance.assistantName}“ verbindet sich mit dem Konferenzraum…`}
+                            : `Zuhörer „${formatBotDisplayName(rec, instance.assistantName)}“ verbindet sich mit dem Konferenzraum…`}
                         </Text>
                       </VStack>
                       <Button

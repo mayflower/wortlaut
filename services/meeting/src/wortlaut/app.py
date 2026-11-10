@@ -3,6 +3,7 @@ import base64
 import hashlib
 import json
 import logging
+import re
 import secrets
 import struct
 import uuid
@@ -488,11 +489,15 @@ def create_recording(
         return recording_json(existing)
     if capacity_reached(db):
         raise HTTPException(503, "audio_capacity_limit")
+    meta: dict = {}
+    if principal.name and principal.name.strip():
+        meta["owner_name"] = " ".join(principal.name.split())[:120]
     recording = Recording(
         idempotency_key=idempotency_key,
         request_digest=digest,
         owner_sub=principal.sub,
         owner_email=principal.email.lower() if principal.email else None,
+        protocol_meta=meta,
         **body.model_dump(),
     )
     db.add(recording)
@@ -527,6 +532,10 @@ async def import_calendar_message(request: Request, db: Db, principal: AuthPrinc
                 if rec and not rec.owner_email:
                     rec.owner_sub = principal.sub
                     rec.owner_email = principal.email.lower()
+                    if principal.name and principal.name.strip():
+                        meta = dict(rec.protocol_meta or {})
+                        meta.setdefault("owner_name", " ".join(principal.name.split())[:120])
+                        rec.protocol_meta = meta
     db.commit()
     return {"events": result}
 
@@ -1546,6 +1555,24 @@ def claim(
     return {"claimed": True}
 
 
+def _humanize_inviter_name(raw: str | None) -> str | None:
+    if not raw:
+        return None
+    clean = " ".join(str(raw).strip().split())
+    if not clean:
+        return None
+    if "@" not in clean and (" " in clean or any(c.isupper() for c in clean)):
+        return clean
+    local = clean.split("@", 1)[0].strip()
+    tokens = [t for t in re.split(r"[._+]+", local) if t]
+    if not tokens:
+        return local or clean
+    return " ".join(
+        "-".join(seg.capitalize() for seg in tok.split("-") if seg) or tok.capitalize()
+        for tok in tokens
+    )
+
+
 def _recording_inviter(db: Session, recording: Recording) -> str | None:
     if recording.owner_email:
         return recording.owner_email
@@ -1553,7 +1580,58 @@ def _recording_inviter(db: Session, recording: Recording) -> str | None:
         entry = db.get(CalendarEntry, recording.calendar_entry_id)
         if entry and entry.organizer:
             return entry.organizer
+    synced = db.scalar(
+        select(CalendarSyncedEvent)
+        .where(CalendarSyncedEvent.recording_id == recording.id)
+        .limit(1)
+    )
+    if synced and (synced.owner_email or synced.organizer_email):
+        return synced.owner_email or synced.organizer_email
     return None
+
+
+def _recording_inviter_name(db: Session, recording: Recording) -> str | None:
+    meta = recording.protocol_meta if isinstance(recording.protocol_meta, dict) else {}
+    owner_name = meta.get("owner_name")
+    if isinstance(owner_name, str) and owner_name.strip():
+        human = _humanize_inviter_name(owner_name)
+        if human:
+            return human
+    if recording.calendar_entry_id:
+        entry = db.get(CalendarEntry, recording.calendar_entry_id)
+        if entry:
+            if entry.original:
+                try:
+                    from icalendar import Calendar
+
+                    ev = Calendar.from_ical(entry.original).walk("VEVENT")[0]
+                    org_prop = ev.get("ORGANIZER")
+                    cn = org_prop.params.get("CN") if org_prop is not None else None
+                    if cn:
+                        human_cn = _humanize_inviter_name(str(cn))
+                        if human_cn:
+                            return human_cn
+                except Exception:
+                    pass
+            if entry.organizer:
+                return _humanize_inviter_name(entry.organizer)
+    inviter = _recording_inviter(db, recording)
+    return _humanize_inviter_name(inviter)
+
+
+def recording_display_name(db: Session, recording: Recording, settings=None) -> str:
+    settings = settings or get_settings()
+    base = (recording.guest_name or settings.assistant_name or "wortlaut").strip() or "wortlaut"
+    inviter_name = _recording_inviter_name(db, recording)
+    if not inviter_name:
+        return base
+    if inviter_name.lower() in base.lower() or "(" in base:
+        return base
+    combined = f"{base} ({inviter_name})"
+    if len(combined) <= 60:
+        return combined
+    max_inviter = max(1, 60 - len(base) - 3)
+    return f"{base} ({inviter_name[:max_inviter].rstrip()})"
 
 
 def build_chat_intro(
@@ -1602,7 +1680,7 @@ def bootstrap(
         raise HTTPException(409, "Claim this occurrence before bootstrap")
     settings = get_settings()
     response.headers["Cache-Control"] = "no-store"
-    display_name = recording.guest_name or settings.assistant_name
+    display_name = recording_display_name(db, recording, settings)
     inviter = _recording_inviter(db, recording)
     chat_intro = build_chat_intro(display_name, inviter, recording, settings)
     common = {

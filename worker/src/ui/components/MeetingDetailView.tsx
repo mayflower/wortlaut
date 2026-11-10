@@ -44,7 +44,12 @@ import {
   retryMailDelivery,
   updateRecordingProtocol,
 } from '../api';
-import type { AuthMode, RecordingDetail, TranscriptExport } from '../types';
+import {
+  formatBotDisplayName,
+  type AuthMode,
+  type RecordingDetail,
+  type TranscriptExport,
+} from '../types';
 import { DiagnosticsTab } from './DiagnosticsTab';
 import { ParticipationStepper } from './ParticipationStepper';
 import { SourcesTab } from './SourcesTab';
@@ -288,7 +293,7 @@ export function MeetingDetailView({
       recording.participation === 'unknown') &&
       !isNormalEnd);
   const explanation = reason ? failureReasons[reason] || '' : '';
-  const botName = recording.guest_name || instance.assistantName;
+  const botName = formatBotDisplayName(recording, instance.assistantName);
   const live = recording.live_status;
 
   const operatorMenuItems = [

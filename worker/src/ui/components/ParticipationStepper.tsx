@@ -20,7 +20,12 @@ import {
   getInstanceInfo,
   getSourceFilterKey,
 } from '../api';
-import type { RecordingDetail, SourceSummary, TranscriptExport } from '../types';
+import {
+  formatBotDisplayName,
+  type RecordingDetail,
+  type SourceSummary,
+  type TranscriptExport,
+} from '../types';
 
 export interface ParticipationStepperProps {
   recording: RecordingDetail;
@@ -43,7 +48,7 @@ export function ParticipationStepper({
 }: ParticipationStepperProps) {
   const failureReasons = getFailureReasons();
   const instance = getInstanceInfo();
-  const botName = recording.guest_name || instance.assistantName;
+  const botName = formatBotDisplayName(recording, instance.assistantName);
   const lastAttempt =
     recording.attempts && recording.attempts.length > 0
       ? recording.attempts[recording.attempts.length - 1]

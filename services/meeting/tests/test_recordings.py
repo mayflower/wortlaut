@@ -1284,6 +1284,7 @@ def test_oidc_dex_pkce_exchange_and_per_user_isolation(client, database, monkeyp
     assert boot.status_code == 200
     boot_data = boot.json()
     assert boot_data["invited_by"] == "mara.lindner@mayflower.de"
+    assert boot_data["meet"]["display_name"] == "wortlaut (Mara Lindner)"
     assert "mara.lindner@mayflower.de" in boot_data["chat_intro"]
     assert f"/ui#view=meetings&id={rec_mara_id}&token=wortlaut-read-{rec_mara_id}." in boot_data[
         "chat_intro"
