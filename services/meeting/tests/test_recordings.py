@@ -1469,6 +1469,46 @@ def test_oidc_dex_pkce_exchange_and_per_user_isolation(client, database, monkeyp
         == 200
     )
 
+    # A second colleague syncing the same Google Calendar meeting must reuse the canonical recording
+    monkeypatch.setattr(
+        cal_oauth_mod.httpx,
+        "post",
+        lambda url, **kw: _FakeCalTokenResp("kollege@mayflower.de"),
+    )
+    kollege_ex = client.post(
+        "/v1/calendar/oauth/exchange",
+        headers=kollege_headers,
+        json={
+            "provider": "google",
+            "code": "gcal-kollege-code",
+            "code_verifier": "k" * 44,
+            "redirect_uri": "https://wortlaut.data.mayflower.tech/auth/callback",
+        },
+    )
+    assert kollege_ex.status_code == 200, kollege_ex.text
+    kollege_events = {e["external_event_id"]: e for e in kollege_ex.json()["synced_events"]}
+    kollege_toggle = client.post(
+        f"/v1/calendar/oauth/events/{kollege_events['gcal-own-1']['id']}/toggle",
+        headers=kollege_headers,
+        json={"enabled": True},
+    )
+    assert kollege_toggle.status_code == 200
+    assert kollege_toggle.json()["recording_id"] == own_ev["recording_id"]
+    client.post(
+        f"/v1/calendar/oauth/events/{kollege_events['gcal-own-1']['id']}/toggle",
+        headers=kollege_headers,
+        json={"enabled": False},
+    )
+    monkeypatch.setattr(
+        cal_oauth_mod.httpx,
+        "post",
+        lambda url, **kw: _FakeCalTokenResp(
+            "mara.lindner@mayflower.de"
+            if "googleapis.com" in url
+            else "thomas.berg@mayflower.de"
+        ),
+    )
+
     unconf_ev = events_by_ext["gcal-unconfirmed-3"]
     assert unconf_ev["is_self_organized"] is True
     assert unconf_ev["auto_record"] is False

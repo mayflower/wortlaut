@@ -80,6 +80,7 @@ async function run(api: string, credential: string) {
   let lobbySince: number | undefined;
   let emptySince: number | undefined;
   let lastActiveSamples = 0;
+  let lastRtpTimestamp = -Infinity;
   let maxDomParticipants = 0;
   const stopped = new Promise<void>((resolve) => { signalStop = resolve; });
   async function stop(reason: string) {
@@ -147,8 +148,18 @@ async function run(api: string, credential: string) {
         const activeSamples = typeof state.active_audio_samples === 'number'
           ? state.active_audio_samples
           : (state.streams > 0 ? state.audio_samples : 0);
-        if (activeSamples > lastActiveSamples && state.streams > 0) {
-          lastActiveSamples = activeSamples;
+        let maxRtpTs = -Infinity;
+        for (const recv of (state.receiver_sources ?? []) as Array<{csrc?: Array<{timestamp?: number}>; ssrc?: Array<{timestamp?: number}>}>) {
+          for (const item of [...(recv.csrc ?? []), ...(recv.ssrc ?? [])]) {
+            if (typeof item.timestamp === 'number' && Number.isFinite(item.timestamp) && item.timestamp > maxRtpTs) {
+              maxRtpTs = item.timestamp;
+            }
+          }
+        }
+        const rtpAdvanced = maxRtpTs > lastRtpTimestamp;
+        if (rtpAdvanced) lastRtpTimestamp = maxRtpTs;
+        if ((activeSamples > lastActiveSamples && state.streams > 0) || rtpAdvanced) {
+          if (activeSamples > lastActiveSamples) lastActiveSamples = activeSamples;
           emptySince = undefined;
         } else {
           emptySince ??= performance.now();
@@ -157,7 +168,9 @@ async function run(api: string, credential: string) {
             ? Math.min(configuredTimeout, 15)
             : (maxDomParticipants >= 2 && currentDom <= 1)
               ? Math.min(configuredTimeout, 60)
-              : configuredTimeout;
+              : currentDom >= 2
+                ? Math.max(configuredTimeout * 6, 1800)
+                : configuredTimeout;
           if (performance.now() - emptySince >= emptyTimeoutSeconds * 1000) {
             await stop('room_empty');
             return;
@@ -233,7 +246,7 @@ async function run(api: string, credential: string) {
     await browser.close();
     if (endReason === 'normal' && diagnostics.drained === false) endReason = 'audio_drain_incomplete';
     try { await request(`/v1/attempts/${attemptId}/status`, 'POST',
-      {participation: 'ended', reason: endReason, ...diagnostics}, Date.now() + 20000); }
+      {participation: 'ended', reason: endReason, ...diagnostics}, Date.now() + 60000); }
     catch { process.exitCode = 1; }
     process.off('SIGTERM', terminate);
     process.off('SIGINT', terminate);

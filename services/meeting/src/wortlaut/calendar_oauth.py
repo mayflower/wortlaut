@@ -619,6 +619,32 @@ def _merge_recording_attendees(recording: Recording, emails: list[str] | set[str
         recording.protocol_meta = meta
 
 
+def _find_canonical_meeting_recording(
+    db: Session, ev: CalendarSyncedEvent
+) -> Recording | None:
+    if not ev.meeting_provider or not ev.meeting_url:
+        return None
+    return db.scalar(
+        select(Recording)
+        .where(
+            Recording.provider == ev.meeting_provider,
+            Recording.meeting_url == ev.meeting_url,
+            Recording.metadata_deleted_at.is_(None),
+            Recording.cancelled_at.is_(None),
+            Recording.participation != "ended",
+            Recording.starts_at < ev.ends_at,
+            Recording.ends_at > ev.starts_at,
+        )
+        .order_by(
+            Recording.active_attempt_id.is_not(None).desc(),
+            Recording.created_at.asc(),
+            Recording.id.asc(),
+        )
+        .limit(1)
+        .with_for_update()
+    )
+
+
 def _reconcile_synced_event_recording(
     db: Session,
     ev: CalendarSyncedEvent,
@@ -639,7 +665,18 @@ def _reconcile_synced_event_recording(
     should_record = ev.status == "confirmed" and ev.auto_record
     if not should_record:
         if recording is not None and recording.participation != "ended":
-            request_cancellation(recording, now)
+            other_active = db.scalar(
+                select(CalendarSyncedEvent.id)
+                .where(
+                    CalendarSyncedEvent.recording_id == recording.id,
+                    CalendarSyncedEvent.id != ev.id,
+                    CalendarSyncedEvent.status == "confirmed",
+                    CalendarSyncedEvent.auto_record.is_(True),
+                )
+                .limit(1)
+            )
+            if other_active is None:
+                request_cancellation(recording, now)
         ev.recording_id = None
         return None
 
@@ -648,31 +685,62 @@ def _reconcile_synced_event_recording(
             _merge_recording_attendees(recording, all_emails)
         return recording
 
-    if recording is None:
-        idemp_hash = hashlib.sha256(
-            f"cal-oauth:{ev.connection_id}:{ev.external_event_id}".encode()
-        ).hexdigest()
-        idemp_key = f"cal-oauth-{idemp_hash[:48]}"
-        recording = db.scalar(
-            select(Recording).where(Recording.idempotency_key == idemp_key).with_for_update()
-        )
-        if recording is None:
-            if capacity_reached(db):
-                return None
-            recording = Recording(
-                idempotency_key=idemp_key,
-                request_digest=idemp_hash,
-                owner_sub=ev.owner_sub,
-                owner_email=ev.owner_email,
-                provider=ev.meeting_provider,
-                meeting_url=ev.meeting_url,
-                title=ev.title,
-                starts_at=ev.starts_at,
-                ends_at=ev.ends_at,
-                protocol_meta={"attendee_emails": sorted(all_emails)} if all_emails else {},
+    canonical = _find_canonical_meeting_recording(db, ev)
+    if (
+        recording is not None
+        and canonical is not None
+        and canonical.id != recording.id
+        and recording.participation == "scheduled"
+        and recording.active_attempt_id is None
+        and recording.cancelled_at is None
+    ):
+        prev_emails = list((recording.protocol_meta or {}).get("attendee_emails") or [])
+        _merge_recording_attendees(canonical, prev_emails)
+        ev.recording_id = canonical.id
+        other_refs = db.scalar(
+            select(CalendarSyncedEvent.id)
+            .where(
+                CalendarSyncedEvent.recording_id == recording.id,
+                CalendarSyncedEvent.id != ev.id,
+                CalendarSyncedEvent.status == "confirmed",
+                CalendarSyncedEvent.auto_record.is_(True),
             )
-            db.add(recording)
-            db.flush()
+            .limit(1)
+        )
+        if other_refs is None:
+            request_cancellation(recording, now)
+        recording = canonical
+
+    if recording is None:
+        if canonical is not None:
+            recording = canonical
+        else:
+            idemp_hash = hashlib.sha256(
+                f"cal-oauth:{ev.connection_id}:{ev.external_event_id}".encode()
+            ).hexdigest()
+            idemp_key = f"cal-oauth-{idemp_hash[:48]}"
+            recording = db.scalar(
+                select(Recording)
+                .where(Recording.idempotency_key == idemp_key)
+                .with_for_update()
+            )
+            if recording is None:
+                if capacity_reached(db):
+                    return None
+                recording = Recording(
+                    idempotency_key=idemp_key,
+                    request_digest=idemp_hash,
+                    owner_sub=ev.owner_sub,
+                    owner_email=ev.owner_email,
+                    provider=ev.meeting_provider,
+                    meeting_url=ev.meeting_url,
+                    title=ev.title,
+                    starts_at=ev.starts_at,
+                    ends_at=ev.ends_at,
+                    protocol_meta={"attendee_emails": sorted(all_emails)} if all_emails else {},
+                )
+                db.add(recording)
+                db.flush()
         ev.recording_id = recording.id
 
     _merge_recording_attendees(recording, all_emails)

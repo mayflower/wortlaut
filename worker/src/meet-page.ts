@@ -1171,7 +1171,8 @@ function install(config: MeetCaptureConfig) {
     .then(() => { window.wortlautMeetReceivers.observe = observe; state.capture_ready = true; })
     .catch(() => { state.reason = 'capture_modules_failed'; })
     .finally(() => { modules.forEach((url) => URL.revokeObjectURL(url)); });
-  const sources = new Map<RTCRtpReceiver, {id: string; track?: MediaStreamTrack}>();
+  const sources = new Map<RTCRtpReceiver, {id: string; track?: MediaStreamTrack; recovered?: boolean}>();
+  const keepaliveAudios = new Map<RTCRtpReceiver, {el: HTMLAudioElement; track: MediaStreamTrack}>();
   let nextSource = 0;
   let pendingBytes = 0, pendingMessages = 0;
   let bridge: Promise<void> = Promise.resolve();
@@ -1349,12 +1350,59 @@ function install(config: MeetCaptureConfig) {
           }
         }
         if (live.size > 64) { state.reason = 'audio_source_limit'; return; }
+        const domAudioTracks = new Set<MediaStreamTrack>();
+        for (const el of document.querySelectorAll<HTMLAudioElement>('audio:not([data-wortlaut-keepalive])')) {
+          const stream = el.srcObject instanceof MediaStream ? el.srcObject : null;
+          if (!stream) continue;
+          const tracks = stream.getAudioTracks().filter((t) => t.readyState === 'live');
+          if (!tracks.length) continue;
+          for (const t of tracks) domAudioTracks.add(t);
+          if (el.muted) el.muted = false;
+          if (el.volume < 1) el.volume = 1;
+          if (el.paused) void el.play().catch(() => {});
+        }
+        for (const [receiver, ka] of keepaliveAudios) {
+          if (!live.has(receiver) || ka.track !== receiver.track || domAudioTracks.has(receiver.track)) {
+            ka.el.pause();
+            ka.el.srcObject = null;
+            ka.el.remove();
+            keepaliveAudios.delete(receiver);
+          } else if (ka.el.paused) {
+            void ka.el.play().catch(() => {});
+          }
+        }
+        for (const receiver of live) {
+          if (!domAudioTracks.has(receiver.track) && !keepaliveAudios.has(receiver)) {
+            try {
+              const el = document.createElement('audio');
+              el.dataset.wortlautKeepalive = '1';
+              el.autoplay = true;
+              el.muted = false;
+              el.volume = 1;
+              el.style.display = 'none';
+              el.srcObject = new MediaStream([receiver.track]);
+              document.body?.append(el);
+              void el.play().catch(() => {});
+              keepaliveAudios.set(receiver, {el, track: receiver.track});
+            } catch { /* ignore headless audio element errors */ }
+          }
+        }
+        const silentCaptureWithParticipants =
+          state.active_audio_samples === 0 &&
+          state.audio_samples >= 16000 * 10 &&
+          (participants.size > 0 || liveDomCount > 0);
         for (const [receiver, entry] of observations) {
           if (!live.has(receiver)) { detachObservation(receiver); continue; }
           if (!entry.transform) continue;
           if (receiver.transform !== entry.transform) {
             if (entry.evidence.state !== 'replaced') observer?.postMessage({type: 'forget', id: entry.id});
             entry.evidence.state = 'replaced'; continue;
+          }
+          if (silentCaptureWithParticipants && entry.evidence.state === 'waiting_frames' && entry.evidence.frame_count === 0) {
+            receiver.transform = null; entry.transform = undefined;
+            entry.evidence.state = 'unsupported';
+            observer?.postMessage({type: 'forget', id: entry.id});
+            continue;
           }
           if (entry.requestedAt !== undefined && performance.now() - entry.requestedAt > 5000) {
             receiver.transform = null; entry.transform = undefined;
@@ -1367,11 +1415,15 @@ function install(config: MeetCaptureConfig) {
           }
         }
         for (const [receiver, source] of sources) {
-          if (!live.has(receiver) || receiver.track !== source.track) {
+          const forceReattach = silentCaptureWithParticipants && !source.recovered && source.track === receiver.track;
+          if (!live.has(receiver) || receiver.track !== source.track || forceReattach) {
             if (source.track && ![...sources].some(([other, entry]) => other !== receiver &&
                 live.has(other) && entry.track === source.track)) await capture.detach(source.track);
             if (!live.has(receiver)) sources.delete(receiver);
-            else source.track = undefined;
+            else {
+              if (forceReattach) source.recovered = true;
+              source.track = undefined;
+            }
           }
         }
         if (config.provider === 'webex') {
@@ -1486,6 +1538,12 @@ function install(config: MeetCaptureConfig) {
           if (entry.evidence.state !== 'failed') entry.evidence.state = 'stopped';
         }
       }
+      for (const [, ka] of keepaliveAudios) {
+        ka.el.pause();
+        ka.el.srcObject = null;
+        ka.el.remove();
+      }
+      keepaliveAudios.clear();
       observer?.terminate();
       state.drained = !bridgeFailed;
       state.stopped = true;

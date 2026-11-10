@@ -90,7 +90,7 @@ export class AudioTransport {
     }
   }
 
-  async drain(timeoutMs = 15000): Promise<boolean> {
+  async drain(timeoutMs = 45000): Promise<boolean> {
     const deadline = performance.now() + timeoutMs;
     while (this.pending.size && performance.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 50));
