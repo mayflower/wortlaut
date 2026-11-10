@@ -3,189 +3,134 @@
 [![Checks](https://github.com/mayflower/wortlaut/actions/workflows/checks.yml/badge.svg)](https://github.com/mayflower/wortlaut/actions/workflows/checks.yml)
 [![Website](https://img.shields.io/badge/Website-wortlaut.cloud-10b981)](https://wortlaut.cloud)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
-[![Deploy](https://img.shields.io/badge/Deploy-Docker%20Compose%20%7C%20Helm%20%7C%20Kubernetes-6366f1)](#self-hosting--deployment-options)
+[![Deploy](https://img.shields.io/badge/Deploy-Docker%20Compose%20%7C%20Helm%20%7C%20Kubernetes-6366f1)](#quickstart--self-hosting)
 
-**Website:** [https://wortlaut.cloud](https://wortlaut.cloud) · **Quickstart:** [Docker Compose](docker-compose.yml) · **Helm Chart:** [`charts/wortlaut`](charts/wortlaut) · **REST API:** [`/docs`](services/meeting/src/wortlaut/app.py)
+**Website:** [https://wortlaut.cloud](https://wortlaut.cloud) · **Docker-Quickstart:** [`docker-compose.yml`](docker-compose.yml) · **Helm Chart:** [`charts/wortlaut`](charts/wortlaut) · **Datenschutz-Info:** [`/privacy`](services/meeting/src/wortlaut/ui.py)
 
-Self-hosted, GDPR-compliant meeting transcription for **Google Meet**, **Cisco Webex**, **Microsoft Teams**, and **Zoom**. `wortlaut` joins conferences as a browser participant, captures incoming WebRTC audio sources per receiver before mixing, transcribes them locally with a shared **Parakeet** ASR model (GPU or CPU fallback — no external cloud speech APIs), and delivers speaker-attributed **Markdown (`.md`)**, **TXT**, **WebVTT (`.vtt`)**, **JSON**, and **HTML email** protocols.
+**Sprechergenaue Wortprotokolle für Google Meet, Microsoft Teams, Cisco Webex und Zoom — zu 100 % auf Ihrer eigenen Infrastruktur.**
 
-Meetings can be started ad hoc or scheduled through the integrated Web-UI (`/` and `/ui`), the HTTP REST API, OAuth2 calendar synchronization (`calendar_oauth.py` for Google Calendar & Microsoft 365), or `.ics` email invitations (`robot@wortlaut.cloud`). Meet, Webex, Teams, and Zoom run side by side in the same instance, sharing storage, transcription, and capacity limits.
+`wortlaut` nimmt als transparenter Browser-Teilnehmer an Online-Besprechungen teil, zeichnet jeden Sprecher auf seiner eigenen Tonspur vor dem Abmischen auf und erstellt lokal (ohne externe Cloud-Sprachdienste) ein durchsuchbares Wortprotokoll inklusive Direktlink im Kalendereintrag, Markdown-Export und E-Mail-Versand.
 
-## Current status
+---
 
-wortlaut is under active development. Browser participation, per-receiver WebRTC audio capture, and local Parakeet transcription work across Google Meet, Webex, Microsoft Teams, and Zoom. Participant names are resolved from the browser DOM, SDP, and signaling channels when unambiguously matched to a receiver source.
+## Warum `wortlaut`?
 
-| Provider | Available path | Current status & limits |
-| --- | --- | --- |
-| Google Meet | Chromium web client ([meet.ts](worker/runtime/meet.ts), [meet-page.ts](worker/src/meet-page.ts), [capture.ts](worker/src/capture.ts)); guest or saved browser session | Per-receiver WebRTC audio capture and participant binding verified live |
-| Webex | Chromium guest join ([webex-browser.ts](worker/runtime/webex-browser.ts)); separate SDK path also available | Browser join, multistream `AUDIO-MAIN` receiver capture, and `activeSpeakerNotification` DataChannel attribution verified live. SDK path needs separate live validation |
-| Microsoft Teams | Chromium guest join with English/German controls ([teams-browser.ts](worker/runtime/teams-browser.ts)) | Per-receiver WebRTC audio capture and CSI participant rebinding verified live |
-| Zoom | Chromium web client ([zoom-browser.ts](worker/runtime/zoom-browser.ts), [zoom-url.ts](worker/src/zoom-url.ts)); guest or saved browser session | Anonymous browser join, waiting room admission, DOM roster inspection, and `RTCRtpReceiver` Opus audio capture verified live (`attribution_unknown: true` when Zoom's web client does not expose per-participant SSRC signaling) |
+Kommerzielle Meeting-Bots (*Fireflies, Otter, Fathom, Read.ai*) leiten Gesprächsinhalte in fremde Clouds weiter, legen biometrische Stimmprofile an und lassen Teilnehmern nur die Wahl, entweder komplett aufgenommen zu werden oder das Meeting zu verlassen.
 
-Unbound sources are explicitly marked `speaker_id: null` and `attribution_unknown: true` when transcribed speech cannot be attributed to a verified participant session; source coverage remains `unknown` unless complete signaling coverage is proven.
+`wortlaut` löst dieses Dilemma für datenschutzbewusste Teams, Beratungen, Behörden und Engineering-Organisationen:
 
-The intended model is transcription per incoming source with a verified provider participant identity. Speaker diarization, voiceprints, and active-speaker name guesses are not substitutes for that binding. Meet uses the browser only for conference participation and audio capture (no Google Meet REST or Media API); for calendar event discovery and automatic protocol-link write-back into the calendar event after completion, OAuth2 calendar synchronization (Google Calendar `calendar.events` and Microsoft Graph `Calendars.ReadWrite` in [calendar_oauth.py](services/meeting/src/wortlaut/calendar_oauth.py)) is supported alongside IMAP/`.ics` invitations.
+| Was Nutzer im Alltag brauchen | Wie `wortlaut` es löst |
+| :--- | :--- |
+| **Kein Datenabfluss in Dritt-Clouds** | Spracherkennung (**NVIDIA Parakeet**, `2,95 %` deutsche Wortfehlerrate) und optionale Zusammenfassungen (**Ollama**) laufen komplett im eigenen Cluster oder auf dem eigenen Server. |
+| **Wer hat was gesagt – ohne Raten** | Statt eines gemischten Audiostroms mit fehleranfälliger Stimm-Diarisierung greift `wortlaut` die getrennten WebRTC-Empfangsspuren (`RTCRtpReceiver`) jedes Teilnehmers vor dem Mix ab. |
+| **Individueller Opt-out mitten im Call** | Wer nicht protokolliert werden möchte, schreibt im Meeting-Chat einfach **`nein`** oder **`opt out`**. Das Gespräch läuft für alle anderen weiter – die Aussagen dieser Person werden sofort verworfen und rückstandslos gelöscht. |
+| **Protokoll direkt dort, wo man sucht** | Nach dem Gespräch hängt `wortlaut` den schreibgeschützten Protokoll-Link automatisch an den **Google-Calendar-** oder **Outlook/M365-Termin** an, verschickt das Ergebnis per E-Mail und stellt `.md`, `.txt`, `.vtt` und `.json` bereit. |
+| **Sekundengenaue Prüfbarkeit** | Jedes Zitat besitzt einen klickbaren Zeitstempel. Innerhalb der 24-stündigen Audio-Aufbewahrungsfrist lässt sich jeder Satz direkt im Browser mit dem Original-Ton gegenhören, bevor das Roh-Audio automatisch gelöscht wird. |
 
-Participants can also opt out individually during a live call by sending `"opt out"`, `"optout"`, `"no"`, `"nein"`, `"stop"`, or `"widerspruch"` in the meeting chat. When an opt-out is detected ([meet-page.ts](worker/src/meet-page.ts), [app.py](services/meeting/src/wortlaut/app.py), [processing.py](services/meeting/src/wortlaut/processing.py), [asr.py](services/meeting/src/wortlaut/asr.py), [exports.py](services/meeting/src/wortlaut/exports.py)), the participant is marked `opted_out: true` (and listed in `opted_out_speakers`), further incoming audio chunks for that participant are discarded at ingest, pending ASR jobs are skipped, any already-transcribed segments for that participant are deleted from PostgreSQL, and all exports and protocol summaries omit their statements.
+---
 
-## Architecture
+## So funktioniert `wortlaut` im Alltag
 
-- **Meeting service** ([app.py](services/meeting/src/wortlaut/app.py), [models.py](services/meeting/src/wortlaut/models.py)) — Python/FastAPI, integrated Web-UI ([ui.py](services/meeting/src/wortlaut/ui.py) serving `/`, `/ui`, and the public transparency notice `/privacy`), Dex OIDC authentication ([oidc.py](services/meeting/src/wortlaut/oidc.py)), calendar & OAuth2 sync ([calendar.py](services/meeting/src/wortlaut/calendar.py), [calendar_oauth.py](services/meeting/src/wortlaut/calendar_oauth.py)), PostgreSQL-backed scheduling, Kubernetes worker management ([controller.py](services/meeting/src/wortlaut/controller.py)), audio ingest, exports ([exports.py](services/meeting/src/wortlaut/exports.py)), and email processing ([mail.py](services/meeting/src/wortlaut/mail.py)) in one service.
-- **Worker** ([worker](worker)) — TypeScript, Playwright, and sandboxed Chromium; one short-lived Kubernetes Job per meeting. Browser workers use a virtual display under Linux. The alternative Webex SDK path uses a hosted HTTPS page.
-- **ASR service** ([services/asr](services/asr)) — a shared local Parakeet model for speech recognition (defaulting to `primeline/parakeet-primeline` / `2_95_WER.nemo` at revision `3f1a9bcb611dfeda53fe74fe5f1a3d5701e8023e`, configurable via `WORTLAUT_ASR_MODEL_NAME`, `WORTLAUT_ASR_MODEL_NEMO_FILE`, and `WORTLAUT_ASR_MODEL_REVISION` in [services/asr/app.py](services/asr/app.py)).
-- **Storage** — PostgreSQL for state and transcripts, S3-compatible storage for audio.
+### 1. Besprechung aufzeichnen (3 Wege)
 
-See [meeting service](services/meeting), [ASR service](services/asr), [worker](worker), [Helm chart](charts/wortlaut), [Docker Compose](docker-compose.yml), and [Kubernetes Kustomize manifests](deploy).
+* **Automatisch über den Kalender (Google Calendar & Microsoft 365):**
+  Verbinden Sie Ihren Kalender einmalig per OAuth2 in der Web-UI (`/ui#view=calendar`). Eigene Termine mit bestätigten Gästen werden automatisch protokolliert; externe Termine lassen sich per **1-Klick-Schalter** zu- oder abschalten.
+* **Sofort im Browser (Ad-hoc):**
+  Fügen Sie einen beliebigen **Google Meet-**, **Microsoft Teams-**, **Cisco Webex-** oder **Zoom-Link** auf der Startseite ein – `wortlaut` tritt innerhalb weniger Sekunden bei.
+* **Per E-Mail-Einladung (`.ics`):**
+  Laden Sie die Bot-Adresse (z. B. `robot@wortlaut.cloud`) einfach wie einen normalen Teilnehmer zum Kalendereintrag ein oder laden Sie eine `.ics`-Datei hoch.
 
-## Self-hosting & deployment options
+### 2. Transparente Teilnahme & Live-Widerspruch im Call
 
-wortlaut supports four deployment setups depending on your environment ([runtime_backends.py](services/meeting/src/wortlaut/runtime_backends.py)):
+* Beim Beitritt erscheint `wortlaut` klar erkennbar mit dem Namen der einladenden Person – z. B. **`wortlaut (Mara Lindner)`** – und postet im Meeting-Chat einen kurzen Hinweis samt Link zur [Datenschutz-Information (`/privacy`)](services/meeting/src/wortlaut/ui.py).
+* **Live-Chat-Opt-out:** Schreibt eine teilnehmende Person im Meeting-Chat `nein`, `no`, `opt out`, `optout`, `stop` oder `widerspruch`, wird ihre Tonspur sofort verworfen und bereits transkribierte Sätze dieser Person werden aus der Datenbank gelöscht ([meet-page.ts](worker/src/meet-page.ts), [processing.py](services/meeting/src/wortlaut/processing.py)).
 
-1. **Docker Compose (`WORTLAUT_CONTROLLER_BACKEND=docker`)** — Single-server / VM deployment ([docker-compose.yml](docker-compose.yml)). Starts `wortlaut-meeting`, `wortlaut-asr`, PostgreSQL 17, and MinIO S3, and spawns isolated short-lived `wortlaut-worker` containers via the Docker Engine socket:
-   ```sh
-   docker compose up -d --build
-   # Web-UI: http://127.0.0.1:8000/ui
-   ```
-2. **Helm Chart for Kubernetes (`WORTLAUT_CONTROLLER_BACKEND=kubernetes`)** — Production Kubernetes deployment ([charts/wortlaut](charts/wortlaut)):
-   ```sh
-   helm install wortlaut ./charts/wortlaut \
-     --namespace wortlaut --create-namespace \
-     --set config.apiUrl=https://wortlaut.example.org/ \
-     --set config.sdkPageUrl=https://wortlaut.example.org/sdk/ \
-     --set secrets.apiToken="$WORTLAUT_API_TOKEN" \
-     --set secrets.databaseUrl="$DATABASE_URL"
-   ```
-   *(Alternatively, declarative Kubernetes manifests via Kustomize are available under [deploy/k8s/base](deploy/k8s/base).)*
-3. **Local Process / Bare-Metal Mode (`WORTLAUT_CONTROLLER_BACKEND=local`)** — Runs `wortlaut-meeting` directly on Linux and spawns isolated `node dist-worker/runtime/main.js` subprocesses per recording ([scripts/run-local.sh](scripts/run-local.sh)):
-   ```sh
-   ./scripts/run-local.sh
-   ```
-4. **CPU Fallback for ASR (`WORTLAUT_ASR_ALLOW_CPU=true`)** — For production scale, an NVIDIA GPU node is recommended for `wortlaut-asr`. For evaluation, CI, or small setups without a GPU, setting `WORTLAUT_ASR_ALLOW_CPU=true` loads the Parakeet ASR model on CPU (`map_location="cpu"` in [services/asr/app.py](services/asr/app.py); enabled by default in `docker-compose.yml`).
+### 3. Nachbereiten, Prüfen & Teilen
 
-## Development setup
+* **Direkt im Kalendereintrag verlinkt:** Sobald das Protokoll fertig ist, trägt `wortlaut` den Lese-Link (`wortlaut-read-…`) automatisch in die Terminbeschreibung in Google Calendar bzw. Microsoft 365 ein – bei selbst organisierten Terminen direkt sichtbar für alle eingeladenen Gäste ([calendar_oauth.py](services/meeting/src/wortlaut/calendar_oauth.py)).
+* **Volltextsuche & Editor:** Durchsuchen Sie alle Meetings nach Stichworten oder Sprechernamen, benennen Sie Gast-Teilnehmer bei Bedarf um (`speaker_overrides`) und korrigieren Sie Fachbegriffe im gesamten Protokoll mit einem Klick.
+* **Exporte für jedes Werkzeug:** Kopieren Sie das Protokoll als **GitHub-Flavored Markdown (`.md`)** direkt nach Confluence, Notion, GitLab oder Jira, laden Sie `.txt`, `.vtt` oder `.json` herunter oder teilen Sie einen schreibgeschützten **Lese-Link (`wortlaut-read-…`)** ohne Account-Zwang ([exports.py](services/meeting/src/wortlaut/exports.py)).
 
-The included Tilt setup targets the existing `data` Kubernetes cluster. It is not a standalone Docker quickstart: it requires access to that cluster, its registry, GPU resources, and configured ingress domain. Another environment needs corresponding changes to [Tiltfile](Tiltfile) and [deploy/dev](deploy/dev).
+---
 
-Install `uv`, Node.js/npm, `kubectl`, Tilt, and Docker with Buildx, then run:
+## Unterstützte Konferenzplattformen
 
-```sh
-make setup
-make dev
-```
+Alle vier Plattformen laufen parallel in derselben `wortlaut`-Instanz:
 
-`make setup` installs locked dependencies and creates a private `.dev/kubeconfig` from `~/.kube/data-lan-mayflower`. Set `WORTLAUT_SOURCE_KUBECONFIG` to use another source containing context `data`. The global Kubernetes context is unchanged.
+| Plattform | Beitritt & Funktionsumfang |
+| :--- | :--- |
+| **Google Meet** | Beitritt als Gast oder mit hinterlegtem Google-Konto ([meet.ts](worker/runtime/meet.ts), [meet-page.ts](worker/src/meet-page.ts), [capture.ts](worker/src/capture.ts)); getrennte WebRTC-Einzelspuren, Teilnehmer-Zuordnung und Live-Chat-Opt-out. |
+| **Microsoft Teams** | Beitritt als Gast mit deutscher/englischer Steuerung ([teams-browser.ts](worker/runtime/teams-browser.ts)); getrennte WebRTC-Empfangsspuren, CSI-Sprecher-Bindung und Live-Chat-Opt-out. |
+| **Cisco Webex** | Beitritt als Browser-Gast ([webex-browser.ts](worker/runtime/webex-browser.ts)) oder per Service-App-SDK; Multistream-`AUDIO-MAIN`-Erfassung, `activeSpeakerNotification`-Zuordnung und Live-Chat-Opt-out. |
+| **Zoom** | Beitritt über den Zoom Web-Client als Gast oder mit hinterlegter Sitzung ([zoom-browser.ts](worker/runtime/zoom-browser.ts), [zoom-url.ts](worker/src/zoom-url.ts)); Warteraum-Unterstützung, Opus-Audio-Erfassung und Live-Chat-Opt-out. |
 
-Tilt builds `linux/amd64` images using Kubernetes BuildKit and deploys to `wortlaut-$(id -un)`. Credentials are generated under the ignored `.dev/` directory and copied into Kubernetes Secrets.
+*(Kann eine Tonspur vom Konferenzanbieter nicht eindeutig einer Teilnehmersitzung zugeordnet werden, weist `wortlaut` dies im Protokoll transparent als `attribution_unknown: true` aus, statt Namen zu erraten.)*
 
-| Service | Local address |
-| --- | --- |
-| Tilt | http://127.0.0.1:34604 |
-| Meeting Web-UI | http://127.0.0.1:34601/ui |
-| Meeting API / OpenAPI UI | http://127.0.0.1:34601/docs |
-| ASR | http://127.0.0.1:34602 |
-| PostgreSQL | `127.0.0.1:34632` |
-| S3 | http://127.0.0.1:34609 |
+---
 
-Workers use the configured HTTPS ingress to reach the meeting service. For direct cluster commands, always select the project kubeconfig, context, and namespace explicitly:
+## Quickstart & Self-Hosting
+
+`wortlaut` unterstützt vier Betriebsarten ([runtime_backends.py](services/meeting/src/wortlaut/runtime_backends.py)) und läuft sowohl mit **NVIDIA-GPU** als auch per **CPU-Fallback**:
+
+### Option 1: Docker Compose (Einzelserver / VM – schnellster Start)
+
+Startet `wortlaut-meeting`, `wortlaut-asr` (standardmäßig mit CPU-Fallback), PostgreSQL 17 und MinIO S3 ([docker-compose.yml](docker-compose.yml)):
 
 ```sh
-kubectl --kubeconfig .dev/kubeconfig --context data \
-  -n "wortlaut-$(id -un)" get pods
+docker compose up -d --build
+# Web-UI öffnen: http://127.0.0.1:8000/ui
 ```
 
-## Enable meeting providers
+### Option 2: Kubernetes mit Helm Chart (Produktion)
 
-Provider files use `NAME=value` lines. Keep them private (`chmod 600`) and never commit credentials or browser session files. All providers can be enabled at once.
+Für den produktiven Cluster-Betrieb mit kurzlebigen Worker-Jobs und GPU-gestützter Parakeet-ASR ([charts/wortlaut](charts/wortlaut)):
 
-**Google Meet — `.dev/meet.env`:**
+```sh
+helm install wortlaut ./charts/wortlaut \
+  --namespace wortlaut --create-namespace \
+  --set config.apiUrl=https://wortlaut.example.org/ \
+  --set config.sdkPageUrl=https://wortlaut.example.org/sdk/ \
+  --set secrets.apiToken="$WORTLAUT_API_TOKEN" \
+  --set secrets.databaseUrl="$DATABASE_URL"
+```
+
+*(Deklarative Kustomize-Manifeste liegen zusätzlich unter [deploy/k8s/base](deploy/k8s/base).)*
+
+### Option 3: Lokal / Bare-Metal (`WORTLAUT_CONTROLLER_BACKEND=local`)
+
+Startet den Meeting-Dienst direkt unter Linux und isolierte Worker als lokale Node-Subprozesse ([scripts/run-local.sh](scripts/run-local.sh)):
+
+```sh
+./scripts/run-local.sh
+```
+
+---
+
+## Datenschutz & Aufbewahrungsfristen
+
+`wortlaut` ist nach dem Prinzip **Privacy by Design** aufgebaut:
+
+1. **Kurze Roh-Audio-Aufbewahrung (24 Stunden):** Aufgezeichnete Audiospuren dienen ausschließlich der Transkription und der kurzen Satz-Überprüfung und werden standardmäßig **24 Stunden nach Meeting-Ende** automatisch aus dem S3-Speicher gelöscht.
+2. **Automatische Protokoll-Löschfrist (30 Tage):** Transkripte und Metadaten laufen standardmäßig nach **30 Tagen** ab (konfigurierbar in [settings.py](services/meeting/src/wortlaut/settings.py)) oder können jederzeit sofort per Klick gelöscht werden (`DELETE /v1/recordings/{id}`).
+3. **Mandantentrennung & Scoped Links:** Über **Dex OIDC** ([oidc.py](services/meeting/src/wortlaut/oidc.py)) angemeldete Nutzer sehen ausschließlich ihre eigenen Aufnahmen sowie Termine, zu denen sie eingeladen waren. Geteilte Lese-Links (`wortlaut-read-<recording_id>.<hmac>`) gewähren ausschließlich Lesezugriff auf genau ein Protokoll.
+
+---
+
+## Optionale Erweiterungen
+
+### Lokale KI-Zusammenfassung & Aufgabenliste (Ollama)
+
+Wenn im eigenen Cluster oder Netzwerk ein lokaler **Ollama**-Endpunkt verfügbar ist, erstellt `wortlaut` auf Wunsch nach dem Call eine strukturierte Kurzfassung, Themenblöcke und Action-Items – ohne externe KI-APIs:
 
 ```dotenv
-WORTLAUT_ENABLE_GOOGLE_MEET=true
-WORTLAUT_MEET_LOCALE=de-DE
+WORTLAUT_ENABLE_LLM_SUMMARY=true
+WORTLAUT_OLLAMA_URL=http://ollama.ollama.svc.cluster.local:11434
+WORTLAUT_OLLAMA_MODEL=qwen3.8:latest
 ```
 
-Guest access depends on meeting settings and host admission. To use an authorized saved browser session, place its Playwright storage state in `.dev/meet-storage-state.json` and set `WORTLAUT_MEET_STORAGE_STATE_SECRET=wortlaut-meet-browser`. Only Meet workers receive that Secret.
+### E-Mail-Einladungen (IMAP) & Ergebnisversand (SMTP)
 
-**Webex browser guest — `.dev/webex.env`:**
-
-```dotenv
-WORTLAUT_ENABLE_WEBEX_BROWSER=true
-```
-
-This path needs no Service-App token. The host must start the room and admit the participant when required. The current browser flow was tested with a Webex personal room; other join flows may need additional handling.
-
-For the alternative Webex SDK path, leave the browser flag disabled and configure `WORTLAUT_WEBEX_SERVICE_TOKEN`. Optional Service-App refresh uses `WORTLAUT_ENABLE_WEBEX_REFRESH`, `WORTLAUT_WEBEX_CLIENT_ID`, `WORTLAUT_WEBEX_CLIENT_SECRET`, and `WORTLAUT_WEBEX_REFRESH_TOKEN` in the same private file.
-
-**Teams browser guest — `.dev/teams.env`:**
-
-```dotenv
-WORTLAUT_ENABLE_TEAMS=true
-WORTLAUT_TEAMS_LOCALE=en-US
-```
-
-Use `provider: "teams"` with the full invitation URL, including its query parameters. Teams supports API scheduling, OAuth2 calendar sync, and iCalendar invitations, with the same capacity limits as Meet, Webex, and Zoom.
-
-The browser worker handles English/German join controls and the admission lobby, captures incoming WebRTC receiver tracks, and streams them to ASR. Browser fixtures and live CSI participant rebinding have been verified.
-
-**Zoom browser guest — `.dev/zoom.env`:**
-
-```dotenv
-WORTLAUT_ENABLE_ZOOM=true
-WORTLAUT_ZOOM_LOCALE=en-US
-```
-
-Use `provider: "zoom"` with a `https://*.zoom.us/j/<id>?pwd=...` or `https://app.zoom.us/wc/<id>/join?pwd=...` invitation URL (normalized automatically to the Zoom web client `/wc/<id>/join`). To use an authorized saved browser session when a meeting requires Zoom sign-in, place its Playwright storage state in `.dev/zoom-storage-state.json` and set `WORTLAUT_ZOOM_STORAGE_STATE_SECRET=wortlaut-zoom-browser`.
-
-After changing provider or mail configuration in a running environment:
-
-```sh
-KUBECONFIG="$PWD/.dev/kubeconfig" WORTLAUT_NAMESPACE="wortlaut-$(id -un)" \
-  python3 scripts/dev-secrets.py
-kubectl --kubeconfig .dev/kubeconfig --context data \
-  -n "wortlaut-$(id -un)" rollout restart deployment/wortlaut-meeting
-```
-
-## Authentication, scheduling, and exporting a recording
-
-wortlaut supports three credential types ([oidc.py](services/meeting/src/wortlaut/oidc.py), [app.py](services/meeting/src/wortlaut/app.py)):
-1. **Dex OIDC User Sessions (`wortlaut-user-…`)**: Browser users sign in via OIDC Authorization Code + PKCE (`GET /auth/callback`, `POST /v1/auth/oidc/exchange`, `GET /v1/auth/me` configured via `WORTLAUT_OIDC_ISSUER` and `WORTLAUT_OIDC_CLIENT_ID`). Regular users only see and manage their own recordings (`owner_sub` / `owner_email`), while emails listed in `WORTLAUT_OIDC_ADMIN_EMAILS` have full operator access.
-2. **Operator API Token (`WORTLAUT_API_TOKEN`)**: Generated in `.dev/runtime.env` for full operator and automation access. Supply it privately via the `Authorization: Bearer` header; do not put it in URLs.
-3. **Scoped Reader Token (`wortlaut-read-<recording_id>.<mac>`)**: Issued per recording (`POST /v1/recordings/{id}/reader-token` or included as `#token=wortlaut-read-…` in result emails) for read-only access to a single recording's transcript and exports.
-
-Set `MEETING_URL` to a real meeting you are authorized to record, and `STARTS_AT` / `ENDS_AT` to ISO 8601 timestamps including a timezone.
-
-```sh
-# Requires jq. Use provider=webex for Webex, provider=teams for Teams, or provider=zoom for Zoom.
-IDEMPOTENCY_KEY=$(uuidgen) # Keep this value for retries of this request.
-jq -n --arg url "$MEETING_URL" --arg start "$STARTS_AT" --arg end "$ENDS_AT" \
-  '{provider:"google_meet", meeting_url:$url, starts_at:$start, ends_at:$end}' |
-  curl --fail-with-body http://127.0.0.1:34601/v1/recordings \
-    -H "Authorization: Bearer $WORTLAUT_API_TOKEN" \
-    -H 'Content-Type: application/json' \
-    -H "Idempotency-Key: $IDEMPOTENCY_KEY" --data-binary @-
-```
-
-Save the returned `id` as `RECORDING_ID`. Reusing an idempotency key with the same request returns the same recording; a different request returns HTTP 409. Retain the original key when retrying a request whose outcome is unknown.
-
-```sh
-curl --fail-with-body "http://127.0.0.1:34601/v1/recordings/$RECORDING_ID" \
-  -H "Authorization: Bearer $WORTLAUT_API_TOKEN"
-
-curl --fail-with-body "http://127.0.0.1:34601/v1/recordings/$RECORDING_ID/exports/json" \
-  -H "Authorization: Bearer $WORTLAUT_API_TOKEN" -o recording.json
-
-# End a recording early or cancel a scheduled recording.
-curl --fail-with-body -X POST "http://127.0.0.1:34601/v1/recordings/$RECORDING_ID/cancel" \
-  -H "Authorization: Bearer $WORTLAUT_API_TOKEN"
-```
-
-Exports ([exports.py](services/meeting/src/wortlaut/exports.py)) support `txt`, `vtt`, `md` (GitHub-Flavored Markdown), and `json` via `GET /v1/recordings/{id}/exports/{format}` (or `?format=`). They return HTTP 409 while processing is pending and HTTP 410 after transcript retention expires. The recording detail includes participation, processing, audio gaps, source attribution, worker diagnostics, `live_status`, `opted_out_speakers`, and delivery status. `GET /v1/recordings/{id}/transcript` returns live or completed transcript segments, `GET /v1/recordings` lists recordings with cursor pagination and full-text/speaker search (`?q=`), `PATCH /v1/recordings/{id}` updates recording metadata (such as `title`) or speaker display-name overrides (`speaker_overrides`), `DELETE /v1/recordings/{id}` permanently deletes a recording and its stored S3 audio objects, `GET /v1/recordings/{id}/audio-snippet` streams a bounded WAV snippet for a single source/time window during active audio retention, `POST /v1/recordings/{id}/summary` generates or refreshes an optional local Ollama protocol summary, `POST /v1/recordings/{id}/rejoin` triggers a fresh worker join attempt, `POST /v1/recordings/{id}/reader-token` issues a scoped read-only link token, `POST /v1/recordings/{id}/claim-access` binds an authenticated OIDC user to a recording accessed via a scoped reader token, `POST /v1/recordings/{id}/delivery/retry` retries SMTP delivery, `GET /privacy` serves the bilingual GDPR/privacy notice, and `GET /metrics` exposes Prometheus metrics; see the OpenAPI UI (`/docs`) for all parameters.
-
-By default ([settings.py](services/meeting/src/wortlaut/settings.py)), the scheduler starts workers 60 seconds before a meeting, allows 15 active meetings (`max_active_meetings`) across all providers, waits up to ten minutes for admission, and stops a worker after five minutes if no remote participants or active audio are observed (`room_empty`). Completed transcription does not imply complete audio coverage or correct speaker attribution.
-
-## Email invitations and results
-
-IMAP and SMTP are disabled by default. For a regular mailbox, configure `.dev/mail.env` with your provider's settings:
+Für den Empfang von `.ics`-Kalendereinladungen (mit DKIM-Prüfung) und den automatischen Versand der fertigen Wortprotokolle per E-Mail ([mail.py](services/meeting/src/wortlaut/mail.py), [calendar.py](services/meeting/src/wortlaut/calendar.py)):
 
 ```dotenv
 WORTLAUT_ENABLE_IMAP=true
@@ -202,25 +147,70 @@ WORTLAUT_SMTP_PASSWORD=REPLACE_PRIVATELY
 WORTLAUT_SMTP_FROM=bot@example.org
 ```
 
-Defaults are IMAP over TLS on port 993 and SMTP with STARTTLS on port 587. DKIM mode verifies signatures against DNS and requires an allowed sender domain; the visible From address alone is insufficient. Calendar organizers must match the authenticated sender.
+*(Alternativ unterstützt `WORTLAUT_MAIL_SENDER_AUTH=gateway` vertrauenswürdige Mail-Gateways über `WORTLAUT_TRUSTED_SENDER_HEADER` und `WORTLAUT_ORGANIZER_PERMISSIONS`.)*
 
-Supported invitations include iCalendar messages and immediate email invitations containing a meeting link in text or HTML for Google Meet, Webex, Microsoft Teams, and Zoom. Signed Google Meet notifications are supported with the inviter checked against the same domain allowlist. Immediate invitations default to 120 minutes from the signed sending time (`WORTLAUT_INSTANT_INVITE_MINUTES`). Duplicate messages do not create duplicate recordings. In addition to email invitations, users can connect Google Calendar (`calendar.events`) or Microsoft 365 Calendar (`Calendars.ReadWrite`) via OAuth2 PKCE in the Web-UI (`POST /v1/calendar/oauth/exchange`, `POST /v1/calendar/oauth/connections/{id}/sync`, `DELETE /v1/calendar/oauth/connections/{id}`, `POST /v1/calendar/oauth/events/{id}/toggle`, `POST /v1/recordings/{id}/calendar-link`). When a recording completes, `wortlaut` automatically appends the scoped protocol link (`wortlaut-read-…`) to the calendar event description/body (updating all calendar attendees when `is_self_organized` is true).
+---
 
-Alternatively, `WORTLAUT_MAIL_SENDER_AUTH=gateway` uses `WORTLAUT_TRUSTED_SENDER_HEADER` and `WORTLAUT_ORGANIZER_PERMISSIONS`. This requires a trusted mail gateway that strips incoming copies of the configured header and sets it after authenticating the sender. Ordinary mailboxes must not rely on a sender-supplied header.
+## Technische Architektur & Referenz
 
-With `WORTLAUT_MAIL_REPLY_TO_SENDER=true`, results go to the validated organizer/inviter, not arbitrary Reply-To or CC addresses. Explicit recipient mappings are available through `WORTLAUT_RESULT_RECIPIENTS`. Results include TXT/VTT/JSON attachments; large results use ZIP or authenticated download instructions. When a calendar-invited recording or a recording ending with a known join/lobby failure finishes without recorded audio, wortlaut sends a failure notification email. An uncertain SMTP result is marked `delivery_unknown`; explicitly retrying delivery may send a duplicate.
+`wortlaut` besteht aus drei schlanken Komponenten:
 
-## Optional Local LLM Protocol Summary
+* **Meeting-Dienst** ([services/meeting](services/meeting), [app.py](services/meeting/src/wortlaut/app.py), [models.py](services/meeting/src/wortlaut/models.py), [settings.py](services/meeting/src/wortlaut/settings.py)) — Python/FastAPI, integrierte Web-UI ([ui.py](services/meeting/src/wortlaut/ui.py)), Dex-OIDC-Authentifizierung ([oidc.py](services/meeting/src/wortlaut/oidc.py)), Kalender- & OAuth2-Synchronisation ([calendar.py](services/meeting/src/wortlaut/calendar.py), [calendar_oauth.py](services/meeting/src/wortlaut/calendar_oauth.py)), Scheduler, Worker-Steuerung ([controller.py](services/meeting/src/wortlaut/controller.py)), Audio-Ingest, Exporte ([exports.py](services/meeting/src/wortlaut/exports.py)) und Mail-Verarbeitung ([mail.py](services/meeting/src/wortlaut/mail.py)) in einem Prozess.
+* **Browser-Worker** ([worker](worker)) — TypeScript, Playwright und gesandboxtes Chromium; ein kurzlebiger Job pro Besprechung, der eingehende WebRTC-Empfangskanäle getrennt vor dem Mix abgreift.
+* **ASR-Dienst** ([services/asr](services/asr), [services/asr/app.py](services/asr/app.py)) — Gemeinsam genutztes lokales **Parakeet**-Spracherkennungsmodell (Standard-Checkpoint `primeline/parakeet-primeline` / `2_95_WER.nemo`, Revision `3f1a9bcb611dfeda53fe74fe5f1a3d5701e8023e`, konfigurierbar über `WORTLAUT_ASR_MODEL_NAME`, `WORTLAUT_ASR_MODEL_NEMO_FILE`, `WORTLAUT_ASR_MODEL_REVISION` sowie `WORTLAUT_ASR_ALLOW_CPU=true`).
 
-Structured protocol summaries, topic blocks, and action items are disabled by default (`WORTLAUT_ENABLE_LLM_SUMMARY=false`). When a local Ollama endpoint is available in the cluster, enable it with:
+### Wichtige REST-API-Endpunkte (vollständige Doku unter `/docs`)
 
-```dotenv
-WORTLAUT_ENABLE_LLM_SUMMARY=true
-WORTLAUT_OLLAMA_URL=http://ollama.ollama.svc.cluster.local:11434
-WORTLAUT_OLLAMA_MODEL=qwen3.8:latest
+| Endpunkt | Funktion |
+| :--- | :--- |
+| `POST /v1/recordings` | Neue Aufnahme anlegen (mit `Idempotency-Key`-Header) |
+| `GET /v1/recordings` | Aufnahmen auflisten & Volltext-/Sprechersuche (`?q=`) |
+| `GET /v1/recordings/{id}` | Aufnahme-Status, Quellen, Diagnose (`live_status`) & `opted_out_speakers` |
+| `PATCH /v1/recordings/{id}` | Titel, Notizen, `speaker_overrides`, Fachbegriffe oder `opted_out_speakers` aktualisieren |
+| `DELETE /v1/recordings/{id}` | Aufnahme samt Transkript und S3-Audiodateien sofort löschen |
+| `GET /v1/recordings/{id}/transcript` | Live- oder abgeschlossenes Transkript abrufen |
+| `GET /v1/recordings/{id}/exports/{format}` | Protokoll als `md`, `txt`, `vtt` oder `json` herunterladen |
+| `GET /v1/recordings/{id}/audio-snippet` | WAV-Audioausschnitt einer Tonspur zur Satzprüfung abrufen |
+| `POST /v1/recordings/{id}/summary` | Lokale KI-Zusammenfassung über Ollama erzeugen |
+| `POST /v1/recordings/{id}/calendar-link` | Protokoll-Link in den verknüpften Google-/M365-Kalendereintrag schreiben |
+| `POST /v1/recordings/{id}/reader-token` | Schreibgeschützten `wortlaut-read-…`-Link-Token erzeugen |
+| `POST /v1/recordings/{id}/claim-access` | Geteilten Lese-Link mit dem eigenen OIDC-Konto verknüpfen |
+| `POST /v1/recordings/{id}/cancel` / `rejoin` | Laufende Aufnahme beenden oder Worker erneut beitreten lassen |
+| `POST /v1/recordings/{id}/delivery/retry` | Fehlgeschlagenen SMTP-Ergebnisversand erneut anstoßen |
+| `GET /v1/calendar` | Synchronisierte Google-/M365-Termine und `.ics`-Einladungen abrufen |
+| `POST /v1/calendar/oauth/exchange` | Google Calendar (`calendar.events`) oder M365 (`Calendars.ReadWrite`) per OAuth2 PKCE verbinden |
+| `POST /v1/calendar/oauth/connections/{id}/sync` | Kalender-Synchronisation sofort auslösen (`DELETE` zum Trennen) |
+| `POST /v1/calendar/oauth/events/{id}/toggle` | Automatische Aufnahme für einen Kalendertermin ein-/ausschalten |
+| `GET /privacy` / `GET /metrics` | Öffentliche Datenschutz-Seite bzw. Prometheus-Metriken |
+
+#### Beispiel: Aufnahme per CLI / API planen & exportieren
+
+```sh
+IDEMPOTENCY_KEY=$(uuidgen)
+jq -n --arg url "$MEETING_URL" --arg start "$STARTS_AT" --arg end "$ENDS_AT" \
+  '{provider:"google_meet", meeting_url:$url, starts_at:$start, ends_at:$end}' |
+  curl --fail-with-body http://127.0.0.1:34601/v1/recordings \
+    -H "Authorization: Bearer $WORTLAUT_API_TOKEN" \
+    -H 'Content-Type: application/json' \
+    -H "Idempotency-Key: $IDEMPOTENCY_KEY" --data-binary @-
+
+# Fertiges Markdown-Protokoll herunterladen:
+curl --fail-with-body "http://127.0.0.1:34601/v1/recordings/$RECORDING_ID/exports/md" \
+  -H "Authorization: Bearer $WORTLAUT_API_TOKEN" -o protokoll.md
 ```
 
-## Tests
+---
+
+## Entwicklung & Tests
+
+Für die lokale Entwicklung gegen den Kubernetes-Cluster (`data` Context, Details in [AGENTS.md](AGENTS.md) und [Tiltfile](Tiltfile)):
+
+```sh
+make setup
+make dev
+```
+
+Provider-Zugänge werden in privaten, ignorierten Dateien unter `.dev/` (`meet.env`, `webex.env`, `teams.env`, `zoom.env`, `mail.env`) gepflegt und per `python3 scripts/dev-secrets.py` in Kubernetes-Secrets synchronisiert.
 
 ```sh
 make lint
@@ -230,14 +220,4 @@ npm --prefix worker run test:audio
 npm --prefix worker run test:meet
 ```
 
-Database and storage tests use isolated PostgreSQL schemas and S3 buckets. Run the development environment or configure `WORTLAUT_TEST_DATABASE_URL` and the S3 settings; tests requiring unavailable services may be skipped. Browser tests also require Playwright Chromium (`cd worker && npx playwright install chromium`). On Linux, the Meet browser suite also needs an X11 display, Xvfb, and `xdotool`. It includes the Webex guest-flow fixture. Fixtures verify controlled behavior, not live provider compatibility or participant identity.
-
-## Operational limits
-
-- Audio retention defaults to 24 hours after completion; transcript retention is 30 days. Unfinished processing expires 72 hours after the scheduled end.
-- Worker buffering, stored audio, and ASR backlog have bounded capacities. Dropped audio and incomplete capture remain visible in status and exports.
-- Browser UI changes, guest-access rules, and admission requirements can affect joins. A successful click is not proof of admission.
-- Chromium runs as UID 1000 with its sandbox enabled. Worker Jobs currently use outer `Unconfined` seccomp for user namespaces; a preinstalled local profile can be configured instead.
-- Calendar `RANGE=THISANDFUTURE`, changes to a series master's time basis, and high-frequency recurrence rules are unsupported.
-
-All meeting-service settings and defaults are in [settings.py](services/meeting/src/wortlaut/settings.py). Development contributions should follow [AGENTS.md](AGENTS.md).
+Alle Konfigurationsparameter und Standardwerte sind in [settings.py](services/meeting/src/wortlaut/settings.py) dokumentiert. Beiträge und Weiterentwicklungen folgen den Vorgaben in [AGENTS.md](AGENTS.md).

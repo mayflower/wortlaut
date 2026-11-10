@@ -276,11 +276,13 @@ try {
 
   const stalled = await preparePage();
   await stalled.meet.join(); await stalled.page.evaluate('window.admit()');
-  await stalled.page.waitForFunction(() => window.wortlautMeet.inspect().audio_samples > 16000,
+  await stalled.page.waitForFunction(() => window.wortlautMeet.inspect().audio_samples > 16000 &&
+    window.wortlautMeet.inspect().receiver_sources.length === 2,
     undefined, {timeout: 15000});
   await stalled.page.evaluate(() => (window as any).fixtureWorkers[0].terminate());
-  await stalled.page.waitForFunction(() => window.wortlautMeet.inspect().reason === 'encoded_transform_failed',
-    undefined, {timeout: 8000});
+  await stalled.page.waitForFunction(() => window.wortlautMeet.inspect().reason === 'encoded_transform_failed' &&
+    window.wortlautMeet.inspect().receiver_sources.every((source: any) => source.encoded_transform?.state === 'failed'),
+    undefined, {timeout: 10000});
   await stalled.meet.stop('encoded_transform_failed');
   const failedObserver = await stalled.meet.inspect();
   assert.equal(failedObserver.capability, 'unverified');
