@@ -14,12 +14,16 @@ from wortlaut.settings import get_settings
 def _asset_version() -> str:
     digest = hashlib.sha256()
     found = False
-    for candidate in (
-        Path("/app/sdk/ui/app.js"),
-        Path("/app/sdk/ui/app.css"),
-        Path(__file__).resolve().parents[4] / "worker/dist/ui/app.js",
-        Path(__file__).resolve().parents[4] / "worker/dist/ui/app.css",
-    ):
+    here = Path(__file__).resolve()
+    candidates = [Path("/app/sdk/ui/app.js"), Path("/app/sdk/ui/app.css")]
+    if len(here.parents) > 4:
+        candidates.extend(
+            [
+                here.parents[4] / "worker/dist/ui/app.js",
+                here.parents[4] / "worker/dist/ui/app.css",
+            ]
+        )
+    for candidate in candidates:
         if candidate.is_file():
             digest.update(candidate.read_bytes())
             found = True
