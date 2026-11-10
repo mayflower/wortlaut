@@ -37,49 +37,196 @@ PRIVACY_HTML = """<!DOCTYPE html>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Datenschutz &amp; Transparenz – __ASSISTANT_NAME__</title>
   <link rel="stylesheet" href="/sdk/ui/app.css?v=__ASSET_VERSION__">
+  <style>
+    :root {
+      --priv-bg: var(--color-background-body, #0f1014);
+      --priv-surface: var(--color-background-surface, #181920);
+      --priv-surface-hover: var(--color-background-muted, #23252f);
+      --priv-border: var(--color-border, #2b2d38);
+      --priv-text: var(--color-text-primary, #f2f3f8);
+      --priv-muted: var(--color-text-secondary, #a2a6b8);
+      --priv-emerald: #34d399;
+      --priv-emerald-bg: rgba(16, 185, 129, 0.10);
+      --priv-emerald-border: rgba(16, 185, 129, 0.28);
+      --priv-amber: #fbbf24;
+      --priv-amber-bg: rgba(245, 158, 11, 0.08);
+      --priv-amber-border: rgba(245, 158, 11, 0.30);
+    }
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      min-height: 100vh;
+      background-color: var(--priv-bg);
+      color: var(--priv-text);
+      font-family: var(--font-family-body, system-ui, -apple-system, sans-serif);
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+    .priv-container {
+      max-width: 780px;
+      margin: 0 auto;
+      padding: 48px 24px 64px;
+      display: flex;
+      flex-direction: column;
+      gap: 24px;
+    }
+    .priv-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 20px;
+      padding-bottom: 24px;
+      border-bottom: 1px solid var(--priv-border);
+      flex-wrap: wrap;
+    }
+    .priv-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 4px 12px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--priv-emerald);
+      background: var(--priv-emerald-bg);
+      border: 1px solid var(--priv-emerald-border);
+      margin-bottom: 12px;
+    }
+    .priv-title {
+      margin: 0;
+      font-size: 24px;
+      font-weight: 650;
+      letter-spacing: -0.02em;
+      line-height: 1.25;
+      color: var(--priv-text);
+    }
+    .priv-subtitle {
+      margin: 8px 0 0;
+      font-size: 14px;
+      color: var(--priv-muted);
+    }
+    .priv-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 14px;
+      border-radius: 10px;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--priv-text);
+      background: var(--priv-surface);
+      border: 1px solid var(--priv-border);
+      text-decoration: none;
+      white-space: nowrap;
+      transition: background 0.15s ease, border-color 0.15s ease;
+    }
+    .priv-btn:hover {
+      background: var(--priv-surface-hover);
+    }
+    .priv-card {
+      border-radius: 14px;
+      border: 1px solid var(--priv-border);
+      background: var(--priv-surface);
+      padding: 24px;
+    }
+    .priv-card h2 {
+      margin: 0 0 10px;
+      font-size: 16px;
+      font-weight: 600;
+      color: var(--priv-text);
+    }
+    .priv-card p {
+      margin: 0;
+      font-size: 14px;
+      color: var(--priv-muted);
+    }
+    .priv-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
+    }
+    @media (max-width: 640px) {
+      .priv-grid { grid-template-columns: 1fr; }
+    }
+    .priv-card-sm {
+      border-radius: 14px;
+      border: 1px solid var(--priv-border);
+      background: var(--priv-surface);
+      padding: 20px;
+    }
+    .priv-card-sm h3 {
+      margin: 0 0 8px;
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--priv-emerald);
+    }
+    .priv-card-sm p {
+      margin: 0;
+      font-size: 13px;
+      color: var(--priv-muted);
+    }
+    .priv-list {
+      margin: 0;
+      padding-left: 20px;
+      font-size: 14px;
+      color: var(--priv-muted);
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .priv-list strong, .priv-card p strong, .priv-callout p strong {
+      color: var(--priv-text);
+      font-weight: 600;
+    }
+    .priv-callout {
+      border-radius: 14px;
+      border: 1px solid var(--priv-amber-border);
+      background: var(--priv-amber-bg);
+      padding: 24px;
+    }
+    .priv-callout h2 {
+      margin: 0 0 8px;
+      font-size: 16px;
+      font-weight: 600;
+      color: var(--priv-amber);
+    }
+    .priv-callout p {
+      margin: 0;
+      font-size: 14px;
+      color: var(--priv-muted);
+    }
+    .priv-callout a {
+      color: var(--priv-amber);
+      text-decoration: underline;
+    }
+  </style>
 </head>
-<body
-  class="min-h-screen bg-[var(--color-background-body,#101018)]
-         text-[var(--color-text-primary,#f0f0f9)] antialiased"
->
-  <main class="mx-auto max-w-3xl px-6 py-12 space-y-8">
-    <header
-      class="border-b border-[var(--color-border,#2e2e36)] pb-6
-             flex items-start justify-between gap-4"
-    >
-      <div>
-        <div
-          class="inline-flex items-center gap-2 rounded-full border border-emerald-500/30
-                 bg-emerald-500/10 px-3 py-1 text-xs font-medium text-emerald-300 mb-3"
-        >
+<body>
+  <main class="priv-container">
+    <header class="priv-header">
+      <div style="flex: 1; min-width: 260px;">
+        <div class="priv-badge">
           100 % Self-Hosted · Keine Cloud-Weitergabe
         </div>
-        <h1 class="text-2xl font-semibold tracking-tight">
+        <h1 class="priv-title">
           Datenschutz- &amp; Transparenzhinweis (__ASSISTANT_NAME__)
         </h1>
-        <p class="mt-2 text-sm text-[var(--color-text-secondary,#ababb3)]">
+        <p class="priv-subtitle">
           Informationen zur automatisierten Meeting-Protokollierung für Teilnehmende in
-          Google Meet, Microsoft Teams und Cisco Webex.
+          Google Meet, Microsoft Teams, Zoom und Cisco Webex.
         </p>
       </div>
-      <a
-        href="/ui"
-        class="shrink-0 rounded-lg border border-[var(--color-border,#2e2e36)]
-               bg-[var(--color-background-surface,#1b1b21)] px-3.5 py-2 text-xs font-medium
-               hover:bg-[var(--color-background-muted,#3a3a42)]"
-      >
+      <a href="/ui" class="priv-btn">
         Zur Web-UI →
       </a>
     </header>
 
-    <section
-      class="rounded-xl border border-[var(--color-border,#2e2e36)]
-             bg-[var(--color-background-surface,#1b1b21)] p-6 space-y-3"
-    >
-      <h2 class="text-base font-semibold">
+    <section class="priv-card">
+      <h2>
         1. Warum nimmt __ASSISTANT_NAME__ an diesem Meeting teil?
       </h2>
-      <p class="text-sm leading-relaxed text-[var(--color-text-secondary,#ababb3)]">
+      <p>
         Der Bot <strong>__ASSISTANT_NAME__</strong> wurde von einer am Meeting teilnehmenden
         Person gezielt eingeladen, um ein schriftliches Wortprotokoll (Transkript) der
         Besprechung zu erstellen. Beim Beitritt stellt sich der Bot im Meeting-Chat vor,
@@ -87,24 +234,18 @@ PRIVACY_HTML = """<!DOCTYPE html>
       </p>
     </section>
 
-    <section class="grid gap-4 sm:grid-cols-2">
-      <div
-        class="rounded-xl border border-[var(--color-border,#2e2e36)]
-               bg-[var(--color-background-surface,#1b1b21)] p-5 space-y-2"
-      >
-        <h3 class="text-sm font-semibold text-emerald-400">Keine externen KI-/Cloud-Dienste</h3>
-        <p class="text-xs leading-relaxed text-[var(--color-text-secondary,#ababb3)]">
-          Audioerfassung und Spracherkennung (lokales NVIDIA-Parakeet-ASR-Modell) laufen
-          ausschließlich innerhalb des eigenen Kubernetes-Clusters. Es werden keine Audio- oder
-          Textdaten an externe Cloud-Anbieter übertragen.
+    <section class="priv-grid">
+      <div class="priv-card-sm">
+        <h3>Keine externen KI-/Cloud-Dienste</h3>
+        <p>
+          Audioerfassung und Spracherkennung laufen ausschließlich innerhalb des eigenen
+          Mayflower-Kubernetes-Clusters auf dedizierter GPU-Infrastruktur. Es werden keine
+          Audio- oder Textdaten an externe Cloud-Anbieter übertragen.
         </p>
       </div>
-      <div
-        class="rounded-xl border border-[var(--color-border,#2e2e36)]
-               bg-[var(--color-background-surface,#1b1b21)] p-5 space-y-2"
-      >
-        <h3 class="text-sm font-semibold text-emerald-400">Keine Stimmprofile &amp; kein Video</h3>
-        <p class="text-xs leading-relaxed text-[var(--color-text-secondary,#ababb3)]">
+      <div class="priv-card-sm">
+        <h3>Keine Stimmprofile &amp; kein Video</h3>
+        <p>
           Es werden weder Kamerabilder noch Bildschirminhalte aufgezeichnet. Die
           Sprecherzuordnung erfolgt ausschließlich über die technische
           Konferenz-Teilnehmersitzung (WebRTC), niemals über biometrische Stimmprofile
@@ -113,18 +254,15 @@ PRIVACY_HTML = """<!DOCTYPE html>
       </div>
     </section>
 
-    <section
-      class="rounded-xl border border-[var(--color-border,#2e2e36)]
-             bg-[var(--color-background-surface,#1b1b21)] p-6 space-y-3"
-    >
-      <h2 class="text-base font-semibold">
+    <section class="priv-card">
+      <h2>
         2. Zugriffsschutz &amp; automatische Löschfristen
       </h2>
-      <ul class="list-disc pl-5 text-sm text-[var(--color-text-secondary,#ababb3)] space-y-2">
+      <ul class="priv-list">
         <li>
-          <strong>Zugriff auf Protokolle:</strong> Standardmäßig hat nur die einladende Person
-          nach Authentifizierung Zugriff auf das Protokoll (sowie Personen, denen explizit ein
-          schreibgeschützter Lese-Link geteilt wurde).
+          <strong>Zugriff auf Protokolle:</strong> Standardmäßig haben nur die einladende Person
+          und bestätigte Kalendergäste nach Authentifizierung Zugriff auf das Protokoll (sowie
+          Personen, denen explizit ein schreibgeschützter Lese-Link geteilt wurde).
         </li>
         <li>
           <strong>Roh-Audiodaten:</strong> Temporäre Audiospuren dienen ausschließlich der
@@ -139,16 +277,16 @@ PRIVACY_HTML = """<!DOCTYPE html>
       </ul>
     </section>
 
-    <section class="rounded-xl border border-amber-500/30 bg-amber-500/5 p-6 space-y-2">
-      <h2 class="text-base font-semibold text-amber-200">
+    <section class="priv-callout">
+      <h2>
         3. Widerspruch &amp; Beenden der Aufzeichnung
       </h2>
-      <p class="text-sm leading-relaxed text-[var(--color-text-secondary,#ababb3)]">
+      <p>
         Wenn Sie keine Protokollierung wünschen, können Sie der Aufzeichnung jederzeit
         widersprechen: Der Bot <strong>__ASSISTANT_NAME__</strong> kann direkt über die
-        Teilnehmerliste von Google Meet, Microsoft Teams oder Cisco Webex aus dem Raum
+        Teilnehmerliste von Google Meet, Microsoft Teams, Zoom oder Cisco Webex aus dem Raum
         entfernt oder durch die einladende Person in der
-        <a href="/ui" class="underline text-amber-300 hover:text-amber-200">wortlaut Web-UI</a>
+        <a href="/ui">wortlaut Web-UI</a>
         gestoppt und gelöscht werden.
       </p>
     </section>
