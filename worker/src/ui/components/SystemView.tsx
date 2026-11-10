@@ -81,6 +81,7 @@ export function SystemView({
       !reason ||
       reason === 'normal' ||
       reason === 'room_empty' ||
+      reason === 'source_binding_unverified' ||
       ((reason === 'cancelled' || reason === 'deadline') && samples > 0);
     return (
       r.processing === 'failed' || (r.participation === 'ended' && !cleanStop)

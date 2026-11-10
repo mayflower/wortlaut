@@ -334,10 +334,12 @@ export function RecordingSidebar({
           !reason ||
           reason === 'normal' ||
           reason === 'room_empty' ||
+          reason === 'source_binding_unverified' ||
           ((reason === 'cancelled' || reason === 'deadline') && samples > 0);
         const hasError =
           row.processing === 'failed' ||
-          (row.participation === 'ended' && !isNormalEnd);
+          ((row.participation === 'ended' || row.participation === 'unknown') &&
+            !isNormalEnd);
         return (
           <StatusBadge
             participation={row.participation}
@@ -358,11 +360,14 @@ export function RecordingSidebar({
           !reason ||
           reason === 'normal' ||
           reason === 'room_empty' ||
+          reason === 'source_binding_unverified' ||
           ((reason === 'cancelled' || reason === 'deadline') && samples > 0);
+        const isEndedOrUnknown =
+          row.participation === 'ended' || row.participation === 'unknown';
         const reasonHint =
-          !isNormalEnd && reason && failureReasons[reason]
+          isEndedOrUnknown && !isNormalEnd && reason && failureReasons[reason]
             ? failureReasons[reason]
-            : reason && !isNormalEnd
+            : isEndedOrUnknown && reason && !isNormalEnd
               ? reason
               : null;
 
@@ -454,7 +459,8 @@ export function RecordingSidebar({
         const isFailedEmpty =
           row.participation === 'ended' &&
           Boolean(reason) &&
-          reason !== 'normal';
+          reason !== 'normal' &&
+          reason !== 'source_binding_unverified';
         if (!isFailedEmpty && plannedMin > 0) {
           return (
             <Text type="supporting" color="secondary" hasTabularNumbers>

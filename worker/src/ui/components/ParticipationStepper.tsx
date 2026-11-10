@@ -59,7 +59,8 @@ export function ParticipationStepper({
     recording.participation === 'ended' &&
     sampleSec === 0 &&
     Boolean(reason) &&
-    reason !== 'normal';
+    reason !== 'normal' &&
+    reason !== 'source_binding_unverified';
 
   let activeIndex = 0;
   if (recording.participation === 'scheduled') {
@@ -204,7 +205,10 @@ export function ParticipationStepper({
                 recording.delivery.status}
             </MetadataListItem>
           )}
-          {reason && reason !== 'normal' && (
+          {recording.participation === 'ended' &&
+            reason &&
+            reason !== 'normal' &&
+            reason !== 'source_binding_unverified' && (
             <MetadataListItem label="Endgrund">
               <Token size="sm" color="orange" label={reason} />
             </MetadataListItem>

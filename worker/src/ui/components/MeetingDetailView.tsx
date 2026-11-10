@@ -280,10 +280,13 @@ export function MeetingDetailView({
     !reason ||
     reason === 'normal' ||
     reason === 'room_empty' ||
+    reason === 'source_binding_unverified' ||
     ((reason === 'cancelled' || reason === 'deadline') && sampleSec > 0);
   const hasError =
     recording.processing === 'failed' ||
-    (recording.participation === 'ended' && !isNormalEnd);
+    ((recording.participation === 'ended' ||
+      recording.participation === 'unknown') &&
+      !isNormalEnd);
   const explanation = reason ? failureReasons[reason] || '' : '';
   const botName = recording.guest_name || instance.assistantName;
   const live = recording.live_status;
@@ -613,7 +616,10 @@ export function MeetingDetailView({
                 </div>
               )}
 
-              {!isNormalEnd && (explanation || reason) && (
+              {(recording.participation === 'ended' ||
+                recording.participation === 'unknown') &&
+                !isNormalEnd &&
+                (explanation || reason) && (
                 <Banner
                   status="error"
                   container="card"
