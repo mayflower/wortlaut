@@ -84,7 +84,12 @@ from wortlaut.oidc import (
     verify_dex_id_token,
     verify_user_session_token,
 )
-from wortlaut.processing import RATE, segmentation_pass, stream_quality
+from wortlaut.processing import (
+    RATE,
+    purge_opted_out_transcript_segments,
+    segmentation_pass,
+    stream_quality,
+)
 from wortlaut.recurrence import recurrence_pass
 from wortlaut.retention import retention_pass
 from wortlaut.settings import get_settings
@@ -312,12 +317,17 @@ class ParticipantEvidence(BaseModel):
     truncated: bool = False
     dom_participants: int | None = Field(default=None, ge=0)
     sources: list[ParticipantSourceEvidence] = Field(default_factory=list, max_length=256)
+    opted_out: list[Annotated[str, Field(min_length=1, max_length=200)]] = Field(
+        default_factory=list, max_length=64
+    )
 
     @model_serializer(mode="wrap")
     def _serialize(self, handler):
         data = handler(self)
         if data.get("dom_participants") is None:
             data.pop("dom_participants", None)
+        if not data.get("opted_out"):
+            data.pop("opted_out", None)
         return data
 
 
@@ -1382,6 +1392,7 @@ class ProtocolUpdateRequest(BaseModel):
     speaker_overrides: dict[str, str] | None = None
     term_replacements: dict[str, str] | None = None
     segment_edits: dict[str, str] | None = None
+    opted_out_speakers: list[str] | None = None
 
 
 @app.patch("/v1/recordings/{recording_id}")
@@ -1438,7 +1449,18 @@ def update_recording_protocol(
             else:
                 cur_edits.pop(key, None)
         meta["segment_edits"] = cur_edits
+    if body.opted_out_speakers is not None:
+        cleaned_opt_out: list[str] = []
+        seen_opt_out: set[str] = set()
+        for item in body.opted_out_speakers[:64]:
+            val = str(item).strip()[:200]
+            if val and val.lower() not in seen_opt_out:
+                seen_opt_out.add(val.lower())
+                cleaned_opt_out.append(val)
+        meta["opted_out_speakers"] = cleaned_opt_out
     recording.protocol_meta = meta
+    if body.opted_out_speakers:
+        purge_opted_out_transcript_segments(db, recording)
     db.commit()
     return export_data(db, recording)
 
@@ -1657,6 +1679,8 @@ def build_chat_intro(
     return (
         f"Hallo! Ich bin {bot_label} und wurde von {who} eingeladen, "
         f"dieses Meeting zu protokollieren. "
+        f"Wenn deine Aussagen nicht protokolliert werden sollen, "
+        f"schreibe einfach „nein“ oder „opt out“ in den Chat. "
         f"Protokoll: {recording_url} | Datenschutz-Info: {privacy_url}"
     )
 
@@ -1785,6 +1809,21 @@ def worker_status(
     attempt.last_heartbeat_at = datetime.now(UTC)
     # Status is evidence about the current worker, not a provider acceptance test.
     attempt.diagnostics = body.model_dump(mode="json", exclude={"participation"})
+    if body.participant_sources.opted_out:
+        meta = dict(recording.protocol_meta or {})
+        cur_opted = list(meta.get("opted_out_speakers") or [])
+        seen_opted = {str(x).strip().lower() for x in cur_opted if str(x).strip()}
+        changed_opted = False
+        for item in body.participant_sources.opted_out:
+            val = str(item).strip()[:200]
+            if val and val.lower() not in seen_opted and len(cur_opted) < 64:
+                seen_opted.add(val.lower())
+                cur_opted.append(val)
+                changed_opted = True
+        if changed_opted:
+            meta["opted_out_speakers"] = cur_opted
+            recording.protocol_meta = meta
+        purge_opted_out_transcript_segments(db, recording, [attempt])
     recording.participation = body.participation
     if body.participation == "ended":
         attempt.ended_at = datetime.now(UTC)

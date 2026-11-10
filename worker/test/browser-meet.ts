@@ -781,6 +781,22 @@ try {
     const zoomState = await zoom.inspect();
     assert.equal(zoomState.capability, 'unverified');
     assert.equal(zoomState.participant_sources.available, true);
+    assert.equal(zoomState.participant_sources.opted_out, undefined);
+    await zoomPage.evaluate(() => {
+      const chatItem = document.createElement('div');
+      chatItem.className = 'chat-item__container';
+      const sender = document.createElement('span');
+      sender.className = 'chat-item__sender';
+      sender.textContent = 'Clara Zoom';
+      const msg = document.createElement('div');
+      msg.className = 'new-chat-message__text-box';
+      msg.textContent = 'nein';
+      chatItem.append(sender, msg);
+      document.body.append(chatItem);
+    });
+    const zoomOptOutState = await zoom.inspect();
+    assert.ok(zoomOptOutState.participant_sources.opted_out?.includes('Clara Zoom'));
+    assert.ok(zoomOptOutState.participant_sources.opted_out?.includes('4201'));
     await zoom.stop('normal');
     assert.equal((await zoom.inspect()).participation, 'ended');
     assert.equal(await zoomPage.getByRole('button', {name: 'Leave', exact: true}).count(), 0);

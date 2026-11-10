@@ -681,6 +681,28 @@ def test_web_ui_live_status_and_browser_participant_names_in_exports(
     assert "Kurzes Kickoff-Treffen zur Begrüßung." in md_after
     assert "**Dr. Alice Beispiel:** Agenda versenden" in md_after
 
+    # Opt-out suppresses and purges all statements and audio snippets of the speaker
+    opt_out_res = client.patch(
+        f"/v1/recordings/{recording}",
+        headers=API,
+        json={"opted_out_speakers": ["participant-alice"]},
+    )
+    assert opt_out_res.status_code == 200
+    opt_out_tx = opt_out_res.json()
+    assert opt_out_tx["opted_out_speakers"] == ["participant-alice"]
+    assert opt_out_tx["segments"] == []
+    assert opt_out_tx["sources_summary"][0]["opted_out"] is True
+    assert opt_out_tx["sources_summary"][0]["segment_count"] == 0
+    assert opt_out_tx["sources_summary"][0]["speech_seconds"] == 0.0
+    assert opt_out_tx["sources_summary"][0]["sample_text"] is None
+    snippet_blocked = client.get(
+        f"/v1/recordings/{recording}/audio-snippet",
+        params={"stream_id": seg["stream_id"], "start": 0.0, "end": 1.0},
+        headers=API,
+    )
+    assert snippet_blocked.status_code == 404
+    assert "speaker_opted_out" in snippet_blocked.text
+
 
 def test_recording_title_guest_name_empty_room_timeout_and_otlp_telemetry(
     client, database, monkeypatch
@@ -1289,7 +1311,37 @@ def test_oidc_dex_pkce_exchange_and_per_user_isolation(client, database, monkeyp
     assert f"/ui#view=meetings&id={rec_mara_id}&token=wortlaut-read-{rec_mara_id}." in boot_data[
         "chat_intro"
     ]
+    assert "opt out" in boot_data["chat_intro"]
     assert "/privacy" in boot_data["chat_intro"]
+    opt_status = client.post(
+        f"/v1/attempts/{attempt_id}/status",
+        headers={**attempt_headers, "X-Worker-ID": "owner-mara"},
+        json={
+            "participation": "capturing",
+            "streams": 1,
+            "audio_samples": 1600,
+            "active_audio_samples": 1600,
+            "participant_sources": {
+                "available": True,
+                "total": 1,
+                "truncated": False,
+                "opted_out": ["spaces/demo/devices/99", "Bob Widerspruch"],
+                "sources": [
+                    {
+                        "participant_id": "spaces/demo/devices/99",
+                        "participant_name": "Bob Widerspruch",
+                        "audio_csis": [99],
+                        "share_audio_csis": [],
+                    }
+                ],
+            },
+        },
+    )
+    assert opt_status.status_code == 200
+    mara_tx = client.get(
+        f"/v1/recordings/{rec_mara_id}/transcript", headers=mara_headers
+    ).json()
+    assert mara_tx["opted_out_speakers"] == ["spaces/demo/devices/99", "Bob Widerspruch"]
 
     assert (
         client.delete(f"/v1/recordings/{rec_thomas_id}", headers=mara_headers).status_code == 404

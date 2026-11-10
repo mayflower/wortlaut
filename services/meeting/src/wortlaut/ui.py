@@ -279,15 +279,19 @@ PRIVACY_HTML = """<!DOCTYPE html>
 
     <section class="priv-callout">
       <h2>
-        3. Widerspruch &amp; Beenden der Aufzeichnung
+        3. Individueller Chat-Opt-out &amp; Beenden der Aufzeichnung
       </h2>
       <p>
-        Wenn Sie keine Protokollierung wünschen, können Sie der Aufzeichnung jederzeit
-        widersprechen: Der Bot <strong>__ASSISTANT_NAME__</strong> kann direkt über die
-        Teilnehmerliste von Google Meet, Microsoft Teams, Zoom oder Cisco Webex aus dem Raum
-        entfernt oder durch die einladende Person in der
-        <a href="/ui">wortlaut Web-UI</a>
-        gestoppt und gelöscht werden.
+        <strong>Eigene Aussagen von der Protokollierung ausschließen (Chat-Opt-out):</strong>
+        Schreiben Sie während des laufenden Calls einfach <strong>„opt out“</strong>,
+        <strong>„optout“</strong>, <strong>„nein“</strong> oder <strong>„no“</strong> in den
+        Meeting-Chat. __ASSISTANT_NAME__ erkennt dies automatisch, verwirft Ihre Audiospur und
+        löscht auch bereits während des Calls erfasste Redebeiträge Ihrer Person vollständig aus
+        dem Protokoll.<br><br>
+        <strong>Gesamte Aufzeichnung beenden:</strong> Der Bot <strong>__ASSISTANT_NAME__</strong>
+        kann jederzeit direkt über die Teilnehmerliste von Google Meet, Microsoft Teams, Zoom
+        oder Cisco Webex aus dem Raum entfernt oder durch die einladende Person in der
+        <a href="/ui">wortlaut Web-UI</a> gestoppt und gelöscht werden.
       </p>
     </section>
   </main>

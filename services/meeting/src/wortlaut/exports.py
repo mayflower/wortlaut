@@ -21,7 +21,14 @@ from wortlaut.models import (
     Recording,
     TranscriptSegment,
 )
-from wortlaut.processing import MAX_CHUNK, RATE, read_pcm, stream_quality
+from wortlaut.processing import (
+    MAX_CHUNK,
+    RATE,
+    collect_opted_out_speakers,
+    is_speaker_opted_out,
+    read_pcm,
+    stream_quality,
+)
 from wortlaut.settings import get_settings
 
 BERLIN_TZ = ZoneInfo("Europe/Berlin")
@@ -550,6 +557,9 @@ def export_data(db: Session, recording: Recording):
         pid = seg.get("participant_id") or seg.get("speaker_id")
         if pid and seg.get("participant_name"):
             participant_names[pid] = seg["participant_name"]
+    opted_out_list, opted_out_norm = collect_opted_out_speakers(
+        recording, attempts, participant_names
+    )
     anchors = [datetime.fromisoformat(s.contract["session_utc_origin"]) for s in streams]
     origin = min(anchors) if anchors else recording.starts_at
     unambiguous_stream_bindings: dict[tuple[str, str], tuple[str, str | None, str]] = {}
@@ -698,6 +708,15 @@ def export_data(db: Session, recording: Recording):
             if segment.get("attribution_unknown")
             else ("bound" if pid else "unbound")
         )
+        if is_speaker_opted_out(
+            opted_out_norm,
+            participant_id=segment.get("participant_id"),
+            speaker_id=segment.get("speaker_id"),
+            participant_name=segment.get("participant_name"),
+            speaker_label=segment.get("speaker_label"),
+            provider_source_id=segment.get("provider_source_id"),
+        ):
+            continue
         resolved_segments.append(segment)
     segments = (
         _coalesce_protocol_segments(resolved_segments)
@@ -713,6 +732,10 @@ def export_data(db: Session, recording: Recording):
         for k, v in speaker_overrides.items():
             if v and v.strip():
                 participant_names[k] = v.strip()
+        opted_out_list, opted_out_norm = collect_opted_out_speakers(
+            recording, attempts, participant_names
+        )
+    filtered_segments: list[dict] = []
     for seg in segments:
         seg_id = str(seg.get("segment_id") or seg.get("id") or "")
         if seg_id and seg_id in segment_edits and segment_edits[seg_id].strip():
@@ -737,6 +760,17 @@ def export_data(db: Session, recording: Recording):
                 seg["participant_name"] = clean_override
                 seg["speaker_name"] = clean_override
                 seg["speaker_label"] = clean_override
+        if is_speaker_opted_out(
+            opted_out_norm,
+            participant_id=seg.get("participant_id"),
+            speaker_id=seg.get("speaker_id"),
+            participant_name=seg.get("participant_name"),
+            speaker_label=seg.get("speaker_label"),
+            provider_source_id=seg.get("provider_source_id"),
+        ):
+            continue
+        filtered_segments.append(seg)
+    segments = filtered_segments
     qualities = [
         {
             "stream_id": str(s.stream_id),
@@ -780,6 +814,7 @@ def export_data(db: Session, recording: Recording):
         "notes": meta.get("notes") or "",
         "speaker_overrides": speaker_overrides,
         "term_replacements": term_replacements,
+        "opted_out_speakers": opted_out_list,
         "attempts": [
             {
                 "id": str(a.id),
@@ -832,14 +867,26 @@ def export_data(db: Session, recording: Recording):
             "streams": qualities,
         },
         "sources_summary": _build_sources_summary(
-            attempts, streams, qualities, segments, participant_names, bind_controls
+            attempts,
+            streams,
+            qualities,
+            segments,
+            participant_names,
+            bind_controls,
+            opted_out_norm,
         ),
         "segments": segments,
     }
 
 
 def _build_sources_summary(
-    attempts, streams, qualities, segments, participant_names, bind_controls=()
+    attempts,
+    streams,
+    qualities,
+    segments,
+    participant_names,
+    bind_controls=(),
+    opted_out_norm: set[str] | None = None,
 ):
     receiver_by_id = {}
     for attempt in attempts:
@@ -1013,6 +1060,19 @@ def _build_sources_summary(
             if pid:
                 by_participant[pid] = item
             merged.append(item)
+    if opted_out_norm:
+        for item in merged:
+            if is_speaker_opted_out(
+                opted_out_norm,
+                participant_id=item.get("signaled_participant_id"),
+                participant_name=item.get("participant_name"),
+                speaker_label=item.get("speaker_label"),
+                provider_source_id=item.get("provider_source_id"),
+            ):
+                item["opted_out"] = True
+                item["segment_count"] = 0
+                item["speech_seconds"] = 0.0
+                item["sample_text"] = None
     return merged
 
 
@@ -1250,9 +1310,69 @@ def extract_audio_snippet_wav(
     anchors = [datetime.fromisoformat(s.contract["session_utc_origin"]) for s in streams]
     origin = min(anchors) if anchors else recording.starts_at
 
+    participant_names: dict[str, str] = {}
+    for s in streams:
+        pid = s.contract.get("participant_id") or s.contract.get("speaker_id")
+        if pid and s.contract.get("participant_name"):
+            participant_names[str(pid)] = str(s.contract["participant_name"])
+    bind_controls = list(
+        db.scalars(
+            select(AudioControl).where(
+                AudioControl.stream_id.in_([s.id for s in streams]),
+                AudioControl.kind == "bind",
+            )
+        ).all()
+    )
+    for ctrl in bind_controls:
+        pid = ctrl.contract.get("participant_id") or ctrl.contract.get("speaker_id")
+        if pid and ctrl.contract.get("participant_name"):
+            participant_names[str(pid)] = str(ctrl.contract["participant_name"])
+    _, opted_out_norm = collect_opted_out_speakers(recording, attempts, participant_names)
+
+    def _stream_is_opted_out(s: AudioStream) -> bool:
+        if not opted_out_norm:
+            return False
+        pid = s.contract.get("participant_id") or s.contract.get("speaker_id")
+        pname = s.contract.get("participant_name") or (
+            participant_names.get(str(pid)) if pid else None
+        )
+        spk = s.contract.get("speaker_id")
+        psid = s.contract.get("provider_source_id")
+        if is_speaker_opted_out(
+            opted_out_norm,
+            participant_id=str(pid) if pid else None,
+            speaker_id=str(spk) if spk else None,
+            participant_name=str(pname) if pname else None,
+            provider_source_id=str(psid) if psid else None,
+        ):
+            return True
+        for ctrl in bind_controls:
+            if ctrl.stream_id == s.id:
+                cpid = ctrl.contract.get("participant_id") or ctrl.contract.get("speaker_id")
+                cpname = ctrl.contract.get("participant_name") or (
+                    participant_names.get(str(cpid)) if cpid else None
+                )
+                cspk = ctrl.contract.get("speaker_id")
+                cpsid = ctrl.contract.get("provider_source_id")
+                if is_speaker_opted_out(
+                    opted_out_norm,
+                    participant_id=str(cpid) if cpid else None,
+                    speaker_id=str(cspk) if cspk else None,
+                    participant_name=str(cpname) if cpname else None,
+                    provider_source_id=str(cpsid) if cpsid else None,
+                ):
+                    return True
+        return False
+
     candidates = [s for s in streams if stream_id and str(s.stream_id) == str(stream_id)]
+    if candidates and all(_stream_is_opted_out(s) for s in candidates):
+        raise LookupError("speaker_opted_out")
     if not candidates:
-        candidates = streams
+        candidates = [s for s in streams if not _stream_is_opted_out(s)]
+    else:
+        candidates = [s for s in candidates if not _stream_is_opted_out(s)]
+    if not candidates:
+        raise LookupError("speaker_opted_out")
 
     duration_sec = min(90.0, max(0.8, float(end_sec) - float(start_sec)))
     target_end_sec = float(start_sec) + duration_sec

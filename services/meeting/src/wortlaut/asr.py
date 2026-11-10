@@ -11,7 +11,13 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from wortlaut.models import AsrJob, Attempt, AudioChunk, AudioStream, Recording, TranscriptSegment
-from wortlaut.processing import MAX_CHUNK, RATE, AudioReadError, read_pcm
+from wortlaut.processing import (
+    MAX_CHUNK,
+    RATE,
+    AudioReadError,
+    read_pcm,
+    stream_binding_opted_out,
+)
 from wortlaut.settings import get_settings
 
 
@@ -90,9 +96,11 @@ def commit_result(db: Session, identifier: str, result: dict):
     job = db.scalar(select(AsrJob).where(AsrJob.id == identifier).with_for_update())
     if job is None or job.status in ("completed", "failed"):
         return  # A late GPU result cannot revive explicitly abandoned work.
+    stream = db.get(AudioStream, job.stream_id)
+    opted_out = stream_binding_opted_out(db, stream, result)
     # A client timeout cannot cancel GPU work. A late valid result is identified
     # by the immutable job, and a committed segment is never duplicated/rewritten.
-    if db.get(TranscriptSegment, identifier) is None:
+    if not opted_out and db.get(TranscriptSegment, identifier) is None:
         db.add(TranscriptSegment(id=identifier, result=result))
     job.status, job.error, job.retry_at = "completed", None, None
     db.commit()

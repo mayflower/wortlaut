@@ -35,6 +35,7 @@ type ParticipantSourcesState = {
   total: number;
   truncated: boolean;
   dom_participants?: number;
+  opted_out?: string[];
   sources: {participant_id: string; participant_name?: string | null; audio_csis: number[]; share_audio_csis: number[]}[];
 };
 
@@ -169,6 +170,7 @@ function install(config: MeetCaptureConfig) {
   }>();
   const domNames = new Map<string, string>();
   const ignoredParticipantIds = new Set<string>();
+  const optedOutParticipants = new Set<string>();
   let liveDomCount = 0;
   const NOTETAKER_BOT_RE =
     /\b(fireflies(\.ai)?|otter(\.ai)?|read\.ai|fathom|tl;dv|tldv|meetgeek|fellow(\.app)?|avoma|sembly|supernormal|grain|krisp|tactiq|airgram|notta|nyota|circleback|sonnet|bluedot|granola|notetaker|note[\s-]*taker|meeting[\s-]*bot|ai[\s-]*notetaker|ai[\s-]*assistant)\b/i;
@@ -176,6 +178,110 @@ function install(config: MeetCaptureConfig) {
     /^(wortlaut(?:\b.*)?|you|sie|ich)$/i;
   const UI_CHROME_TEXT_RE =
     /(vollständigen videofeed|full video|bildausschnitt|reframing)/i;
+  const CHAT_OPT_OUT_EXACT_RE =
+    /^[/!]?(?:opt[\s_-]*out|no|nein|stop|stopp|widerspruch|keine\s+(?:aufnahme|aufzeichnung|protokollierung|transkription)|nicht\s+(?:aufnehmen|aufzeichnen|protokollieren|transkribieren)|do\s+not\s+(?:record|transcribe)|don['’]?t\s+(?:record|transcribe))(?:[\s.!?,;:]+(?:bitte|please|danke|thanks|thank\s+you))?$/i;
+  const CHAT_OPT_OUT_PHRASE_RE =
+    /\b(?:[/!]?opt[\s_-]*out|ich\s+widerspreche|keine\s+(?:aufnahme|aufzeichnung|protokollierung|transkription)|nicht\s+(?:aufnehmen|aufzeichnen|protokollieren|transkribieren)|do\s+not\s+(?:record|transcribe)|don['’]?t\s+(?:record|transcribe))\b/i;
+
+  function isChatOptOutMessage(rawText: unknown, allowBareShortTokens = true): boolean {
+    if (typeof rawText !== 'string') return false;
+    const cleaned = rawText.trim().replace(/\s+/g, ' ');
+    if (!cleaned || cleaned.length > 240) return false;
+    if (/https?:\/\/|Protokoll:|Datenschutz-Info:|Schreib(?:e|en Sie) einfach/i.test(cleaned)) return false;
+    const hasMentionPrefix = /^[@#]?wortlaut\b/i.test(cleaned);
+    const stripped = cleaned.replace(/^[@#]?wortlaut(?:\s*\([^)]*\))?[\s,:;-]*/i, '').trim();
+    if (!stripped) return false;
+    const core = stripped.replace(/^[.!?,;:"'„“”‚‘’()[\]\s-]+|[.!?,;:"'„“”‚‘’()[\]\s-]+$/g, '').trim();
+    if (!core) return false;
+    if (!allowBareShortTokens && !hasMentionPrefix && /^(?:no|stop)$/i.test(core)) {
+      return false;
+    }
+    if (CHAT_OPT_OUT_EXACT_RE.test(core)) return true;
+    return core.length <= 140 && CHAT_OPT_OUT_PHRASE_RE.test(core);
+  }
+
+  function syncOptOutCrossLinks(): boolean {
+    if (!optedOutParticipants.size) return false;
+    let added = false;
+    const lowerSet = new Set<string>();
+    for (const item of optedOutParticipants) lowerSet.add(item.trim().toLowerCase());
+    for (const p of participants.values()) {
+      const pidLow = p.participant_id.trim().toLowerCase();
+      const nameLow = p.participant_name?.trim().toLowerCase() ?? '';
+      if (lowerSet.has(pidLow) || (nameLow && lowerSet.has(nameLow))) {
+        if (!optedOutParticipants.has(p.participant_id) && optedOutParticipants.size < 256) {
+          optedOutParticipants.add(p.participant_id);
+          lowerSet.add(pidLow);
+          added = true;
+        }
+        if (p.participant_name && !optedOutParticipants.has(p.participant_name) && optedOutParticipants.size < 256) {
+          optedOutParticipants.add(p.participant_name);
+          lowerSet.add(nameLow);
+          added = true;
+        }
+      }
+    }
+    for (const [pid, dName] of domNames) {
+      const pidLow = pid.trim().toLowerCase();
+      const nameLow = dName.trim().toLowerCase();
+      if (lowerSet.has(pidLow) || (nameLow && lowerSet.has(nameLow))) {
+        if (!optedOutParticipants.has(pid) && optedOutParticipants.size < 256) {
+          optedOutParticipants.add(pid);
+          lowerSet.add(pidLow);
+          added = true;
+        }
+        if (!optedOutParticipants.has(dName) && optedOutParticipants.size < 256) {
+          optedOutParticipants.add(dName);
+          lowerSet.add(nameLow);
+          added = true;
+        }
+      }
+    }
+    return added;
+  }
+
+  function recordOptOutAuthor(senderId?: string | null, senderName?: string | null): boolean {
+    let added = false;
+    const cleanId = typeof senderId === 'string' ? senderId.trim() : '';
+    const cleanName = typeof senderName === 'string'
+      ? senderName.replace(/\s*\((?:Host|Co-host|Gastgeber|Co-Gastgeber|Organizer|Organisator)\)\s*$/i, '').trim()
+      : '';
+    if (cleanName && SELF_OR_UI_TEXT_RE.test(cleanName)) return false;
+    if (cleanId && (cleanId === webexSelfParticipantId || ignoredParticipantIds.has(cleanId))) return false;
+    if (cleanId && cleanId.length <= 200 && !optedOutParticipants.has(cleanId) && optedOutParticipants.size < 256) {
+      optedOutParticipants.add(cleanId);
+      added = true;
+    }
+    if (cleanName && cleanName.length <= 200 && !optedOutParticipants.has(cleanName) && optedOutParticipants.size < 256) {
+      optedOutParticipants.add(cleanName);
+      added = true;
+    }
+    if (syncOptOutCrossLinks()) added = true;
+    return added;
+  }
+
+  function isParticipantOptedOut(participantId?: string | null, participantName?: string | null): boolean {
+    if (!optedOutParticipants.size) return false;
+    const cleanId = participantId?.trim() ?? '';
+    if (cleanId) {
+      if (optedOutParticipants.has(cleanId)) return true;
+      const lowerId = cleanId.toLowerCase();
+      for (const item of optedOutParticipants) {
+        if (item.toLowerCase() === lowerId) return true;
+      }
+    }
+    const effectiveName = participantName?.trim() ||
+      (cleanId ? (domNames.get(cleanId) ?? participants.get(cleanId)?.participant_name ?? '') : '');
+    if (effectiveName) {
+      const clean = effectiveName.trim();
+      if (optedOutParticipants.has(clean)) return true;
+      const lower = clean.toLowerCase();
+      for (const item of optedOutParticipants) {
+        if (item.toLowerCase() === lower) return true;
+      }
+    }
+    return false;
+  }
 
   function isIgnoredParticipantName(name: string | null | undefined): boolean {
     if (!name) return false;
@@ -597,6 +703,75 @@ function install(config: MeetCaptureConfig) {
     return validCsi(num) ? num : null;
   }
 
+  function scanDomChatOptOut(): boolean {
+    if (!document.body) return false;
+    let updated = false;
+    const chatItems = document.querySelectorAll(
+      '[data-message-text], [data-sender-name], ' +
+      '[data-tid="chat-pane-item"], [data-tid="chat-pane-message"], ' +
+      '.chat-item__container, .new-chat-message__container, .chat-message__text-box, ' +
+      '[class*="chat-message"], [class*="chatMessage"], [class*="message-item"]'
+    );
+    let lastKnownSenderName: string | null = null;
+    let lastKnownSenderId: string | null = null;
+    for (const el of Array.from(chatItems).slice(0, 128)) {
+      const explicitSenderId = (
+        el.getAttribute('data-sender-id') ??
+        el.getAttribute('data-participant-id') ??
+        el.getAttribute('data-user-id') ??
+        el.closest('[data-sender-id], [data-participant-id]')?.getAttribute('data-sender-id') ??
+        el.closest('[data-sender-id], [data-participant-id]')?.getAttribute('data-participant-id') ??
+        ''
+      ).trim() || null;
+      const senderNode = el.querySelector(
+        '[data-sender-name], [data-tid="message-author-name"], [data-tid="chat-message-author"], ' +
+        '.chat-item__sender, .new-chat-message__sender, [class*="sender-name"], [class*="senderName"], [class*="author-name"]'
+      );
+      const explicitSenderName = (
+        el.getAttribute('data-sender-name') ??
+        el.closest('[data-sender-name]')?.getAttribute('data-sender-name') ??
+        senderNode?.getAttribute('data-sender-name') ??
+        senderNode?.textContent ??
+        ''
+      ).trim() || null;
+      if (
+        (explicitSenderName && SELF_OR_UI_TEXT_RE.test(explicitSenderName)) ||
+        (explicitSenderId && (explicitSenderId === webexSelfParticipantId || ignoredParticipantIds.has(explicitSenderId)))
+      ) {
+        lastKnownSenderName = null;
+        lastKnownSenderId = null;
+        continue;
+      }
+      if (explicitSenderName) {
+        lastKnownSenderName = explicitSenderName;
+      }
+      if (explicitSenderId) {
+        lastKnownSenderId = explicitSenderId;
+      }
+      const msgNode = el.querySelector(
+        '[data-message-text], [data-tid="chat-pane-message"], .chat-message__text-content, .new-chat-message__text-box, [class*="message-text"], [class*="messageText"]'
+      );
+      const rawText = (
+        el.getAttribute('data-message-text') ??
+        msgNode?.getAttribute('data-message-text') ??
+        msgNode?.textContent ??
+        el.textContent ??
+        ''
+      ).trim();
+      if (!rawText) continue;
+      let candidateText = rawText;
+      const authorName = explicitSenderName ?? lastKnownSenderName;
+      const authorId = explicitSenderId ?? lastKnownSenderId;
+      if (authorName && candidateText.startsWith(authorName)) {
+        candidateText = candidateText.slice(authorName.length).replace(/^[\s•·:,-]+/, '').replace(/^\d{1,2}:\d{2}(?:\s*[AP]M)?[\s•·:,-]*/i, '').trim();
+      }
+      if (isChatOptOutMessage(candidateText) || isChatOptOutMessage(rawText)) {
+        if (recordOptOutAuthor(authorId, authorName)) updated = true;
+      }
+    }
+    return updated;
+  }
+
   function scanDomParticipants(): boolean {
     if (!document.body) return false;
     let updated = false;
@@ -700,6 +875,8 @@ function install(config: MeetCaptureConfig) {
       }
     }
     liveDomCount = seenLiveDom.size;
+    if (scanDomChatOptOut()) updated = true;
+    if (syncOptOutCrossLinks()) updated = true;
     return updated;
   }
 
@@ -880,7 +1057,33 @@ function install(config: MeetCaptureConfig) {
             }
           }
         }
-        if (ingestParticipantRecord(record)) updated = true;
+        if (ingestParticipantRecord(record)) {
+          syncOptOutCrossLinks();
+          updated = true;
+        }
+        const explicitChatText = record.chatMessage ?? record.chat_text ?? record.messageText;
+        const chatBodyCandidate = explicitChatText ?? record.text ??
+          record.content ?? record.msg ??
+          (typeof record.body === 'string' && !record.body.startsWith('{') && !record.body.startsWith('[') && !record.body.startsWith('H4sI') ? record.body : undefined);
+        if (typeof chatBodyCandidate === 'string' && isChatOptOutMessage(chatBodyCandidate, explicitChatText !== undefined)) {
+          const fromObj = record.from && typeof record.from === 'object' ? (record.from as Record<string, unknown>) : undefined;
+          const senderObj = record.sender && typeof record.sender === 'object' ? (record.sender as Record<string, unknown>) : undefined;
+          const userObj = (fromObj?.user && typeof fromObj.user === 'object' ? (fromObj.user as Record<string, unknown>) : undefined) ??
+            (senderObj?.user && typeof senderObj.user === 'object' ? (senderObj.user as Record<string, unknown>) : undefined);
+          const sId = [
+            record.senderId, record.sender_id, record.participantId, record.participant_id,
+            record.authorId, record.author_id, record.userId, record.user_id, record.fromId,
+            fromObj?.id, senderObj?.id, userObj?.id,
+          ].find((v) => (typeof v === 'string' && v.trim()) || (typeof v === 'number' && Number.isFinite(v)));
+          const sName = [
+            record.senderName, record.sender_name, record.displayName, record.display_name,
+            record.authorName, record.author_name, record.userName, record.user_name, record.imDisplayName,
+            fromObj?.name, fromObj?.displayName, senderObj?.name, senderObj?.displayName, userObj?.displayName,
+          ].find((v): v is string => typeof v === 'string' && Boolean(v.trim()));
+          if (recordOptOutAuthor(sId !== undefined ? String(sId) : null, sName ?? null)) {
+            updated = true;
+          }
+        }
         for (const b64Key of ['message', 'body'] as const) {
           const b64Val = record[b64Key];
           if (typeof b64Val === 'string' && b64Val.startsWith('H4sI') && b64Val.length <= 262144) {
@@ -986,6 +1189,22 @@ function install(config: MeetCaptureConfig) {
       scanDomParticipants();
       const matchedId = strings.find((s) =>
         domNames.has(s) || participants.has(s) || /^(?:spaces\/[^/\s]+\/)?devices\/[^/\s]+$/.test(s));
+      const optOutStr = strings.find((s) => isChatOptOutMessage(s, false));
+      if (optOutStr) {
+        const senderNameCandidate = (matchedId ? (domNames.get(matchedId) ?? participants.get(matchedId)?.participant_name) : null) ??
+          strings.find((s) =>
+            s !== optOutStr &&
+            s !== matchedId &&
+            s.length >= 2 &&
+            s.length <= 120 &&
+            !/^\d+$/.test(s) &&
+            !/https?:\/\/|googleusercontent\.com/i.test(s) &&
+            !/^(?:spaces\/|devices\/|FID$)/i.test(s) &&
+            !/^[A-Za-z0-9+/=_-]{24,}$/.test(s)) ?? null;
+        if (recordOptOutAuthor(matchedId ?? null, senderNameCandidate)) {
+          updated = true;
+        }
+      }
       if (matchedId) {
         const protoName = strings.find((s) =>
           s !== matchedId &&
@@ -1204,18 +1423,22 @@ function install(config: MeetCaptureConfig) {
   const sink: CaptureSink = {begin: control, bind: control, end: control, gap: control,
     chunk: (metadata: Chunk, pcm: Uint8Array) => {
       // Five-second blocks, not one RPC per AudioWorklet render quantum.
+      const optedOut = isParticipantOptedOut(metadata.participant_id ?? metadata.speaker_id, metadata.participant_name);
+      const effectivePcm = optedOut ? new Uint8Array(pcm.length) : pcm;
       let raw = '';
-      for (let offset = 0; offset < pcm.length; offset += 8192) {
-        raw += String.fromCharCode(...pcm.subarray(offset, offset + 8192));
+      for (let offset = 0; offset < effectivePcm.length; offset += 8192) {
+        raw += String.fromCharCode(...effectivePcm.subarray(offset, offset + 8192));
       }
       const encoded = btoa(raw);
       send({attempt_id: config.attempt_id, type: 'chunk', metadata, pcm: encoded}, encoded.length + 8192);
       state.audio_samples += metadata.sample_count;
-      const view = new DataView(pcm.buffer, pcm.byteOffset, pcm.byteLength);
-      for (let i = 0; i + 1 < pcm.byteLength; i += 2) {
-        if (Math.abs(view.getInt16(i, true)) >= 200) {
-          state.active_audio_samples += metadata.sample_count;
-          break;
+      if (!optedOut) {
+        const view = new DataView(pcm.buffer, pcm.byteOffset, pcm.byteLength);
+        for (let i = 0; i + 1 < pcm.byteLength; i += 2) {
+          if (Math.abs(view.getInt16(i, true)) >= 200) {
+            state.active_audio_samples += metadata.sample_count;
+            break;
+          }
         }
       }
     }, error: (reason) => { state.reason = reason; }};
@@ -1495,6 +1718,7 @@ function install(config: MeetCaptureConfig) {
         total: totalParticipants,
         truncated: totalParticipants > 256,
         ...(liveDomCount > 0 || domNames.size > 0 ? {dom_participants: liveDomCount} : {}),
+        ...(optedOutParticipants.size > 0 ? {opted_out: [...optedOutParticipants].slice(0, 64)} : {}),
         sources: [...participants.values()].slice(0, 256).map((p) => ({
           participant_id: p.participant_id,
           ...(p.participant_name ? {participant_name: p.participant_name} : {}),

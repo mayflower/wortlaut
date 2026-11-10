@@ -12,7 +12,15 @@ from sqlalchemy import case, func, literal, select, union_all
 from sqlalchemy.orm import Session
 
 from wortlaut.ingest import SourceBinding
-from wortlaut.models import AsrJob, Attempt, AudioChunk, AudioControl, AudioStream, Recording
+from wortlaut.models import (
+    AsrJob,
+    Attempt,
+    AudioChunk,
+    AudioControl,
+    AudioStream,
+    Recording,
+    TranscriptSegment,
+)
 from wortlaut.settings import get_settings
 from wortlaut.storage import canonical, get_storage
 
@@ -405,12 +413,263 @@ def speech_section(pcm: bytes, cursor: int, terminal: bool):
     return None, cursor
 
 
+def collect_opted_out_speakers(
+    recording: Recording | None,
+    attempts: list[Attempt],
+    participant_names: dict[str, str] | None = None,
+) -> tuple[list[str], set[str]]:
+    raw_list: list[str] = []
+    norm_set: set[str] = set()
+
+    def _add(val: object):
+        if not isinstance(val, str):
+            return
+        cleaned = val.strip()[:200]
+        if not cleaned:
+            return
+        low = cleaned.lower()
+        if low not in norm_set:
+            raw_list.append(cleaned)
+        norm_set.add(low)
+
+    if recording is not None and isinstance(recording.protocol_meta, dict):
+        for item in recording.protocol_meta.get("opted_out_speakers") or []:
+            _add(item)
+    name_map: dict[str, str] = dict(participant_names or {})
+    for attempt in attempts:
+        diag = attempt.diagnostics if isinstance(attempt.diagnostics, dict) else {}
+        ps = diag.get("participant_sources")
+        if isinstance(ps, dict):
+            for item in ps.get("opted_out") or []:
+                _add(item)
+            for src in ps.get("sources") or []:
+                if (
+                    isinstance(src, dict)
+                    and src.get("participant_id")
+                    and src.get("participant_name")
+                ):
+                    name_map[str(src["participant_id"])] = str(src["participant_name"])
+        for rcv in diag.get("receiver_sources") or []:
+            if (
+                isinstance(rcv, dict)
+                and rcv.get("signaled_participant_id")
+                and rcv.get("participant_name")
+            ):
+                name_map[str(rcv["signaled_participant_id"])] = str(rcv["participant_name"])
+
+    if norm_set and name_map:
+        for pid, pname in list(name_map.items()):
+            pid_l = pid.strip().lower()
+            pname_l = pname.strip().lower()
+            if pid_l in norm_set or pname_l in norm_set:
+                if pid_l:
+                    norm_set.add(pid_l)
+                if pname_l:
+                    norm_set.add(pname_l)
+    return raw_list, norm_set
+
+
+def is_speaker_opted_out(
+    opted_out_norm: set[str],
+    *,
+    participant_id: str | None = None,
+    speaker_id: str | None = None,
+    participant_name: str | None = None,
+    speaker_label: str | None = None,
+    provider_source_id: str | None = None,
+) -> bool:
+    if not opted_out_norm:
+        return False
+    for candidate in (
+        participant_id,
+        speaker_id,
+        participant_name,
+        speaker_label,
+        provider_source_id,
+    ):
+        if isinstance(candidate, str):
+            low = candidate.strip().lower()
+            if low and low in opted_out_norm:
+                return True
+    return False
+
+
+def purge_opted_out_transcript_segments(
+    db: Session,
+    recording: Recording,
+    attempts: list[Attempt] | None = None,
+) -> int:
+    if attempts is None:
+        attempts = list(
+            db.scalars(select(Attempt).where(Attempt.recording_id == recording.id)).all()
+        )
+    if not attempts:
+        return 0
+    streams = list(
+        db.scalars(
+            select(AudioStream).where(AudioStream.attempt_id.in_([a.id for a in attempts]))
+        ).all()
+    )
+    participant_names: dict[str, str] = {}
+    for s in streams:
+        pid = s.contract.get("participant_id") or s.contract.get("speaker_id")
+        if pid and s.contract.get("participant_name"):
+            participant_names[str(pid)] = str(s.contract["participant_name"])
+    bind_controls = (
+        list(
+            db.scalars(
+                select(AudioControl).where(
+                    AudioControl.stream_id.in_([s.id for s in streams]),
+                    AudioControl.kind == "bind",
+                )
+            ).all()
+        )
+        if streams
+        else []
+    )
+    for ctrl in bind_controls:
+        pid = ctrl.contract.get("participant_id") or ctrl.contract.get("speaker_id")
+        if pid and ctrl.contract.get("participant_name"):
+            participant_names[str(pid)] = str(ctrl.contract["participant_name"])
+    _, opted_out_norm = collect_opted_out_speakers(recording, attempts, participant_names)
+    if not opted_out_norm or not streams:
+        return 0
+
+    stream_ids = [s.id for s in streams]
+    unambiguous_by_stream: dict[tuple[str, str], tuple[str, str | None]] = {}
+    for s in streams:
+        key = (str(s.stream_id), str(s.epoch))
+        observed: set[tuple[str, str | None]] = set()
+        if not s.contract.get("attribution_unknown"):
+            pid = s.contract.get("participant_id") or s.contract.get("speaker_id")
+            if pid:
+                pname_s = s.contract.get("participant_name") or participant_names.get(str(pid))
+                observed.add((str(pid), pname_s))
+        for ctrl in bind_controls:
+            if ctrl.stream_id == s.id and not ctrl.contract.get("attribution_unknown"):
+                pid = ctrl.contract.get("participant_id") or ctrl.contract.get("speaker_id")
+                if pid:
+                    pname_c = ctrl.contract.get("participant_name") or participant_names.get(
+                        str(pid)
+                    )
+                    observed.add((str(pid), pname_c))
+        if len(observed) == 1:
+            unambiguous_by_stream[key] = next(iter(observed))
+
+    deleted = 0
+    seg_rows = list(
+        db.scalars(
+            select(TranscriptSegment)
+            .join(AsrJob, AsrJob.id == TranscriptSegment.id)
+            .where(AsrJob.stream_id.in_(stream_ids))
+        ).all()
+    )
+    for seg_row in seg_rows:
+        res = seg_row.result if isinstance(seg_row.result, dict) else {}
+        pid = res.get("participant_id") or res.get("speaker_id")
+        pname = res.get("participant_name") or (participant_names.get(str(pid)) if pid else None)
+        skey = (str(res.get("stream_id") or ""), str(res.get("epoch") or ""))
+        if not pid and skey in unambiguous_by_stream:
+            pid, pname = unambiguous_by_stream[skey]
+        spk = res.get("speaker_id")
+        psid = res.get("provider_source_id")
+        if is_speaker_opted_out(
+            opted_out_norm,
+            participant_id=str(pid) if pid else None,
+            speaker_id=str(spk) if spk else None,
+            participant_name=str(pname) if pname else None,
+            provider_source_id=str(psid) if psid else None,
+        ):
+            db.delete(seg_row)
+            deleted += 1
+
+    pending_jobs = list(
+        db.scalars(
+            select(AsrJob).where(
+                AsrJob.stream_id.in_(stream_ids),
+                AsrJob.status.in_(["pending", "processing"]),
+            )
+        ).all()
+    )
+    for job in pending_jobs:
+        binding = job.binding if isinstance(job.binding, dict) else {}
+        pid = binding.get("participant_id") or binding.get("speaker_id")
+        pname = binding.get("participant_name") or (
+            participant_names.get(str(pid)) if pid else None
+        )
+        spk = binding.get("speaker_id")
+        psid = binding.get("provider_source_id")
+        if is_speaker_opted_out(
+            opted_out_norm,
+            participant_id=str(pid) if pid else None,
+            speaker_id=str(spk) if spk else None,
+            participant_name=str(pname) if pname else None,
+            provider_source_id=str(psid) if psid else None,
+        ):
+            job.status, job.error, job.retry_at = "completed", None, None
+
+    return deleted
+
+
+def stream_binding_opted_out(
+    db: Session,
+    stream: AudioStream | None,
+    binding: dict | None,
+) -> bool:
+    if stream is None or not isinstance(binding, dict):
+        return False
+    attempt = db.get(Attempt, stream.attempt_id)
+    recording = db.get(Recording, attempt.recording_id) if attempt else None
+    participant_names: dict[str, str] = {}
+    observed_pids: set[str] = set()
+    pid_s = stream.contract.get("participant_id") or stream.contract.get("speaker_id")
+    if pid_s:
+        observed_pids.add(str(pid_s))
+        if stream.contract.get("participant_name"):
+            participant_names[str(pid_s)] = str(stream.contract["participant_name"])
+    bind_controls = list(
+        db.scalars(
+            select(AudioControl).where(
+                AudioControl.stream_id == stream.id,
+                AudioControl.kind == "bind",
+            )
+        ).all()
+    )
+    for ctrl in bind_controls:
+        cpid = ctrl.contract.get("participant_id") or ctrl.contract.get("speaker_id")
+        if cpid:
+            observed_pids.add(str(cpid))
+            if ctrl.contract.get("participant_name"):
+                participant_names[str(cpid)] = str(ctrl.contract["participant_name"])
+    _, opted_out_norm = collect_opted_out_speakers(
+        recording, [attempt] if attempt else [], participant_names
+    )
+    if not opted_out_norm:
+        return False
+    pid = binding.get("participant_id") or binding.get("speaker_id")
+    if not pid and len(observed_pids) == 1:
+        pid = next(iter(observed_pids))
+    pname = binding.get("participant_name") or (participant_names.get(str(pid)) if pid else None)
+    return is_speaker_opted_out(
+        opted_out_norm,
+        participant_id=str(pid) if pid else None,
+        speaker_id=str(binding.get("speaker_id")) if binding.get("speaker_id") else None,
+        participant_name=str(pname) if pname else None,
+        provider_source_id=(
+            str(binding.get("provider_source_id")) if binding.get("provider_source_id") else None
+        ),
+    )
+
+
 def segment_stream(db: Session, stream: AudioStream):
     runs, terminal, _ = timeline(db, stream, incremental=True)
     for index, run in enumerate(runs):
         if run.end <= stream.scan_sample:
             continue
         if run.binding is None:
+            stream.scan_sample = run.end
+            continue
+        if stream_binding_opted_out(db, stream, run.binding):
             stream.scan_sample = run.end
             continue
         cursor = max(stream.scan_sample, run.start)
