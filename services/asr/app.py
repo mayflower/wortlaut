@@ -11,7 +11,10 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Header, HTTPException, Request
 from starlette.concurrency import run_in_threadpool
 
-MODEL_REVISION = "541d1f99c6b0c3cd0b11a95167540bb8edefd82b"
+DEFAULT_MODEL_REPO = "primeline/parakeet-primeline"
+DEFAULT_MODEL_FILENAME = "2_95_WER.nemo"
+DEFAULT_MODEL_REVISION = "3f1a9bcb611dfeda53fe74fe5f1a3d5701e8023e"
+MODEL_REVISION = os.environ.get("WORTLAUT_ASR_MODEL_REVISION", DEFAULT_MODEL_REVISION)
 MAX_BYTES = 16000 * 2 * 32
 lock = threading.Lock()
 model = None
@@ -30,9 +33,10 @@ def load_model():
         device = "cpu"
     else:
         raise RuntimeError("Parakeet service requires an NVIDIA GPU")
-    filename = hf_hub_download(
-        "nvidia/parakeet-tdt-0.6b-v3", "parakeet-tdt-0.6b-v3.nemo", revision=MODEL_REVISION
-    )
+    repo = os.environ.get("WORTLAUT_ASR_MODEL_REPO", DEFAULT_MODEL_REPO)
+    name = os.environ.get("WORTLAUT_ASR_MODEL_FILENAME", DEFAULT_MODEL_FILENAME)
+    revision = os.environ.get("WORTLAUT_ASR_MODEL_REVISION", DEFAULT_MODEL_REVISION)
+    filename = hf_hub_download(repo, name, revision=revision)
     loaded = nemo_asr.models.ASRModel.restore_from(filename, map_location=device)
     loaded.freeze()
     loaded.eval()

@@ -7,7 +7,7 @@ spec:
   storageClassName: longhorn
   resources:
     requests:
-      storage: 8Gi
+      storage: 20Gi
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -49,7 +49,7 @@ spec:
               drop: [ALL]
           resources:
             requests: {cpu: '1', memory: 4Gi, nvidia.com/gpu: '1'}
-            limits: {cpu: '4', memory: 8Gi, nvidia.com/gpu: '1'}
+            limits: {cpu: '4', memory: 16Gi, nvidia.com/gpu: '1'}
           volumeMounts:
             - name: model-cache
               mountPath: /model-cache

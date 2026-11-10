@@ -137,7 +137,7 @@ def test_cpu_fallback_loads_model_on_cpu_when_enabled(monkeypatch):
     loaded = asr_service.load_model()
     assert isinstance(loaded, DummyModel)
     assert restored == {
-        "filename": "/tmp/parakeet-tdt-0.6b-v3.nemo",
+        "filename": "/tmp/2_95_WER.nemo",
         "map_location": "cpu",
         "frozen": True,
         "eval": True,
