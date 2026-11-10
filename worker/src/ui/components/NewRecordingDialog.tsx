@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { CalendarPlus, Link2, Upload, Video } from 'lucide-react';
 import { Dialog, DialogHeader } from '@astryxdesign/core/Dialog';
+import { Layout, LayoutContent } from '@astryxdesign/core/Layout';
 import { FormLayout } from '@astryxdesign/core/FormLayout';
 import {
   SegmentedControl,
@@ -151,13 +152,18 @@ export function NewRecordingDialog({
       width={560}
       purpose="form"
     >
-      <DialogHeader
-        title="Bot in ein Meeting schicken"
-        subtitle="Starten Sie einen Bot sofort per Meeting-Link oder importieren Sie eine Kalendereinladung (.ics / .eml)."
-        onOpenChange={onOpenChange}
-      />
-
-      <VStack gap={3}>
+      <Layout
+        height="auto"
+        header={
+          <DialogHeader
+            title="Bot in ein Meeting schicken"
+            subtitle="Starten Sie einen Bot sofort per Meeting-Link oder importieren Sie eine Kalendereinladung (.ics / .eml)."
+            onOpenChange={onOpenChange}
+          />
+        }
+        content={
+          <LayoutContent>
+            <VStack gap={3}>
         <SegmentedControl
           size="sm"
           layout="fill"
@@ -350,7 +356,10 @@ export function NewRecordingDialog({
             </FormLayout>
           </form>
         )}
-      </VStack>
+            </VStack>
+          </LayoutContent>
+        }
+      />
     </Dialog>
   );
 }
