@@ -65,7 +65,9 @@ jobs:
         run: npm --prefix worker run build
       - name: Install pinned Chromium
         working-directory: worker
-        run: npx playwright install --with-deps chromium
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          npx playwright install --with-deps chromium
       - name: Native browser fixtures (no real provider identity proof)
         working-directory: worker
         run: |
