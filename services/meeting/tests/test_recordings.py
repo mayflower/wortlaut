@@ -645,8 +645,13 @@ def test_web_ui_live_status_and_browser_participant_names_in_exports(
     assert patched_tx["segments"][0]["speaker_label"] == "Dr. Alice Beispiel"
     assert patched_tx["segments"][0]["text"] == "Willkommen zusammen."
 
-    # Structured AI summary via local Ollama endpoint
+    # Structured AI summary via local Ollama endpoint (opt-in via WORTLAUT_ENABLE_LLM_SUMMARY=true)
     from wortlaut import exports as exports_module
+    from wortlaut.settings import get_settings
+
+    assert client.post(f"/v1/recordings/{recording}/summary", headers=API).status_code == 503
+    monkeypatch.setenv("WORTLAUT_ENABLE_LLM_SUMMARY", "true")
+    get_settings.cache_clear()
 
     class FakeOllamaResponse:
         def raise_for_status(self):

@@ -275,6 +275,8 @@ def _build_instance_info() -> dict:
             "microsoftTenantId": s.microsoft_calendar_tenant_id or "common",
         },
         "privacyUrl": s.privacy_url or "/privacy",
+        "llmSummaryEnabled": bool(s.enable_llm_summary and s.ollama_url),
+        "llmModel": s.ollama_model if s.enable_llm_summary else "",
     }
 
 

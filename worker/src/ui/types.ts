@@ -285,6 +285,8 @@ export interface InstanceInfo {
     audioHours: number;
     transcriptDays: number;
   };
+  llmSummaryEnabled?: boolean;
+  llmModel?: string;
 }
 
 declare global {

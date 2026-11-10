@@ -31,6 +31,7 @@ import {
   fetchAudioSnippetBlobUrl,
   formatWallClockTime,
   generateRecordingSummary,
+  getInstanceInfo,
   getSourceFilterKey,
   matchesSourceFilter,
   updateRecordingProtocol,
@@ -380,27 +381,29 @@ export function TranscriptTab({
   }, [sources]);
 
   const activeTermEntries = Object.entries(termReplacements);
+  const instance = getInstanceInfo();
+  const llmSummaryEnabled = Boolean(instance.llmSummaryEnabled);
 
   return (
     <VStack gap={3}>
-      {/* 1. Structured AI Protocol Summary & Action Items (Qwen 3.8 via local Ollama) */}
-      {(summary || (isOperator && segments.length > 0)) && (
+      {/* 1. Structured AI Protocol Summary & Action Items (opt-in via WORTLAUT_ENABLE_LLM_SUMMARY=true) */}
+      {(summary || (llmSummaryEnabled && isOperator && segments.length > 0)) && (
         <Card>
           <VStack gap={3}>
             <HStack justify="between" vAlign="center" wrap="wrap" gap={2}>
               <HStack gap={2} vAlign="center" wrap="wrap">
                 <Sparkles className="h-4 w-4 text-[var(--color-text-accent)]" />
                 <Heading level={4}>Ergebnisprotokoll & Aufgaben</Heading>
-                {summary?.model && (
+                {(summary?.model || instance.llmModel) && (
                   <Token
                     size="sm"
                     color="green"
-                    label={`Lokal · ${summary.model}`}
+                    label={`Lokal · ${summary?.model || instance.llmModel}`}
                   />
                 )}
               </HStack>
 
-              {isOperator && segments.length > 0 && (
+              {llmSummaryEnabled && isOperator && segments.length > 0 && (
                 <Button
                   variant={summary ? 'ghost' : 'secondary'}
                   size="sm"
@@ -409,7 +412,7 @@ export function TranscriptTab({
                   label={
                     summary
                       ? 'Zusammenfassung aktualisieren'
-                      : 'KI-Zusammenfassung erstellen (Qwen 3.8)'
+                      : 'KI-Zusammenfassung erstellen'
                   }
                   onClick={handleGenerateSummary}
                 />

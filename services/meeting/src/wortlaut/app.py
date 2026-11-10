@@ -1416,6 +1416,10 @@ def create_recording_summary(
     db: Db,
     principal: AuthPrincipal,
 ):
+    if not get_settings().enable_llm_summary:
+        raise HTTPException(
+            503, "KI-Zusammenfassung ist deaktiviert (WORTLAUT_ENABLE_LLM_SUMMARY=false)"
+        )
     recording = db.scalar(select(Recording).where(Recording.id == recording_id).with_for_update())
     if recording is None or not can_access_recording(db, principal, recording):
         raise HTTPException(404, "Recording not found")
