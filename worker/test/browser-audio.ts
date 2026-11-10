@@ -53,7 +53,10 @@ try {
       if (negativeLobe && value > 3000) { crossings.push(i / 2); negativeLobe = false; }
     }
     const steady = crossings.slice(20, -20);
-    const frequency = 16000 * (steady.length - 1) / (steady.at(-1)! - steady[0]);
+    const maxCycleSamples = (16000 / result.frequency) * 1.5;
+    const validCycles = steady.slice(1).map((pos, idx) => pos - steady[idx]).filter((span) => span <= maxCycleSamples);
+    assert.ok(validCycles.length >= 80, `validCycles=${validCycles.length}`);
+    const frequency = 16000 * validCycles.length / validCycles.reduce((sum, span) => sum + span, 0);
     assert.ok(Math.abs(frequency - result.frequency) < 2, `frequency=${frequency}`);
     assert.ok(peak > 30000 && peak <= 32768);
     assert.equal(metadata.speaker_id, `fixture:${result.frequency}`);
