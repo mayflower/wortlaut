@@ -50,7 +50,13 @@ from wortlaut.calendar_oauth import (
 )
 from wortlaut.controller import controller_pass, new_attempt, request_cancellation
 from wortlaut.database import get_engine, session
-from wortlaut.exports import export_data, export_reader_token, render_export
+from wortlaut.exports import (
+     export_data,
+    export_reader_token,
+    extract_audio_snippet_wav,
+    generate_protocol_summary,
+    render_export,
+)
 from wortlaut.ingest import accept_chunk, accept_control, capacity_reached, verify_owner
 from wortlaut.mail import FAILURE_REASONS, delivery_json, smtp_pass
 from wortlaut.models import (
@@ -1335,6 +1341,114 @@ def get_transcript(
     if recording.transcript_deleted_at:
         raise HTTPException(410, "Transcript retention expired")
     return export_data(db, recording)
+
+
+class ProtocolUpdateRequest(BaseModel):
+    title: str | None = Field(default=None, max_length=200)
+    notes: str | None = Field(default=None, max_length=20000)
+    speaker_overrides: dict[str, str] | None = None
+    term_replacements: dict[str, str] | None = None
+    segment_edits: dict[str, str] | None = None
+
+
+@app.patch("/v1/recordings/{recording_id}")
+def update_recording_protocol(
+    recording_id: uuid.UUID,
+    body: ProtocolUpdateRequest,
+    db: Db,
+    principal: AuthPrincipal,
+):
+    recording = db.scalar(select(Recording).where(Recording.id == recording_id).with_for_update())
+    if recording is None or not can_access_recording(db, principal, recording):
+        raise HTTPException(404, "Recording not found")
+    if recording.metadata_deleted_at or recording.transcript_deleted_at:
+        raise HTTPException(410, "Recording retention expired")
+    if body.title is not None:
+        cleaned_title = body.title.strip()
+        recording.title = cleaned_title or None
+    meta = dict(recording.protocol_meta or {})
+    if body.notes is not None:
+        meta["notes"] = body.notes[:20000]
+    if body.speaker_overrides is not None:
+        cur_speakers = dict(meta.get("speaker_overrides") or {})
+        for k, v in body.speaker_overrides.items():
+            key = str(k).strip()[:200]
+            if not key:
+                continue
+            val = str(v).strip()[:120]
+            if val:
+                cur_speakers[key] = val
+            else:
+                cur_speakers.pop(key, None)
+        meta["speaker_overrides"] = cur_speakers
+    if body.term_replacements is not None:
+        cur_terms = dict(meta.get("term_replacements") or {})
+        for k, v in body.term_replacements.items():
+            key = str(k).strip()[:120]
+            if not key:
+                continue
+            val = str(v).strip()[:120]
+            if val and val != key:
+                cur_terms[key] = val
+            else:
+                cur_terms.pop(key, None)
+        meta["term_replacements"] = cur_terms
+    if body.segment_edits is not None:
+        cur_edits = dict(meta.get("segment_edits") or {})
+        for k, v in body.segment_edits.items():
+            key = str(k).strip()[:120]
+            if not key:
+                continue
+            val = str(v).strip()[:10000]
+            if val:
+                cur_edits[key] = val
+            else:
+                cur_edits.pop(key, None)
+        meta["segment_edits"] = cur_edits
+    recording.protocol_meta = meta
+    db.commit()
+    return export_data(db, recording)
+
+
+@app.post("/v1/recordings/{recording_id}/summary")
+def create_recording_summary(
+    recording_id: uuid.UUID,
+    db: Db,
+    principal: AuthPrincipal,
+):
+    recording = db.scalar(select(Recording).where(Recording.id == recording_id).with_for_update())
+    if recording is None or not can_access_recording(db, principal, recording):
+        raise HTTPException(404, "Recording not found")
+    if recording.transcript_deleted_at:
+        raise HTTPException(410, "Transcript retention expired")
+    try:
+        summary = generate_protocol_summary(db, recording)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from None
+    except Exception as exc:
+        raise HTTPException(502, f"KI-Zusammenfassung fehlgeschlagen: {exc}") from None
+    return {"summary": summary}
+
+
+@app.get("/v1/recordings/{recording_id}/audio-snippet")
+def get_audio_snippet(
+    recording_id: uuid.UUID,
+    db: Db,
+    start: Annotated[float, Query(ge=0.0)] = 0.0,
+    end: Annotated[float, Query(ge=0.1)] = 5.0,
+    stream_id: Annotated[str | None, Query(max_length=120)] = None,
+    authorization: Annotated[str | None, Header()] = None,
+):
+    recording, _ = _authenticate_recording_access(db, recording_id, authorization)
+    try:
+        wav_bytes = extract_audio_snippet_wav(db, recording, stream_id, start, end)
+    except LookupError as exc:
+        raise HTTPException(404, f"Audio-Ausschnitt nicht verfügbar ({exc})") from None
+    return Response(
+        wav_bytes,
+        media_type="audio/wav",
+        headers={"Cache-Control": "private, max-age=300"},
+    )
 
 
 @app.get("/v1/recordings/{recording_id}/exports/{format}")

@@ -1,8 +1,22 @@
-import React, { useMemo, useState } from 'react';
-import { Check, Copy, FileText, Search } from 'lucide-react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Check,
+  CheckSquare,
+  Copy,
+  Edit3,
+  FileText,
+  Pause,
+  Play,
+  Replace,
+  Search,
+  Sparkles,
+  X,
+} from 'lucide-react';
 import { HStack } from '@astryxdesign/core/HStack';
 import { VStack } from '@astryxdesign/core/VStack';
 import { Text } from '@astryxdesign/core/Text';
+import { Heading } from '@astryxdesign/core/Heading';
+import { Card } from '@astryxdesign/core/Card';
 import { Avatar } from '@astryxdesign/core/Avatar';
 import { Token } from '@astryxdesign/core/Token';
 import { TextInput } from '@astryxdesign/core/TextInput';
@@ -11,15 +25,20 @@ import { IconButton } from '@astryxdesign/core/IconButton';
 import { EmptyState } from '@astryxdesign/core/EmptyState';
 import { Divider } from '@astryxdesign/core/Divider';
 import { Button } from '@astryxdesign/core/Button';
+import { Banner } from '@astryxdesign/core/Banner';
 import {
   ATTRIBUTION_STATUS_LABELS,
+  fetchAudioSnippetBlobUrl,
   formatWallClockTime,
+  generateRecordingSummary,
   getSourceFilterKey,
   matchesSourceFilter,
+  updateRecordingProtocol,
 } from '../api';
 import type {
   ParticipationState,
   ProcessingState,
+  ProtocolSummary,
   SourceSummary,
   TranscriptSegment,
 } from '../types';
@@ -43,13 +62,19 @@ function renderHighlightedText(text: string, query: string): React.ReactNode {
 
 export interface TranscriptTabProps {
   recordingId: string;
+  token?: string;
+  isOperator?: boolean;
   participation: ParticipationState;
   processing: ProcessingState;
   timeOriginUtc?: string | null;
+  audioAvailable?: boolean;
+  summary?: ProtocolSummary | null;
+  termReplacements?: Record<string, string>;
   segments: TranscriptSegment[];
   sources: SourceSummary[];
   selectedSourceFilter: string;
   onSelectedSourceFilterChange: (sourceId: string) => void;
+  onProtocolUpdated?: () => void;
 }
 
 interface TurnParagraph {
@@ -61,6 +86,8 @@ interface TurnParagraph {
 
 interface GroupedTurn {
   id: string;
+  streamId: string;
+  speakerKey: string;
   speakerLabel: string;
   speakerName: string | null;
   providerSourceId: string;
@@ -72,16 +99,60 @@ interface GroupedTurn {
 }
 
 export function TranscriptTab({
+  recordingId,
+  token = '',
+  isOperator = false,
   participation,
   processing,
   timeOriginUtc,
+  audioAvailable = false,
+  summary,
+  termReplacements = {},
   segments,
   sources,
   selectedSourceFilter,
   onSelectedSourceFilterChange,
+  onProtocolUpdated,
 }: TranscriptTabProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [copiedTurnId, setCopiedTurnId] = useState<string | null>(null);
+
+  // AI Summary state
+  const [generatingSummary, setGeneratingSummary] = useState(false);
+  const [summaryError, setSummaryError] = useState<string | null>(null);
+
+  // Audio snippet playback state
+  const [playingTurnId, setPlayingTurnId] = useState<string | null>(null);
+  const [loadingAudioTurnId, setLoadingAudioTurnId] = useState<string | null>(
+    null
+  );
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const audioBlobUrlRef = useRef<string | null>(null);
+
+  // Inline turn & speaker edit state
+  const [editingTurnId, setEditingTurnId] = useState<string | null>(null);
+  const [editSpeakerName, setEditSpeakerName] = useState('');
+  const [editTurnText, setEditTurnText] = useState('');
+  const [savingEdit, setSavingEdit] = useState(false);
+
+  // Term replacement bar state
+  const [showTermBar, setShowTermBar] = useState(false);
+  const [termFrom, setTermFrom] = useState('');
+  const [termTo, setTermTo] = useState('');
+  const [savingTerm, setSavingTerm] = useState(false);
+
+  useEffect(() => {
+    return () => {
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current = null;
+      }
+      if (audioBlobUrlRef.current) {
+        URL.revokeObjectURL(audioBlobUrlRef.current);
+        audioBlobUrlRef.current = null;
+      }
+    };
+  }, []);
 
   const sourceOptions = useMemo(() => {
     return [
@@ -109,14 +180,13 @@ export function TranscriptTab({
     });
   }, [segments, selectedSourceFilter, searchQuery]);
 
-  // Group consecutive segments from the same speaker into a single turn,
-  // splitting into sub-paragraphs when a pause exceeds 8 seconds.
   const groupedTurns = useMemo<GroupedTurn[]>(() => {
     const turns: GroupedTurn[] = [];
     for (const seg of filteredSegments) {
       const segId = seg.segment_id || seg.id || `${seg.stream_id}-${seg.start}`;
       const segPid = seg.participant_id || seg.speaker_id;
       const segName = seg.participant_name || seg.speaker_name;
+      const speakerKey = segPid || seg.speaker_label || seg.provider_source_id;
       const segFilterKey = segPid
         ? `participant:${segPid}`
         : segName
@@ -147,6 +217,8 @@ export function TranscriptTab({
       } else {
         turns.push({
           id: segId,
+          streamId: seg.stream_id,
+          speakerKey,
           speakerLabel: seg.speaker_label,
           speakerName: segName,
           providerSourceId: seg.provider_source_id,
@@ -176,6 +248,130 @@ export function TranscriptTab({
     setTimeout(() => setCopiedTurnId(null), 1600);
   };
 
+  const handlePlaySnippet = async (turn: GroupedTurn) => {
+    if (!token) return;
+    if (playingTurnId === turn.id && audioRef.current) {
+      audioRef.current.pause();
+      setPlayingTurnId(null);
+      return;
+    }
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current = null;
+    }
+    if (audioBlobUrlRef.current) {
+      URL.revokeObjectURL(audioBlobUrlRef.current);
+      audioBlobUrlRef.current = null;
+    }
+    setLoadingAudioTurnId(turn.id);
+    try {
+      const url = await fetchAudioSnippetBlobUrl(
+        token,
+        recordingId,
+        turn.streamId,
+        turn.start,
+        turn.end
+      );
+      audioBlobUrlRef.current = url;
+      const audio = new Audio(url);
+      audioRef.current = audio;
+      audio.onended = () => setPlayingTurnId(null);
+      audio.onerror = () => setPlayingTurnId(null);
+      setPlayingTurnId(turn.id);
+      await audio.play();
+    } catch {
+      setPlayingTurnId(null);
+    } finally {
+      setLoadingAudioTurnId(null);
+    }
+  };
+
+  const handleGenerateSummary = async () => {
+    if (!token) return;
+    setSummaryError(null);
+    setGeneratingSummary(true);
+    try {
+      await generateRecordingSummary(token, recordingId);
+      onProtocolUpdated?.();
+    } catch (err) {
+      setSummaryError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setGeneratingSummary(false);
+    }
+  };
+
+  const handleStartEditTurn = (turn: GroupedTurn) => {
+    setEditingTurnId(turn.id);
+    setEditSpeakerName(turn.speakerLabel);
+    setEditTurnText(turn.paragraphs.map((p) => p.text).join(' '));
+  };
+
+  const handleSaveTurnEdit = async (turn: GroupedTurn) => {
+    if (!token) return;
+    setSavingEdit(true);
+    try {
+      const payload: {
+        speaker_overrides?: Record<string, string>;
+        segment_edits?: Record<string, string>;
+      } = {};
+      if (
+        editSpeakerName.trim() &&
+        editSpeakerName.trim() !== turn.speakerLabel
+      ) {
+        payload.speaker_overrides = {
+          [turn.speakerKey]: editSpeakerName.trim(),
+          [turn.speakerLabel]: editSpeakerName.trim(),
+        };
+      }
+      const joinedOriginal = turn.paragraphs.map((p) => p.text).join(' ');
+      if (editTurnText.trim() && editTurnText.trim() !== joinedOriginal) {
+        payload.segment_edits = {
+          [turn.id]: editTurnText.trim(),
+        };
+      }
+      if (payload.speaker_overrides || payload.segment_edits) {
+        await updateRecordingProtocol(token, recordingId, payload);
+        onProtocolUpdated?.();
+      }
+      setEditingTurnId(null);
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
+  const handleAddTermReplacement = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!token || !termFrom.trim() || !termTo.trim()) return;
+    setSavingTerm(true);
+    try {
+      await updateRecordingProtocol(token, recordingId, {
+        term_replacements: {
+          [termFrom.trim()]: termTo.trim(),
+        },
+      });
+      setTermFrom('');
+      setTermTo('');
+      onProtocolUpdated?.();
+    } finally {
+      setSavingTerm(false);
+    }
+  };
+
+  const handleRemoveTermReplacement = async (key: string) => {
+    if (!token) return;
+    setSavingTerm(true);
+    try {
+      await updateRecordingProtocol(token, recordingId, {
+        term_replacements: {
+          [key]: '',
+        },
+      });
+      onProtocolUpdated?.();
+    } finally {
+      setSavingTerm(false);
+    }
+  };
+
   const totalSpeechSec = useMemo(() => {
     return Math.max(
       1,
@@ -183,8 +379,108 @@ export function TranscriptTab({
     );
   }, [sources]);
 
+  const activeTermEntries = Object.entries(termReplacements);
+
   return (
     <VStack gap={3}>
+      {/* 1. Structured AI Protocol Summary & Action Items (Qwen 3.8 via local Ollama) */}
+      {(summary || (isOperator && segments.length > 0)) && (
+        <Card>
+          <VStack gap={3}>
+            <HStack justify="between" vAlign="center" wrap="wrap" gap={2}>
+              <HStack gap={2} vAlign="center" wrap="wrap">
+                <Sparkles className="h-4 w-4 text-[var(--color-text-accent)]" />
+                <Heading level={4}>Ergebnisprotokoll & Aufgaben</Heading>
+                {summary?.model && (
+                  <Token
+                    size="sm"
+                    color="green"
+                    label={`Lokal · ${summary.model}`}
+                  />
+                )}
+              </HStack>
+
+              {isOperator && segments.length > 0 && (
+                <Button
+                  variant={summary ? 'ghost' : 'secondary'}
+                  size="sm"
+                  isLoading={generatingSummary}
+                  icon={<Sparkles className="h-3.5 w-3.5" />}
+                  label={
+                    summary
+                      ? 'Zusammenfassung aktualisieren'
+                      : 'KI-Zusammenfassung erstellen (Qwen 3.8)'
+                  }
+                  onClick={handleGenerateSummary}
+                />
+              )}
+            </HStack>
+
+            {summaryError && (
+              <Banner status="error" container="card" title={summaryError} />
+            )}
+
+            {summary ? (
+              <VStack gap={3}>
+                {summary.summary && (
+                  <Text type="body" color="primary">
+                    {summary.summary}
+                  </Text>
+                )}
+
+                {summary.topics && summary.topics.length > 0 && (
+                  <VStack gap={1.5}>
+                    <Text type="supporting" weight="semibold" color="secondary">
+                      Besprochene Themen & Beschlüsse
+                    </Text>
+                    <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
+                      {summary.topics.map((t, idx) => (
+                        <div
+                          key={idx}
+                          className="rounded-md border border-[var(--color-border)] bg-[var(--color-background-muted)] p-2.5"
+                        >
+                          <Text type="supporting" weight="semibold" color="primary">
+                            {t.title}
+                          </Text>
+                          <Text type="supporting" color="secondary">
+                            {t.details}
+                          </Text>
+                        </div>
+                      ))}
+                    </div>
+                  </VStack>
+                )}
+
+                {summary.action_items && summary.action_items.length > 0 && (
+                  <VStack gap={1.5}>
+                    <Text type="supporting" weight="semibold" color="secondary">
+                      Aufgaben & nächste Schritte ({summary.action_items.length})
+                    </Text>
+                    <VStack gap={1}>
+                      {summary.action_items.map((item, idx) => (
+                        <HStack key={idx} gap={2} vAlign="start">
+                          <CheckSquare className="h-4 w-4 shrink-0 mt-0.5 text-[var(--color-text-accent)]" />
+                          <Text type="supporting" color="primary">
+                            <strong className="font-semibold">
+                              {item.owner}:
+                            </strong>{' '}
+                            {item.task}
+                          </Text>
+                        </HStack>
+                      ))}
+                    </VStack>
+                  </VStack>
+                )}
+              </VStack>
+            ) : (
+              <Text type="supporting" color="secondary">
+                Erstellen Sie per Klick eine strukturierte Kurzfassung, Themenübersicht und Aufgabenliste auf dem lokalen Cluster-Modell (Qwen 3.8 27B).
+              </Text>
+            )}
+          </VStack>
+        </Card>
+      )}
+
       {/* Interactive Speaker Filter Chips */}
       {sources.length > 0 && (
         <HStack gap={2} wrap="wrap" vAlign="center">
@@ -240,25 +536,115 @@ export function TranscriptTab({
           />
         </div>
 
-        {sources.length > 0 && (
-          <div className="w-64">
-            <Selector
-              size="sm"
-              label="Sprecher filtern"
-              isLabelHidden
-              options={sourceOptions}
-              value={selectedSourceFilter || 'all'}
-              onChange={(v) =>
-                onSelectedSourceFilterChange(v === 'all' ? '' : v)
+        <HStack gap={2} vAlign="center" wrap="wrap">
+          {isOperator && (
+            <Button
+              variant={
+                showTermBar || activeTermEntries.length > 0
+                  ? 'secondary'
+                  : 'ghost'
               }
+              size="sm"
+              icon={<Replace className="h-3.5 w-3.5" />}
+              label={
+                activeTermEntries.length > 0
+                  ? `Begriffe korrigieren (${activeTermEntries.length})`
+                  : 'Begriffe korrigieren'
+              }
+              onClick={() => setShowTermBar((v) => !v)}
             />
-          </div>
-        )}
+          )}
+
+          {sources.length > 0 && (
+            <div className="w-64">
+              <Selector
+                size="sm"
+                label="Sprecher filtern"
+                isLabelHidden
+                options={sourceOptions}
+                value={selectedSourceFilter || 'all'}
+                onChange={(v) =>
+                  onSelectedSourceFilterChange(v === 'all' ? '' : v)
+                }
+              />
+            </div>
+          )}
+        </HStack>
       </HStack>
+
+      {/* Term Replacement Bar (Search & Replace for Domain Vocabulary / Names) */}
+      {isOperator && (showTermBar || activeTermEntries.length > 0) && (
+        <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-background-muted)] p-3">
+          <VStack gap={2}>
+            <form
+              onSubmit={handleAddTermReplacement}
+              className="flex flex-wrap items-center gap-2"
+            >
+              <Text type="supporting" weight="semibold" color="primary">
+                Fachbegriff / Name im gesamten Protokoll ersetzen:
+              </Text>
+              <div className="w-44">
+                <TextInput
+                  size="sm"
+                  label="Falsch erkannt"
+                  isLabelHidden
+                  value={termFrom}
+                  onChange={setTermFrom}
+                  placeholder="z. B. OmniSA"
+                />
+              </div>
+              <span className="text-xs text-[var(--color-text-secondary)]">
+                →
+              </span>
+              <div className="w-44">
+                <TextInput
+                  size="sm"
+                  label="Korrekte Schreibweise"
+                  isLabelHidden
+                  value={termTo}
+                  onChange={setTermTo}
+                  placeholder="z. B. OmniASR"
+                />
+              </div>
+              <Button
+                type="submit"
+                variant="secondary"
+                size="sm"
+                isLoading={savingTerm}
+                isDisabled={!termFrom.trim() || !termTo.trim()}
+                label="Übernehmen"
+              />
+            </form>
+
+            {activeTermEntries.length > 0 && (
+              <HStack gap={1.5} wrap="wrap" vAlign="center">
+                {activeTermEntries.map(([fromTerm, toTerm]) => (
+                  <span
+                    key={fromTerm}
+                    className="inline-flex items-center gap-1.5 rounded-full border border-[var(--color-border)] bg-[var(--color-background-surface)] px-2.5 py-0.5 text-xs"
+                  >
+                    <span className="line-through opacity-70">{fromTerm}</span>
+                    <span>→</span>
+                    <strong className="font-semibold">{toTerm}</strong>
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveTermReplacement(fromTerm)}
+                      className="ml-0.5 opacity-60 hover:opacity-100 cursor-pointer"
+                      title="Ersetzung entfernen"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </span>
+                ))}
+              </HStack>
+            )}
+          </VStack>
+        </div>
+      )}
 
       <Divider variant="subtle" />
 
-      {/* Editorial Transcript Stream (no Card soup around individual turns) */}
+      {/* Editorial Transcript Stream */}
       <div id="transcript-view">
         {groupedTurns.length === 0 ? (
           <EmptyState
@@ -302,6 +688,9 @@ export function TranscriptTab({
             {groupedTurns.map((turn) => {
               const isCopied = copiedTurnId === turn.id;
               const isBound = turn.attributionStatus === 'bound';
+              const isPlaying = playingTurnId === turn.id;
+              const isLoadingAudio = loadingAudioTurnId === turn.id;
+              const isEditing = editingTurnId === turn.id;
 
               return (
                 <div
@@ -344,6 +733,35 @@ export function TranscriptTab({
                             {formatWallClockTime(turn.start, timeOriginUtc)} –{' '}
                             {formatWallClockTime(turn.end, timeOriginUtc)}
                           </Text>
+
+                          {/* Click-to-Listen Audio Snippet Playback */}
+                          {audioAvailable && token && (
+                            <button
+                              type="button"
+                              onClick={() => handlePlaySnippet(turn)}
+                              disabled={isLoadingAudio}
+                              className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium transition-colors cursor-pointer ${
+                                isPlaying
+                                  ? 'bg-[var(--color-background-accent-emphasis,#059669)] text-white'
+                                  : 'bg-[var(--color-background-muted)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]'
+                              }`}
+                              title="Originalton dieser Stelle anhören"
+                            >
+                              {isPlaying ? (
+                                <Pause className="h-3 w-3" />
+                              ) : (
+                                <Play className="h-3 w-3" />
+                              )}
+                              <span>
+                                {isLoadingAudio
+                                  ? 'Lädt…'
+                                  : isPlaying
+                                    ? 'Stopp'
+                                    : 'Anhören'}
+                              </span>
+                            </button>
+                          )}
+
                           {!isBound && (
                             <Token
                               size="sm"
@@ -357,7 +775,21 @@ export function TranscriptTab({
                           )}
                         </HStack>
 
-                        <div className="opacity-0 group-hover:opacity-100 transition-opacity">
+                        <HStack
+                          gap={1}
+                          vAlign="center"
+                          className="opacity-0 group-hover:opacity-100 transition-opacity"
+                        >
+                          {isOperator && (
+                            <IconButton
+                              variant="ghost"
+                              size="sm"
+                              label="Sprecher oder Text korrigieren"
+                              tooltip="Sprecher oder Text korrigieren"
+                              icon={<Edit3 className="h-3.5 w-3.5" />}
+                              onClick={() => handleStartEditTurn(turn)}
+                            />
+                          )}
                           <IconButton
                             variant="ghost"
                             size="sm"
@@ -372,18 +804,61 @@ export function TranscriptTab({
                             }
                             onClick={() => handleCopyTurn(turn)}
                           />
-                        </div>
+                        </HStack>
                       </HStack>
 
-                      <VStack gap={1.5} paddingBlockStart={1}>
-                        {turn.paragraphs.map((para) => (
-                          <div key={para.id}>
-                            <Text type="body" color="primary">
-                              {renderHighlightedText(para.text, searchQuery)}
-                            </Text>
-                          </div>
-                        ))}
-                      </VStack>
+                      {isEditing ? (
+                        <div className="mt-2 rounded-md border border-[var(--color-border)] bg-[var(--color-background-muted)] p-3">
+                          <VStack gap={2}>
+                            <div className="w-72">
+                              <TextInput
+                                size="sm"
+                                label="Sprechername (für alle Beiträge dieser Quelle)"
+                                value={editSpeakerName}
+                                onChange={setEditSpeakerName}
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-xs font-medium text-[var(--color-text-secondary)] mb-1">
+                                Protokolltext dieses Beitrags
+                              </label>
+                              <textarea
+                                value={editTurnText}
+                                onChange={(e) =>
+                                  setEditTurnText(e.target.value)
+                                }
+                                rows={3}
+                                className="w-full rounded-md border border-[var(--color-border)] bg-[var(--color-background-surface)] p-2 text-sm text-[var(--color-text-primary)]"
+                              />
+                            </div>
+                            <HStack gap={2}>
+                              <Button
+                                variant="primary"
+                                size="sm"
+                                isLoading={savingEdit}
+                                label="Speichern"
+                                onClick={() => handleSaveTurnEdit(turn)}
+                              />
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                label="Abbrechen"
+                                onClick={() => setEditingTurnId(null)}
+                              />
+                            </HStack>
+                          </VStack>
+                        </div>
+                      ) : (
+                        <VStack gap={1.5} paddingBlockStart={1}>
+                          {turn.paragraphs.map((para) => (
+                            <div key={para.id}>
+                              <Text type="body" color="primary">
+                                {renderHighlightedText(para.text, searchQuery)}
+                              </Text>
+                            </div>
+                          ))}
+                        </VStack>
+                      )}
                     </div>
                   </HStack>
                 </div>
@@ -393,7 +868,9 @@ export function TranscriptTab({
             {participation === 'capturing' && (
               <div className="py-3.5 px-2 flex items-center gap-2.5 text-sm text-[var(--color-text-secondary)]">
                 <LiveWaveform />
-                <span>Hört aktiv zu — neue Wortbeiträge erscheinen hier automatisch…</span>
+                <span>
+                  Hört aktiv zu — neue Wortbeiträge erscheinen hier automatisch…
+                </span>
               </div>
             )}
           </div>

@@ -3,11 +3,13 @@ import {
   Check,
   Copy,
   Download,
+  Edit3,
   FolderOpen,
   RotateCcw,
   Share2,
   Square,
   Trash2,
+  X,
 } from 'lucide-react';
 import {
   Layout,
@@ -21,6 +23,7 @@ import { Text } from '@astryxdesign/core/Text';
 import { HStack } from '@astryxdesign/core/HStack';
 import { VStack } from '@astryxdesign/core/VStack';
 import { Button } from '@astryxdesign/core/Button';
+import { TextInput } from '@astryxdesign/core/TextInput';
 import { DropdownMenu } from '@astryxdesign/core/DropdownMenu';
 import { MoreMenu } from '@astryxdesign/core/MoreMenu';
 import { AlertDialog } from '@astryxdesign/core/AlertDialog';
@@ -39,6 +42,7 @@ import {
   issueReaderToken,
   rejoinRecording,
   retryMailDelivery,
+  updateRecordingProtocol,
 } from '../api';
 import type { AuthMode, RecordingDetail, TranscriptExport } from '../types';
 import { DiagnosticsTab } from './DiagnosticsTab';
@@ -77,6 +81,8 @@ export function MeetingDetailView({
   const [copiedTranscript, setCopiedTranscript] = useState(false);
   const [copiedShareLink, setCopiedShareLink] = useState(false);
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
+  const [isEditingTitle, setIsEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState('');
 
   const isOperator = authMode.kind === 'operator';
   const token = authMode.kind === 'unauthenticated' ? '' : authMode.token;
@@ -132,14 +138,46 @@ export function MeetingDetailView({
       (s) =>
         `[${formatWallClockTime(s.start, timeOriginUtc)} - ${formatWallClockTime(s.end, timeOriginUtc)}] ${s.speaker_label}: ${s.text}`
     );
+    const headerParts: string[] = [];
+    if (transcript.summary?.summary) {
+      headerParts.push(`Kurzfassung:\n${transcript.summary.summary}`);
+      if (transcript.summary.action_items?.length) {
+        headerParts.push(
+          `Aufgaben & Beschlüsse:\n${transcript.summary.action_items
+            .map(
+              (item) =>
+                `- [${item.owner || 'Alle'}] ${item.task}${item.due ? ` (${item.due})` : ''}`
+            )
+            .join('\n')}`
+        );
+      }
+      headerParts.push('---');
+    }
     const body =
       lines.length > 0
-        ? lines.join('\n')
+        ? [...headerParts, ...lines].join('\n\n')
         : 'Noch keine transkribierten Segmente vorhanden.';
     if (navigator.clipboard) {
       await navigator.clipboard.writeText(body).catch(() => {});
       setCopiedTranscript(true);
       setTimeout(() => setCopiedTranscript(false), 1800);
+    }
+  };
+
+  const handleSaveTitle = async () => {
+    if (!token || !titleDraft.trim()) return;
+    setActionError(null);
+    setBusyAction('title');
+    try {
+      await updateRecordingProtocol(token, recording.id, {
+        title: titleDraft.trim(),
+      });
+      setIsEditingTitle(false);
+      onRefresh();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusyAction(null);
     }
   };
 
@@ -308,7 +346,54 @@ export function MeetingDetailView({
 
               <HStack justify="between" vAlign="center" wrap="wrap" gap={3}>
                 <HStack gap={2} vAlign="center" wrap="wrap">
-                  <Heading level={1}>{formatRecordingTitle(recording)}</Heading>
+                  {isEditingTitle ? (
+                    <HStack gap={1.5} vAlign="center">
+                      <div className="w-64">
+                        <TextInput
+                          label="Sitzungstitel"
+                          isLabelHidden
+                          size="sm"
+                          value={titleDraft}
+                          onChange={(val) => setTitleDraft(val)}
+                          placeholder="Sitzungstitel"
+                        />
+                      </div>
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        isLoading={busyAction === 'title'}
+                        icon={<Check className="h-3.5 w-3.5" />}
+                        label="Speichern"
+                        onClick={handleSaveTitle}
+                      />
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        icon={<X className="h-3.5 w-3.5" />}
+                        label="Abbrechen"
+                        onClick={() => setIsEditingTitle(false)}
+                      />
+                    </HStack>
+                  ) : (
+                    <>
+                      <Heading level={1}>
+                        {formatRecordingTitle(recording)}
+                      </Heading>
+                      {isOperator && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setTitleDraft(formatRecordingTitle(recording));
+                            setIsEditingTitle(true);
+                          }}
+                          className="rounded p-1 text-slate-400 hover:bg-slate-800/60 hover:text-slate-200 transition-colors"
+                          title="Sitzungstitel bearbeiten"
+                        >
+                          <Edit3 className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                    </>
+                  )}
                   <ProviderBadge provider={recording.provider} />
                   <StatusBadge
                     participation={recording.participation}
@@ -555,13 +640,19 @@ export function MeetingDetailView({
               {activeTab === 'transcript' && (
                 <TranscriptTab
                   recordingId={recording.id}
+                  token={token}
+                  isOperator={isOperator}
                   participation={recording.participation}
                   processing={recording.processing}
                   timeOriginUtc={timeOriginUtc}
+                  audioAvailable={Boolean(transcript.audio_available)}
+                  summary={transcript.summary}
+                  termReplacements={transcript.term_replacements}
                   segments={transcript.segments || []}
                   sources={transcript.sources_summary || []}
                   selectedSourceFilter={selectedSourceFilter}
                   onSelectedSourceFilterChange={setSelectedSourceFilter}
+                  onProtocolUpdated={onRefresh}
                 />
               )}
 

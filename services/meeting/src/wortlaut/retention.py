@@ -49,6 +49,7 @@ def remove_audio_metadata(db, recording, stream_ids, now):
     recording.owner_sub = None
     recording.owner_email = None
     recording.export_reader_nonce = None
+    recording.protocol_meta = {}
     recording.metadata_deleted_at = now
 
 
@@ -224,6 +225,7 @@ def retention_pass(engine):
             ):
                 ids = select(AsrJob.id).where(AsrJob.stream_id.in_(stream_ids))
                 db.execute(delete(TranscriptSegment).where(TranscriptSegment.id.in_(ids)))
+                recording.protocol_meta = {}
                 recording.transcript_deleted_at = now
             if (
                 recording.metadata_deleted_at is None

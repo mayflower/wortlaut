@@ -4,6 +4,7 @@ import type {
   CalendarEvent,
   CalendarSyncedEventInfo,
   InstanceInfo,
+  ProtocolSummary,
   Provider,
   RecordingDetail,
   RecordingSummary,
@@ -757,6 +758,67 @@ export async function issueReaderToken(
   return apiRequest(`/v1/recordings/${encodeURIComponent(recordingId)}/reader-token`, token, {
     method: 'POST',
   });
+}
+
+export async function updateRecordingProtocol(
+  token: string,
+  recordingId: string,
+  payload: {
+    title?: string | null;
+    notes?: string | null;
+    speaker_overrides?: Record<string, string>;
+    term_replacements?: Record<string, string>;
+    segment_edits?: Record<string, string>;
+  }
+): Promise<TranscriptExport> {
+  return apiRequest(
+    `/v1/recordings/${encodeURIComponent(recordingId)}`,
+    token,
+    {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    }
+  );
+}
+
+export async function generateRecordingSummary(
+  token: string,
+  recordingId: string
+): Promise<{ summary: ProtocolSummary }> {
+  return apiRequest(
+    `/v1/recordings/${encodeURIComponent(recordingId)}/summary`,
+    token,
+    {
+      method: 'POST',
+    }
+  );
+}
+
+export async function fetchAudioSnippetBlobUrl(
+  token: string,
+  recordingId: string,
+  streamId: string | undefined,
+  start: number,
+  end: number
+): Promise<string> {
+  const params = new URLSearchParams({
+    start: String(Math.max(0, start)),
+    end: String(Math.max(start + 0.5, end)),
+  });
+  if (streamId) {
+    params.set('stream_id', streamId);
+  }
+  const res = await fetch(
+    `/v1/recordings/${encodeURIComponent(recordingId)}/audio-snippet?${params.toString()}`,
+    {
+      headers: { Authorization: `Bearer ${normalizeBearerToken(token)}` },
+    }
+  );
+  if (!res.ok) {
+    throw new ApiError(res.status, 'Audio-Ausschnitt nicht verfügbar.');
+  }
+  const blob = await res.blob();
+  return URL.createObjectURL(blob);
 }
 
 export async function importCalendarPayload(

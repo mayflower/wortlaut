@@ -111,6 +111,10 @@ class Settings(BaseSettings):
     asr_timeout_seconds: int = 120
     asr_lease_seconds: int = 180
     asr_max_permanent_failures: int = 3
+    enable_llm_summary: bool = False
+    ollama_url: str = "http://ollama.ollama.svc.cluster.local:11434"
+    ollama_model: str = "qwen3.8:latest"
+    ollama_timeout_seconds: int = 120
 
 
 @lru_cache

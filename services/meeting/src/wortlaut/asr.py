@@ -198,6 +198,7 @@ def inference_pass(engine):
 
 
 def finalize_processing(engine):
+    completed_ids = []
     with Session(engine) as db:
         recordings = db.scalars(
             select(Recording)
@@ -235,4 +236,20 @@ def finalize_processing(engine):
                 recording.processing_error = unreadable
             recording.processing_finished_at = datetime.now(UTC)
             recording.audio_closed_at = datetime.now(UTC)
+            if recording.processing == "completed":
+                completed_ids.append(recording.id)
         db.commit()
+
+    if completed_ids and get_settings().enable_llm_summary:
+        from wortlaut.exports import generate_protocol_summary
+
+        for rec_id in completed_ids:
+            try:
+                with Session(engine) as db:
+                    rec = db.get(Recording, rec_id)
+                    if rec and not (rec.protocol_meta or {}).get("summary"):
+                        generate_protocol_summary(db, rec)
+            except Exception as exc:
+                logging.getLogger("wortlaut").warning(
+                    "llm_summary_auto_failed recording=%s error=%s", rec_id, exc
+                )

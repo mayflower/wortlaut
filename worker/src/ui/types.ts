@@ -149,6 +149,14 @@ export interface TranscriptSegment {
   text: string;
 }
 
+export interface ProtocolSummary {
+  summary: string;
+  topics: Array<{ title: string; details: string }>;
+  action_items: Array<{ owner: string; task: string; due?: string }>;
+  model?: string;
+  generated_at?: string;
+}
+
 export interface TranscriptExport {
   recording_id: string;
   provider: Provider;
@@ -161,6 +169,11 @@ export interface TranscriptExport {
   scheduled_period: { start: string; end: string };
   time_origin_utc?: string | null;
   last_known_audio_utc: string | null;
+  audio_available?: boolean;
+  summary?: ProtocolSummary | null;
+  notes?: string;
+  speaker_overrides?: Record<string, string>;
+  term_replacements?: Record<string, string>;
   quality: {
     no_audio_received: boolean;
     has_audio_gaps: boolean;

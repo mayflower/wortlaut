@@ -416,7 +416,7 @@ def test_audio_clock_interruption_is_persisted_and_visible_without_inventing_sam
 
 
 def test_web_ui_live_status_and_browser_participant_names_in_exports(
-    client, database, storage
+    client, database, storage, monkeypatch
 ):
     from sqlalchemy import select
     from sqlalchemy.orm import Session
@@ -614,6 +614,65 @@ def test_web_ui_live_status_and_browser_participant_names_in_exports(
     assert exported["sources_summary"][0]["segment_count"] == 1
     assert exported["sources_summary"][0]["speech_seconds"] == 1.0
     assert exported["sources_summary"][0]["sample_text"] == "Guten Tag zusammen."
+    assert exported["audio_available"] is True
+
+    # Audio snippet extraction (Click-to-Listen WAV)
+    seg = exported["segments"][0]
+    snippet_res = client.get(
+        f"/v1/recordings/{recording}/audio-snippet",
+        params={"stream_id": seg["stream_id"], "start": 0.0, "end": 1.0},
+        headers=API,
+    )
+    assert snippet_res.status_code == 200
+    assert snippet_res.headers["content-type"] == "audio/wav"
+    assert snippet_res.content[:4] == b"RIFF"
+
+    # Inline protocol editing (title, speaker override, term replacement)
+    patch_res = client.patch(
+        f"/v1/recordings/{recording}",
+        headers=API,
+        json={
+            "title": "Projekt-Kickoff Q4",
+            "speaker_overrides": {"participant-alice": "Dr. Alice Beispiel"},
+            "term_replacements": {"Guten Tag": "Willkommen"},
+            "notes": "Wichtige Vorbemerkung",
+        },
+    )
+    assert patch_res.status_code == 200
+    patched_tx = client.get(f"/v1/recordings/{recording}/transcript", headers=API).json()
+    assert patched_tx["title"] == "Projekt-Kickoff Q4"
+    assert patched_tx["notes"] == "Wichtige Vorbemerkung"
+    assert patched_tx["segments"][0]["speaker_label"] == "Dr. Alice Beispiel"
+    assert patched_tx["segments"][0]["text"] == "Willkommen zusammen."
+
+    # Structured AI summary via local Ollama endpoint
+    from wortlaut import exports as exports_module
+
+    class FakeOllamaResponse:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {
+                "message": {
+                    "content": (
+                        '{"summary": "Kurzes Kickoff-Treffen zur Begrüßung.", '
+                        '"topics": [{"title": "Begrüßung", "details": "Willkommen im Team."}], '
+                        '"action_items": [{"owner": "Dr. Alice Beispiel", '
+                        '"task": "Agenda versenden"}]}'
+                    )
+                }
+            }
+
+    monkeypatch.setattr(exports_module.httpx, "post", lambda *a, **kw: FakeOllamaResponse())
+    sum_res = client.post(f"/v1/recordings/{recording}/summary", headers=API)
+    assert sum_res.status_code == 200
+    assert sum_res.json()["summary"]["summary"] == "Kurzes Kickoff-Treffen zur Begrüßung."
+    assert sum_res.json()["summary"]["action_items"][0]["owner"] == "Dr. Alice Beispiel"
+    md_after = client.get(f"/v1/recordings/{recording}/exports/md", headers=API).text
+    assert "## Kurzfassung" in md_after
+    assert "Kurzes Kickoff-Treffen zur Begrüßung." in md_after
+    assert "**Dr. Alice Beispiel**: Agenda versenden" in md_after
 
 
 def test_recording_title_guest_name_empty_room_timeout_and_otlp_telemetry(

@@ -1,15 +1,26 @@
 import hmac
+import io
 import json
 import re
+import wave
 from datetime import UTC, datetime, timedelta
 from html import escape
 from zoneinfo import ZoneInfo
 
+import httpx
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from wortlaut.models import AsrJob, Attempt, AudioControl, AudioStream, Recording, TranscriptSegment
-from wortlaut.processing import RATE, stream_quality
+from wortlaut.models import (
+    AsrJob,
+    Attempt,
+    AudioChunk,
+    AudioControl,
+    AudioStream,
+    Recording,
+    TranscriptSegment,
+)
+from wortlaut.processing import MAX_CHUNK, RATE, read_pcm, stream_quality
 from wortlaut.settings import get_settings
 
 BERLIN_TZ = ZoneInfo("Europe/Berlin")
@@ -661,6 +672,38 @@ def export_data(db: Session, recording: Recording):
         else resolved_segments
     )
     segments.sort(key=lambda s: (s["start"], s["stream_id"], s["id"]))
+    meta = dict(recording.protocol_meta or {})
+    speaker_overrides: dict[str, str] = dict(meta.get("speaker_overrides") or {})
+    term_replacements: dict[str, str] = dict(meta.get("term_replacements") or {})
+    segment_edits: dict[str, str] = dict(meta.get("segment_edits") or {})
+    if speaker_overrides:
+        for k, v in speaker_overrides.items():
+            if v and v.strip():
+                participant_names[k] = v.strip()
+    for seg in segments:
+        seg_id = str(seg.get("segment_id") or seg.get("id") or "")
+        if seg_id and seg_id in segment_edits and segment_edits[seg_id].strip():
+            seg["text"] = " ".join(segment_edits[seg_id].split())
+        if term_replacements:
+            txt = seg.get("text") or ""
+            for old_t, new_t in term_replacements.items():
+                if old_t:
+                    txt = txt.replace(old_t, new_t)
+            seg["text"] = txt
+        if speaker_overrides:
+            pid = seg.get("participant_id") or seg.get("speaker_id")
+            orig_label = seg.get("speaker_label") or ""
+            prov_src = seg.get("provider_source_id") or ""
+            override = (
+                (speaker_overrides.get(str(pid)) if pid else None)
+                or speaker_overrides.get(orig_label)
+                or speaker_overrides.get(prov_src)
+            )
+            if override and override.strip():
+                clean_override = override.strip()
+                seg["participant_name"] = clean_override
+                seg["speaker_name"] = clean_override
+                seg["speaker_label"] = clean_override
     qualities = [
         {
             "stream_id": str(s.stream_id),
@@ -679,6 +722,11 @@ def export_data(db: Session, recording: Recording):
         )
         for s, q in zip(streams, qualities, strict=True)
     ]
+    audio_available = bool(
+        recording.audio_deleted_at is None
+        and streams
+        and any(q.get("accepted_samples", 0) > 0 and not q.get("audio_deleted") for q in qualities)
+    )
     return {
         "recording_id": str(recording.id),
         "provider": recording.provider,
@@ -694,6 +742,11 @@ def export_data(db: Session, recording: Recording):
         },
         "time_origin_utc": origin.astimezone(UTC).isoformat(),
         "last_known_audio_utc": max(ends).isoformat() if ends else None,
+        "audio_available": audio_available,
+        "summary": meta.get("summary"),
+        "notes": meta.get("notes") or "",
+        "speaker_overrides": speaker_overrides,
+        "term_replacements": term_replacements,
         "attempts": [
             {
                 "id": str(a.id),
@@ -970,6 +1023,26 @@ def render_export(data, format):
         if total_speech > 0:
             lines.append(f"- **Erfasste Sprechzeit:** {format_duration_de(total_speech)}")
         lines.append("")
+        summary_data = data.get("summary")
+        if isinstance(summary_data, dict) and summary_data.get("summary"):
+            lines.extend(["## Zusammenfassung", "", str(summary_data["summary"]).strip(), ""])
+            topics = summary_data.get("topics") or []
+            if topics:
+                lines.extend(["### Besprochene Themen & Ergebnisse", ""])
+                for t in topics:
+                    if isinstance(t, dict) and (t.get("title") or t.get("details")):
+                        lines.append(
+                            f"- **{t.get('title') or 'Thema'}:** {t.get('details') or ''}".strip()
+                        )
+                lines.append("")
+            actions = summary_data.get("action_items") or []
+            if actions:
+                lines.extend(["### Aufgaben & nächste Schritte", ""])
+                for a in actions:
+                    if isinstance(a, dict) and a.get("task"):
+                        owner = a.get("owner") or "Team"
+                        lines.append(f"- [ ] **{owner}:** {a['task']}")
+                lines.append("")
         if sources:
             lines.extend(
                 [
@@ -1031,3 +1104,173 @@ def render_export(data, format):
             ]
         )
     return "\n".join(lines), "text/vtt; charset=utf-8"
+
+
+def generate_protocol_summary(db: Session, recording: Recording) -> dict:
+    settings = get_settings()
+    data = export_data(db, recording)
+    segments = data.get("segments") or []
+    if not segments:
+        raise ValueError("Kein Transkript für die KI-Zusammenfassung vorhanden.")
+
+    origin_utc = data.get("time_origin_utc")
+    transcript_lines: list[str] = []
+    for seg in segments:
+        txt = " ".join((seg.get("text") or "").split())
+        if not txt:
+            continue
+        t0 = wall_clock_time_de(origin_utc, float(seg.get("start") or 0.0))
+        spk = seg.get("speaker_label") or "Sprecher"
+        transcript_lines.append(f"[{t0}] {spk}: {txt}")
+
+    transcript_text = "\n".join(transcript_lines)
+    if len(transcript_text) > 36000:
+        transcript_text = transcript_text[:36000] + "\n...[gekürzt]"
+
+    title = recording.title or f"Besprechung ({provider_label(recording.provider)})"
+    system_prompt = (
+        "Du bist ein präziser deutschsprachiger Protokollführer für Geschäftstreffen. "
+        "Erstelle aus dem folgenden Wortprotokoll eine sachliche, strukturierte "
+        "Zusammenfassung auf Deutsch. "
+        "Antworte ausschließlich als valides JSON-Objekt mit genau diesem Schema:\n"
+        "{\n"
+        '  "summary": "Prägnante Management-Zusammenfassung des Gesprächs (2-4 Sätze).",\n'
+        '  "topics": [\n'
+        '    {"title": "Kurzer Thementitel", '
+        '"details": "Besprochene Inhalte und Entscheidungen in 1 bis 3 Sätzen."}\n'
+        "  ],\n"
+        '  "action_items": [\n'
+        '    {"owner": "Name der Person (oder \'Team\')", '
+        '"task": "Konkrete vereinbarte Aufgabe oder nächster Schritt."}\n'
+        "  ]\n"
+        "}\n"
+        "Erfinde keine Fakten oder Namen, die nicht im Transkript vorkommen."
+    )
+    user_prompt = f"Titel der Besprechung: {title}\n\nWortprotokoll:\n{transcript_text}"
+
+    url = settings.ollama_url.rstrip("/") + "/api/chat"
+    resp = httpx.post(
+        url,
+        json={
+            "model": settings.ollama_model,
+            "think": False,
+            "stream": False,
+            "format": "json",
+            "options": {"num_ctx": 16384, "temperature": 0.2},
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+        },
+        timeout=float(settings.ollama_timeout_seconds),
+    )
+    if resp.status_code != 200:
+        raise RuntimeError(f"ollama_http_{resp.status_code}")
+
+    raw_content = (resp.json().get("message") or {}).get("content") or "{}"
+    parsed = json.loads(raw_content)
+    summary_obj = {
+        "summary": str(parsed.get("summary") or "").strip(),
+        "topics": [
+            {
+                "title": str(t.get("title") or "").strip(),
+                "details": str(t.get("details") or "").strip(),
+            }
+            for t in (parsed.get("topics") or [])
+            if isinstance(t, dict) and (t.get("title") or t.get("details"))
+        ],
+        "action_items": [
+            {
+                "owner": str(a.get("owner") or "Team").strip(),
+                "task": str(a.get("task") or "").strip(),
+            }
+            for a in (parsed.get("action_items") or [])
+            if isinstance(a, dict) and a.get("task")
+        ],
+        "model": settings.ollama_model,
+        "generated_at": datetime.now(UTC).isoformat(),
+    }
+    meta = dict(recording.protocol_meta or {})
+    meta["summary"] = summary_obj
+    recording.protocol_meta = meta
+    db.commit()
+    return summary_obj
+
+
+def extract_audio_snippet_wav(
+    db: Session,
+    recording: Recording,
+    stream_id: str | None,
+    start_sec: float,
+    end_sec: float,
+) -> bytes:
+    if recording.audio_deleted_at is not None:
+        raise LookupError("audio_deleted")
+    attempts = db.scalars(select(Attempt).where(Attempt.recording_id == recording.id)).all()
+    if not attempts:
+        raise LookupError("no_audio")
+    streams = db.scalars(
+        select(AudioStream).where(AudioStream.attempt_id.in_([a.id for a in attempts]))
+    ).all()
+    if not streams:
+        raise LookupError("no_audio")
+    anchors = [datetime.fromisoformat(s.contract["session_utc_origin"]) for s in streams]
+    origin = min(anchors) if anchors else recording.starts_at
+
+    candidates = [s for s in streams if stream_id and str(s.stream_id) == str(stream_id)]
+    if not candidates:
+        candidates = streams
+
+    duration_sec = min(90.0, max(0.8, float(end_sec) - float(start_sec)))
+    target_end_sec = float(start_sec) + duration_sec
+
+    pcm_bytes = b""
+    for s in candidates:
+        s_delta = (
+            datetime.fromisoformat(s.contract["session_utc_origin"]) - origin
+        ).total_seconds()
+        s_mono_delta = (
+            s.contract.get("monotonic_origin_ms", 0)
+            - s.contract.get("session_monotonic_origin_ms", 0)
+        ) / 1000.0
+        stream_offset = s_delta + s_mono_delta
+        start_sample = max(0, int((float(start_sec) - stream_offset - 0.15) * RATE))
+        end_sample = max(
+            start_sample + int(0.5 * RATE),
+            int((target_end_sec - stream_offset + 0.25) * RATE),
+        )
+        chunks = db.scalars(
+            select(AudioChunk)
+            .where(
+                AudioChunk.stream_id == s.id,
+                AudioChunk.deleted_at.is_(None),
+                AudioChunk.start_sample >= max(0, start_sample - MAX_CHUNK),
+                AudioChunk.start_sample < end_sample,
+                AudioChunk.start_sample + AudioChunk.sample_count > start_sample,
+            )
+            .order_by(AudioChunk.start_sample)
+        ).all()
+        if not chunks:
+            continue
+        clip_start = max(start_sample, chunks[0].start_sample)
+        clip_end = min(end_sample, chunks[-1].start_sample + chunks[-1].sample_count)
+        if clip_end <= clip_start:
+            continue
+        try:
+            pcm_bytes = read_pcm(chunks, clip_start, clip_end)
+            if pcm_bytes:
+                break
+        except Exception:
+            continue
+
+    if not pcm_bytes:
+        raise LookupError("audio_range_unavailable")
+
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(RATE)
+        wf.writeframes(pcm_bytes)
+    return buf.getvalue()
+

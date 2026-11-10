@@ -60,6 +60,7 @@ class Recording(Base):
     calendar_entry_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("calendar_entries.id"))
     calendar_conflict: Mapped[bool] = mapped_column(Boolean, default=False)
     recurrence_key: Mapped[str | None] = mapped_column(String(100))
+    protocol_meta: Mapped[dict] = mapped_column(JSONB, default=dict, server_default="{}")
 
 
 class CalendarEntry(Base):
