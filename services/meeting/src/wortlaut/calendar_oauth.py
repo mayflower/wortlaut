@@ -637,7 +637,7 @@ def _find_canonical_meeting_recording(
         )
         .order_by(
             Recording.active_attempt_id.is_not(None).desc(),
-            Recording.created_at.asc(),
+            Recording.starts_at.asc(),
             Recording.id.asc(),
         )
         .limit(1)
