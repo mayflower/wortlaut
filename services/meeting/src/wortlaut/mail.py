@@ -9,12 +9,23 @@ import zipfile
 from datetime import UTC, datetime, timedelta
 from email.message import EmailMessage
 from email.utils import parseaddr
+from html import escape
 from urllib.parse import urlsplit
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from wortlaut.exports import export_data, export_reader_token, render_export
+from wortlaut.exports import (
+    export_data,
+    export_reader_token,
+    format_date_short_de,
+    format_duration_de,
+    format_period_de,
+    group_transcript_turns,
+    provider_label,
+    render_export,
+    short_timestamp,
+)
 from wortlaut.models import Attempt, AudioChunk, AudioStream, CalendarEntry, Delivery, Recording
 from wortlaut.settings import get_settings
 
@@ -77,6 +88,312 @@ def delivery_json(delivery):
     }
 
 
+SPEAKER_BADGE_COLORS = (
+    ("#ecfdf5", "#047857", "#10b981"),
+    ("#eff6ff", "#1d4ed8", "#3b82f6"),
+    ("#f5f3ff", "#6d28d9", "#8b5cf6"),
+    ("#fffbeb", "#b45309", "#f59e0b"),
+    ("#fdf2f8", "#be185d", "#ec4899"),
+    ("#f0fdfa", "#0f766e", "#14b8a6"),
+)
+
+
+def _speaker_breakdown(data: dict) -> list[dict]:
+    totals: dict[str, float] = {}
+    for seg in data.get("segments") or []:
+        label = " ".join((seg.get("speaker_label") or "Sprecher").split())
+        dur = max(0.0, float(seg.get("end") or 0.0) - float(seg.get("start") or 0.0))
+        totals[label] = totals.get(label, 0.0) + dur
+    if not totals:
+        for src in data.get("sources_summary") or []:
+            sec = float(src.get("speech_seconds") or 0.0)
+            if sec > 0:
+                name = (
+                    src.get("participant_name")
+                    or src.get("signaled_participant_id")
+                    or "Sprecher"
+                )
+                totals[name] = totals.get(name, 0.0) + sec
+    overall = sum(totals.values())
+    items = []
+    for idx, (name, secs) in enumerate(sorted(totals.items(), key=lambda kv: -kv[1])):
+        pct = round((secs / overall) * 100) if overall > 0 else 0
+        bg, fg, bar = SPEAKER_BADGE_COLORS[idx % len(SPEAKER_BADGE_COLORS)]
+        items.append(
+            {
+                "name": name,
+                "seconds": secs,
+                "duration": format_duration_de(secs),
+                "share_pct": pct,
+                "bg": bg,
+                "fg": fg,
+                "bar": bar,
+            }
+        )
+    return items
+
+
+def _build_failed_join_bodies(
+    *,
+    title: str,
+    human_provider: str,
+    human_period: str,
+    reason: str | None,
+    explanation: str | None,
+    ui_url: str,
+) -> tuple[str, str]:
+    hint = explanation or "Es wurde kein Audio im Meeting empfangen."
+    reason_code = reason or "no_audio_received"
+    plain = (
+        f"KEINE AUFNAHME · {title}\n"
+        f"{'=' * 64}\n\n"
+        f"Plattform:   {human_provider}\n"
+        f"Termin:      {human_period}\n"
+        f"Status:      Aufnahme konnte nicht gestartet werden (Grund: {reason_code})\n\n"
+        f"Ursache:\n{hint}\n\n"
+        f"In der Web-Ansicht öffnen & bei Bedarf erneut starten:\n{ui_url}\n\n"
+        "Es wurde kein Audio aufgezeichnet; daher sind keine Transkript-Anhänge enthalten.\n"
+    )
+    html = (
+        "<!DOCTYPE html><html lang='de'><head><meta charset='utf-8'></head>"
+        "<body style='margin:0;padding:24px 12px;background:#f4f6f9;"
+        "font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;"
+        "color:#0f172a;'>"
+        "<div style='max-width:640px;margin:0 auto;background:#ffffff;border-radius:16px;"
+        "border:1px solid #e2e8f0;overflow:hidden;box-shadow:0 4px 16px rgba(15,23,42,0.05);'>"
+        "<div style='background:#0f172a;padding:20px 28px;color:#ffffff;'>"
+        "<div style='font-size:12px;letter-spacing:0.08em;text-transform:uppercase;"
+        "color:#94a3b8;font-weight:700;'>wortlaut · Konferenz-Benachrichtigung</div>"
+        "<h1 style='margin:6px 0 0;font-size:20px;line-height:1.35;color:#ffffff;'>"
+        f"{escape(title)}</h1>"
+        "</div>"
+        "<div style='padding:24px 28px;'>"
+        "<div style='background:#fef2f2;border:1px solid #fecaca;border-radius:12px;"
+        "padding:14px 16px;margin-bottom:20px;color:#991b1b;font-size:14px;line-height:1.5;'>"
+        f"<strong>Aufnahme nicht zustande gekommen:</strong> {escape(hint)}"
+        "<div style='margin-top:4px;font-size:12px;color:#b91c1c;'>"
+        f"Grund: {escape(reason_code)}</div>"
+        "</div>"
+        "<table style='width:100%;border-collapse:collapse;font-size:14px;margin-bottom:22px;'>"
+        "<tr><td style='padding:6px 0;color:#64748b;width:130px;'>Plattform</td>"
+        "<td style='padding:6px 0;font-weight:600;color:#0f172a;'>"
+        f"{escape(human_provider)}</td></tr>"
+        "<tr><td style='padding:6px 0;color:#64748b;'>Termin</td>"
+        f"<td style='padding:6px 0;color:#0f172a;'>{escape(human_period)}</td></tr>"
+        "</table>"
+        f"<a href='{escape(ui_url)}' style='display:inline-block;background:#059669;"
+        "color:#ffffff;text-decoration:none;font-weight:600;font-size:14px;"
+        "padding:11px 20px;border-radius:10px;'>"
+        "In der Web-Ansicht prüfen &amp; erneut starten →</a>"
+        "</div></div></body></html>"
+    )
+    return plain, html
+
+
+def _build_completed_bodies(
+    *,
+    title: str,
+    human_provider: str,
+    human_period: str,
+    speakers: list[dict],
+    turns: list[dict],
+    notices: list[str],
+    ui_url: str,
+    reader_url: str | None,
+    include_inline_transcript: bool = True,
+) -> tuple[str, str]:
+    total_speech_sec = sum(s["seconds"] for s in speakers)
+    speech_summary = (
+        f"{format_duration_de(total_speech_sec)} ({len(speakers)} "
+        f"{'Sprecher' if len(speakers) != 1 else 'Sprecher'})"
+        if speakers
+        else "Audio erfasst (keine Sprachsegmente erkannt)"
+    )
+    primary_link = reader_url or ui_url
+
+    plain_lines = [
+        f"WORTPROTOKOLL · {title}",
+        "=" * 68,
+        "",
+        f"Plattform:    {human_provider}",
+        f"Termin:       {human_period}",
+        f"Sprechzeit:   {speech_summary}",
+        f"Web-Ansicht:  {primary_link}",
+    ]
+    if reader_url:
+        plain_lines.append(f"Alle Meetings: {ui_url}")
+
+    if notices:
+        plain_lines.extend(["", "Hinweise zur Sitzung:"])
+        for note in notices:
+            plain_lines.append(f"• {note}")
+
+    if speakers:
+        plain_lines.extend(["", "SPRECHERANTEILE", "-" * 68])
+        for sp in speakers:
+            plain_lines.append(f"• {sp['name']} — {sp['duration']} ({sp['share_pct']} %)")
+
+    color_by_speaker = {sp["name"]: (sp["bg"], sp["fg"]) for sp in speakers}
+    inline_turns: list[dict] = []
+    inline_truncated = False
+    if include_inline_transcript and turns:
+        char_budget = 3600
+        used_chars = 0
+        for turn in turns:
+            snippet = turn["text"]
+            if len(snippet) > 420:
+                snippet = snippet[:417].rstrip() + "…"
+                inline_truncated = True
+            if used_chars + len(snippet) > char_budget and inline_turns:
+                inline_truncated = True
+                break
+            inline_turns.append({**turn, "snippet": snippet})
+            used_chars += len(snippet)
+            if len(inline_turns) >= 24 and len(turns) > 24:
+                inline_truncated = True
+                break
+
+    if include_inline_transcript:
+        plain_lines.extend(["", "WORTPROTOKOLL", "-" * 68])
+        if not inline_turns:
+            plain_lines.append("Keine gesprochenen Textsegmente im Aufzeichnungszeitraum erkannt.")
+        else:
+            for turn in inline_turns:
+                ts = short_timestamp(turn["start"])
+                plain_lines.append(f"[{ts}] {turn['speaker']}:")
+                plain_lines.append(turn["snippet"])
+                plain_lines.append("")
+            if inline_truncated:
+                plain_lines.append(
+                    "… Vollständiges Wortprotokoll im angehängten Markdown-Dokument (.md) "
+                    "sowie in der Web-Ansicht."
+                )
+                plain_lines.append("")
+
+    plain_lines.extend(
+        [
+            "-" * 68,
+            "Anhänge: Markdown (.md), Text (.txt), Untertitel (.vtt), Rohdaten (.json)",
+        ]
+    )
+    plain_body = "\n".join(plain_lines).rstrip() + "\n"
+
+    notice_html = ""
+    if notices:
+        items_html = "".join(
+            f"<div style='margin:3px 0;'>• {escape(note)}</div>" for note in notices
+        )
+        notice_html = (
+            "<div style='background:#fffbeb;border:1px solid #fde68a;border-radius:12px;"
+            "padding:12px 16px;margin-bottom:20px;color:#92400e;font-size:13px;line-height:1.5;'>"
+            "<strong style='display:block;margin-bottom:2px;'>Hinweis zur Sitzung</strong>"
+            f"{items_html}</div>"
+        )
+
+    speakers_html = ""
+    if speakers:
+        rows = []
+        for sp in speakers:
+            pct = max(4, min(100, sp["share_pct"]))
+            rows.append(
+                "<div style='margin-bottom:10px;'>"
+                "<div style='display:flex;justify-content:space-between;font-size:13px;"
+                "margin-bottom:4px;'>"
+                f"<span style='font-weight:600;color:#0f172a;'>{escape(sp['name'])}</span>"
+                "<span style='color:#64748b;'>"
+                f"{escape(sp['duration'])} · {sp['share_pct']}&nbsp;%</span>"
+                "</div>"
+                "<div style='height:6px;background:#f1f5f9;border-radius:999px;overflow:hidden;'>"
+                f"<div style='width:{pct}%;height:6px;background:{sp['bar']};"
+                "border-radius:999px;'></div>"
+                "</div></div>"
+            )
+        speakers_html = (
+            "<div style='background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;"
+            "padding:16px 18px;margin-bottom:22px;'>"
+            "<div style='font-size:11px;font-weight:700;text-transform:uppercase;"
+            "letter-spacing:0.07em;color:#64748b;margin-bottom:12px;'>Sprecheranteile</div>"
+            + "".join(rows)
+            + "</div>"
+        )
+
+    transcript_html = ""
+    if include_inline_transcript:
+        if not inline_turns:
+            turn_blocks = (
+                "<p style='color:#64748b;font-size:14px;margin:0;'>"
+                "Keine gesprochenen Textsegmente im Aufzeichnungszeitraum erkannt.</p>"
+            )
+        else:
+            blocks = []
+            for turn in inline_turns:
+                bg, fg = color_by_speaker.get(turn["speaker"], ("#f1f5f9", "#334155"))
+                ts = short_timestamp(turn["start"])
+                blocks.append(
+                    "<div style='padding:12px 0;border-bottom:1px solid #f1f5f9;'>"
+                    "<div style='margin-bottom:5px;'>"
+                    f"<span style='display:inline-block;background:{bg};color:{fg};"
+                    "font-weight:700;font-size:12px;padding:2px 9px;border-radius:999px;'>"
+                    f"{escape(turn['speaker'])}</span>"
+                    f"<span style='font-size:12px;color:#94a3b8;margin-left:8px;"
+                    f"font-family:ui-monospace,SFMono-Regular,Menlo,monospace;'>{ts}</span>"
+                    "</div>"
+                    "<div style='font-size:14px;line-height:1.6;color:#1e293b;'>"
+                    f"{escape(turn['snippet'])}</div></div>"
+                )
+            if inline_truncated:
+                blocks.append(
+                    "<div style='padding-top:12px;font-size:13px;color:#475569;font-style:italic;'>"
+                    "Vollständiges Wortprotokoll im angehängten Markdown-Dokument "
+                    "(<code>.md</code>) oder in der interaktiven Web-Ansicht.</div>"
+                )
+            turn_blocks = "".join(blocks)
+        transcript_html = (
+            "<div style='margin-top:8px;'>"
+            "<div style='font-size:11px;font-weight:700;text-transform:uppercase;"
+            "letter-spacing:0.07em;color:#64748b;margin-bottom:8px;'>Wortprotokoll</div>"
+            f"{turn_blocks}</div>"
+        )
+
+    html_body = (
+        "<!DOCTYPE html><html lang='de'><head><meta charset='utf-8'></head>"
+        "<body style='margin:0;padding:24px 12px;background:#f4f6f9;"
+        "font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;"
+        "color:#0f172a;'>"
+        "<div style='max-width:680px;margin:0 auto;background:#ffffff;border-radius:16px;"
+        "border:1px solid #e2e8f0;overflow:hidden;box-shadow:0 4px 16px rgba(15,23,42,0.05);'>"
+        "<div style='background:linear-gradient(135deg,#0f172a 0%,#1e293b 100%);"
+        "padding:22px 28px;color:#ffffff;'>"
+        "<div style='display:flex;align-items:center;justify-content:space-between;'>"
+        "<span style='font-size:12px;letter-spacing:0.08em;text-transform:uppercase;"
+        "color:#34d399;font-weight:700;'>wortlaut · Wortprotokoll</span>"
+        "<span style='font-size:12px;background:rgba(255,255,255,0.12);color:#e2e8f0;"
+        f"padding:3px 10px;border-radius:999px;'>{escape(human_provider)}</span>"
+        "</div>"
+        "<h1 style='margin:8px 0 4px;font-size:22px;line-height:1.3;color:#ffffff;'>"
+        f"{escape(title)}</h1>"
+        "<div style='font-size:13px;color:#cbd5e1;'>"
+        f"{escape(human_period)} · {escape(speech_summary)}</div>"
+        "</div>"
+        "<div style='padding:24px 28px;'>"
+        "<div style='margin-bottom:22px;'>"
+        f"<a href='{escape(primary_link)}' style='display:inline-block;background:#059669;"
+        "color:#ffffff;text-decoration:none;font-weight:600;font-size:14px;"
+        "padding:11px 20px;border-radius:10px;'>Protokoll im Browser öffnen →</a>"
+        "</div>"
+        f"{notice_html}"
+        f"{speakers_html}"
+        f"{transcript_html}"
+        "<div style='margin-top:24px;padding-top:16px;border-top:1px solid #e2e8f0;"
+        "font-size:12px;color:#64748b;line-height:1.5;'>"
+        "<strong>Angehängte Dateien:</strong> Markdown-Protokoll (<code>.md</code>), "
+        "Text-Transkript (<code>.txt</code>), Untertitel (<code>.vtt</code>) und "
+        "strukturierte Metadaten (<code>.json</code>)."
+        "</div></div></div></body></html>"
+    )
+    return plain_body, html_body
+
+
 def build_message(db, recording, delivery):
     settings = get_settings()
     data = export_data(db, recording)
@@ -88,69 +405,65 @@ def build_message(db, recording, delivery):
     quality = data["quality"]
     reason = effective_participation_reason(data)
     explanation = FAILURE_REASONS.get(reason) if reason else None
-    title_line = f"Titel: {recording.title}\n" if recording.title else ""
+    human_provider = provider_label(recording.provider)
+    human_period = format_period_de(period["start"], period["end"])
+    date_short = format_date_short_de(period["start"])
+    ui_url = f"{settings.api_url.rstrip('/')}/ui"
+    title = recording.title or f"Besprechung ({human_provider})"
+
     if quality["no_audio_received"]:
         message["Subject"] = (
-            f"wortlaut: Aufnahme {recording.id} fehlgeschlagen ({reason or 'no_audio_received'})"
+            f"wortlaut · Keine Aufnahme: {title} — fehlgeschlagen ({reason or 'no_audio_received'})"
         )
-        body = (
-            f"wortlaut – {recording.provider}\n"
-            + title_line
-            + f"Termin: {period['start']} bis {period['end']}\n"
-            f"Teilnahme: {data['participation']}; "
-            f"Grund: {reason or 'unbekannt'}\n"
-            f"Hinweis: {explanation or 'Es wurde kein Audio im Meeting empfangen.'}\n"
-            f"Verarbeitung: {data['processing']}\n"
-            f"Web-UI (Status & Erneut starten): {settings.api_url.rstrip('/')}/ui\n"
-            "Es wurde kein Audio aufgezeichnet; daher sind keine Transkript-Exporte angehängt.\n"
+        plain_body, html_body = _build_failed_join_bodies(
+            title=title,
+            human_provider=human_provider,
+            human_period=human_period,
+            reason=reason,
+            explanation=explanation,
+            ui_url=ui_url,
         )
-        message.set_content(body)
+        message.set_content(plain_body)
+        message.add_alternative(html_body, subtype="html")
         return message
+
     message["Subject"] = (
-        f"wortlaut: {recording.title} (Aufnahme {recording.id})"
+        f"wortlaut · Wortprotokoll: {recording.title} ({date_short})"
         if recording.title
-        else f"wortlaut: Aufnahme {recording.id}"
-    )
-    attribution = "unklar" if quality["attribution_unknown"] else "keine ungebundenen Samples"
-    drain = "unvollständig" if quality["incomplete_drain"] else "kein bekannter Drain-Fehler"
-    clock = (
-        "Unterbrechung beobachtet"
-        if quality["audio_clock_interrupted"]
-        else "keine bekannte Unterbrechung"
-    )
-    failure = data["processing_error"] or (
-        "ASR-Ausfälle" if quality["failed_asr_ranges"] else "keiner"
+        else f"wortlaut · Wortprotokoll ({human_provider}, {date_short})"
     )
     reader_cred = export_reader_token(recording) if recording.export_reader_nonce else None
-    reader_ui_line = (
-        f"Web-Ansicht (schreibgeschützter Lese-Link): "
-        f"{settings.api_url.rstrip('/')}/ui#token=wortlaut-read-{recording.id}.{reader_cred.removeprefix('wortlaut-read-')}\n"
+    reader_url = (
+        f"{ui_url}#token=wortlaut-read-{recording.id}.{reader_cred.removeprefix('wortlaut-read-')}"
         if reader_cred
-        else ""
+        else None
     )
-    body = (
-        f"wortlaut – {recording.provider}\n"
-        + title_line
-        + f"Termin: {period['start']} bis {period['end']}\n"
-        f"Letztes bekanntes Audio: {data['last_known_audio_utc'] or 'unbekannt'}\n"
-        f"Teilnahme: {data['participation']}; "
-        f"Grund: {reason or 'unbekannt'}\n"
-        + (f"Hinweis: {explanation}\n" if explanation else "")
-        + f"Verarbeitung: {data['processing']}\n"
-        f"Audiolücken: {'vorhanden' if quality['has_audio_gaps'] else 'keine bekannten'}\n"
-        f"Audio-Uhr: {clock}\n"
-        f"Aufnahmeende: {'unbekannt' if quality['capture_end_unknown'] else 'bekannt'}\n"
-        f"Sprecherzuordnung: {attribution}\n"
-        f"Quellenabdeckung: {quality['source_coverage']}\n"
-        f"Audioabschluss: {drain}\n"
-        f"Verarbeitungsfehler: {failure}\n"
-        f"Web-UI: {settings.api_url.rstrip('/')}/ui\n"
-        + reader_ui_line
-        + "Die vollständigen Qualitäts- und Zeitangaben stehen im JSON-Export.\n"
+    notices: list[str] = []
+    if explanation:
+        notices.append(explanation)
+    if quality["has_audio_gaps"]:
+        notices.append("Während der Aufnahme traten kurze Audiolücken auf.")
+    if data["processing_error"] or quality["failed_asr_ranges"]:
+        notices.append("Einzelne Audioabschnitte konnten nicht vollständig transkribiert werden.")
+
+    speakers = _speaker_breakdown(data)
+    turns = group_transcript_turns(data.get("segments") or [])
+    plain_body, html_body = _build_completed_bodies(
+        title=title,
+        human_provider=human_provider,
+        human_period=human_period,
+        speakers=speakers,
+        turns=turns,
+        notices=notices,
+        ui_url=ui_url,
+        reader_url=reader_url,
+        include_inline_transcript=True,
     )
-    message.set_content(body)
+    message.set_content(plain_body)
+    message.add_alternative(html_body, subtype="html")
+
     exports = {}
-    for format in ("txt", "vtt", "json"):
+    for format in ("md", "txt", "vtt", "json"):
         content, media_type = render_export(data, format)
         major, minor = media_type.split(";", 1)[0].split("/", 1)
         exports[f"wortlaut-{recording.id}.{format}"] = content.encode()
@@ -161,8 +474,21 @@ def build_message(db, recording, delivery):
             filename=f"wortlaut-{recording.id}.{format}",
         )
     if len(message.as_bytes()) > settings.mail_attachment_limit_bytes:
+        compact_plain, _ = _build_completed_bodies(
+            title=title,
+            human_provider=human_provider,
+            human_period=human_period,
+            speakers=speakers,
+            turns=turns,
+            notices=notices,
+            ui_url=ui_url,
+            reader_url=reader_url,
+            include_inline_transcript=False,
+        )
         message.clear_content()
-        message.set_content(body + "\nDie drei vollständigen Exporte liegen im ZIP-Anhang.\n")
+        message.set_content(
+            compact_plain + "\nDie vier vollständigen Exporte liegen im ZIP-Anhang.\n"
+        )
         archive = io.BytesIO()
         with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as zipped:
             for filename, content in exports.items():
@@ -189,17 +515,17 @@ def build_message(db, recording, delivery):
             recording.export_reader_nonce = recording.export_reader_nonce or uuid.uuid4()
             credential = export_reader_token(recording)
             sig = credential.removeprefix("wortlaut-read-")
-            ui_link = f"{settings.api_url.rstrip('/')}/ui#token=wortlaut-read-{recording.id}.{sig}"
+            ui_link = f"{ui_url}#token=wortlaut-read-{recording.id}.{sig}"
             message.clear_content()
             base_url = settings.api_url.rstrip("/") + f"/v1/recordings/{recording.id}/exports"
             downloads = "\n".join(
                 f"curl --fail --header {shlex.quote('Authorization: Bearer ' + credential)} "
                 f"{shlex.quote(base_url + '/' + format)} "
                 f"--output 'wortlaut-{recording.id}.{format}'"
-                for format in ("txt", "vtt", "json", "md")
+                for format in ("md", "txt", "vtt", "json")
             )
             message.set_content(
-                body
+                compact_plain
                 + "\nDie vollständigen Exporte überschreiten auch komprimiert das Anhangslimit.\n"
                 "Lesezugang nur für die Exporte dieser Aufnahme, bis zum Ablauf der "
                 "Transkriptaufbewahrung. Dieser Zugang erlaubt keine Steuerung.\n"

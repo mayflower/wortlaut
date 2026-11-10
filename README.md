@@ -1,8 +1,15 @@
 # wortlaut
 
-Self-hosted meeting transcription for Google Meet, Webex, Microsoft Teams, and Zoom. wortlaut joins as a browser participant, captures incoming WebRTC audio sources per receiver before mixing, transcribes them with a local Parakeet model, and produces TXT, WebVTT, Markdown (`.md`), and JSON exports.
+[![Checks](https://github.com/mayflower/wortlaut/actions/workflows/checks.yml/badge.svg)](https://github.com/mayflower/wortlaut/actions/workflows/checks.yml)
+[![Website](https://img.shields.io/badge/Website-wortlaut.cloud-10b981)](https://wortlaut.cloud)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
+[![Deploy](https://img.shields.io/badge/Deploy-Docker%20Compose%20%7C%20Helm%20%7C%20Kubernetes-6366f1)](#self-hosting--deployment-options)
 
-Meetings can be scheduled through the HTTP API, the integrated Web-UI (`/` and `/ui`), OAuth2 calendar synchronization (`calendar_oauth.py`), or email invitations. Meet, Webex, Teams, and Zoom run side by side, with a provider selected for each recording. They share storage, transcription, and capacity limits.
+**Website:** [https://wortlaut.cloud](https://wortlaut.cloud) · **Quickstart:** [Docker Compose](docker-compose.yml) · **Helm Chart:** [`charts/wortlaut`](charts/wortlaut) · **REST API:** [`/docs`](services/meeting/src/wortlaut/app.py)
+
+Self-hosted, GDPR-compliant meeting transcription for **Google Meet**, **Cisco Webex**, **Microsoft Teams**, and **Zoom**. `wortlaut` joins conferences as a browser participant, captures incoming WebRTC audio sources per receiver before mixing, transcribes them locally with a shared **Parakeet** ASR model (GPU or CPU fallback — no external cloud speech APIs), and delivers speaker-attributed **Markdown (`.md`)**, **TXT**, **WebVTT (`.vtt`)**, **JSON**, and **HTML email** protocols.
+
+Meetings can be started ad hoc or scheduled through the integrated Web-UI (`/` and `/ui`), the HTTP REST API, OAuth2 calendar synchronization (`calendar_oauth.py` for Google Calendar & Microsoft 365), or `.ics` email invitations (`robot@wortlaut.cloud`). Meet, Webex, Teams, and Zoom run side by side in the same instance, sharing storage, transcription, and capacity limits.
 
 ## Current status
 

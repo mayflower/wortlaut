@@ -67,6 +67,7 @@ jobs:
         working-directory: worker
         run: |
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends xdotool
           npx playwright install --with-deps chromium
       - name: Native browser fixtures (no real provider identity proof)
         working-directory: worker

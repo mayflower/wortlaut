@@ -2,6 +2,7 @@ import hmac
 import json
 from datetime import UTC, datetime, timedelta
 from html import escape
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -9,6 +10,103 @@ from sqlalchemy.orm import Session
 from wortlaut.models import AsrJob, Attempt, AudioControl, AudioStream, Recording, TranscriptSegment
 from wortlaut.processing import RATE, stream_quality
 from wortlaut.settings import get_settings
+
+BERLIN_TZ = ZoneInfo("Europe/Berlin")
+WEEKDAYS_DE = ("Mo.", "Di.", "Mi.", "Do.", "Fr.", "Sa.", "So.")
+
+PROVIDER_LABELS = {
+    "google_meet": "Google Meet",
+    "teams": "Microsoft Teams",
+    "webex": "Cisco Webex",
+    "zoom": "Zoom",
+}
+
+
+def provider_label(provider: str | None) -> str:
+    if not provider:
+        return "Konferenz"
+    return PROVIDER_LABELS.get(provider, provider)
+
+
+def format_date_short_de(iso_str: str | None) -> str:
+    if not iso_str:
+        return "unbekannt"
+    try:
+        dt = datetime.fromisoformat(iso_str).astimezone(BERLIN_TZ)
+        return dt.strftime("%d.%m.%Y")
+    except ValueError:
+        return iso_str
+
+
+def format_period_de(start_iso: str | None, end_iso: str | None) -> str:
+    if not start_iso:
+        return "unbekannt"
+    try:
+        start_dt = datetime.fromisoformat(start_iso).astimezone(BERLIN_TZ)
+        weekday = WEEKDAYS_DE[start_dt.weekday()]
+        if not end_iso:
+            return f"{weekday}, {start_dt:%d.%m.%Y · %H:%M} Uhr"
+        end_dt = datetime.fromisoformat(end_iso).astimezone(BERLIN_TZ)
+        if start_dt.date() == end_dt.date():
+            return f"{weekday}, {start_dt:%d.%m.%Y · %H:%M} – {end_dt:%H:%M} Uhr"
+        end_weekday = WEEKDAYS_DE[end_dt.weekday()]
+        return (
+            f"{weekday}, {start_dt:%d.%m.%Y %H:%M} Uhr – "
+            f"{end_weekday}, {end_dt:%d.%m.%Y %H:%M} Uhr"
+        )
+    except ValueError:
+        return f"{start_iso} bis {end_iso or 'unbekannt'}"
+
+
+def format_duration_de(seconds: float) -> str:
+    total = max(0, round(seconds))
+    if total == 0:
+        return "0 Sek."
+    if total < 60:
+        return f"{total} Sek."
+    minutes, secs = divmod(total, 60)
+    if minutes < 60:
+        return f"{minutes} Min. {secs} Sek." if secs else f"{minutes} Min."
+    hours, mins = divmod(minutes, 60)
+    return f"{hours} Std. {mins} Min." if mins else f"{hours} Std."
+
+
+def short_timestamp(seconds: float) -> str:
+    total = max(0, int(seconds))
+    hours, rem = divmod(total, 3600)
+    minutes, secs = divmod(rem, 60)
+    if hours > 0:
+        return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+    return f"{minutes:02d}:{secs:02d}"
+
+
+def group_transcript_turns(segments: list[dict], max_turn_chars: int = 900) -> list[dict]:
+    turns: list[dict] = []
+    for seg in segments:
+        text = " ".join((seg.get("text") or "").split())
+        if not text:
+            continue
+        label = " ".join((seg.get("speaker_label") or "Sprecher").split())
+        start = float(seg.get("start") or 0.0)
+        end = float(seg.get("end") or start)
+        if (
+            turns
+            and turns[-1]["speaker"] == label
+            and (start - turns[-1]["end"]) <= 15.0
+            and len(turns[-1]["text"]) + 1 + len(text) <= max_turn_chars
+        ):
+            turns[-1]["text"] = f"{turns[-1]['text']} {text}"
+            turns[-1]["end"] = max(turns[-1]["end"], end)
+        else:
+            turns.append(
+                {
+                    "speaker": label,
+                    "start": start,
+                    "end": end,
+                    "text": text,
+                }
+            )
+    return turns
 
 
 def export_reader_token(recording: Recording) -> str | None:
@@ -438,20 +536,22 @@ def render_export(data, format):
         f"; Unverarbeitete Bereiche: {unprocessed}"
     )
     header = f"wortlaut {data['recording_id']}\nZeitursprung: {data['time_origin_utc']}\n{status}\n"
+    period = data["scheduled_period"]
+    human_period = format_period_de(period.get("start"), period.get("end"))
+    human_provider = provider_label(data.get("provider"))
+    title = data.get("title") or f"Wortprotokoll ({human_provider})"
+    sources = data.get("sources_summary") or []
+    total_speech = sum(float(s.get("speech_seconds") or 0.0) for s in sources)
     if format == "md":
-        title = data.get("title") or f"wortlaut {data['recording_id']}"
-        period = data["scheduled_period"]
         lines = [
             f"# {title}",
             "",
-            f"- **Aufnahme-ID:** `{data['recording_id']}`",
-            f"- **Provider:** `{data['provider']}`",
-            f"- **Termin:** {period['start']} bis {period['end']}",
-            f"- **Zeitursprung (UTC):** {data['time_origin_utc']}",
-            f"- **Status:** {status}",
-            "",
+            f"- **Plattform:** {human_provider} (`{data['provider']}`)",
+            f"- **Termin:** {human_period}",
         ]
-        sources = data.get("sources_summary") or []
+        if total_speech > 0:
+            lines.append(f"- **Erfasste Sprechzeit:** {format_duration_de(total_speech)}")
+        lines.append("")
         if sources:
             lines.extend(
                 [
@@ -483,13 +583,20 @@ def render_export(data, format):
                 lines.append("")
         return "\n".join(lines).rstrip() + "\n", "text/markdown; charset=utf-8"
     if format == "txt":
-        lines = [header]
+        lines = [
+            f"WORTPROTOKOLL · {title}",
+            f"Plattform: {human_provider} ({data['provider']})",
+            f"Termin:    {human_period}",
+            "-" * 72,
+            "",
+        ]
         for segment in data["segments"]:
             text = " ".join(segment["text"].split())
             label = " ".join(segment["speaker_label"].split())
             lines.append(
                 f"[{timestamp(segment['start'])} – {timestamp(segment['end'])}] {label}: {text}"
             )
+        lines.extend(["", "-" * 72, header.rstrip()])
         return "\n".join(lines) + "\n", "text/plain; charset=utf-8"
     lines = ["WEBVTT", "", "NOTE " + status, ""]
     for segment in data["segments"]:

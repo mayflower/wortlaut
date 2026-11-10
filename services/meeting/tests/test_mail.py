@@ -105,14 +105,22 @@ def test_successful_real_smtp_has_three_exports_and_does_not_send_without_audio(
     assert len(smtp.messages) == 1
     message = smtp.messages[0]
     assert {part.get_filename().rsplit(".", 1)[-1] for part in message.iter_attachments()} == {
+        "md",
         "txt",
         "vtt",
         "json",
     }
     assert smtp.envelopes == [["operator@example.org"]]
+    assert str(recording) not in message["Subject"]
+    assert "Wortprotokoll" in message["Subject"]
     body = message.get_body(preferencelist=("plain",)).get_content()
-    assert "Quellenabdeckung: unknown" in body
-    assert "vollständigen Qualitäts- und Zeitangaben" in body
+    html_body = message.get_body(preferencelist=("html",)).get_content()
+    assert "WORTPROTOKOLL" in body
+    assert "Web-Ansicht:" in body
+    assert "Quellenabdeckung: unknown" not in body
+    assert "Audioabschluss:" not in body
+    assert "<!DOCTYPE html>" in html_body
+    assert "Protokoll im Browser öffnen" in html_body
     with Session(database) as db:
         delivery = db.get(Delivery, recording)
         assert delivery.status == "delivered"
@@ -259,7 +267,7 @@ def test_large_repetitive_exports_are_losslessly_zipped_before_real_smtp(
         f"wortlaut-{recording}.{format}": client.get(
             f"/v1/recordings/{recording}/exports/{format}", headers=API
         ).content
-        for format in ("txt", "vtt", "json")
+        for format in ("md", "txt", "vtt", "json")
     }
     assert len(expected[f"wortlaut-{recording}.txt"]) > 20000
     smtp_pass(database)
@@ -298,7 +306,7 @@ def test_dkim_calendar_result_goes_to_authenticated_sender(
         db.commit()
     smtp_pass(database)
     assert smtp.envelopes == [["owner@mayflower.de"]]
-    assert len(list(smtp.messages[0].iter_attachments())) == 3
+    assert len(list(smtp.messages[0].iter_attachments())) == 4
 
 
 def test_failed_join_without_audio_sends_notification_mail(
