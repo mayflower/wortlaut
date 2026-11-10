@@ -152,6 +152,7 @@ export function SystemView({
       height="fill"
       header={
         <LayoutHeader hasDivider>
+          <div className="wl-page-container">
           <VStack gap={2}>
             {onNavigateHome && (
               <Breadcrumbs variant="supporting" label="Pfadnavigation">
@@ -198,10 +199,12 @@ export function SystemView({
             </HStack>
           </HStack>
           </VStack>
+          </div>
         </LayoutHeader>
       }
       content={
         <LayoutContent>
+          <div className="wl-page-container">
           <VStack gap={4}>
             {/* User Guide: How wortlaut works */}
             <Section variant="section">
@@ -409,6 +412,7 @@ export function SystemView({
               </VStack>
             </Section>
           </VStack>
+          </div>
         </LayoutContent>
       }
     />

@@ -33,6 +33,25 @@
   }
 }
 
+.wl-page-container {
+  width: 100%;
+  max-width: 1080px;
+  margin-inline: auto;
+}
+
+.wl-page-container-wide {
+  width: 100%;
+  max-width: 1180px;
+  margin-inline: auto;
+}
+
+.wl-section-card {
+  border-radius: 14px;
+  border: 1px solid var(--color-border);
+  background: var(--color-background-surface);
+  padding: 20px 22px;
+}
+
 @keyframes wlWaveBounce {
   0%,
   100% {
@@ -174,21 +193,17 @@
 }
 
 .wl-dispatch-hero {
-  border-radius: 14px;
+  border-radius: 16px;
   border: 1px solid var(--color-border);
-  background: linear-gradient(
-    180deg,
-    var(--color-background-surface) 0%,
-    var(--color-background-muted, rgba(255, 255, 255, 0.02)) 100%
-  );
-  padding: 16px 18px;
-  box-shadow: 0 4px 20px -6px rgba(0, 0, 0, 0.18);
+  background: var(--color-background-surface);
+  padding: 20px 22px;
+  box-shadow: 0 8px 28px -10px rgba(0, 0, 0, 0.22);
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
 .wl-dispatch-hero:focus-within {
-  border-color: var(--color-text-accent, #3b82f6);
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15), 0 8px 24px -6px rgba(0, 0, 0, 0.22);
+  border-color: #10b981;
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.14), 0 10px 30px -10px rgba(0, 0, 0, 0.26);
 }
 
 .wl-speaker-chip {

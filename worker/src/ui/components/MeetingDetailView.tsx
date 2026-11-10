@@ -283,6 +283,7 @@ export function MeetingDetailView({
         height="fill"
         header={
           <LayoutHeader hasDivider paddingBlockEnd={0}>
+            <div className="wl-page-container">
             <VStack gap={2}>
               {isOperator && (onBackToOverview || onNavigateHome) && (
                 <Breadcrumbs variant="supporting" label="Pfadnavigation">
@@ -440,6 +441,7 @@ export function MeetingDetailView({
                 <Tab value="diagnostics" label="Technik & Diagnose" />
               </TabList>
             </VStack>
+            </div>
           </LayoutHeader>
         }
         end={
@@ -466,6 +468,7 @@ export function MeetingDetailView({
         }
         content={
           <LayoutContent>
+            <div className="wl-page-container">
             <VStack gap={3}>
               {actionError && (
                 <Banner
@@ -581,6 +584,7 @@ export function MeetingDetailView({
                 />
               )}
             </VStack>
+            </div>
           </LayoutContent>
         }
       />

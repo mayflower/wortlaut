@@ -384,6 +384,7 @@ export function CalendarWorkspace({
       height="fill"
       header={
         <LayoutHeader hasDivider>
+          <div className="wl-page-container">
           <VStack gap={2}>
             {onNavigateHome && (
               <Breadcrumbs variant="supporting" label="Pfadnavigation">
@@ -432,10 +433,12 @@ export function CalendarWorkspace({
             </HStack>
             </HStack>
           </VStack>
+          </div>
         </LayoutHeader>
       }
       content={
         <LayoutContent>
+          <div className="wl-page-container">
           <VStack gap={4} id="calendar-details">
             {oauthError && (
               <Banner
@@ -698,6 +701,7 @@ export function CalendarWorkspace({
               </div>
             )}
           </VStack>
+          </div>
         </LayoutContent>
       }
     />

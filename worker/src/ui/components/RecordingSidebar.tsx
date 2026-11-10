@@ -188,13 +188,7 @@ export function RecordingSidebar({
   const [quickJoinError, setQuickJoinError] = useState<string | null>(null);
   const [copiedMail, setCopiedMail] = useState(false);
   const [calendarBusyId, setCalendarBusyId] = useState<string | null>(null);
-  const [guideDismissed, setGuideDismissed] = useState<boolean>(() => {
-    try {
-      return localStorage.getItem(ONBOARDING_DISMISSED_KEY) === '1';
-    } catch {
-      return false;
-    }
-  });
+  const [guideOpenManual, setGuideOpenManual] = useState<boolean>(false);
 
   const detectedProvider = detectProviderFromUrl(meetingUrl);
 
@@ -210,8 +204,9 @@ export function RecordingSidebar({
 
   const hasConnectedCalendar = calendarConnections.length > 0;
   const isHomeView = mode === 'home';
-  const showOnboardingGuide = isHomeView && (totalCount === 0 || !guideDismissed);
-  const showFilterToolbar = !isHomeView || totalCount >= 3 || hasActiveFilter;
+  const showOnboardingGuide =
+    isHomeView && (totalCount === 0 || guideOpenManual);
+  const showFilterToolbar = !isHomeView || hasActiveFilter;
   const firstName = userName ? userName.trim().split(/\s+/)[0] : null;
   const displayedRecordings =
     isHomeView && !hasActiveFilter ? recordings.slice(0, 5) : recordings;
@@ -240,10 +235,10 @@ export function RecordingSidebar({
     })
     .slice(0, 3);
 
-  const handleToggleGuide = (nextDismissed: boolean) => {
-    setGuideDismissed(nextDismissed);
+  const handleToggleGuide = (dismissed: boolean) => {
+    setGuideOpenManual(!dismissed);
     try {
-      if (nextDismissed) {
+      if (dismissed) {
         localStorage.setItem(ONBOARDING_DISMISSED_KEY, '1');
       } else {
         localStorage.removeItem(ONBOARDING_DISMISSED_KEY);
@@ -579,184 +574,158 @@ export function RecordingSidebar({
       height="fill"
       header={
         <LayoutHeader hasDivider>
-          <VStack gap={3}>
-            {!isHomeView && onNavigateHome && (
-              <Breadcrumbs variant="supporting" label="Pfadnavigation">
-                <BreadcrumbItem onClick={onNavigateHome}>
-                  Startseite
-                </BreadcrumbItem>
-                <BreadcrumbItem isCurrent>Aufnahmen</BreadcrumbItem>
-              </Breadcrumbs>
-            )}
+          <div className="wl-page-container">
+            <VStack gap={2}>
+              {!isHomeView && onNavigateHome && (
+                <Breadcrumbs variant="supporting" label="Pfadnavigation">
+                  <BreadcrumbItem onClick={onNavigateHome}>
+                    Startseite
+                  </BreadcrumbItem>
+                  <BreadcrumbItem isCurrent>Aufnahmen</BreadcrumbItem>
+                </Breadcrumbs>
+              )}
 
-            <HStack justify="between" vAlign="center" wrap="wrap" gap={2}>
-              <VStack gap={0.5} id="welcome-intro">
-                <Heading level={1}>
-                  {isHomeView
-                    ? firstName
-                      ? `Willkommen bei wortlaut, ${firstName}`
-                      : 'Willkommen bei wortlaut'
-                    : 'Aufnahmen'}
-                </Heading>
-                <Text type="supporting" color="secondary">
-                  {isHomeView
-                    ? `Ihr selbstgehosteter Meeting-Assistent für Google Meet, Microsoft Teams, Cisco Webex und Zoom. „${instance.assistantName}“ erfasst jede Teilnehmerspur getrennt im Browser und erstellt Ihr Wortprotokoll lokal auf eigener GPU — ohne Cloud-Weitergabe.`
-                    : 'Alle aufgezeichneten, laufenden und geplanten Besprechungen durchsuchen, filtern und exportieren.'}
-                </Text>
-              </VStack>
+              <HStack justify="between" vAlign="center" wrap="wrap" gap={2}>
+                <VStack gap={0.5} id="welcome-intro">
+                  <Heading level={1}>
+                    {isHomeView
+                      ? firstName
+                        ? `Guten Tag, ${firstName}`
+                        : 'Übersicht'
+                      : 'Aufnahmen'}
+                  </Heading>
+                  <Text type="supporting" color="secondary">
+                    {isHomeView
+                      ? 'Spontan per Konferenz-Link starten oder geplante Besprechungen verwalten.'
+                      : 'Alle aufgezeichneten, laufenden und geplanten Besprechungen durchsuchen und exportieren.'}
+                  </Text>
+                </VStack>
 
-              <HStack gap={2} vAlign="center" wrap="wrap">
-                {isHomeView && !showOnboardingGuide && (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    icon={<HelpCircle className="h-3.5 w-3.5" />}
-                    label="Kurzanleitung einblenden"
-                    onClick={() => handleToggleGuide(false)}
-                  />
-                )}
-                {!isHomeView && (
-                  <Button
-                    variant="primary"
-                    size="sm"
-                    icon={<Plus className="h-3.5 w-3.5" />}
-                    label="Neue Aufnahme"
-                    onClick={onOpenNewRecording}
-                  />
-                )}
-              </HStack>
-            </HStack>
-
-            {/* Primary Action on Startseite: Elevated Ad-hoc Join Hero Card + 3-Step Mental Model */}
-            {token && isHomeView && (
-              <form
-                id="dispatch-form"
-                onSubmit={handleQuickStart}
-                className="wl-dispatch-hero wl-fade-in"
-              >
-                <VStack gap={2}>
-                  <HStack justify="between" vAlign="center" wrap="wrap" gap={2}>
-                    <HStack gap={2} vAlign="center" wrap="wrap">
-                      <Heading level={4}>Sofort-Aufnahme starten</Heading>
-                      {detectedProvider ? (
-                        <span className="wl-fade-in">
-                          <ProviderBadge provider={detectedProvider} size="sm" />
-                        </span>
-                      ) : (
-                        <Text type="supporting" color="secondary">
-                          Link einfügen — Konferenzsystem wird automatisch erkannt
-                        </Text>
-                      )}
-                    </HStack>
-                    <SegmentedControl
-                      size="sm"
-                      label="Aufnahmedauer"
-                      value={String(quickDurationMin)}
-                      onChange={(v) => setQuickDurationMin(Number(v) || 60)}
-                    >
-                      <SegmentedControlItem value="30" label="30 Min." />
-                      <SegmentedControlItem value="60" label="60 Min." />
-                      <SegmentedControlItem value="90" label="90 Min." />
-                    </SegmentedControl>
-                  </HStack>
-
-                  <HStack gap={2} vAlign="center" wrap="wrap">
-                    <div
-                      ref={urlWrapRef}
-                      className="flex-1 min-w-[260px]"
-                      id="meeting-url-wrap"
-                    >
-                      <TextInput
-                        type="url"
-                        size="sm"
-                        label="Meeting-Link"
-                        isLabelHidden
-                        value={meetingUrl}
-                        onChange={setMeetingUrl}
-                        placeholder="Meeting-Link hier einfügen (Google Meet, Teams, Webex oder Zoom)…"
-                        startIcon={<Video className="h-3.5 w-3.5" />}
-                        hasClear
-                      />
-                    </div>
-                    <div className="w-56">
-                      <TextInput
-                        type="text"
-                        size="sm"
-                        label="Titel (optional)"
-                        isLabelHidden
-                        value={title}
-                        onChange={setTitle}
-                        placeholder="Titel (optional, z. B. Weekly)"
-                        startIcon={<Tag className="h-3.5 w-3.5" />}
-                      />
-                    </div>
-                    <Button
-                      type="submit"
-                      variant="primary"
-                      size="sm"
-                      isLoading={submitting}
-                      isDisabled={!meetingUrl.trim()}
-                      icon={<Play className="h-3.5 w-3.5" />}
-                      label={`Jetzt aufzeichnen (${quickDurationMin} Min.)`}
-                    />
-                  </HStack>
-
-                  {/* 3-Step Mental Model + Secondary Schedule Link */}
-                  <HStack
-                    justify="between"
-                    vAlign="center"
-                    wrap="wrap"
-                    gap={2}
-                  >
-                    <HStack gap={2} vAlign="center" wrap="wrap">
-                      <Token size="sm" color="gray" label="1. Link einfügen oder Kalender verbinden" />
-                      <Text type="supporting" color="secondary">
-                        →
-                      </Text>
-                      <Token
-                        size="sm"
-                        color="orange"
-                        label={`2. Zuhörer „${instance.assistantName}“ im Warteraum zulassen`}
-                      />
-                      <Text type="supporting" color="secondary">
-                        →
-                      </Text>
-                      <Token
-                        size="sm"
-                        color="green"
-                        label="3. Wortprotokoll live mitlesen & per E-Mail erhalten"
-                      />
-                    </HStack>
-
+                <HStack gap={2} vAlign="center" wrap="wrap">
+                  {isHomeView && !showOnboardingGuide && (
                     <Button
                       variant="ghost"
                       size="sm"
+                      icon={<HelpCircle className="h-3.5 w-3.5" />}
+                      label="Kurzanleitung"
+                      onClick={() => handleToggleGuide(false)}
+                    />
+                  )}
+                  {isHomeView ? (
+                    <Button
+                      variant="secondary"
+                      size="sm"
                       icon={<CalendarPlus className="h-3.5 w-3.5" />}
-                      label="Für später planen / .ics importieren"
+                      label="Termin planen / .ics"
                       onClick={onOpenIcsImport || onOpenNewRecording}
                     />
-                  </HStack>
-                </VStack>
-
-                {quickJoinError && (
-                  <div className="mt-2">
-                    <Banner
-                      status="error"
-                      container="card"
-                      title={quickJoinError}
-                      isDismissable
-                      onDismiss={() => setQuickJoinError(null)}
+                  ) : (
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      icon={<Plus className="h-3.5 w-3.5" />}
+                      label="Neue Aufnahme"
+                      onClick={onOpenNewRecording}
                     />
-                  </div>
-                )}
-              </form>
-            )}
-          </VStack>
+                  )}
+                </HStack>
+              </HStack>
+            </VStack>
+          </div>
         </LayoutHeader>
       }
       content={
         <LayoutContent>
-          <VStack gap={4} id="recordings-list">
+          <div className="wl-page-container">
+            <VStack gap={5} id="recordings-list">
+              {/* Primary Action on Startseite: Clean, Focused Command Card */}
+              {token && isHomeView && (
+                <form
+                  id="dispatch-form"
+                  onSubmit={handleQuickStart}
+                  className="wl-dispatch-hero wl-fade-in"
+                >
+                  <VStack gap={3}>
+                    <HStack justify="between" vAlign="center" wrap="wrap" gap={2}>
+                      <HStack gap={2} vAlign="center" wrap="wrap">
+                        <Heading level={3}>Sofort-Aufnahme starten</Heading>
+                        {detectedProvider && (
+                          <span className="wl-fade-in">
+                            <ProviderBadge provider={detectedProvider} size="sm" />
+                          </span>
+                        )}
+                      </HStack>
+                      <SegmentedControl
+                        size="sm"
+                        label="Aufnahmedauer"
+                        value={String(quickDurationMin)}
+                        onChange={(v) => setQuickDurationMin(Number(v) || 60)}
+                      >
+                        <SegmentedControlItem value="30" label="30 Min." />
+                        <SegmentedControlItem value="60" label="60 Min." />
+                        <SegmentedControlItem value="90" label="90 Min." />
+                      </SegmentedControl>
+                    </HStack>
+
+                    <HStack gap={2} vAlign="center" wrap="wrap">
+                      <div
+                        ref={urlWrapRef}
+                        className="flex-1 min-w-[260px]"
+                        id="meeting-url-wrap"
+                      >
+                        <TextInput
+                          type="url"
+                          size="sm"
+                          label="Meeting-Link"
+                          isLabelHidden
+                          value={meetingUrl}
+                          onChange={setMeetingUrl}
+                          placeholder="Meeting-Link einfügen (Google Meet, Teams, Webex oder Zoom)…"
+                          startIcon={<Video className="h-3.5 w-3.5" />}
+                          hasClear
+                        />
+                      </div>
+                      <div className="w-56">
+                        <TextInput
+                          type="text"
+                          size="sm"
+                          label="Titel (optional)"
+                          isLabelHidden
+                          value={title}
+                          onChange={setTitle}
+                          placeholder="Titel (optional, z. B. Jour Fixe)"
+                          startIcon={<Tag className="h-3.5 w-3.5" />}
+                        />
+                      </div>
+                      <Button
+                        type="submit"
+                        variant="primary"
+                        size="sm"
+                        isLoading={submitting}
+                        isDisabled={!meetingUrl.trim()}
+                        icon={<Play className="h-3.5 w-3.5" />}
+                        label="Jetzt aufzeichnen"
+                      />
+                    </HStack>
+
+                    <Text type="supporting" color="secondary">
+                      Tritt als Zuhörer „{instance.assistantName}“ bei — bitte im Konferenz-Warteraum kurz zulassen.
+                    </Text>
+                  </VStack>
+
+                  {quickJoinError && (
+                    <div className="mt-2.5">
+                      <Banner
+                        status="error"
+                        container="card"
+                        title={quickJoinError}
+                        isDismissable
+                        onDismiss={() => setQuickJoinError(null)}
+                      />
+                    </div>
+                  )}
+                </form>
+              )}
             {/* Active Waiting Room Admission Alerts */}
             {lobbyRecordings.map((rec) => (
               <div key={rec.id} className="wl-lobby-card p-3.5 wl-fade-in">
@@ -1233,6 +1202,7 @@ export function RecordingSidebar({
               )}
             </VStack>
           </VStack>
+          </div>
         </LayoutContent>
       }
     />
