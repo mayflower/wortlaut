@@ -315,6 +315,7 @@ export async function completeOidcCallbackIfPresent(): Promise<{
   }
 
   try {
+    const prevReader = sessionStorage.getItem(READER_SESSION_KEY) || '';
     const res = await apiRequest<{
       token: string;
       user: { sub: string; email: string; name: string; is_admin: boolean };
@@ -327,8 +328,23 @@ export async function completeOidcCallbackIfPresent(): Promise<{
         nonce: stored.nonce || null,
       }),
     });
+    const readerMatch = READER_TOKEN_RE.exec(prevReader.trim());
+    if (readerMatch) {
+      await claimRecordingAccess(
+        res.token,
+        readerMatch[1].toLowerCase(),
+        `wortlaut-read-${readerMatch[2]}`
+      ).catch(() => {});
+    }
     saveTokenToStorage(res.token);
     clearCallbackUrl();
+    if (readerMatch) {
+      window.history.replaceState(
+        null,
+        '',
+        `/ui#view=meetings&id=${encodeURIComponent(readerMatch[1].toLowerCase())}`
+      );
+    }
     return { token: res.token };
   } catch (err) {
     clearCallbackUrl();
@@ -758,6 +774,21 @@ export async function issueReaderToken(
   return apiRequest(`/v1/recordings/${encodeURIComponent(recordingId)}/reader-token`, token, {
     method: 'POST',
   });
+}
+
+export async function claimRecordingAccess(
+  accountToken: string,
+  recordingId: string,
+  readerToken: string
+): Promise<{ claimed: boolean; recording_id: string }> {
+  return apiRequest(
+    `/v1/recordings/${encodeURIComponent(recordingId)}/claim-access`,
+    accountToken,
+    {
+      method: 'POST',
+      body: JSON.stringify({ reader_token: readerToken }),
+    }
+  );
 }
 
 export async function updateRecordingProtocol(

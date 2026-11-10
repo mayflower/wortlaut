@@ -51,11 +51,13 @@ from wortlaut.calendar_oauth import (
 from wortlaut.controller import controller_pass, new_attempt, request_cancellation
 from wortlaut.database import get_engine, session
 from wortlaut.exports import (
-     export_data,
+    chat_reader_token,
+    export_data,
     export_reader_token,
     extract_audio_snippet_wav,
     generate_protocol_summary,
     render_export,
+    verify_recording_reader_token,
 )
 from wortlaut.ingest import accept_chunk, accept_control, capacity_reached, verify_owner
 from wortlaut.mail import FAILURE_REASONS, delivery_json, smtp_pass
@@ -77,6 +79,7 @@ from wortlaut.oidc import (
     can_access_recording,
     exchange_oidc_code,
     is_admin_email,
+    user_recording_access_predicate,
     verify_dex_id_token,
     verify_user_session_token,
 )
@@ -744,21 +747,10 @@ def list_recordings(
     )
     query = query.where(~unstarted_cancelled_cal)
     if not principal.is_admin:
-        user_email = (principal.email or "").lower()
-        calendar_match = (
-            select(CalendarEntry.id)
-            .where(
-                CalendarEntry.id == Recording.calendar_entry_id,
-                func.lower(CalendarEntry.organizer) == user_email,
-            )
-            .exists()
-        )
-        owner_predicates = [calendar_match]
-        if principal.sub:
-            owner_predicates.append(Recording.owner_sub == principal.sub)
-        if user_email:
-            owner_predicates.append(func.lower(Recording.owner_email) == user_email)
-        query = query.where(or_(*owner_predicates))
+        pred = user_recording_access_predicate(principal)
+        if pred is False:
+            return {"items": [], "next_cursor": None}
+        query = query.where(pred)
     if provider:
         query = query.where(Recording.provider == provider)
     if participation:
@@ -1003,13 +995,12 @@ def _authenticate_recording_access(
 ) -> tuple[Recording, Principal]:
     token = bearer_value(authorization)
     recording = db.get(Recording, recording_id)
-    reader = export_reader_token(recording) if recording else None
     is_operator = secrets.compare_digest(
         token.encode(), get_settings().api_token.get_secret_value().encode()
     )
     if is_operator:
         principal = Principal(kind="operator", is_admin=True)
-    elif reader is not None and secrets.compare_digest(token.encode(), reader.encode()):
+    elif verify_recording_reader_token(recording, token):
         principal = Principal(kind="reader", recording_id=recording.id if recording else None)
     else:
         principal = verify_user_session_token(token)
@@ -1193,10 +1184,11 @@ def issue_reader_token(
     if recording.transcript_deleted_at is not None:
         raise HTTPException(410, "Transcript retention expired")
     if recording.processing_finished_at is None:
-        raise HTTPException(409, "Transcript processing not finished yet")
-    recording.export_reader_nonce = recording.export_reader_nonce or uuid.uuid4()
-    db.commit()
-    credential = export_reader_token(recording)
+        credential = chat_reader_token(recording)
+    else:
+        recording.export_reader_nonce = recording.export_reader_nonce or uuid.uuid4()
+        db.commit()
+        credential = export_reader_token(recording)
     if not credential:
         raise HTTPException(410, "Transcript retention expired")
     sig = credential.removeprefix("wortlaut-read-")
@@ -1206,6 +1198,37 @@ def issue_reader_token(
         "reader_token": credential,
         "ui_token": f"wortlaut-read-{recording.id}.{sig}",
     }
+
+
+class ClaimRecordingAccessRequest(BaseModel):
+    reader_token: str = Field(min_length=10, max_length=256)
+
+
+@app.post("/v1/recordings/{recording_id}/claim-access")
+def claim_recording_access(
+    recording_id: uuid.UUID,
+    body: ClaimRecordingAccessRequest,
+    db: Db,
+    principal: AuthPrincipal,
+):
+    recording = db.scalar(select(Recording).where(Recording.id == recording_id).with_for_update())
+    if recording is None or not verify_recording_reader_token(recording, body.reader_token):
+        raise HTTPException(404, "Recording not found")
+    if recording.transcript_deleted_at is not None or recording.metadata_deleted_at is not None:
+        raise HTTPException(410, "Recording retention expired")
+    user_email = (principal.email or "").strip().lower()
+    if user_email and "@" in user_email:
+        meta = dict(recording.protocol_meta or {})
+        existing = {
+            str(e).strip().lower()
+            for e in (meta.get("attendee_emails") or [])
+            if e and "@" in str(e)
+        }
+        if user_email not in existing:
+            meta["attendee_emails"] = sorted(existing | {user_email})
+            recording.protocol_meta = meta
+            db.commit()
+    return {"claimed": True, "recording_id": str(recording.id)}
 
 
 @app.post("/v1/recordings/{recording_id}/attempts", dependencies=[Depends(api_auth)])
@@ -1536,13 +1559,19 @@ def _recording_inviter(db: Session, recording: Recording) -> str | None:
 def build_chat_intro(
     display_name: str,
     inviter: str | None,
-    recording_id: uuid.UUID,
+    recording: Recording,
     settings,
 ) -> str | None:
     if not settings.enable_chat_intro:
         return None
     base_url = settings.api_url.rstrip("/")
-    recording_url = f"{base_url}/ui#view=meetings&id={recording_id}"
+    cred = chat_reader_token(recording)
+    token_param = (
+        f"&token=wortlaut-read-{recording.id}.{cred.removeprefix('wortlaut-read-')}"
+        if cred
+        else ""
+    )
+    recording_url = f"{base_url}/ui#view=meetings&id={recording.id}{token_param}"
     privacy_url = settings.privacy_url or f"{base_url}/privacy"
     bot_label = display_name.strip() or "wortlaut"
     who = inviter.strip() if inviter and inviter.strip() else "einem Teilnehmenden"
@@ -1575,7 +1604,7 @@ def bootstrap(
     response.headers["Cache-Control"] = "no-store"
     display_name = recording.guest_name or settings.assistant_name
     inviter = _recording_inviter(db, recording)
-    chat_intro = build_chat_intro(display_name, inviter, recording.id, settings)
+    chat_intro = build_chat_intro(display_name, inviter, recording, settings)
     common = {
         "provider": recording.provider,
         "meeting_id": str(recording.id),

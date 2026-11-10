@@ -8,7 +8,7 @@ import secrets
 import time
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Literal
 
 import httpx
@@ -16,10 +16,10 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
-from wortlaut.models import CalendarEntry, Recording
+from wortlaut.models import CalendarEntry, CalendarSyncedEvent, Delivery, Recording
 from wortlaut.settings import get_settings
 
 USER_TOKEN_PREFIX = "wortlaut-user-"
@@ -302,6 +302,54 @@ def exchange_oidc_code(
     }
 
 
+def user_recording_access_predicate(principal: Principal):
+    user_email = (principal.email or "").strip().lower()
+    predicates = []
+    if principal.sub:
+        predicates.append(Recording.owner_sub == principal.sub)
+    if user_email:
+        predicates.append(func.lower(Recording.owner_email) == user_email)
+        predicates.append(Recording.protocol_meta["attendee_emails"].contains([user_email]))
+        predicates.append(
+            select(CalendarEntry.id)
+            .where(
+                CalendarEntry.id == Recording.calendar_entry_id,
+                or_(
+                    func.lower(CalendarEntry.organizer) == user_email,
+                    func.lower(CalendarEntry.original).like(f"%mailto:{user_email}%"),
+                ),
+            )
+            .exists()
+        )
+        predicates.append(
+            select(Delivery.recording_id)
+            .where(
+                Delivery.recording_id == Recording.id,
+                Delivery.recipients.contains([user_email]),
+            )
+            .exists()
+        )
+        predicates.append(
+            select(CalendarSyncedEvent.id)
+            .where(
+                or_(
+                    func.lower(CalendarSyncedEvent.owner_email) == user_email,
+                    func.lower(CalendarSyncedEvent.organizer_email) == user_email,
+                ),
+                or_(
+                    CalendarSyncedEvent.recording_id == Recording.id,
+                    and_(
+                        CalendarSyncedEvent.meeting_url == Recording.meeting_url,
+                        CalendarSyncedEvent.starts_at <= Recording.ends_at + timedelta(hours=1),
+                        CalendarSyncedEvent.ends_at >= Recording.starts_at - timedelta(hours=1),
+                    ),
+                ),
+            )
+            .exists()
+        )
+    return or_(*predicates) if predicates else False
+
+
 def can_access_recording(db: Session, principal: Principal, recording: Recording) -> bool:
     if principal.is_admin or principal.kind == "operator":
         return True
@@ -313,12 +361,12 @@ def can_access_recording(db: Session, principal: Principal, recording: Recording
         user_email = (principal.email or "").strip().lower()
         if user_email and recording.owner_email and recording.owner_email.lower() == user_email:
             return True
-        if user_email and recording.calendar_entry_id:
-            organizer = db.scalar(
-                select(CalendarEntry.organizer).where(
-                    CalendarEntry.id == recording.calendar_entry_id
-                )
-            )
-            if organizer and organizer.strip().lower() == user_email:
-                return True
+        attendees = (recording.protocol_meta or {}).get("attendee_emails") or []
+        if user_email and any(str(e).strip().lower() == user_email for e in attendees):
+            return True
+        pred = user_recording_access_predicate(principal)
+        if pred is not False and db.scalar(
+            select(Recording.id).where(Recording.id == recording.id, pred)
+        ):
+            return True
     return False

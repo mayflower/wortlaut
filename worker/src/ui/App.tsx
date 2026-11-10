@@ -9,6 +9,7 @@ import {
 import {
   ApiError,
   PROVIDER_LABELS,
+  claimRecordingAccess,
   completeOidcCallbackIfPresent,
   exitReaderModeToAccount,
   fetchCalendar,
@@ -147,8 +148,29 @@ export function App() {
     if (authMode.kind === 'reader') {
       setSelectedId(authMode.recordingId);
       setActiveNav('meetings');
+      const savedAccount = getSavedAccountToken();
+      if (savedAccount) {
+        let cancelled = false;
+        claimRecordingAccess(
+          savedAccount,
+          authMode.recordingId,
+          authMode.token
+        )
+          .then(() => {
+            if (cancelled) return;
+            const restored = exitReaderModeToAccount();
+            if (restored) {
+              setToken(restored);
+              queryClient.invalidateQueries();
+            }
+          })
+          .catch(() => {});
+        return () => {
+          cancelled = true;
+        };
+      }
     }
-  }, [authMode]);
+  }, [authMode, queryClient]);
 
   const handleStartOidcLogin = () => {
     setAuthError(null);

@@ -1283,7 +1283,9 @@ def test_oidc_dex_pkce_exchange_and_per_user_isolation(client, database, monkeyp
     boot_data = boot.json()
     assert boot_data["invited_by"] == "mara.lindner@mayflower.de"
     assert "mara.lindner@mayflower.de" in boot_data["chat_intro"]
-    assert f"/ui#view=meetings&id={rec_mara_id}" in boot_data["chat_intro"]
+    assert f"/ui#view=meetings&id={rec_mara_id}&token=wortlaut-read-{rec_mara_id}." in boot_data[
+        "chat_intro"
+    ]
     assert "/privacy" in boot_data["chat_intro"]
 
     assert (
@@ -1447,6 +1449,22 @@ def test_oidc_dex_pkce_exchange_and_per_user_isolation(client, database, monkeyp
     assert own_ev["is_self_organized"] is True
     assert own_ev["auto_record"] is True
     assert own_ev["recording_id"] is not None
+
+    from wortlaut.oidc import issue_user_session_token
+
+    kollege_token, _ = issue_user_session_token(
+        sub="sub-kollege",
+        email="kollege@mayflower.de",
+        name="Kollege Mayflower",
+        exp=int(time.time()) + 3600,
+    )
+    kollege_headers = {"Authorization": f"Bearer {kollege_token}"}
+    kollege_list = client.get("/v1/recordings", headers=kollege_headers).json()["items"]
+    assert own_ev["recording_id"] in {r["id"] for r in kollege_list}
+    assert (
+        client.get(f"/v1/recordings/{own_ev['recording_id']}", headers=kollege_headers).status_code
+        == 200
+    )
 
     unconf_ev = events_by_ext["gcal-unconfirmed-3"]
     assert unconf_ev["is_self_organized"] is True

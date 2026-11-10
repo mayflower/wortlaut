@@ -2,6 +2,7 @@ import hmac
 import io
 import json
 import re
+import secrets
 import wave
 from datetime import UTC, datetime, timedelta
 from html import escape
@@ -450,6 +451,38 @@ def export_reader_token(recording: Recording) -> str | None:
         get_settings().api_token.get_secret_value().encode(), domain.encode(), "sha256"
     ).hex()
     return "wortlaut-read-" + signature
+
+
+def chat_reader_token(recording: Recording) -> str | None:
+    if (
+        not recording.request_digest
+        or recording.transcript_deleted_at is not None
+        or recording.metadata_deleted_at is not None
+    ):
+        return None
+    anchor = recording.processing_finished_at or recording.ends_at
+    if anchor is not None and datetime.now(UTC) >= anchor + timedelta(
+        days=get_settings().transcript_retention_days
+    ):
+        return None
+    domain = f"wortlaut.chat.reader.v1:{recording.id}:{recording.request_digest}"
+    signature = hmac.digest(
+        get_settings().api_token.get_secret_value().encode(), domain.encode(), "sha256"
+    ).hex()
+    return "wortlaut-read-" + signature
+
+
+def verify_recording_reader_token(recording: Recording | None, token: str) -> bool:
+    if recording is None or not token:
+        return False
+    clean = token.strip()
+    prefix = f"wortlaut-read-{recording.id}."
+    if clean.lower().startswith(prefix.lower()):
+        clean = "wortlaut-read-" + clean.split(".", 1)[1]
+    for candidate in (export_reader_token(recording), chat_reader_token(recording)):
+        if candidate is not None and secrets.compare_digest(clean.encode(), candidate.encode()):
+            return True
+    return False
 
 
 def timestamp(seconds: float):

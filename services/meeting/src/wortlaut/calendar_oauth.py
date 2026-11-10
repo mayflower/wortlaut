@@ -479,6 +479,17 @@ def _parse_google_items(conn: CalendarConnection, items: list[dict]) -> list[dic
             str(a.get("responseStatus") or "") in ("accepted", "tentative")
             for a in other_attendees
         )
+        attendee_emails = sorted(
+            {
+                *(e for e in self_emails if "@" in e),
+                *([org_email] if org_email and "@" in org_email else []),
+                *(
+                    str(a.get("email") or "").strip().lower()
+                    for a in other_attendees
+                    if "@" in str(a.get("email") or "")
+                ),
+            }
+        )
         title = " ".join(str(item.get("summary") or "").split())[:200] or None
         parsed.append(
             {
@@ -488,6 +499,7 @@ def _parse_google_items(conn: CalendarConnection, items: list[dict]) -> list[dic
                 "starts_at": starts_at,
                 "ends_at": ends_at,
                 "organizer_email": org_email,
+                "attendee_emails": attendee_emails,
                 "is_self_organized": is_self,
                 "default_auto_record": is_self and has_confirmed_attendee,
                 "meeting_provider": meeting_provider,
@@ -560,6 +572,17 @@ def _parse_microsoft_items(conn: CalendarConnection, items: list[dict]) -> list[
             in ("accepted", "tentativelyAccepted")
             for a in other_attendees
         )
+        attendee_emails = sorted(
+            {
+                *(e for e in self_emails if "@" in e),
+                *([org_email] if org_email and "@" in org_email else []),
+                *(
+                    str(((a.get("emailAddress") or {}).get("address")) or "").strip().lower()
+                    for a in other_attendees
+                    if "@" in str(((a.get("emailAddress") or {}).get("address")) or "")
+                ),
+            }
+        )
         title = " ".join(str(item.get("subject") or "").split())[:200] or None
         parsed.append(
             {
@@ -569,6 +592,7 @@ def _parse_microsoft_items(conn: CalendarConnection, items: list[dict]) -> list[
                 "starts_at": starts_at,
                 "ends_at": ends_at,
                 "organizer_email": org_email,
+                "attendee_emails": attendee_emails,
                 "is_self_organized": is_self,
                 "default_auto_record": is_self and has_confirmed_attendee,
                 "meeting_provider": meeting_provider,
@@ -579,13 +603,38 @@ def _parse_microsoft_items(conn: CalendarConnection, items: list[dict]) -> list[
     return parsed
 
 
+def _merge_recording_attendees(recording: Recording, emails: list[str] | set[str]) -> None:
+    clean = {str(e).strip().lower() for e in emails if e and "@" in str(e)}
+    if not clean:
+        return
+    meta = dict(recording.protocol_meta or {})
+    existing = {
+        str(e).strip().lower()
+        for e in (meta.get("attendee_emails") or [])
+        if e and "@" in str(e)
+    }
+    merged = sorted(existing | clean)
+    if merged != meta.get("attendee_emails"):
+        meta["attendee_emails"] = merged
+        recording.protocol_meta = meta
+
+
 def _reconcile_synced_event_recording(
-    db: Session, ev: CalendarSyncedEvent, now: datetime
+    db: Session,
+    ev: CalendarSyncedEvent,
+    now: datetime,
+    attendee_emails: list[str] | None = None,
 ) -> Recording | None:
     recording = db.get(Recording, ev.recording_id) if ev.recording_id else None
     if recording is not None and recording.metadata_deleted_at is not None:
         recording = None
         ev.recording_id = None
+
+    all_emails = set(attendee_emails or [])
+    if ev.owner_email:
+        all_emails.add(ev.owner_email.strip().lower())
+    if ev.organizer_email:
+        all_emails.add(ev.organizer_email.strip().lower())
 
     should_record = ev.status == "confirmed" and ev.auto_record
     if not should_record:
@@ -595,6 +644,8 @@ def _reconcile_synced_event_recording(
         return None
 
     if ev.ends_at <= now:
+        if recording is not None:
+            _merge_recording_attendees(recording, all_emails)
         return recording
 
     if recording is None:
@@ -618,10 +669,13 @@ def _reconcile_synced_event_recording(
                 title=ev.title,
                 starts_at=ev.starts_at,
                 ends_at=ev.ends_at,
+                protocol_meta={"attendee_emails": sorted(all_emails)} if all_emails else {},
             )
             db.add(recording)
             db.flush()
         ev.recording_id = recording.id
+
+    _merge_recording_attendees(recording, all_emails)
 
     if (
         (
@@ -712,7 +766,21 @@ def sync_connection(
                 bool(ev.user_override) if ev.user_override is not None else default_auto
             )
             ev.updated_at = now
-        _reconcile_synced_event_recording(db, ev, now)
+        event_attendees = item.get("attendee_emails") or []
+        _reconcile_synced_event_recording(db, ev, now, attendee_emails=event_attendees)
+        if event_attendees:
+            matching_recs = db.scalars(
+                select(Recording)
+                .where(
+                    Recording.meeting_url == ev.meeting_url,
+                    Recording.metadata_deleted_at.is_(None),
+                    Recording.starts_at <= ev.ends_at + timedelta(hours=1),
+                    Recording.ends_at >= ev.starts_at - timedelta(hours=1),
+                )
+                .with_for_update()
+            ).all()
+            for mrec in matching_recs:
+                _merge_recording_attendees(mrec, event_attendees)
         synced.append(ev)
 
     # Mark previously synced future events in this window that disappeared as cancelled
