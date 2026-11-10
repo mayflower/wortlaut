@@ -506,15 +506,18 @@ def _parse_google_items(conn: CalendarConnection, items: list[dict]) -> list[dic
         meeting_provider, meeting_url = target
         org = item.get("organizer") or {}
         org_email = str(org.get("email") or "").strip().lower() or None
-        is_self = bool(org.get("self")) or (org_email in self_emails if org_email else False)
+        is_self = (org_email in self_emails) if org_email else bool(org.get("self"))
         raw_attendees = item.get("attendees") or []
         other_attendees = [
             a
             for a in raw_attendees
             if isinstance(a, dict)
-            and not a.get("self")
             and not a.get("resource")
-            and str(a.get("email") or "").strip().lower() not in self_emails
+            and (
+                str(a.get("email") or "").strip().lower() not in self_emails
+                if a.get("email")
+                else not a.get("self")
+            )
             and not is_notetaker_bot(
                 str(a.get("email") or ""), str(a.get("displayName") or "")
             )
@@ -595,9 +598,7 @@ def _parse_microsoft_items(conn: CalendarConnection, items: list[dict]) -> list[
         meeting_provider, meeting_url = target
         org = (item.get("organizer") or {}).get("emailAddress") or {}
         org_email = str(org.get("address") or "").strip().lower() or None
-        is_self = bool(item.get("isOrganizer")) or (
-            org_email in self_emails if org_email else False
-        )
+        is_self = (org_email in self_emails) if org_email else bool(item.get("isOrganizer"))
         raw_attendees = item.get("attendees") or []
         other_attendees = [
             a
