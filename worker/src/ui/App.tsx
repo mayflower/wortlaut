@@ -195,17 +195,21 @@ export function App() {
 
   const rawRecordings = recordingsQuery.data?.items || [];
 
-  // Client-side quick status filter
+  // Client-side quick status filter + human-first ordering:
+  // 1. Live/active recordings first,
+  // 2. Recent/ended recordings sorted by starts_at DESC (newest first),
+  // 3. Upcoming scheduled recordings sorted by starts_at ASC (next upcoming first).
   const filteredRecordings = useMemo(() => {
-    return rawRecordings.filter((r) => {
+    const activeStates = new Set([
+      'starting',
+      'preparing',
+      'joining',
+      'waiting_admission',
+      'capturing',
+    ]);
+    const matching = rawRecordings.filter((r) => {
       if (quickFilter === 'active') {
-        return [
-          'starting',
-          'preparing',
-          'joining',
-          'waiting_admission',
-          'capturing',
-        ].includes(r.participation);
+        return activeStates.has(r.participation);
       }
       if (quickFilter === 'scheduled') {
         return r.participation === 'scheduled';
@@ -227,6 +231,22 @@ export function App() {
         );
       }
       return true;
+    });
+
+    const rankOf = (p: string): number => {
+      if (activeStates.has(p)) return 0;
+      if (p !== 'scheduled') return 1;
+      return 2;
+    };
+
+    return [...matching].sort((a, b) => {
+      const rankA = rankOf(a.participation);
+      const rankB = rankOf(b.participation);
+      if (rankA !== rankB) return rankA - rankB;
+      const tA = new Date(a.starts_at).getTime();
+      const tB = new Date(b.starts_at).getTime();
+      // Scheduled meetings: soonest upcoming first; Recent/Active: newest first
+      return rankA === 2 ? tA - tB : tB - tA;
     });
   }, [rawRecordings, quickFilter]);
 

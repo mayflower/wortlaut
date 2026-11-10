@@ -209,7 +209,7 @@ export function RecordingSidebar({
   const showFilterToolbar = !isHomeView || hasActiveFilter;
   const firstName = userName ? userName.trim().split(/\s+/)[0] : null;
   const displayedRecordings =
-    isHomeView && !hasActiveFilter ? recordings.slice(0, 5) : recordings;
+    isHomeView && !hasActiveFilter ? recordings.slice(0, 8) : recordings;
 
   const lobbyRecordings = recordings.filter(
     (r) => r.participation === 'waiting_admission'

@@ -32,7 +32,7 @@ from pydantic import (
     model_serializer,
     model_validator,
 )
-from sqlalchemy import delete, func, or_, select, text, tuple_
+from sqlalchemy import and_, delete, func, or_, select, text, tuple_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
@@ -730,6 +730,13 @@ def list_recordings(
     if starts_from and starts_before and starts_from >= starts_before:
         raise HTTPException(422, "Invalid start-time interval")
     query = select(Recording, Delivery).outerjoin(Delivery)
+    unstarted_cancelled_cal = and_(
+        Recording.idempotency_key.like("cal-oauth-%"),
+        Recording.participation == "ended",
+        Recording.participation_reason == "cancelled",
+        ~select(Attempt.id).where(Attempt.recording_id == Recording.id).exists(),
+    )
+    query = query.where(~unstarted_cancelled_cal)
     if not principal.is_admin:
         user_email = (principal.email or "").lower()
         calendar_match = (
