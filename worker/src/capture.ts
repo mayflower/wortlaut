@@ -223,9 +223,9 @@ export class AudioCapture {
           stream_id: streamId, epoch, start_sample: sample, ...currentBinding});
         return;
       }
-      chunker.flush();
       const sample = chunker.finalSample;
-      if (sample <= lastBoundSample) return;
+      if (sample <= lastBoundSample || (lastBoundSample > 0 && sample - lastBoundSample < 16000 * 2)) return;
+      chunker.flush();
       currentBinding = {...pendingBinding};
       pendingBinding = undefined;
       lastBoundSample = sample;
@@ -281,6 +281,15 @@ export class AudioCapture {
     let stopping: Promise<void> | undefined;
     const handle: Handle = {error: sink.error,
       rebind: (next: Binding) => {
+        if (currentBinding.provider_source_id === next.provider_source_id &&
+            currentBinding.speaker_id === next.speaker_id &&
+            currentBinding.source_kind === next.source_kind &&
+            currentBinding.attribution_unknown === next.attribution_unknown &&
+            currentBinding.participant_id === next.participant_id &&
+            currentBinding.participant_name === next.participant_name) {
+          pendingBinding = undefined;
+          return;
+        }
         const active = pendingBinding ?? currentBinding;
         if (active.provider_source_id === next.provider_source_id &&
             active.speaker_id === next.speaker_id &&

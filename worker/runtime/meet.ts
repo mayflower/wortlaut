@@ -338,6 +338,7 @@ export class MeetBrowser {
   private drained = false;
   private joinSent = false;
   private chatSent = false;
+  private chatAttempts = 0;
   private rosterOpened = false;
   private initialize?: () => Promise<void>;
 
@@ -467,29 +468,38 @@ export class MeetBrowser {
 
   private async sendChatIntro() {
     const text = this.bootstrap.chat_intro?.trim();
-    if (!text) return;
+    if (!text) {
+      this.chatSent = true;
+      return;
+    }
     try {
+      await this.dismissWithoutMedia().catch(() => {});
       const chatBox = this.page.getByRole('textbox', {
         name: /send a message|nachricht.*senden|chat/i,
-      }).or(this.page.locator('textarea[aria-label*="Nachricht" i], textarea[aria-label*="message" i]'));
+      }).or(this.page.locator(
+        'textarea[aria-label*="Nachricht" i], textarea[aria-label*="message" i], ' +
+        '[contenteditable="true"][aria-label*="Nachricht" i], [contenteditable="true"][aria-label*="message" i]'
+      ));
       if (!await visible(chatBox)) {
         const chatToggle = this.page.getByRole('button', {
-          name: /^(?:Chat with everyone|Chat|Nachricht an alle|In-call messages|Nachrichten im Anruf)(?:\b|\s|$)/i,
-        }).and(this.page.locator('[aria-expanded="false"], [aria-pressed="false"], :not([aria-expanded="true"]):not([aria-pressed="true"])')).first();
+          name: /^(?:Chat with everyone|Mit allen chatten|Chat|Nachricht an alle|In-call messages|Nachrichten im Anruf)(?:\b|\s|$)/i,
+        }).or(this.page.locator('button[data-panel-id="2"]'))
+          .and(this.page.locator('[aria-expanded="false"], [aria-pressed="false"], :not([aria-expanded="true"]):not([aria-pressed="true"])')).first();
         if (!await visible(chatToggle)) return;
-        await this.input.click(chatToggle).catch(() => {});
+        await chatToggle.click({timeout: 2500}).catch(() => {});
         await chatBox.first().waitFor({state: 'visible', timeout: 2500}).catch(() => {});
       }
       if (!await visible(chatBox)) return;
-      await this.input.fill(chatBox.first(), text);
+      await chatBox.first().fill(text, {timeout: 2500});
       const sendBtn = this.page.getByRole('button', {
         name: /^(?:Send a message|Send message|Send|Nachricht senden|Senden)(?:\b|\s|$)/i,
       }).first();
       if (await visible(sendBtn) && await sendBtn.isEnabled().catch(() => false)) {
-        await this.input.click(sendBtn).catch(() => {});
+        await sendBtn.click({timeout: 2000}).catch(() => {});
       } else {
         await chatBox.first().press('Enter', {timeout: 2000}).catch(() => {});
       }
+      this.chatSent = true;
     } catch { /* chat intro is non-critical */ }
   }
 
@@ -515,15 +525,16 @@ export class MeetBrowser {
           await visible(this.page.getByRole('button', {name: actions.leave})) &&
           await this.page.locator('[data-self-name], [data-participant-id]').count()) {
         this.participation = 'capturing';
-        if (!this.chatSent) {
-          this.chatSent = true;
+        if (!this.chatSent && this.chatAttempts < 8) {
+          this.chatAttempts += 1;
           await this.sendChatIntro();
         }
-        if (!this.rosterOpened) {
+        if (!this.rosterOpened && (this.chatSent || !this.bootstrap.chat_intro?.trim() || this.chatAttempts >= 3)) {
           this.rosterOpened = true;
           const toggle = this.page.getByRole('button', {
             name: /^(?:People|Participants|Show everyone|Alle anzeigen|Teilnehmer|Personen)(?:\b|\s|$)/i,
-          }).and(this.page.locator('[aria-expanded="false"], [aria-pressed="false"]')).first();
+          }).or(this.page.locator('button[data-panel-id="1"]'))
+            .and(this.page.locator('[aria-expanded="false"], [aria-pressed="false"]')).first();
           if (await visible(toggle)) {
             await this.input.click(toggle).catch(() => {});
           }

@@ -366,9 +366,36 @@ try {
     }, labels);
     await localized.meet.join();
     assert.equal((await localized.meet.inspect()).participation, 'waiting_admission');
+    if (labels.join === 'Jetzt teilnehmen') {
+      (localized.meet as any).bootstrap.chat_intro = 'Hallo aus wortlaut';
+      await localized.page.evaluate(() => {
+        document.querySelector('#waiting')!.textContent = '';
+        const tile = document.createElement('div');
+        tile.dataset.selfName = 'fixture';
+        document.body.append(tile);
+        const chatToggle = document.createElement('button');
+        chatToggle.setAttribute('aria-label', 'Mit allen chatten');
+        chatToggle.setAttribute('data-panel-id', '2');
+        chatToggle.setAttribute('aria-expanded', 'false');
+        chatToggle.onclick = () => {
+          chatToggle.setAttribute('aria-expanded', 'true');
+          (window as any).labelEvents.push('chat-open');
+          const box = document.createElement('textarea');
+          box.setAttribute('aria-label', 'Nachricht senden');
+          const send = document.createElement('button');
+          send.setAttribute('aria-label', 'Nachricht senden');
+          send.onclick = () => { (window as any).labelEvents.push(`chat-send:${box.value}`); };
+          document.body.append(box, send);
+        };
+        document.body.append(chatToggle);
+      });
+      assert.equal((await localized.meet.inspect()).participation, 'capturing');
+    }
     await localized.meet.stop('cancelled');
     assert.deepEqual(await localized.page.evaluate(() => (window as any).labelEvents),
-      ['mic-off', 'camera-off', 'join', 'leave']);
+      labels.join === 'Jetzt teilnehmen'
+        ? ['mic-off', 'camera-off', 'join', 'chat-open', 'chat-send:Hallo aus wortlaut', 'leave']
+        : ['mic-off', 'camera-off', 'join', 'leave']);
     assert.deepEqual(localized.errors, []);
     await localized.context.close();
   }

@@ -22,6 +22,7 @@ export class TeamsBrowser {
   private joined = false;
   private browserClicked = false;
   private chatSent = false;
+  private chatAttempts = 0;
   private rosterOpened = false;
   private drained: boolean | null = null;
 
@@ -136,7 +137,10 @@ export class TeamsBrowser {
 
   private async sendChatIntro() {
     const text = this.bootstrap.chat_intro?.trim();
-    if (!text) return;
+    if (!text) {
+      this.chatSent = true;
+      return;
+    }
     try {
       const chatBox = this.page.getByRole('textbox', {
         name: /type a message|send a message|nachricht.*eingeben|nachricht.*senden|chat/i,
@@ -159,6 +163,7 @@ export class TeamsBrowser {
       } else {
         await chatBox.first().press('Enter', {timeout: 2000}).catch(() => {});
       }
+      this.chatSent = true;
     } catch { /* chat intro is non-critical */ }
   }
 
@@ -179,11 +184,11 @@ export class TeamsBrowser {
     else if (trusted && this.joined && !await this.page.getByRole('button', {name: joinLabel}).isVisible()
       && await this.page.getByRole('button', {name: leaveLabel}).first().isVisible()) {
       participation = 'capturing';
-      if (!this.chatSent) {
-        this.chatSent = true;
+      if (!this.chatSent && this.chatAttempts < 8) {
+        this.chatAttempts += 1;
         await this.sendChatIntro();
       }
-      if (!this.rosterOpened) {
+      if (!this.rosterOpened && (this.chatSent || !this.bootstrap.chat_intro?.trim() || this.chatAttempts >= 3)) {
         this.rosterOpened = true;
         const toggle = this.page.getByRole('button', {
           name: /^(?:People|Participants|Show participants|Teilnehmer|Personen|Teilnehmer anzeigen)(?:\b|\s|$)/i,

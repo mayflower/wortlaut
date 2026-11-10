@@ -16,6 +16,7 @@ export class WebexBrowser {
   private reason = '';
   private joined = false;
   private chatSent = false;
+  private chatAttempts = 0;
   private rosterOpened = false;
   private drained: boolean | null = null;
 
@@ -100,7 +101,10 @@ export class WebexBrowser {
 
   private async sendChatIntro(frame: Frame) {
     const text = this.bootstrap.chat_intro?.trim();
-    if (!text) return;
+    if (!text) {
+      this.chatSent = true;
+      return;
+    }
     try {
       const chatBox = frame.getByRole('textbox', {
         name: /write a message|send a message|enter message|nachricht.*eingeben|nachricht.*schreiben|chat/i,
@@ -116,6 +120,7 @@ export class WebexBrowser {
       if (!await chatBox.first().isVisible().catch(() => false)) return;
       await chatBox.first().fill(text, {timeout: 2500});
       await chatBox.first().press('Enter', {timeout: 2000}).catch(() => {});
+      this.chatSent = true;
     } catch { /* chat intro is non-critical */ }
   }
 
@@ -131,11 +136,11 @@ export class WebexBrowser {
       name: /^(Leave meeting|Leave|Meeting verlassen|Meeting verlassen oder Meeting für alle beenden|Verlassen)(?:\s|$)/i,
     }).first().isVisible()) {
       participation = 'capturing';
-      if (!this.chatSent) {
-        this.chatSent = true;
+      if (!this.chatSent && this.chatAttempts < 8) {
+        this.chatAttempts += 1;
         await this.sendChatIntro(frame);
       }
-      if (!this.rosterOpened) {
+      if (!this.rosterOpened && (this.chatSent || !this.bootstrap.chat_intro?.trim() || this.chatAttempts >= 3)) {
         this.rosterOpened = true;
         const toggle = frame.getByRole('button', {
           name: /^(?:Participants|Show participants|Open participants|People|Teilnehmer|Teilnehmer anzeigen|Teilnehmerbereich öffnen|Personen)(?:\b|\s|$)/i,
