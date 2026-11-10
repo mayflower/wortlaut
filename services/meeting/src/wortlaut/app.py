@@ -545,13 +545,14 @@ def calendar_status(db: Db, principal: AuthPrincipal):
     cal_query = select(CalendarEntry).order_by(CalendarEntry.dtstamp.desc())
     conn_query = select(CalendarConnection).order_by(CalendarConnection.created_at.desc())
     synced_query = select(CalendarSyncedEvent).order_by(CalendarSyncedEvent.starts_at.asc())
-    if not principal.is_admin:
-        user_email = (principal.email or "").lower()
-        cal_query = cal_query.where(func.lower(CalendarEntry.organizer) == user_email)
+    user_email = (principal.email or "").lower()
+    if principal.kind != "operator":
         conn_query = conn_query.where(func.lower(CalendarConnection.owner_email) == user_email)
         synced_query = synced_query.where(
             func.lower(CalendarSyncedEvent.owner_email) == user_email
         )
+    if not principal.is_admin:
+        cal_query = cal_query.where(func.lower(CalendarEntry.organizer) == user_email)
     entries = db.scalars(cal_query.limit(128)).all()
     result = []
     for entry in entries:

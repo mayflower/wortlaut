@@ -1576,6 +1576,10 @@ def test_oidc_dex_pkce_exchange_and_per_user_isolation(client, database, monkeyp
         "gcal-unconfirmed-3",
         "gcal-ext-2",
     }
+    # Admin user's personal calendar view must not leak other users' OAuth calendar connections
+    cal_admin = client.get("/v1/calendar", headers=admin_headers).json()
+    assert cal_admin["connections"] == []
+    assert cal_admin["synced_events"] == []
 
     disc = client.delete(
         f"/v1/calendar/oauth/connections/{gcal_data['connection']['id']}",
