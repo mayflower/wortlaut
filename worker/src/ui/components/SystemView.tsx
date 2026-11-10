@@ -362,12 +362,12 @@ export function SystemView({
                     </MetadataListItem>
                     <MetadataListItem label="Google Calendar OAuth2">
                       {instance.calendarOAuth?.googleEnabled
-                        ? 'Aktiviert (calendar.readonly)'
+                        ? 'Aktiviert (calendar.events)'
                         : 'Nicht konfiguriert'}
                     </MetadataListItem>
                     <MetadataListItem label="Microsoft 365 OAuth2">
                       {instance.calendarOAuth?.microsoftEnabled
-                        ? 'Aktiviert (Calendars.Read)'
+                        ? 'Aktiviert (Calendars.ReadWrite)'
                         : 'Nicht konfiguriert'}
                     </MetadataListItem>
                     <MetadataListItem label="IMAP / SMTP">

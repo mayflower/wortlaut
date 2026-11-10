@@ -129,8 +129,12 @@ def meeting_link(event, mail_text):
 
 
 def entry_json(entry, recording=None):
+    from wortlaut.calendar_oauth import build_protocol_reader_url
+
     provider = recording.provider if recording else None
     title = recording.title if recording else None
+    starts_at = recording.starts_at.isoformat() if recording and recording.starts_at else None
+    ends_at = recording.ends_at.isoformat() if recording and recording.ends_at else None
     if entry.original and (provider is None or title is None):
         try:
             event = Calendar.from_ical(entry.original).walk("VEVENT")[0]
@@ -145,12 +149,17 @@ def entry_json(entry, recording=None):
         "uid": entry.uid,
         "organizer": entry.organizer,
         "title": title,
+        "starts_at": starts_at,
+        "ends_at": ends_at,
         "recurrence_key": entry.recurrence_key,
         "sequence": entry.sequence,
         "dtstamp": entry.dtstamp.isoformat(),
         "status": entry.status,
         "reason": entry.reason,
         "recording_id": str(recording.id) if recording else None,
+        "recording_participation": recording.participation if recording else None,
+        "recording_processing": recording.processing if recording else None,
+        "protocol_url": build_protocol_reader_url(recording) if recording else None,
         "provider": provider,
     }
 

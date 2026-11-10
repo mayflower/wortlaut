@@ -1641,4 +1641,47 @@ def test_oidc_dex_pkce_exchange_and_per_user_isolation(client, database, monkeyp
     assert client.get("/v1/calendar", headers=mara_headers).json()["connections"] == []
 
 
+def test_calendar_protocol_block_injection_and_writeback(monkeypatch):
+    from wortlaut.calendar_oauth import (
+        HTML_MARKER_END,
+        HTML_MARKER_START,
+        PROTOCOL_MARKER_END,
+        PROTOCOL_MARKER_START,
+        _inject_protocol_block_html,
+        _inject_protocol_block_plain,
+    )
+
+    url1 = "https://wortlaut.data.mayflower.tech/ui#view=meetings&id=111&token=wortlaut-read-111.abc"
+    plain1 = _inject_protocol_block_plain("Agenda:\n- Punkt 1", url1)
+    assert plain1.startswith("Agenda:\n- Punkt 1\n\n" + PROTOCOL_MARKER_START)
+    assert url1 in plain1
+    assert plain1.endswith(PROTOCOL_MARKER_END)
+
+    # Idempotent update with summary replaces existing block instead of duplicating
+    plain2 = _inject_protocol_block_plain(plain1, url1, "Kurzfassung des Termins.")
+    assert plain2.count(PROTOCOL_MARKER_START) == 1
+    assert "Zusammenfassung: Kurzfassung des Termins." in plain2
+    assert "Agenda:\n- Punkt 1" in plain2
+
+    html1 = _inject_protocol_block_html(
+        "<html><body><p>Einwahl</p></body></html>", url1, "HTML-Kurzfassung"
+    )
+    assert html1.count(HTML_MARKER_START) == 1
+    assert html1.index(HTML_MARKER_END) < html1.index("</body>")
+    assert "HTML-Kurzfassung" in html1
+    html2 = _inject_protocol_block_html(html1, url1, "Aktualisierte HTML-Kurzfassung")
+    assert html2.count(HTML_MARKER_START) == 1
+    assert "Aktualisierte HTML-Kurzfassung" in html2
+    assert "HTML-Kurzfassung" not in html2.replace("Aktualisierte HTML-Kurzfassung", "")
+
+    # Even if Google/Exchange strips HTML comments, re-injection remains idempotent
+    stripped_comments = html2.replace(HTML_MARKER_START, "").replace(HTML_MARKER_END, "")
+    html3 = _inject_protocol_block_html(stripped_comments, url1, "Dritte HTML-Fassung")
+    assert html3.count("📝 wortlaut Wortprotokoll") == 1
+    assert "Dritte HTML-Fassung" in html3
+    assert "Aktualisierte HTML-Kurzfassung" not in html3
+
+
+
+
 

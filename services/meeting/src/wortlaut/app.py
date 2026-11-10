@@ -45,6 +45,7 @@ from wortlaut.calendar_oauth import (
     calendar_oauth_pass,
     connection_json,
     exchange_calendar_oauth_code,
+    publish_protocol_link_to_calendar_events,
     sync_connection,
     synced_event_json,
     toggle_synced_event,
@@ -554,7 +555,11 @@ async def import_calendar_message(request: Request, db: Db, principal: AuthPrinc
 def calendar_status(db: Db, principal: AuthPrincipal):
     cal_query = select(CalendarEntry).order_by(CalendarEntry.dtstamp.desc())
     conn_query = select(CalendarConnection).order_by(CalendarConnection.created_at.desc())
-    synced_query = select(CalendarSyncedEvent).order_by(CalendarSyncedEvent.starts_at.asc())
+    synced_query = (
+        select(CalendarSyncedEvent)
+        .where(CalendarSyncedEvent.ends_at >= datetime.now(UTC) - timedelta(days=7))
+        .order_by(CalendarSyncedEvent.starts_at.asc())
+    )
     user_email = (principal.email or "").lower()
     if principal.kind != "operator":
         conn_query = conn_query.where(func.lower(CalendarConnection.owner_email) == user_email)
@@ -584,10 +589,25 @@ def calendar_status(db: Db, principal: AuthPrincipal):
         if rec_ids
         else {}
     )
-    synced_events = [
-        synced_event_json(ev, rec_map.get(ev.recording_id) if ev.recording_id else None)
-        for ev in synced_rows
-    ]
+    synced_events = []
+    for ev in synced_rows:
+        rec = rec_map.get(ev.recording_id) if ev.recording_id else None
+        if rec is None and ev.meeting_url:
+            candidate = db.scalar(
+                select(Recording)
+                .where(
+                    Recording.meeting_url == ev.meeting_url,
+                    Recording.metadata_deleted_at.is_(None),
+                    Recording.cancelled_at.is_(None),
+                    Recording.starts_at <= ev.ends_at + timedelta(hours=1),
+                    Recording.ends_at >= ev.starts_at - timedelta(hours=1),
+                )
+                .order_by(Recording.starts_at.desc())
+                .limit(1)
+            )
+            if candidate is not None and can_access_recording(db, principal, candidate):
+                rec = candidate
+        synced_events.append(synced_event_json(ev, rec))
     return {
         "events": result,
         "connections": connections,
@@ -1486,7 +1506,48 @@ def create_recording_summary(
         raise HTTPException(409, str(exc)) from None
     except Exception as exc:
         raise HTTPException(502, f"KI-Zusammenfassung fehlgeschlagen: {exc}") from None
+    try:
+        publish_protocol_link_to_calendar_events(db, recording)
+        db.commit()
+    except Exception:
+        pass
     return {"summary": summary}
+
+
+@app.post("/v1/recordings/{recording_id}/calendar-link")
+def link_recording_in_calendar(
+    recording_id: uuid.UUID,
+    db: Db,
+    principal: AuthPrincipal,
+):
+    recording = db.scalar(select(Recording).where(Recording.id == recording_id).with_for_update())
+    if recording is None or not can_access_recording(db, principal, recording):
+        raise HTTPException(404, "Recording not found")
+    if recording.transcript_deleted_at or recording.metadata_deleted_at:
+        raise HTTPException(410, "Recording retention expired")
+    if recording.processing != "completed":
+        raise HTTPException(409, "Das Protokoll wird noch verarbeitet.")
+    res = publish_protocol_link_to_calendar_events(db, recording, force_empty_audio=True)
+    db.commit()
+    if res["status"] == "no_matching_calendar_event":
+        raise HTTPException(
+            404,
+            "Kein passender Google- oder Microsoft-365-Kalendereintrag "
+            "für diese Besprechung gefunden.",
+        )
+    if res["status"] == "error":
+        err = res.get("error") or "calendar_update_failed"
+        if err == "insufficient_calendar_write_scope":
+            raise HTTPException(
+                403,
+                "Kalender-Berechtigung ist noch auf Read-Only gesetzt. "
+                "Bitte verbinden Sie Ihren Kalender im Tab „Kalender“ einmalig neu, "
+                "um das Eintragen von Protokoll-Links zu aktivieren.",
+            )
+        raise HTTPException(
+            502, f"Kalendereintrag konnte nicht aktualisiert werden ({err})."
+        )
+    return res
 
 
 @app.get("/v1/recordings/{recording_id}/audio-snippet")

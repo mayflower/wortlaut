@@ -124,6 +124,7 @@ export function CalendarWorkspace({
   const instance = getInstanceInfo();
   const failureReasons = getFailureReasons();
   const [copiedMail, setCopiedMail] = useState(false);
+  const [copiedProtocolId, setCopiedProtocolId] = useState<string | null>(null);
   const [oauthBusy, setOauthBusy] = useState<string | null>(null);
   const [oauthError, setOauthError] = useState<string | null>(null);
 
@@ -263,23 +264,56 @@ export function CalendarWorkspace({
     },
     {
       key: 'recording_id',
-      header: '',
-      width: pixel(140),
+      header: 'Protokoll',
+      width: pixel(240),
       align: 'end',
-      renderCell: (ev) =>
-        ev.recording_id ? (
-          <Button
-            variant="ghost"
-            size="sm"
-            label="Öffnen"
-            endContent={<ArrowRight className="h-3.5 w-3.5" />}
-            onClick={() => onSelectRecording(ev.recording_id!)}
-          />
-        ) : (
-          <Text type="supporting" color="secondary">
-            –
-          </Text>
-        ),
+      renderCell: (ev) => {
+        if (!ev.recording_id) {
+          return (
+            <Text type="supporting" color="secondary">
+              –
+            </Text>
+          );
+        }
+        const isCompleted = ev.recording_processing === 'completed';
+        return (
+          <HStack gap={1.5} vAlign="center" justify="end" wrap="nowrap">
+            {ev.calendar_link_synced_at && (
+              <Token size="sm" color="green" label="Im Termin verlinkt" />
+            )}
+            {isCompleted && ev.protocol_url && (
+              <Button
+                variant="ghost"
+                size="sm"
+                icon={
+                  copiedProtocolId === ev.id ? (
+                    <Check className="h-3.5 w-3.5" />
+                  ) : (
+                    <Copy className="h-3.5 w-3.5" />
+                  )
+                }
+                label={copiedProtocolId === ev.id ? 'Kopiert' : 'Link'}
+                onClick={async () => {
+                  try {
+                    await navigator.clipboard.writeText(ev.protocol_url!);
+                    setCopiedProtocolId(ev.id);
+                    setTimeout(() => setCopiedProtocolId(null), 2000);
+                  } catch {
+                    // ignore clipboard errors
+                  }
+                }}
+              />
+            )}
+            <Button
+              variant={isCompleted ? 'secondary' : 'ghost'}
+              size="sm"
+              label={isCompleted ? 'Protokoll öffnen' : 'Öffnen'}
+              endContent={<ArrowRight className="h-3.5 w-3.5" />}
+              onClick={() => onSelectRecording(ev.recording_id!)}
+            />
+          </HStack>
+        );
+      },
     },
   ];
 
@@ -354,19 +388,20 @@ export function CalendarWorkspace({
     },
     {
       key: 'recording_id',
-      header: '',
-      width: pixel(140),
+      header: 'Protokoll',
+      width: pixel(180),
       align: 'end',
       renderCell: (ev) => {
         const recId =
           ev.recording_id ||
           (ev.recording_ids && ev.recording_ids[0]) ||
           null;
+        const isCompleted = ev.recording_processing === 'completed';
         return recId ? (
           <Button
-            variant="ghost"
+            variant={isCompleted ? 'secondary' : 'ghost'}
             size="sm"
-            label="Öffnen"
+            label={isCompleted ? 'Protokoll öffnen' : 'Öffnen'}
             endContent={<ArrowRight className="h-3.5 w-3.5" />}
             onClick={() => onSelectRecording(recId)}
           />
@@ -399,7 +434,8 @@ export function CalendarWorkspace({
                 <Heading level={1}>Kalender &amp; E-Mail-Einladungen</Heading>
                 <Text type="supporting" color="secondary">
                   Verbinden Sie Ihren Google- oder Microsoft-365-Kalender per
-                  OAuth2 (Read-Only) oder laden Sie eine Kalendereinladung hoch.
+                  OAuth2 (inkl. automatischer Protokoll-Verlinkung im Termin)
+                  oder laden Sie eine Kalendereinladung hoch.
                 </Text>
               </VStack>
 
@@ -462,7 +498,7 @@ export function CalendarWorkspace({
                     {googleConn ? (
                       <StatusIndicator variant="success" weight="medium" label="Verbunden" />
                     ) : (
-                      <Token size="sm" color="gray" label="calendar.readonly" />
+                      <Token size="sm" color="gray" label="calendar.events" />
                     )}
                   </HStack>
 
@@ -488,7 +524,8 @@ export function CalendarWorkspace({
                   ) : (
                     <Text type="supporting" color="secondary">
                       Synchronisiert automatisch Termine mit Google Meet-,
-                      Teams- oder Webex-Link aus Ihrem primären Google-Kalender.
+                      Teams-, Webex- oder Zoom-Link und hinterlegt nach dem Call
+                      den Protokoll-Link direkt im Kalendereintrag.
                     </Text>
                   )}
 
@@ -503,6 +540,15 @@ export function CalendarWorkspace({
                           icon={<RefreshCw className="h-3.5 w-3.5" />}
                           label="Jetzt synchronisieren"
                           onClick={() => handleSyncConnection(googleConn.id)}
+                        />
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          isLoading={oauthBusy === 'connect-google'}
+                          isDisabled={oauthBusy !== null}
+                          icon={<Link2 className="h-3.5 w-3.5" />}
+                          label="Berechtigung erneuern"
+                          onClick={() => handleConnectOAuth('google')}
                         />
                         <Button
                           variant="destructive"
@@ -546,7 +592,7 @@ export function CalendarWorkspace({
                     {microsoftConn ? (
                       <StatusIndicator variant="success" weight="medium" label="Verbunden" />
                     ) : (
-                      <Token size="sm" color="gray" label="Calendars.Read" />
+                      <Token size="sm" color="gray" label="Calendars.ReadWrite" />
                     )}
                   </HStack>
 
@@ -572,7 +618,8 @@ export function CalendarWorkspace({
                   ) : (
                     <Text type="supporting" color="secondary">
                       Synchronisiert automatisch Termine mit Microsoft Teams-,
-                      Google Meet- oder Webex-Link über Microsoft Graph.
+                      Google Meet-, Webex- oder Zoom-Link und hinterlegt nach
+                      dem Call den Protokoll-Link direkt im Termin.
                     </Text>
                   )}
 
@@ -587,6 +634,15 @@ export function CalendarWorkspace({
                           icon={<RefreshCw className="h-3.5 w-3.5" />}
                           label="Jetzt synchronisieren"
                           onClick={() => handleSyncConnection(microsoftConn.id)}
+                        />
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          isLoading={oauthBusy === 'connect-microsoft'}
+                          isDisabled={oauthBusy !== null}
+                          icon={<Link2 className="h-3.5 w-3.5" />}
+                          label="Berechtigung erneuern"
+                          onClick={() => handleConnectOAuth('microsoft')}
                         />
                         <Button
                           variant="destructive"

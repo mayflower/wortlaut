@@ -1,24 +1,36 @@
-"""OAuth2 Read-Only Calendar Integration for Google Calendar & Microsoft Graph."""
+"""OAuth2 Calendar Integration for Google Calendar & Microsoft Graph."""
 
 import base64
 import hashlib
 import json
+import logging
 import re
 import uuid
 from datetime import UTC, datetime, timedelta
+from html import escape
 from typing import Literal
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 from cryptography.fernet import Fernet, InvalidToken
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from wortlaut.controller import request_cancellation
+from wortlaut.exports import chat_reader_token
 from wortlaut.ingest import capacity_reached
-from wortlaut.models import CalendarConnection, CalendarSyncedEvent, Recording
+from wortlaut.models import (
+    AsrJob,
+    Attempt,
+    AudioChunk,
+    AudioStream,
+    CalendarConnection,
+    CalendarSyncedEvent,
+    Recording,
+    TranscriptSegment,
+)
 from wortlaut.oidc import Principal
 from wortlaut.settings import get_settings
 from wortlaut.validation import normalize_meeting_url
@@ -135,18 +147,48 @@ def connection_json(conn: CalendarConnection) -> dict:
     }
 
 
+def build_protocol_reader_url(recording: Recording | None) -> str | None:
+    if (
+        recording is None
+        or recording.cancelled_at is not None
+        or recording.metadata_deleted_at is not None
+        or recording.transcript_deleted_at is not None
+        or recording.processing != "completed"
+    ):
+        return None
+    cred = chat_reader_token(recording)
+    if not cred:
+        return None
+    sig = cred.removeprefix("wortlaut-read-")
+    base_url = get_settings().api_url.rstrip("/")
+    return (
+        f"{base_url}/ui#view=meetings&id={recording.id}"
+        f"&token=wortlaut-read-{recording.id}.{sig}"
+    )
+
+
 def synced_event_json(
     ev: CalendarSyncedEvent, recording: Recording | None = None
 ) -> dict:
+    protocol_url: str | None = None
+    calendar_link_synced_at: str | None = None
+    calendar_link_error: str | None = None
     if recording is not None:
         rec_active = (
             recording.cancelled_at is None and recording.metadata_deleted_at is None
         )
         rec_id = str(recording.id) if rec_active else None
         rec_part = recording.participation if rec_active else None
+        rec_proc = recording.processing if rec_active else None
+        if rec_active:
+            protocol_url = build_protocol_reader_url(recording)
+            meta = recording.protocol_meta if isinstance(recording.protocol_meta, dict) else {}
+            calendar_link_synced_at = meta.get("calendar_link_synced_at")
+            calendar_link_error = meta.get("calendar_link_error")
     else:
         rec_id = str(ev.recording_id) if ev.recording_id else None
         rec_part = "scheduled" if ev.recording_id else None
+        rec_proc = None
     return {
         "id": str(ev.id),
         "connection_id": str(ev.connection_id),
@@ -164,6 +206,10 @@ def synced_event_json(
         "user_override": ev.user_override,
         "recording_id": rec_id,
         "recording_participation": rec_part,
+        "recording_processing": rec_proc,
+        "protocol_url": protocol_url,
+        "calendar_link_synced_at": calendar_link_synced_at,
+        "calendar_link_error": calendar_link_error,
     }
 
 
@@ -922,3 +968,286 @@ def calendar_oauth_pass(engine) -> bool:
             sync_connection(db, conn, now=now)
             db.commit()
     return False
+
+
+PROTOCOL_MARKER_START = "--- wortlaut Wortprotokoll ---"
+PROTOCOL_MARKER_END = "--- Ende wortlaut Wortprotokoll ---"
+HTML_MARKER_START = "<!-- wortlaut-protocol-start -->"
+HTML_MARKER_END = "<!-- wortlaut-protocol-end -->"
+
+
+def _inject_protocol_block_plain(
+    existing: str, protocol_url: str, summary_text: str | None = None
+) -> str:
+    lines = [
+        PROTOCOL_MARKER_START,
+        "📝 wortlaut Wortprotokoll",
+        f"Protokoll & Audio-Prüfung: {protocol_url}",
+    ]
+    if summary_text and summary_text.strip():
+        lines.append(f"Zusammenfassung: {' '.join(summary_text.split())}")
+    lines.append(PROTOCOL_MARKER_END)
+    block = "\n".join(lines)
+
+    raw = existing or ""
+    if HTML_MARKER_START in raw and HTML_MARKER_END in raw:
+        pattern = re.compile(
+            re.escape(HTML_MARKER_START) + r".*?" + re.escape(HTML_MARKER_END),
+            re.DOTALL,
+        )
+        raw = pattern.sub("", raw).rstrip()
+    if PROTOCOL_MARKER_START in raw and PROTOCOL_MARKER_END in raw:
+        pattern = re.compile(
+            re.escape(PROTOCOL_MARKER_START) + r".*?" + re.escape(PROTOCOL_MARKER_END),
+            re.DOTALL,
+        )
+        return pattern.sub(lambda _: block, raw)
+    base = raw.rstrip()
+    if not base:
+        return block
+    return f"{base}\n\n{block}"
+
+
+def _inject_protocol_block_html(
+    existing: str, protocol_url: str, summary_text: str | None = None
+) -> str:
+    safe_url = escape(protocol_url, quote=True)
+    summary_html = ""
+    if summary_text and summary_text.strip():
+        safe_sum = escape(" ".join(summary_text.split()))
+        summary_html = f"<br><span><strong>Zusammenfassung:</strong> {safe_sum}</span>"
+    block = (
+        f"{HTML_MARKER_START}"
+        f"<hr>"
+        f"<p><strong>📝 wortlaut Wortprotokoll</strong><br>"
+        f'Protokoll &amp; Audio-Prüfung: <a href="{safe_url}">{safe_url}</a>'
+        f"{summary_html}<br>"
+        f"<small>{PROTOCOL_MARKER_END}</small></p>"
+        f"{HTML_MARKER_END}"
+    )
+
+    raw = existing or ""
+    if PROTOCOL_MARKER_START in raw and PROTOCOL_MARKER_END in raw:
+        pattern = re.compile(
+            re.escape(PROTOCOL_MARKER_START) + r".*?" + re.escape(PROTOCOL_MARKER_END),
+            re.DOTALL,
+        )
+        raw = pattern.sub("", raw).rstrip()
+    if HTML_MARKER_START in raw and HTML_MARKER_END in raw:
+        pattern = re.compile(
+            re.escape(HTML_MARKER_START) + r".*?" + re.escape(HTML_MARKER_END),
+            re.DOTALL,
+        )
+        return pattern.sub(lambda _: block, raw)
+    sanitized_html_pattern = re.compile(
+        r"(?:<hr\s*/?>\s*)?<p[^>]*>\s*<strong>📝 wortlaut Wortprotokoll</strong>.*?"
+        + re.escape(PROTOCOL_MARKER_END)
+        + r"\s*</small>\s*</p>",
+        re.DOTALL | re.IGNORECASE,
+    )
+    if sanitized_html_pattern.search(raw):
+        return sanitized_html_pattern.sub(lambda _: block, raw)
+    body_close = re.search(r"</body\s*>", raw, re.IGNORECASE)
+    if body_close:
+        idx = body_close.start()
+        return f"{raw[:idx]}{block}{raw[idx:]}"
+    base = raw.rstrip()
+    if not base:
+        return block
+    return f"{base}\n{block}"
+
+
+def _patch_provider_event_protocol_link(
+    conn: CalendarConnection,
+    ev: CalendarSyncedEvent,
+    protocol_url: str,
+    summary_text: str | None,
+    now: datetime,
+) -> None:
+    access_token = _ensure_access_token(conn, now)
+    headers = {"Authorization": f"Bearer {access_token}", "Accept": "application/json"}
+    encoded_id = quote(ev.external_event_id, safe="")
+
+    try:
+        if conn.provider == "google":
+            event_url = f"{GOOGLE_CALENDAR_EVENTS_URL}/{encoded_id}"
+            get_resp = httpx.get(event_url, headers=headers, timeout=10.0)
+            if get_resp.status_code == 403:
+                raise ValueError("insufficient_calendar_write_scope")
+            if get_resp.status_code != 200:
+                raise ValueError(f"google_event_get_http_{get_resp.status_code}")
+            current_desc = str(get_resp.json().get("description") or "")
+            looks_html = bool(
+                re.search(r"<(a|br|p|div|hr|ul|li)\b", current_desc, re.IGNORECASE)
+                or HTML_MARKER_START in current_desc
+            )
+            updated_desc = (
+                _inject_protocol_block_html(current_desc, protocol_url, summary_text)
+                if looks_html
+                else _inject_protocol_block_plain(current_desc, protocol_url, summary_text)
+            )
+            send_updates = "all" if ev.is_self_organized else "none"
+            patch_resp = httpx.patch(
+                event_url,
+                params={"sendUpdates": send_updates},
+                json={"description": updated_desc},
+                headers=headers,
+                timeout=10.0,
+            )
+            if patch_resp.status_code == 403:
+                raise ValueError("insufficient_calendar_write_scope")
+            if patch_resp.status_code not in (200, 201):
+                raise ValueError(f"google_event_patch_http_{patch_resp.status_code}")
+            return
+
+        event_url = f"https://graph.microsoft.com/v1.0/me/events/{encoded_id}"
+        get_resp = httpx.get(
+            event_url,
+            params={"$select": "id,body,isOrganizer"},
+            headers=headers,
+            timeout=10.0,
+        )
+        if get_resp.status_code == 403:
+            raise ValueError("insufficient_calendar_write_scope")
+        if get_resp.status_code != 200:
+            raise ValueError(f"microsoft_event_get_http_{get_resp.status_code}")
+        body_obj = get_resp.json().get("body") or {}
+        ctype = str(body_obj.get("contentType") or "HTML")
+        current_content = str(body_obj.get("content") or "")
+        if ctype.lower() == "html":
+            updated_content = _inject_protocol_block_html(
+                current_content, protocol_url, summary_text
+            )
+            patch_ctype = "HTML"
+        else:
+            updated_content = _inject_protocol_block_plain(
+                current_content, protocol_url, summary_text
+            )
+            patch_ctype = "Text"
+        patch_resp = httpx.patch(
+            event_url,
+            json={"body": {"contentType": patch_ctype, "content": updated_content}},
+            headers=headers,
+            timeout=10.0,
+        )
+        if patch_resp.status_code == 403:
+            raise ValueError("insufficient_calendar_write_scope")
+        if patch_resp.status_code not in (200, 201, 204):
+            raise ValueError(f"microsoft_event_patch_http_{patch_resp.status_code}")
+    except httpx.HTTPError as exc:
+        raise ValueError(f"calendar_network_{type(exc).__name__}") from None
+
+
+def publish_protocol_link_to_calendar_events(
+    db: Session,
+    recording: Recording,
+    *,
+    force_empty_audio: bool = False,
+) -> dict:
+    protocol_url = build_protocol_reader_url(recording)
+    if not protocol_url:
+        return {"updated_events": 0, "status": "not_ready", "protocol_url": None}
+
+    if not force_empty_audio:
+        has_content = db.scalar(
+            select(TranscriptSegment.id)
+            .join(AsrJob, AsrJob.id == TranscriptSegment.id)
+            .join(AudioStream, AudioStream.id == AsrJob.stream_id)
+            .join(Attempt, Attempt.id == AudioStream.attempt_id)
+            .where(Attempt.recording_id == recording.id)
+            .limit(1)
+        ) or db.scalar(
+            select(AudioChunk.id)
+            .join(AudioStream, AudioStream.id == AudioChunk.stream_id)
+            .join(Attempt, Attempt.id == AudioStream.attempt_id)
+            .where(
+                Attempt.recording_id == recording.id,
+                AudioChunk.sample_count > 0,
+            )
+            .limit(1)
+        )
+        if not has_content:
+            return {"updated_events": 0, "status": "no_audio_content", "protocol_url": protocol_url}
+
+    now = datetime.now(UTC)
+    events = db.scalars(
+        select(CalendarSyncedEvent)
+        .where(
+            CalendarSyncedEvent.status == "confirmed",
+            or_(
+                CalendarSyncedEvent.recording_id == recording.id,
+                (
+                    (CalendarSyncedEvent.meeting_url == recording.meeting_url)
+                    & (CalendarSyncedEvent.starts_at <= recording.ends_at + timedelta(hours=1))
+                    & (CalendarSyncedEvent.ends_at >= recording.starts_at - timedelta(hours=1))
+                ),
+            ),
+        )
+        .order_by(CalendarSyncedEvent.is_self_organized.desc())
+        .with_for_update()
+    ).all()
+
+    if not events:
+        return {
+            "updated_events": 0,
+            "status": "no_matching_calendar_event",
+            "protocol_url": protocol_url,
+        }
+
+    meta = dict(recording.protocol_meta or {})
+    summary_obj = meta.get("summary")
+    summary_text = (
+        str(summary_obj.get("summary") or "").strip()
+        if isinstance(summary_obj, dict)
+        else None
+    )
+
+    updated_count = 0
+    organizer_patched = False
+    last_error: str | None = None
+    for ev in events:
+        if ev.recording_id is None:
+            ev.recording_id = recording.id
+        if organizer_patched and not ev.is_self_organized:
+            continue
+        conn = db.get(CalendarConnection, ev.connection_id)
+        if conn is None:
+            continue
+        try:
+            _patch_provider_event_protocol_link(
+                conn, ev, protocol_url, summary_text, now
+            )
+            updated_count += 1
+            if ev.is_self_organized:
+                organizer_patched = True
+        except Exception as exc:
+            err_code = str(exc)[:120] if isinstance(exc, ValueError) else type(exc).__name__
+            last_error = err_code
+            logging.getLogger("wortlaut").warning(
+                "calendar_protocol_link_failed recording=%s event=%s error=%s",
+                recording.id,
+                ev.id,
+                err_code,
+            )
+
+    if updated_count > 0:
+        meta["calendar_link_synced_at"] = now.isoformat()
+        meta.pop("calendar_link_error", None)
+        recording.protocol_meta = meta
+        return {
+            "updated_events": updated_count,
+            "status": "linked",
+            "protocol_url": protocol_url,
+            "calendar_link_synced_at": meta["calendar_link_synced_at"],
+        }
+
+    if last_error:
+        meta["calendar_link_error"] = last_error
+        recording.protocol_meta = meta
+    return {
+        "updated_events": 0,
+        "status": "error",
+        "error": last_error or "calendar_update_failed",
+        "protocol_url": protocol_url,
+    }
+

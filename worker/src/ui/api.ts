@@ -162,7 +162,7 @@ export async function startCalendarOAuthConnect(
     authUrl.searchParams.set('response_type', 'code');
     authUrl.searchParams.set(
       'scope',
-      'openid email https://www.googleapis.com/auth/calendar.readonly'
+      'openid email https://www.googleapis.com/auth/calendar.events'
     );
     authUrl.searchParams.set('access_type', 'offline');
     authUrl.searchParams.set('prompt', 'consent');
@@ -187,7 +187,7 @@ export async function startCalendarOAuthConnect(
   authUrl.searchParams.set('response_type', 'code');
   authUrl.searchParams.set(
     'scope',
-    'openid email offline_access Calendars.Read'
+    'openid email offline_access Calendars.ReadWrite'
   );
   authUrl.searchParams.set('prompt', 'select_account');
   authUrl.searchParams.set('state', state);
@@ -774,6 +774,24 @@ export async function issueReaderToken(
   return apiRequest(`/v1/recordings/${encodeURIComponent(recordingId)}/reader-token`, token, {
     method: 'POST',
   });
+}
+
+export async function linkRecordingInCalendar(
+  token: string,
+  recordingId: string
+): Promise<{
+  updated_events: number;
+  status: string;
+  protocol_url: string | null;
+  calendar_link_synced_at?: string;
+}> {
+  return apiRequest(
+    `/v1/recordings/${encodeURIComponent(recordingId)}/calendar-link`,
+    token,
+    {
+      method: 'POST',
+    }
+  );
 }
 
 export async function claimRecordingAccess(

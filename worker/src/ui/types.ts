@@ -174,6 +174,9 @@ export interface TranscriptExport {
   notes?: string;
   speaker_overrides?: Record<string, string>;
   term_replacements?: Record<string, string>;
+  opted_out_speakers?: string[];
+  calendar_link_synced_at?: string | null;
+  calendar_link_error?: string | null;
   quality: {
     no_audio_received: boolean;
     has_audio_gaps: boolean;
@@ -203,6 +206,9 @@ export interface CalendarEvent {
   ends_at: string | null;
   recording_id: string | null;
   recording_ids?: string[];
+  recording_participation?: ParticipationState | null;
+  recording_processing?: ProcessingState | null;
+  protocol_url?: string | null;
 }
 
 export interface CalendarConnectionInfo {
@@ -232,6 +238,10 @@ export interface CalendarSyncedEventInfo {
   user_override: boolean | null;
   recording_id: string | null;
   recording_participation: ParticipationState | null;
+  recording_processing?: ProcessingState | null;
+  protocol_url?: string | null;
+  calendar_link_synced_at?: string | null;
+  calendar_link_error?: string | null;
 }
 
 export interface UserIdentity {

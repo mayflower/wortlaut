@@ -815,6 +815,8 @@ def export_data(db: Session, recording: Recording):
         "speaker_overrides": speaker_overrides,
         "term_replacements": term_replacements,
         "opted_out_speakers": opted_out_list,
+        "calendar_link_synced_at": meta.get("calendar_link_synced_at"),
+        "calendar_link_error": meta.get("calendar_link_error"),
         "attempts": [
             {
                 "id": str(a.id),

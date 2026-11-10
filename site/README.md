@@ -4,9 +4,9 @@ Dieses Verzeichnis enthält die statische, zweisprachige (**Deutsch / Englisch**
 
 ## Dateien
 
-- [`index.html`](index.html) – Vollständige Landingpage im **Astryx Stone Editorial Design** mit Hero-Split-Stage (WebRTC-Einzelspur-Visualizer + UI-Vorschau), Architektur-Kontrast, interaktivem 6-Persona-Rundgang, 4-Provider-Matrix (Google Meet, Microsoft Teams, Cisco Webex, Zoom), Datenschutz-Sektion (`/privacy`), SVG-Systemarchitektur und Open-Source-Quickstart (`https://github.com/mayflower/wortlaut`, GNU AGPLv3).
+- [`index.html`](index.html) – Vollständige Landingpage im **Astryx Stone Editorial Design** mit 5 Hauptsektionen: Hero-Stage (`#top`) mit interaktiver Live-UI-Vorschau, 3-Schritte-Ablauf (`#how-it-works`), interaktive Feature-Tabs (`#features` für Einzelspur-Transkript, 1-Klick-Kalender-Sync, Ad-hoc-Sofort-Aufnahme und E-Mail-Einladung), Datenschutz- & Architektur-Vergleich (`#privacy`) sowie Self-Hosting-Quickstart (`#self-hosting` für Docker Compose und Helm, GNU AGPLv3).
 - [`styles.css`](styles.css) – Design-Tokens (`--stone-*`, `--emerald-*`), Layout-Grids, responsive Breakpoints und Wellenform-Animationen.
-- [`app.js`](app.js) – Zweisprachiges Wörterbuch (`DE` / `EN`, umschaltbar per Button, `localStorage` oder URL-Parameter `?lang=de|en`), interaktive Persona-Tabs, 1-Klick-Kalender-Toggle-Demo, Live-Transkript-Suchfilter und Copy-to-Clipboard für alle Installationsbefehle.
+- [`app.js`](app.js) – Zweisprachiges Wörterbuch (`DE` / `EN`, umschaltbar per Button, `localStorage` oder URL-Parameter `?lang=de|en`), interaktive Feature-Tabs (`role="tablist"` mit Tastaturnavigation), 1-Klick-Kalender-Toggle-Demo und Copy-to-Clipboard für alle Installationsbefehle.
 - [`favicon.svg`](favicon.svg) – `wortlaut` `AudioLines`-Signet.
 - [`CNAME`](CNAME) – Custom-Domain-Konfiguration (`wortlaut.cloud`) für GitHub Pages.
 

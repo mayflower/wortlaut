@@ -261,3 +261,20 @@ def finalize_processing(engine):
                 logging.getLogger("wortlaut").warning(
                     "llm_summary_auto_failed recording=%s error=%s", rec_id, exc
                 )
+
+    if completed_ids:
+        from wortlaut.calendar_oauth import publish_protocol_link_to_calendar_events
+
+        for rec_id in completed_ids:
+            try:
+                with Session(engine) as db:
+                    rec = db.scalar(
+                        select(Recording).where(Recording.id == rec_id).with_for_update()
+                    )
+                    if rec is not None:
+                        publish_protocol_link_to_calendar_events(db, rec)
+                        db.commit()
+            except Exception as exc:
+                logging.getLogger("wortlaut").warning(
+                    "calendar_link_auto_failed recording=%s error=%s", rec_id, exc
+                )

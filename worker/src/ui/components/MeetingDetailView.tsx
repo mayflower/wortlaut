@@ -5,6 +5,7 @@ import {
   Download,
   Edit3,
   FolderOpen,
+  Link2,
   RotateCcw,
   Share2,
   Square,
@@ -28,6 +29,7 @@ import { DropdownMenu } from '@astryxdesign/core/DropdownMenu';
 import { MoreMenu } from '@astryxdesign/core/MoreMenu';
 import { AlertDialog } from '@astryxdesign/core/AlertDialog';
 import { TabList, Tab } from '@astryxdesign/core/TabList';
+import { Token } from '@astryxdesign/core/Token';
 import { Banner } from '@astryxdesign/core/Banner';
 import { EmptyState } from '@astryxdesign/core/EmptyState';
 import {
@@ -40,6 +42,7 @@ import {
   getFailureReasons,
   getInstanceInfo,
   issueReaderToken,
+  linkRecordingInCalendar,
   rejoinRecording,
   retryMailDelivery,
   updateRecordingProtocol,
@@ -272,6 +275,20 @@ export function MeetingDetailView({
     }
   };
 
+  const handleLinkInCalendar = async () => {
+    if (!token) return;
+    setActionError(null);
+    setBusyAction('calendar-link');
+    try {
+      await linkRecordingInCalendar(token, recording.id);
+      onRefresh();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
   const lastAttempt =
     recording.attempts && recording.attempts.length > 0
       ? recording.attempts[recording.attempts.length - 1]
@@ -297,6 +314,18 @@ export function MeetingDetailView({
   const live = recording.live_status;
 
   const operatorMenuItems = [
+    ...(isOperator && recording.processing === 'completed'
+      ? [
+          {
+            id: 'calendar-link',
+            label: transcript.calendar_link_synced_at
+              ? 'Kalender-Link im Termin aktualisieren'
+              : 'Protokoll im Kalendertermin verlinken',
+            icon: <Link2 className="h-3.5 w-3.5" />,
+            onClick: handleLinkInCalendar,
+          },
+        ]
+      : []),
     ...(canRejoin
       ? [
           {
@@ -408,6 +437,9 @@ export function MeetingDetailView({
                     processing={recording.processing}
                     hasError={hasError}
                   />
+                  {transcript.calendar_link_synced_at && (
+                    <Token size="sm" color="green" label="Im Kalender verlinkt" />
+                  )}
                 </HStack>
 
                 <HStack gap={1.5} vAlign="center" wrap="wrap">
