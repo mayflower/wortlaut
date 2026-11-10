@@ -208,6 +208,16 @@ Alternatively, `WORTLAUT_MAIL_SENDER_AUTH=gateway` uses `WORTLAUT_TRUSTED_SENDER
 
 With `WORTLAUT_MAIL_REPLY_TO_SENDER=true`, results go to the validated organizer/inviter, not arbitrary Reply-To or CC addresses. Explicit recipient mappings are available through `WORTLAUT_RESULT_RECIPIENTS`. Results include TXT/VTT/JSON attachments; large results use ZIP or authenticated download instructions. When a calendar-invited recording or a recording ending with a known join/lobby failure finishes without recorded audio, wortlaut sends a failure notification email. An uncertain SMTP result is marked `delivery_unknown`; explicitly retrying delivery may send a duplicate.
 
+## Optional Local LLM Protocol Summary
+
+Structured protocol summaries, topic blocks, and action items are disabled by default (`WORTLAUT_ENABLE_LLM_SUMMARY=false`). When a local Ollama endpoint is available in the cluster, enable it with:
+
+```dotenv
+WORTLAUT_ENABLE_LLM_SUMMARY=true
+WORTLAUT_OLLAMA_URL=http://ollama.ollama.svc.cluster.local:11434
+WORTLAUT_OLLAMA_MODEL=qwen3.8:latest
+```
+
 ## Tests
 
 ```sh
