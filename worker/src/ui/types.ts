@@ -130,14 +130,18 @@ export interface SourceSummary {
 }
 
 export interface TranscriptSegment {
+  id?: string;
   segment_id: string;
   stream_id: string;
   epoch: string;
   provider_source_id: string;
+  participant_id?: string | null;
+  participant_name?: string | null;
   speaker_id: string | null;
   speaker_name: string | null;
   speaker_label: string;
   attribution_status: string;
+  attribution_unknown?: boolean;
   start: number;
   end: number;
   start_sample: number;
@@ -155,6 +159,7 @@ export interface TranscriptExport {
   processing: ProcessingState;
   processing_error: string | null;
   scheduled_period: { start: string; end: string };
+  time_origin_utc?: string | null;
   last_known_audio_utc: string | null;
   quality: {
     no_audio_received: boolean;

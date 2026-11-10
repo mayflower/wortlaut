@@ -31,9 +31,9 @@ import {
   cancelRecording,
   deleteRecording,
   downloadExportFile,
-  formatDurationClock,
   formatDurationHuman,
   formatRecordingTitle,
+  formatWallClockTime,
   getFailureReasons,
   getInstanceInfo,
   issueReaderToken,
@@ -123,11 +123,14 @@ export function MeetingDetailView({
     !recording.cancelled_at;
   const canRejoin = isOperator && recording.participation === 'ended';
 
+  const timeOriginUtc =
+    transcript.time_origin_utc || transcript.scheduled_period?.start;
+
   const handleCopyTranscript = async () => {
     const segs = transcript.segments || [];
     const lines = segs.map(
       (s) =>
-        `[${formatDurationClock(s.start)} - ${formatDurationClock(s.end)}] ${s.speaker_label}: ${s.text}`
+        `[${formatWallClockTime(s.start, timeOriginUtc)} - ${formatWallClockTime(s.end, timeOriginUtc)}] ${s.speaker_label}: ${s.text}`
     );
     const body =
       lines.length > 0
@@ -554,6 +557,7 @@ export function MeetingDetailView({
                   recordingId={recording.id}
                   participation={recording.participation}
                   processing={recording.processing}
+                  timeOriginUtc={timeOriginUtc}
                   segments={transcript.segments || []}
                   sources={transcript.sources_summary || []}
                   selectedSourceFilter={selectedSourceFilter}

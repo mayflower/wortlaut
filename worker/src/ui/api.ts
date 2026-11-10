@@ -7,7 +7,9 @@ import type {
   Provider,
   RecordingDetail,
   RecordingSummary,
+  SourceSummary,
   TranscriptExport,
+  TranscriptSegment,
 } from './types';
 
 const STORAGE_KEY = 'wortlaut_api_token';
@@ -839,6 +841,53 @@ export function formatDurationClock(seconds: number): string {
   const m = Math.floor((totalSec % 3600) / 60);
   const s = totalSec % 60;
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
+
+export function formatWallClockTime(
+  offsetSeconds: number,
+  timeOriginUtc?: string | null
+): string {
+  if (timeOriginUtc) {
+    const originMs = Date.parse(timeOriginUtc);
+    if (Number.isFinite(originMs)) {
+      const dt = new Date(
+        originMs + Math.max(0, Number(offsetSeconds) || 0) * 1000
+      );
+      return dt.toLocaleTimeString('de-DE', {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+      });
+    }
+  }
+  return formatDurationClock(offsetSeconds);
+}
+
+export function getSourceFilterKey(src: SourceSummary): string {
+  if (src.signaled_participant_id) {
+    return `participant:${src.signaled_participant_id}`;
+  }
+  if (src.participant_name) {
+    return `name:${src.participant_name}`;
+  }
+  return src.provider_source_id;
+}
+
+export function matchesSourceFilter(
+  seg: TranscriptSegment,
+  filterKey: string
+): boolean {
+  if (filterKey.startsWith('participant:')) {
+    const targetPid = filterKey.slice('participant:'.length);
+    const segPid = seg.participant_id || seg.speaker_id;
+    return segPid === targetPid;
+  }
+  if (filterKey.startsWith('name:')) {
+    const targetName = filterKey.slice('name:'.length);
+    const segName = seg.participant_name || seg.speaker_name;
+    return segName === targetName;
+  }
+  return seg.provider_source_id === filterKey;
 }
 
 export function formatDurationHuman(seconds: number): string {

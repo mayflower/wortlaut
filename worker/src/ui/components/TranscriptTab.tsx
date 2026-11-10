@@ -13,7 +13,9 @@ import { Divider } from '@astryxdesign/core/Divider';
 import { Button } from '@astryxdesign/core/Button';
 import {
   ATTRIBUTION_STATUS_LABELS,
-  formatDurationClock,
+  formatWallClockTime,
+  getSourceFilterKey,
+  matchesSourceFilter,
 } from '../api';
 import type {
   ParticipationState,
@@ -43,6 +45,7 @@ export interface TranscriptTabProps {
   recordingId: string;
   participation: ParticipationState;
   processing: ProcessingState;
+  timeOriginUtc?: string | null;
   segments: TranscriptSegment[];
   sources: SourceSummary[];
   selectedSourceFilter: string;
@@ -61,6 +64,7 @@ interface GroupedTurn {
   speakerLabel: string;
   speakerName: string | null;
   providerSourceId: string;
+  filterKey: string;
   attributionStatus: string;
   start: number;
   end: number;
@@ -70,6 +74,7 @@ interface GroupedTurn {
 export function TranscriptTab({
   participation,
   processing,
+  timeOriginUtc,
   segments,
   sources,
   selectedSourceFilter,
@@ -82,7 +87,7 @@ export function TranscriptTab({
     return [
       { value: 'all', label: `Alle Sprecher (${sources.length})` },
       ...sources.map((src) => ({
-        value: src.provider_source_id,
+        value: getSourceFilterKey(src),
         label: `${src.participant_name || src.speaker_label || src.provider_source_id} (${src.segment_count})`,
       })),
     ];
@@ -93,13 +98,13 @@ export function TranscriptTab({
     return segments.filter((seg) => {
       if (
         selectedSourceFilter &&
-        seg.provider_source_id !== selectedSourceFilter
+        !matchesSourceFilter(seg, selectedSourceFilter)
       ) {
         return false;
       }
       if (!q) return true;
       const hay =
-        `${seg.speaker_label} ${seg.speaker_name || ''} ${seg.text}`.toLowerCase();
+        `${seg.speaker_label} ${seg.participant_name || seg.speaker_name || ''} ${seg.text}`.toLowerCase();
       return hay.includes(q);
     });
   }, [segments, selectedSourceFilter, searchQuery]);
@@ -109,12 +114,23 @@ export function TranscriptTab({
   const groupedTurns = useMemo<GroupedTurn[]>(() => {
     const turns: GroupedTurn[] = [];
     for (const seg of filteredSegments) {
+      const segId = seg.segment_id || seg.id || `${seg.stream_id}-${seg.start}`;
+      const segPid = seg.participant_id || seg.speaker_id;
+      const segName = seg.participant_name || seg.speaker_name;
+      const segFilterKey = segPid
+        ? `participant:${segPid}`
+        : segName
+          ? `name:${segName}`
+          : seg.provider_source_id;
+      const segAttrStatus =
+        seg.attribution_status ||
+        (seg.attribution_unknown
+          ? 'unknown'
+          : segPid
+            ? 'bound'
+            : 'unbound');
       const prev = turns[turns.length - 1];
-      if (
-        prev &&
-        prev.providerSourceId === seg.provider_source_id &&
-        prev.speakerLabel === seg.speaker_label
-      ) {
+      if (prev && prev.speakerLabel === seg.speaker_label) {
         prev.end = seg.end;
         const lastPara = prev.paragraphs[prev.paragraphs.length - 1];
         if (lastPara && seg.start - lastPara.end <= 8.0) {
@@ -122,7 +138,7 @@ export function TranscriptTab({
           lastPara.text = `${lastPara.text} ${seg.text}`;
         } else {
           prev.paragraphs.push({
-            id: seg.segment_id,
+            id: segId,
             start: seg.start,
             end: seg.end,
             text: seg.text,
@@ -130,16 +146,17 @@ export function TranscriptTab({
         }
       } else {
         turns.push({
-          id: seg.segment_id,
+          id: segId,
           speakerLabel: seg.speaker_label,
-          speakerName: seg.speaker_name,
+          speakerName: segName,
           providerSourceId: seg.provider_source_id,
-          attributionStatus: seg.attribution_status,
+          filterKey: segFilterKey,
+          attributionStatus: segAttrStatus,
           start: seg.start,
           end: seg.end,
           paragraphs: [
             {
-              id: seg.segment_id,
+              id: segId,
               start: seg.start,
               end: seg.end,
               text: seg.text,
@@ -153,7 +170,7 @@ export function TranscriptTab({
 
   const handleCopyTurn = async (turn: GroupedTurn) => {
     if (!navigator.clipboard) return;
-    const text = `[${formatDurationClock(turn.start)}] ${turn.speakerLabel}: ${turn.paragraphs.map((p) => p.text).join('\n')}`;
+    const text = `[${formatWallClockTime(turn.start, timeOriginUtc)}] ${turn.speakerLabel}: ${turn.paragraphs.map((p) => p.text).join('\n')}`;
     await navigator.clipboard.writeText(text).catch(() => {});
     setCopiedTurnId(turn.id);
     setTimeout(() => setCopiedTurnId(null), 1600);
@@ -179,7 +196,8 @@ export function TranscriptTab({
             <span>Alle Sprecher ({sources.length})</span>
           </button>
           {sources.map((src) => {
-            const isSelected = selectedSourceFilter === src.provider_source_id;
+            const filterKey = getSourceFilterKey(src);
+            const isSelected = selectedSourceFilter === filterKey;
             const pct = Math.min(
               100,
               Math.round(((src.speech_seconds || 0) / totalSpeechSec) * 100)
@@ -190,12 +208,10 @@ export function TranscriptTab({
               src.provider_source_id;
             return (
               <button
-                key={src.provider_source_id}
+                key={filterKey}
                 type="button"
                 onClick={() =>
-                  onSelectedSourceFilterChange(
-                    isSelected ? '' : src.provider_source_id
-                  )
+                  onSelectedSourceFilterChange(isSelected ? '' : filterKey)
                 }
                 className={`wl-speaker-chip ${isSelected ? 'active' : ''}`}
               >
@@ -311,9 +327,9 @@ export function TranscriptTab({
                             type="button"
                             onClick={() =>
                               onSelectedSourceFilterChange(
-                                selectedSourceFilter === turn.providerSourceId
+                                selectedSourceFilter === turn.filterKey
                                   ? ''
-                                  : turn.providerSourceId
+                                  : turn.filterKey
                               )
                             }
                             className="font-semibold text-sm text-[var(--color-text-primary)] hover:text-[var(--color-text-accent)] cursor-pointer"
@@ -325,8 +341,8 @@ export function TranscriptTab({
                             color="secondary"
                             hasTabularNumbers
                           >
-                            {formatDurationClock(turn.start)} –{' '}
-                            {formatDurationClock(turn.end)}
+                            {formatWallClockTime(turn.start, timeOriginUtc)} –{' '}
+                            {formatWallClockTime(turn.end, timeOriginUtc)}
                           </Text>
                           {!isBound && (
                             <Token
@@ -368,7 +384,7 @@ export function TranscriptTab({
                                 color="secondary"
                                 hasTabularNumbers
                               >
-                                [{formatDurationClock(para.start)}]
+                                [{formatWallClockTime(para.start, timeOriginUtc)}]
                               </Text>
                             )}
                             <Text type="body" color="primary">

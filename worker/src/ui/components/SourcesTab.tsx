@@ -11,7 +11,7 @@ import { Button } from '@astryxdesign/core/Button';
 import { Text } from '@astryxdesign/core/Text';
 import { VStack } from '@astryxdesign/core/VStack';
 import { EmptyState } from '@astryxdesign/core/EmptyState';
-import { formatDurationHuman } from '../api';
+import { formatDurationHuman, getSourceFilterKey } from '../api';
 import type { SourceSummary } from '../types';
 import { StatusIndicator } from './ui/primitives';
 
@@ -21,7 +21,7 @@ export interface SourcesTabProps {
   onSelectSourceForTranscript: (sourceId: string) => void;
 }
 
-type SourceRow = SourceSummary & Record<string, unknown>;
+type SourceRow = SourceSummary & { filter_key: string } & Record<string, unknown>;
 
 export function SourcesTab({
   sources,
@@ -37,6 +37,11 @@ export function SourcesTab({
       />
     );
   }
+
+  const rows: SourceRow[] = sources.map((src) => ({
+    ...src,
+    filter_key: getSourceFilterKey(src),
+  }));
 
   const columns: TableColumn<SourceRow>[] = [
     {
@@ -112,7 +117,9 @@ export function SourcesTab({
       width: pixel(140),
       align: 'end',
       renderCell: (src) => {
-        const isFiltered = selectedSourceFilter === src.provider_source_id;
+        const isFiltered =
+          selectedSourceFilter === src.filter_key ||
+          selectedSourceFilter === src.provider_source_id;
         return (
           <span
             className="filter-source-btn"
@@ -123,9 +130,7 @@ export function SourcesTab({
               size="sm"
               icon={<Filter className="h-3.5 w-3.5" />}
               label={isFiltered ? 'Aktiv' : 'Filtern'}
-              onClick={() =>
-                onSelectSourceForTranscript(src.provider_source_id)
-              }
+              onClick={() => onSelectSourceForTranscript(src.filter_key)}
             />
           </span>
         );
@@ -141,11 +146,11 @@ export function SourcesTab({
       </Text>
 
       <Table<SourceRow>
-        idKey="provider_source_id"
+        idKey="filter_key"
         density="balanced"
         dividers="rows"
         hasHover
-        data={sources as SourceRow[]}
+        data={rows}
         columns={columns}
       />
     </VStack>

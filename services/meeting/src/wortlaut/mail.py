@@ -24,7 +24,7 @@ from wortlaut.exports import (
     group_transcript_turns,
     provider_label,
     render_export,
-    short_timestamp,
+    wall_clock_time_de,
 )
 from wortlaut.models import Attempt, AudioChunk, AudioStream, CalendarEntry, Delivery, Recording
 from wortlaut.settings import get_settings
@@ -195,6 +195,7 @@ def _build_completed_bodies(
     title: str,
     human_provider: str,
     human_period: str,
+    time_origin_utc: str | None = None,
     speakers: list[dict],
     turns: list[dict],
     notices: list[str],
@@ -259,7 +260,7 @@ def _build_completed_bodies(
             plain_lines.append("Keine gesprochenen Textsegmente im Aufzeichnungszeitraum erkannt.")
         else:
             for turn in inline_turns:
-                ts = short_timestamp(turn["start"])
+                ts = wall_clock_time_de(time_origin_utc, turn["start"])
                 plain_lines.append(f"[{ts}] {turn['speaker']}:")
                 plain_lines.append(turn["snippet"])
                 plain_lines.append("")
@@ -328,7 +329,7 @@ def _build_completed_bodies(
             blocks = []
             for turn in inline_turns:
                 bg, fg = color_by_speaker.get(turn["speaker"], ("#f1f5f9", "#334155"))
-                ts = short_timestamp(turn["start"])
+                ts = wall_clock_time_de(time_origin_utc, turn["start"])
                 blocks.append(
                     "<div style='padding:12px 0;border-bottom:1px solid #f1f5f9;'>"
                     "<div style='margin-bottom:5px;'>"
@@ -446,12 +447,14 @@ def build_message(db, recording, delivery):
     if data["processing_error"] or quality["failed_asr_ranges"]:
         notices.append("Einzelne Audioabschnitte konnten nicht vollständig transkribiert werden.")
 
+    time_origin_utc = data.get("time_origin_utc") or period.get("start")
     speakers = _speaker_breakdown(data)
     turns = group_transcript_turns(data.get("segments") or [])
     plain_body, html_body = _build_completed_bodies(
         title=title,
         human_provider=human_provider,
         human_period=human_period,
+        time_origin_utc=time_origin_utc,
         speakers=speakers,
         turns=turns,
         notices=notices,
@@ -478,6 +481,7 @@ def build_message(db, recording, delivery):
             title=title,
             human_provider=human_provider,
             human_period=human_period,
+            time_origin_utc=time_origin_utc,
             speakers=speakers,
             turns=turns,
             notices=notices,

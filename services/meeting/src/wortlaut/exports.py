@@ -80,6 +80,78 @@ def short_timestamp(seconds: float) -> str:
     return f"{minutes:02d}:{secs:02d}"
 
 
+def wall_clock_time_de(origin_iso: str | None, offset_seconds: float) -> str:
+    if not origin_iso:
+        return short_timestamp(offset_seconds)
+    try:
+        origin_dt = datetime.fromisoformat(origin_iso)
+        if origin_dt.tzinfo is None:
+            origin_dt = origin_dt.replace(tzinfo=UTC)
+        wall_dt = (origin_dt + timedelta(seconds=max(0.0, float(offset_seconds)))).astimezone(
+            BERLIN_TZ
+        )
+        return wall_dt.strftime("%H:%M:%S")
+    except (ValueError, TypeError):
+        return short_timestamp(offset_seconds)
+
+
+_BOUNDARY_NOISE_PHRASES = frozenset(
+    {
+        "yeah",
+        "yeah.",
+        "okay",
+        "okay.",
+        "mm",
+        "mm.",
+        "mm-hmm",
+        "mm-hmm.",
+        "oh",
+        "oh.",
+        "yes",
+        "yes.",
+        "uh",
+        "um",
+        "and",
+        "well",
+        "well.",
+        "so",
+        "thank you",
+        "thank you.",
+        "thanks",
+        "thanks.",
+        "right",
+        "right.",
+        "sure",
+        "sure.",
+        "i don't know.",
+        "i don't want to.",
+        "that's okay.",
+        "second.",
+        "six.",
+        "talk to",
+    }
+)
+
+_SHORT_BOUND_NOISE_TOKENS = frozenset(
+    {
+        "yeah",
+        "yeah.",
+        "okay",
+        "okay.",
+        "mm",
+        "mm.",
+        "mm-hmm",
+        "mm-hmm.",
+        "oh",
+        "oh.",
+        "well.",
+        "so",
+        "sure.",
+        "talk to",
+    }
+)
+
+
 def group_transcript_turns(segments: list[dict], max_turn_chars: int = 900) -> list[dict]:
     turns: list[dict] = []
     for seg in segments:
@@ -193,29 +265,52 @@ def export_data(db: Session, recording: Recording):
         pid = seg.get("participant_id") or seg.get("speaker_id")
         if pid and seg.get("participant_name"):
             participant_names[pid] = seg["participant_name"]
+    anchors = [datetime.fromisoformat(s.contract["session_utc_origin"]) for s in streams]
+    origin = min(anchors) if anchors else recording.starts_at
     unambiguous_stream_bindings: dict[tuple[str, str], tuple[str, str | None, str]] = {}
+    observed_by_stream: dict[tuple[str, str], set[tuple[str, str | None, str]]] = {}
+    stream_bind_timeline: dict[tuple[str, str], list[tuple[float, str, str, str, str | None]]] = {}
     for s in streams:
         key = (str(s.stream_id), str(s.epoch))
+        s_delta = (
+            datetime.fromisoformat(s.contract["session_utc_origin"]) - origin
+        ).total_seconds()
+        s_mono_delta = (
+            s.contract.get("monotonic_origin_ms", 0)
+            - s.contract.get("session_monotonic_origin_ms", 0)
+        ) / 1000.0
         observed: set[tuple[str, str | None, str]] = set()
+        timeline: list[tuple[float, str, str, str, str | None]] = []
         if not s.contract.get("attribution_unknown"):
             pid = s.contract.get("participant_id") or s.contract.get("speaker_id")
             if pid:
-                observed.add(
+                spk = s.contract.get("speaker_id") or pid
+                kind = s.contract.get("source_kind", "speaker")
+                observed.add((pid, spk, kind))
+                timeline.append(
                     (
+                        s_delta + s_mono_delta,
                         pid,
-                        s.contract.get("speaker_id") or pid,
-                        s.contract.get("source_kind", "speaker"),
+                        spk,
+                        kind,
+                        s.contract.get("participant_name") or participant_names.get(pid),
                     )
                 )
         for ctrl in bind_controls:
             if ctrl.stream_id == s.id and not ctrl.contract.get("attribution_unknown"):
                 pid = ctrl.contract.get("participant_id") or ctrl.contract.get("speaker_id")
                 if pid:
-                    observed.add(
+                    spk = ctrl.contract.get("speaker_id") or pid
+                    kind = ctrl.contract.get("source_kind", "speaker")
+                    observed.add((pid, spk, kind))
+                    ctrl_sec = s_delta + s_mono_delta + (ctrl.start_sample or 0) / RATE
+                    timeline.append(
                         (
+                            ctrl_sec,
                             pid,
-                            ctrl.contract.get("speaker_id") or pid,
-                            ctrl.contract.get("source_kind", "speaker"),
+                            spk,
+                            kind,
+                            ctrl.contract.get("participant_name") or participant_names.get(pid),
                         )
                     )
         for seg in segments:
@@ -225,18 +320,33 @@ def export_data(db: Session, recording: Recording):
             ):
                 pid = seg.get("participant_id") or seg.get("speaker_id")
                 if pid:
-                    observed.add(
+                    spk = seg.get("speaker_id") or pid
+                    kind = seg.get("source_kind", "speaker")
+                    observed.add((pid, spk, kind))
+                    seg_delta = (
+                        datetime.fromisoformat(seg["session_utc_origin"]) - origin
+                    ).total_seconds()
+                    timeline.append(
                         (
+                            seg["start"] + seg_delta,
                             pid,
-                            seg.get("speaker_id") or pid,
-                            seg.get("source_kind", "speaker"),
+                            spk,
+                            kind,
+                            seg.get("participant_name") or participant_names.get(pid),
                         )
                     )
+        observed_by_stream[key] = observed
         if len(observed) == 1:
             unambiguous_stream_bindings[key] = next(iter(observed))
-    anchors = [datetime.fromisoformat(s.contract["session_utc_origin"]) for s in streams]
-    origin = min(anchors) if anchors else recording.starts_at
+        if timeline:
+            timeline.sort(key=lambda x: x[0])
+            stream_bind_timeline[key] = timeline
+
+    resolved_segments: list[dict] = []
     for segment in segments:
+        clean_text = " ".join((segment.get("text") or "").split())
+        if not clean_text:
+            continue
         delta = (datetime.fromisoformat(segment["session_utc_origin"]) - origin).total_seconds()
         segment["start"] += delta
         segment["end"] += delta
@@ -245,17 +355,62 @@ def export_data(db: Session, recording: Recording):
             for word in segment["words"]
         ]
         stream_key = (segment.get("stream_id"), segment.get("epoch"))
-        if segment.get("attribution_unknown") and stream_key in unambiguous_stream_bindings:
-            resolved_pid, resolved_spk, resolved_kind = unambiguous_stream_bindings[stream_key]
+        dur = max(0.0, segment["end"] - segment["start"])
+        has_stream_bindings = (
+            stream_key in unambiguous_stream_bindings
+            or bool(stream_bind_timeline.get(stream_key))
+        )
+        if segment.get("attribution_unknown") and has_stream_bindings:
+            if (
+                stream_key not in unambiguous_stream_bindings
+                and clean_text.lower() in _BOUNDARY_NOISE_PHRASES
+                and dur <= 0.65
+            ):
+                continue
+            if stream_key in unambiguous_stream_bindings:
+                resolved_pid, resolved_spk, resolved_kind = unambiguous_stream_bindings[stream_key]
+                resolved_name = participant_names.get(resolved_pid)
+            else:
+                tl = stream_bind_timeline[stream_key]
+                before = [b for b in tl if b[0] <= segment["end"] + 0.35]
+                after = [b for b in tl if b[0] > segment["start"]]
+                if before and after:
+                    if after[0][0] - segment["end"] <= 2.5 or before[-1][1] == after[0][1]:
+                        chosen = after[0]
+                    else:
+                        chosen = before[-1]
+                elif before:
+                    chosen = before[-1]
+                else:
+                    chosen = after[0]
+                _, resolved_pid, resolved_spk, resolved_kind, resolved_name = chosen
             segment["attribution_unknown"] = False
             segment["participant_id"] = resolved_pid
             segment["speaker_id"] = resolved_spk if resolved_kind == "speaker" else None
             segment["source_kind"] = resolved_kind
+            if resolved_name and not segment.get("participant_name"):
+                segment["participant_name"] = resolved_name
+        elif (
+            not segment.get("attribution_unknown")
+            and len(observed_by_stream.get(stream_key, ())) > 1
+            and clean_text.lower() in _SHORT_BOUND_NOISE_TOKENS
+            and dur <= 0.35
+        ):
+            continue
         pid = segment.get("participant_id") or segment.get("speaker_id")
         if not segment.get("attribution_unknown") and not segment.get("participant_name") and pid:
             if pid in participant_names:
                 segment["participant_name"] = participant_names[pid]
         segment["speaker_label"] = speaker_label(segment, participant_names)
+        segment["segment_id"] = segment["id"]
+        segment["speaker_name"] = segment.get("participant_name")
+        segment["attribution_status"] = (
+            "unknown"
+            if segment.get("attribution_unknown")
+            else ("bound" if pid else "unbound")
+        )
+        resolved_segments.append(segment)
+    segments = resolved_segments
     segments.sort(key=lambda s: (s["start"], s["stream_id"], s["id"]))
     qualities = [
         {
@@ -462,11 +617,22 @@ def _build_sources_summary(
                     or (participant_names.get(eff_sig_id) if eff_sig_id else None)
                     or part_name
                 )
+                sample_txt = next(
+                    (
+                        " ".join(g.get("text", "").split())[:140]
+                        for g in group_segs
+                        if " ".join(g.get("text", "").split())
+                    ),
+                    "",
+                )
                 summary.append(
                     {
                         "provider_source_id": sid,
                         "participant_name": eff_name,
                         "signaled_participant_id": eff_sig_id,
+                        "speaker_label": (
+                            group_segs[0].get("speaker_label") or eff_name or eff_sig_id or sid
+                        ),
                         "csi": rcv.get("csi"),
                         "source_kind": kind,
                         "segment_count": len(group_segs),
@@ -475,7 +641,7 @@ def _build_sources_summary(
                         ),
                         "accepted_seconds": accepted_sec,
                         "first_start": group_segs[0]["start"],
-                        "sample_text": " ".join(group_segs[0]["text"].split())[:140],
+                        "sample_text": sample_txt,
                     }
                 )
         else:
@@ -484,6 +650,7 @@ def _build_sources_summary(
                     "provider_source_id": sid,
                     "participant_name": part_name,
                     "signaled_participant_id": sig_id,
+                    "speaker_label": part_name or sig_id or sid,
                     "csi": rcv.get("csi"),
                     "source_kind": kind,
                     "segment_count": 0,
@@ -505,6 +672,8 @@ def _build_sources_summary(
             )
             if not existing.get("participant_name") and item.get("participant_name"):
                 existing["participant_name"] = item["participant_name"]
+            if not existing.get("sample_text") and item.get("sample_text"):
+                existing["sample_text"] = item["sample_text"]
         else:
             if pid:
                 by_participant[pid] = item

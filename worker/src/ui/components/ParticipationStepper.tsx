@@ -19,6 +19,7 @@ import {
   formatDurationHuman,
   getFailureReasons,
   getInstanceInfo,
+  getSourceFilterKey,
 } from '../api';
 import type { RecordingDetail, SourceSummary, TranscriptExport } from '../types';
 
@@ -230,8 +231,8 @@ export function ParticipationStepper({
 
             <VStack gap={2}>
               {sources.map((src) => {
-                const isSelected =
-                  selectedSourceFilter === src.provider_source_id;
+                const filterKey = getSourceFilterKey(src);
+                const isSelected = selectedSourceFilter === filterKey;
                 const pct = Math.min(
                   100,
                   Math.round(((src.speech_seconds || 0) / totalSpeechSec) * 100)
@@ -243,11 +244,9 @@ export function ParticipationStepper({
 
                 return (
                   <div
-                    key={src.provider_source_id}
+                    key={filterKey}
                     onClick={() =>
-                      onSelectSourceFilter?.(
-                        isSelected ? '' : src.provider_source_id
-                      )
+                      onSelectSourceFilter?.(isSelected ? '' : filterKey)
                     }
                     className="cursor-pointer rounded-md p-1.5 transition-colors hover:bg-[var(--color-background-muted)]"
                   >

@@ -2,6 +2,7 @@
 
 import hashlib
 import logging
+import struct
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
@@ -17,6 +18,7 @@ from wortlaut.storage import canonical, get_storage
 
 RATE = 16000
 FRAME = 480  # WebRTC VAD: 30 ms, aggressiveness 2.
+MIN_SPEECH_PEAK = 150  # Ignore digital comfort noise (-46 dBFS threshold on int16 PCM).
 PRE_ROLL = 4800  # 300 ms
 POST_ROLL = 2400  # 150 ms
 SILENCE = 9600  # 600 ms
@@ -379,7 +381,9 @@ def speech_section(pcm: bytes, cursor: int, terminal: bool):
                 break
             frame = frame.ljust(FRAME * 2, b"\0")  # VAD-only padding, never sent to ASR.
         frame_start, frame_end = cursor + offset, min(cursor + offset + FRAME, available)
-        if vad.is_speech(frame, RATE):
+        frame_samples = struct.unpack(f"<{FRAME}h", frame)
+        frame_peak = max(abs(x) for x in frame_samples)
+        if frame_peak >= MIN_SPEECH_PEAK and vad.is_speech(frame, RATE):
             first = frame_start if first is None else first
             last = frame_end
         if first is None and frame_end - cursor >= SILENCE_CHECKPOINT:

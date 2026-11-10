@@ -1229,10 +1229,15 @@ function install(config: MeetCaptureConfig) {
     }
     const filtered = Number.isFinite(maxTs)
       ? items.filter((item) =>
-          typeof item.timestamp !== 'number' || !Number.isFinite(item.timestamp) || maxTs - item.timestamp <= 750)
+          typeof item.timestamp !== 'number' || !Number.isFinite(item.timestamp) || maxTs - item.timestamp <= 25)
       : items;
     return filtered.map((item) => item.source);
   }
+
+  const lastResolvedBindings = new WeakMap<RTCRtpReceiver, {
+    csi: number | null; signaled_participant_id: string | null;
+    participant_name: string | null; source_kind: 'speaker' | 'share_audio'; bound: boolean;
+  }>();
 
   function resolveReceiver(receiver: RTCRtpReceiver): {
     csi: number | null; signaled_participant_id: string | null;
@@ -1242,14 +1247,18 @@ function install(config: MeetCaptureConfig) {
       return {csi: null, signaled_participant_id: null, participant_name: null, source_kind: 'speaker', bound: false};
     }
     const lastFrame = observations.get(receiver)?.evidence.last_frame;
-    const csrcs = [...new Set([
-      ...recentRtpSources(receiver.getContributingSources()),
-      ...(Array.isArray(lastFrame?.contributing_sources) ? (lastFrame.contributing_sources as number[]) : []),
-    ].filter(validCsi))];
-    const ssrcs = [...new Set([
-      ...recentRtpSources(receiver.getSynchronizationSources()),
-      ...(validCsi(lastFrame?.synchronization_source) ? [lastFrame.synchronization_source] : []),
-    ].filter(validCsi))];
+    const recentCsrcs = recentRtpSources(receiver.getContributingSources()).filter(validCsi);
+    const csrcs = [...new Set(
+      recentCsrcs.length > 0
+        ? recentCsrcs
+        : (Array.isArray(lastFrame?.contributing_sources) ? (lastFrame.contributing_sources as number[]) : []).filter(validCsi),
+    )];
+    const recentSsrcs = recentRtpSources(receiver.getSynchronizationSources()).filter(validCsi);
+    const ssrcs = [...new Set(
+      recentSsrcs.length > 0
+        ? recentSsrcs
+        : (validCsi(lastFrame?.synchronization_source) ? [lastFrame.synchronization_source] : []).filter(validCsi),
+    )];
 
     const matchByCsi = (candidates: number[]) => {
       const hits: {id: string; name: string | null; kind: 'speaker' | 'share_audio'; csi: number}[] = [];
@@ -1265,27 +1274,40 @@ function install(config: MeetCaptureConfig) {
       return 'ambiguous' as const;
     };
 
+    const remember = (res: {
+      csi: number | null; signaled_participant_id: string | null;
+      participant_name: string | null; source_kind: 'speaker' | 'share_audio'; bound: boolean;
+    }) => {
+      if (res.bound && res.signaled_participant_id) {
+        lastResolvedBindings.set(receiver, res);
+      }
+      return res;
+    };
+
     if (csrcs.length > 0) {
       const csrcMatch = matchByCsi(csrcs);
       if (csrcMatch === 'ambiguous') {
+        lastResolvedBindings.delete(receiver);
         return {csi: null, signaled_participant_id: null, participant_name: null, source_kind: 'speaker', bound: false};
       }
       if (csrcMatch) {
-        return {csi: csrcMatch.csi, signaled_participant_id: csrcMatch.id,
-          participant_name: csrcMatch.name, source_kind: csrcMatch.kind, bound: true};
+        return remember({csi: csrcMatch.csi, signaled_participant_id: csrcMatch.id,
+          participant_name: csrcMatch.name, source_kind: csrcMatch.kind, bound: true});
       }
       if (csrcs.length > 1) {
+        lastResolvedBindings.delete(receiver);
         return {csi: null, signaled_participant_id: null, participant_name: null, source_kind: 'speaker', bound: false};
       }
     }
     if (ssrcs.length > 0) {
       const ssrcMatch = matchByCsi(ssrcs);
       if (ssrcMatch === 'ambiguous') {
+        lastResolvedBindings.delete(receiver);
         return {csi: null, signaled_participant_id: null, participant_name: null, source_kind: 'speaker', bound: false};
       }
       if (ssrcMatch) {
-        return {csi: ssrcMatch.csi, signaled_participant_id: ssrcMatch.id,
-          participant_name: ssrcMatch.name, source_kind: ssrcMatch.kind, bound: true};
+        return remember({csi: ssrcMatch.csi, signaled_participant_id: ssrcMatch.id,
+          participant_name: ssrcMatch.name, source_kind: ssrcMatch.kind, bound: true});
       }
     }
     const streamIds = receiverStreams?.get(receiver) ?? [];
@@ -1294,8 +1316,16 @@ function install(config: MeetCaptureConfig) {
     if (trackMatches.length === 1) {
       const p = trackMatches[0];
       const firstCsi = [...p.audio_csis][0] ?? null;
-      return {csi: firstCsi, signaled_participant_id: p.participant_id,
-        participant_name: p.participant_name, source_kind: 'speaker', bound: true};
+      return remember({csi: firstCsi, signaled_participant_id: p.participant_id,
+        participant_name: p.participant_name, source_kind: 'speaker', bound: true});
+    }
+    const previous = lastResolvedBindings.get(receiver);
+    if (previous && csrcs.length === 0 && previous.signaled_participant_id) {
+      const latestParticipant = participants.get(previous.signaled_participant_id);
+      return {
+        ...previous,
+        participant_name: latestParticipant?.participant_name ?? previous.participant_name,
+      };
     }
     return {csi: null, signaled_participant_id: null, participant_name: null, source_kind: 'speaker', bound: false};
   }
