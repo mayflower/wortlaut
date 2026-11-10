@@ -709,6 +709,7 @@ def _reconcile_synced_event_recording(
         )
         if other_refs is None:
             request_cancellation(recording, now)
+            recording.metadata_deleted_at = now
         recording = canonical
 
     if recording is None:
