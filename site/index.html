@@ -1,10 +1,19 @@
 <!doctype html>
-<html lang="de">
+<html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>wortlaut.cloud — Automatische Wortprotokolle für deine Meetings. 100 % selbst gehostet.</title>
-  <meta name="description" content="wortlaut erstellt verlässliche, nach Sprechern getrennte Wortprotokolle für Google Meet, Microsoft Teams, Cisco Webex und Zoom – komplett auf eurer eigenen Infrastruktur unter GNU AGPLv3." />
+  <title>wortlaut.cloud — Speaker-Accurate Meeting Transcripts. 100% Self-Hosted.</title>
+  <meta name="description" content="wortlaut creates speaker-accurate verbatim transcripts and protocols for Google Meet, Microsoft Teams, Cisco Webex, and Zoom — 100% self-hosted on your own infrastructure under GNU AGPL-3.0." />
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="wortlaut.cloud" />
+  <meta property="og:title" content="wortlaut — Speaker-Accurate Meeting Transcripts. 100% Self-Hosted." />
+  <meta property="og:description" content="Isolated pre-mix WebRTC speaker capture, local NVIDIA Parakeet speech-to-text (25 languages), live chat opt-out, and automatic Google/M365 calendar writeback under AGPL-3.0." />
+  <meta property="og:image" content="https://raw.githubusercontent.com/mayflower/wortlaut/main/docs/assets/social-preview.png" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="wortlaut — Speaker-Accurate Meeting Transcripts. 100% Self-Hosted." />
+  <meta name="twitter:description" content="Self-hosted meeting transcripts for Google Meet, Microsoft Teams, Cisco Webex & Zoom — zero voiceprints, live chat opt-out, local GPU/CPU ASR." />
+  <meta name="twitter:image" content="https://raw.githubusercontent.com/mayflower/wortlaut/main/docs/assets/social-preview.png" />
   <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
   <link rel="stylesheet" href="./styles.css" />
 </head>
@@ -64,17 +73,17 @@
         <span>wortlaut<span class="brand-domain">.cloud</span></span>
       </a>
 
-      <nav class="main-nav" aria-label="Hauptnavigation">
-        <a href="#how-it-works" data-i18n="nav_how">So funktioniert’s</a>
-        <a href="#features" data-i18n="nav_features">Funktionen</a>
-        <a href="#privacy" data-i18n="nav_privacy">Datenschutz</a>
-        <a href="#self-hosting" data-i18n="nav_selfhost">Selbst hosten</a>
+      <nav class="main-nav" aria-label="Primary navigation">
+        <a href="#how-it-works" data-i18n="nav_how">How it works</a>
+        <a href="#features" data-i18n="nav_features">Features</a>
+        <a href="#privacy" data-i18n="nav_privacy">Privacy &amp; Opt-Out</a>
+        <a href="#self-hosting" data-i18n="nav_selfhost">Self-Hosting</a>
       </nav>
 
       <div class="header-actions">
-        <div class="lang-switch" role="group" aria-label="Sprache / Language">
-          <button type="button" class="lang-btn active" data-lang="de">DE</button>
-          <button type="button" class="lang-btn" data-lang="en">EN</button>
+        <div class="lang-switch" role="group" aria-label="Language / Sprache">
+          <button type="button" class="lang-btn active" data-lang="en">EN</button>
+          <button type="button" class="lang-btn" data-lang="de">DE</button>
         </div>
         <a href="https://github.com/mayflower/wortlaut" target="_blank" rel="noopener noreferrer" class="btn btn-outline">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
@@ -82,7 +91,7 @@
           </svg>
           <span data-i18n="cta_github">GitHub</span>
         </a>
-        <a href="#self-hosting" class="btn btn-primary" data-i18n="cta_install">Jetzt installieren</a>
+        <a href="#self-hosting" class="btn btn-primary" data-i18n="cta_install">Get Started</a>
       </div>
     </div>
   </header>
@@ -94,26 +103,26 @@
         <div class="hero-top">
           <div class="eyebrow-badge">
             <span class="pulse-dot" aria-hidden="true"></span>
-            <span data-i18n="hero_badge">Open Source (AGPLv3) · 100 % Self-Hosted · DSGVO-konform</span>
+            <span data-i18n="hero_badge">Open Source (AGPL-3.0) · 100% Self-Hosted · 25 Languages · GDPR-Ready</span>
           </div>
 
           <h1 class="hero-title" data-i18n-html="hero_title_html">
-            Automatische Wortprotokolle für deine Meetings.<br>
-            <span class="highlight">Auf deiner eigenen Infrastruktur.</span>
+            Speaker-accurate transcripts for your meetings.<br>
+            <span class="highlight">100% on your own infrastructure.</span>
           </h1>
 
           <p class="hero-subtitle" data-i18n="hero_subtitle">
-            wortlaut nimmt als stiller Zuhörer an Besprechungen in Google Meet, Microsoft Teams, Cisco Webex und Zoom teil, erkennt zuverlässig, wer spricht, und liefert direkt nach dem Gespräch ein durchsuchbares Wortprotokoll – ohne dass vertrauliche Gespräche in fremde Clouds abfließen.
+            wortlaut joins calls in Google Meet, Microsoft Teams, Cisco Webex, and Zoom as a transparent passive listener, captures each speaker’s isolated audio stream before mixing, and writes finished protocols straight back into your calendar invite — with live chat opt-out and zero third-party cloud leakage.
           </p>
 
           <div class="hero-cta-row">
-            <a href="#self-hosting" class="btn btn-primary btn-lg" data-i18n="hero_cta_primary">Kostenlos selbst hosten</a>
-            <a href="#how-it-works" class="btn btn-outline btn-lg" data-i18n="hero_cta_secondary">So funktioniert’s ansehen</a>
+            <a href="#self-hosting" class="btn btn-primary btn-lg" data-i18n="hero_cta_primary">Self-Host for Free</a>
+            <a href="#how-it-works" class="btn btn-outline btn-lg" data-i18n="hero_cta_secondary">See How It Works</a>
           </div>
 
-          <div class="platform-row" aria-label="Unterstützte Meeting-Plattformen">
+          <div class="platform-row" aria-label="Supported meeting platforms">
             <span class="platform-row-label" data-i18n="platforms_label">
-              Funktioniert einheitlich mit:
+              Runs side-by-side in a single instance across:
             </span>
             <div class="platform-logos">
               <!-- Google Meet Logo -->
@@ -176,97 +185,111 @@
         <div class="app-showcase">
           <div class="app-window-bar">
             <div class="window-dots" aria-hidden="true"><span></span><span></span><span></span></div>
-            <span class="window-url">wortlaut · Besprechungsprotokoll</span>
-            <span class="badge-pill" data-i18n="ui_badge_done">Protokoll fertig</span>
+            <span class="window-url" data-i18n="ui_window_url">wortlaut · Meeting Protocol</span>
+            <span class="badge-pill" data-i18n="ui_badge_done">✓ Linked in calendar invite</span>
           </div>
 
           <div class="app-layout">
             <div class="app-sidebar">
               <div>
-                <div style="display:flex;align-items:center;gap:8px;font-weight:700;font-size:14.5px;padding:4px 8px 16px;">
-                  <span class="brand-mark" style="width:24px;height:24px;border-radius:6px;">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
-                      <path d="M2 10v3M6 6v11M10 3v18M14 8v7M18 5v13M22 10v3"/>
-                    </svg>
-                  </span>
-                  wortlaut
+                <div style="display:flex;align-items:center;justify-content:space-between;padding:4px 8px 16px;">
+                  <div style="display:flex;align-items:center;gap:8px;font-weight:700;font-size:14.5px;">
+                    <span class="brand-mark" style="width:24px;height:24px;border-radius:6px;">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+                        <path d="M2 10v3M6 6v11M10 3v18M14 8v7M18 5v13M22 10v3"/>
+                      </svg>
+                    </span>
+                    wortlaut
+                  </div>
+                  <span class="mono" style="font-size:10.5px;color:var(--stone-500);border:1px solid var(--stone-200);padding:1px 6px;border-radius:5px;background:#fff;">EN | DE</span>
                 </div>
                 <div class="app-nav-list">
-                  <div class="app-nav-item" data-i18n="ui_nav_home">Startseite</div>
+                  <div class="app-nav-item" data-i18n="ui_nav_home">Home</div>
                   <div class="app-nav-item active">
-                    <span data-i18n="ui_nav_rec">Aufnahmen</span>
+                    <span data-i18n="ui_nav_rec">Recordings</span>
                     <span class="mono" style="font-size:11px;background:var(--stone-100);padding:1px 7px;border-radius:99px;">14</span>
                   </div>
-                  <div class="app-nav-item" data-i18n="ui_nav_cal">Kalender</div>
-                  <div class="app-nav-item" data-i18n="ui_nav_sys">System &amp; Hilfe</div>
+                  <div class="app-nav-item" data-i18n="ui_nav_cal">Calendar</div>
+                  <div class="app-nav-item" data-i18n="ui_nav_sys">System &amp; Help</div>
                 </div>
               </div>
               <div style="border-top:1px solid var(--stone-200);padding-top:12px;font-size:12px;color:var(--stone-500);">
-                <div style="font-weight:700;color:var(--stone-800);">Anna Lindner</div>
-                <div>Single Sign-On</div>
+                <div style="font-weight:700;color:var(--stone-800);">Elena Rostova</div>
+                <div data-i18n="ui_sso_label">OIDC Single Sign-On</div>
               </div>
             </div>
 
             <div class="app-main">
               <div class="app-main-header">
                 <div>
-                  <h2 class="app-meeting-title" data-i18n="ui_meeting_title">Produkt- &amp; Architektur-Abstimmung Q4</h2>
+                  <h2 class="app-meeting-title" data-i18n="ui_meeting_title">Q4 Product &amp; Security Architecture Review</h2>
                   <div class="app-meeting-meta">
                     <span class="inline-provider-badge" title="Microsoft Teams">
                       <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#logo-icon-teams"/></svg>
                       <span>Microsoft Teams</span>
                     </span>
                     <span>·</span>
-                    <span data-i18n="ui_meeting_meta">Heute, 14:00 – 14:45 Uhr · 3 Teilnehmende</span>
+                    <span data-i18n="ui_meeting_meta">Today, 14:00 – 14:45 · 3 participants</span>
                   </div>
                 </div>
                 <div style="display:flex;gap:8px;flex-wrap:wrap;">
-                  <span class="btn btn-outline" style="padding:6px 12px;font-size:12.5px;" data-i18n="ui_btn_share">Lese-Link teilen</span>
-                  <span class="btn btn-primary" style="padding:6px 12px;font-size:12.5px;" data-i18n="ui_btn_export">Markdown exportieren</span>
+                  <span class="btn btn-outline" style="padding:6px 12px;font-size:12.5px;" data-i18n="ui_btn_share">Share Read Link</span>
+                  <span class="btn btn-primary" style="padding:6px 12px;font-size:12.5px;" data-i18n="ui_btn_export">Export Markdown</span>
                 </div>
               </div>
 
+              <!-- Optional Local AI Summary Card -->
+              <div class="app-summary-box">
+                <div class="app-summary-head">
+                  <span data-i18n="ui_summary_label">Executive Summary &amp; Action Items</span>
+                  <span class="app-summary-tag" data-i18n="ui_summary_tag">Optional Local AI · Ollama</span>
+                </div>
+                <p class="app-summary-text" data-i18n="ui_summary_body">
+                  Calendar OAuth2 writeback for Google Workspace and Microsoft 365 is live; external client calls stay opt-in via 1-click toggle, and in-call chat opt-out passed security review.
+                </p>
+              </div>
+
               <div class="app-toolbar">
-                <div class="speaker-pills" role="group" aria-label="Sprecher filtern">
-                  <button type="button" class="speaker-pill active" data-speaker-filter="all">Alle (3)</button>
-                  <button type="button" class="speaker-pill" data-speaker-filter="1"><span class="platform-dot" style="background:var(--emerald-600);"></span>Anna Lindner (46 %)</button>
-                  <button type="button" class="speaker-pill" data-speaker-filter="2"><span class="platform-dot" style="background:var(--indigo-600);"></span>Markus Berg (34 %)</button>
-                  <button type="button" class="speaker-pill" data-speaker-filter="3"><span class="platform-dot" style="background:var(--cyan-700);"></span>Julia Vogt (20 %)</button>
+                <div class="speaker-pills" role="group" aria-label="Filter speakers">
+                  <button type="button" class="speaker-pill active" data-speaker-filter="all" data-i18n="ui_filter_all">All (3)</button>
+                  <button type="button" class="speaker-pill" data-speaker-filter="1"><span class="platform-dot" style="background:var(--emerald-600);"></span>Elena Rostova (46%)</button>
+                  <button type="button" class="speaker-pill" data-speaker-filter="2"><span class="platform-dot" style="background:var(--indigo-600);"></span>Marcus Vance (34%)</button>
+                  <button type="button" class="speaker-pill" data-speaker-filter="3"><span class="platform-dot" style="background:var(--cyan-700);"></span>Clara Lindqvist (20%)</button>
                 </div>
                 <div class="site-live-pill">
                   <span class="site-waveform" aria-hidden="true"><span></span><span></span><span></span><span></span></span>
-                  <span>3 Spuren gebunden</span>
+                  <span data-i18n="ui_tracks_bound">3 isolated tracks</span>
                 </div>
               </div>
 
               <div class="transcript-list">
                 <div class="transcript-turn" data-speaker-turn="1">
                   <div class="turn-meta">
-                    <span>Anna Lindner</span>
-                    <span class="turn-timestamp">14:04</span>
+                    <span>Elena Rostova</span>
+                    <span class="turn-snippet-pill" title="24h audio snippet verification">▶ 14:04</span>
                   </div>
                   <p class="turn-body" data-i18n-html="ui_turn1_text_html">
-                    Wir haben die <mark>Kalender-Anbindung</mark> für Google Workspace und Microsoft 365 abgeschlossen. Eigene Termine werden automatisch protokolliert, externe Kundentermine lassen sich mit einem Klick zuschalten.
+                    Finished protocols are now written straight back into the <mark>Google Calendar and Outlook invite</mark> so every attendee finds the read-only link right where they look.
                   </p>
                 </div>
 
                 <div class="transcript-turn speaker-2" data-speaker-turn="2">
                   <div class="turn-meta">
-                    <span>Markus Berg</span>
-                    <span class="turn-timestamp">14:05</span>
+                    <span>Marcus Vance</span>
+                    <span class="turn-snippet-pill" title="24h audio snippet verification">▶ 14:05</span>
                   </div>
                   <p class="turn-body" data-i18n-html="ui_turn2_text_html">
-                    Sehr gut. Besonders hilfreich ist, dass die <mark>Sprechererkennung</mark> auch dann sauber bleibt, wenn zwei Personen kurz gleichzeitig sprechen.
+                    And because each participant’s WebRTC track is captured before mixing, <mark>speaker attribution</mark> stays accurate even when two people overlap — across 25 European languages.
                   </p>
                 </div>
 
                 <div class="transcript-turn speaker-3" data-speaker-turn="3">
                   <div class="turn-meta">
-                    <span>Julia Vogt</span>
-                    <span class="turn-timestamp">14:07</span>
+                    <span>Clara Lindqvist</span>
+                    <span class="turn-snippet-pill" title="24h audio snippet verification">▶ 14:07</span>
                   </div>
                   <p class="turn-body" data-i18n-html="ui_turn3_text_html">
-                    Für unsere Kunden ist entscheidend, dass alle Aufnahmen auf unseren eigenen Servern bleiben und im Meeting-Chat sofort transparent angezeigt wird, wer das Protokoll gestartet hat.
+                    Our DPO especially liked the <mark>in-call chat opt-out</mark>: anyone can type <code>opt out</code> or <code>nein</code> in chat to exclude their voice immediately without stopping the call for everyone else.
                   </p>
                 </div>
               </div>
@@ -280,37 +303,37 @@
     <section id="how-it-works" class="section">
       <div class="container">
         <div class="section-header">
-          <span class="section-kicker" data-i18n="how_kicker">SO FUNKTIONIERT’S</span>
+          <span class="section-kicker" data-i18n="how_kicker">HOW IT WORKS</span>
           <h2 class="section-title" data-i18n="how_title">
-            In drei einfachen Schritten vom Gespräch zum fertigen Protokoll
+            From live conversation to verified protocol in three simple steps
           </h2>
           <p class="section-desc" data-i18n="how_desc">
-            Keine komplizierte Einrichtung für Teilnehmende, keine Browser-Plugins und kein manuelles Mitschreiben.
+            No browser extensions for attendees, no cloud bots in third-party guest lists, and no manual note-taking.
           </p>
         </div>
 
         <div class="steps-grid">
           <div class="step-card">
             <span class="step-number">01</span>
-            <h3 data-i18n="step1_title">1. Termin verbinden oder Link einfügen</h3>
+            <h3 data-i18n="step1_title">1. Connect calendar, paste link, or invite</h3>
             <p data-i18n="step1_desc">
-              Verknüpfe einmalig deinen Google- oder Microsoft-365-Kalender, leite eine Termineinladung per E-Mail weiter oder füge spontan den Link eines laufenden Meetings in der Web-Oberfläche ein.
+              Link your Google Workspace or Microsoft 365 calendar once via OAuth2, paste a live meeting URL on the home screen, or invite your bot email address like a regular attendee.
             </p>
           </div>
 
           <div class="step-card">
             <span class="step-number">02</span>
-            <h3 data-i18n="step2_title">2. Entspannt sprechen</h3>
+            <h3 data-i18n="step2_title">2. Transparent join &amp; live chat opt-out</h3>
             <p data-i18n="step2_desc">
-              wortlaut tritt dem Meeting als rein passiver Audio-Zuhörer bei, stellt sich im Konferenz-Chat transparent mit dem Namen der einladenden Person vor und erfasst jeden Redebeitrag getrennt nach Sprecher.
+              wortlaut joins as a passive audio listener displaying the inviter’s name, posts a privacy link in chat, and lets any individual attendee type “opt out” or “no” in chat to exclude their stream on the spot.
             </p>
           </div>
 
           <div class="step-card">
             <span class="step-number">03</span>
-            <h3 data-i18n="step3_title">3. Nachlesen, suchen &amp; teilen</h3>
+            <h3 data-i18n="step3_title">3. Calendar writeback, verify &amp; export</h3>
             <p data-i18n="step3_desc">
-              Direkt nach Gesprächsende erhältst du das fertige Wortprotokoll per E-Mail und in der Web-Oberfläche. Durchsuche alle Gespräche im Volltext, teile einen geschützten Lese-Link mit dem Team oder exportiere den Text.
+              Right after the call, wortlaut writes the read-only protocol link directly into your calendar event, emails the transcript, and lets you verify 24h audio snippets, edit terms, or export Markdown.
             </p>
           </div>
         </div>
@@ -321,51 +344,51 @@
     <section id="features" class="section section-alt">
       <div class="container">
         <div class="section-header">
-          <span class="section-kicker" data-i18n="feat_kicker">FUNKTIONEN IM ÜBERBLICK</span>
+          <span class="section-kicker" data-i18n="feat_kicker">PRODUCT WORKFLOWS</span>
           <h2 class="section-title" data-i18n="feat_title">
-            Alles, was Teams für verlässliche Besprechungsprotokolle brauchen
+            Everything teams need for accurate, trustworthy meeting protocols
           </h2>
           <p class="section-desc" data-i18n="feat_desc">
-            Entwickelt für den täglichen Einsatz in Kundenprojekten, internen Abstimmungen und technischen Reviews.
+            Designed for daily engineering syncs, confidential client engagements, architecture decisions, and compliance-sensitive teams.
           </p>
         </div>
 
         <div class="feature-tabs-nav" role="tablist">
           <button type="button" class="feature-tab-btn active" data-ftab="cal">
-            <span data-i18n="ftab1_title">Kalender-Automatik</span>
+            <span data-i18n="ftab1_title">Calendar &amp; Writeback</span>
             <span class="sub" data-i18n="ftab1_sub">Google &amp; Microsoft 365</span>
           </button>
           <button type="button" class="feature-tab-btn" data-ftab="adhoc">
-            <span data-i18n="ftab2_title">Spontane Aufnahme</span>
-            <span class="sub" data-i18n="ftab2_sub">In 10 Sekunden im Call</span>
+            <span data-i18n="ftab2_title">Ad-hoc &amp; 25 Languages</span>
+            <span class="sub" data-i18n="ftab2_sub">Join in ~15s · Local Parakeet ASR</span>
           </button>
           <button type="button" class="feature-tab-btn" data-ftab="share">
-            <span data-i18n="ftab3_title">Teilen &amp; Exportieren</span>
-            <span class="sub" data-i18n="ftab3_sub">Lese-Links, Markdown &amp; API</span>
+            <span data-i18n="ftab3_title">Verify, Edit &amp; Summarize</span>
+            <span class="sub" data-i18n="ftab3_sub">Snippets, Ollama AI &amp; Exports</span>
           </button>
           <button type="button" class="feature-tab-btn" data-ftab="speaker">
-            <span data-i18n="ftab4_title">Präzise Sprecher</span>
-            <span class="sub" data-i18n="ftab4_sub">Saubere Trennung ohne Stimmprofile</span>
+            <span data-i18n="ftab4_title">True Speaker Separation</span>
+            <span class="sub" data-i18n="ftab4_sub">Pre-mix WebRTC · Zero voiceprints</span>
           </button>
         </div>
 
         <!-- Feature Panel 1: Calendar -->
         <div class="feature-panel active" data-fpanel="cal">
           <div>
-            <h3 data-i18n="f1_title">Deine Termine automatisch protokolliert – Kundentermine mit einem Klick</h3>
+            <h3 data-i18n="f1_title">Auto-record your own meetings, toggle client calls in 1 click, and link protocols in the invite</h3>
             <p class="lead" data-i18n="f1_lead">
-              Verbinde deinen Google- oder Microsoft-365-Kalender einmalig per Klick. Du behältst jederzeit die volle Kontrolle darüber, bei welchen Gesprächen wortlaut dabei ist:
+              Connect Google Calendar or Microsoft 365 via OAuth2 PKCE in seconds. You stay in complete control of every call:
             </p>
             <ul class="check-list">
-              <li><span class="check-icon">✓</span><span data-i18n="f1_li1">Selbst organisierte Termine mit Videokonferenz-Link werden automatisch eingeplant (jederzeit mit einem Klick abwählbar).</span></li>
-              <li><span class="check-icon">✓</span><span data-i18n="f1_li2">Externe Kundentermine erscheinen übersichtlich in deinem Kalender und können bei Bedarf mit einem einzigen Klick zugeschaltet werden – ohne einen Bot in die fremde Einladungsliste einzutragen.</span></li>
-              <li><span class="check-icon">✓</span><span data-i18n="f1_li3">Terminverschiebungen, Serien-Ausnahmen und Absagen werden automatisch übernommen.</span></li>
+              <li><span class="check-icon">✓</span><span data-i18n="f1_li1">Self-organized meetings with confirmed guests are scheduled automatically (and can be opted out with 1 click anytime).</span></li>
+              <li><span class="check-icon">✓</span><span data-i18n="f1_li2">External client invitations can be toggled on with a single click — without adding a bot email to the client’s guest list.</span></li>
+              <li><span class="check-icon">✓</span><span data-i18n="f1_li3">Automatic Calendar Writeback: once completed, wortlaut appends the protected read-only protocol link straight into your Google Calendar or Outlook event.</span></li>
             </ul>
           </div>
 
           <div class="preview-box">
             <div style="font-size:12.5px;font-weight:600;color:var(--stone-600);" data-i18n="f1_demo_label">
-              Kalender-Übersicht (Klicke auf den Schalter zum Testen):
+              Calendar Workspace (click the toggle switch to test):
             </div>
             <div class="cal-row">
               <div class="cal-row-left">
@@ -373,11 +396,11 @@
                   <svg width="22" height="18" viewBox="0 0 87.5 72" role="img" aria-label="Google Meet"><use href="#logo-icon-meet"/></svg>
                 </span>
                 <div>
-                  <div style="font-weight:700;font-size:14px;" data-i18n="f1_ev1_title">Wöchentliches Team-Sync</div>
-                  <div style="font-size:12px;color:var(--stone-500);" data-i18n="f1_ev1_meta">10:00 – 10:45 Uhr · Automatisch aktiv (eigener Termin)</div>
+                  <div style="font-weight:700;font-size:14px;" data-i18n="f1_ev1_title">Weekly Platform Sync</div>
+                  <div style="font-size:12px;color:var(--stone-500);" data-i18n="f1_ev1_meta">10:00 – 10:45 · Completed · Linked in calendar event</div>
                 </div>
               </div>
-              <span class="toggle-btn" data-i18n="toggle_on">● Aufzeichnen: An</span>
+              <span class="badge-pill" data-i18n="f1_linked_badge">✓ Protocol linked</span>
             </div>
             <div class="cal-row" style="border-color:var(--emerald-500);box-shadow:var(--shadow-xs);">
               <div class="cal-row-left">
@@ -385,11 +408,11 @@
                   <svg width="22" height="22" viewBox="0 0 24 24" role="img" aria-label="Microsoft Teams"><use href="#logo-icon-teams"/></svg>
                 </span>
                 <div>
-                  <div style="font-weight:700;font-size:14px;" data-i18n="f1_ev2_title">Projektabstimmung mit Kunden</div>
-                  <div style="font-size:12px;color:var(--stone-500);" data-i18n="f1_ev2_meta">14:00 – 15:00 Uhr · Externer Termin · Per Klick zuschaltbar</div>
+                  <div style="font-weight:700;font-size:14px;" data-i18n="f1_ev2_title">Client Architecture Workshop</div>
+                  <div style="font-size:12px;color:var(--stone-500);" data-i18n="f1_ev2_meta">14:00 – 15:00 · External invite · Enable with 1 click</div>
                 </div>
               </div>
-              <button type="button" id="demo-external-toggle" class="toggle-btn" data-i18n="toggle_on">● Aufzeichnen: An</button>
+              <button type="button" id="demo-external-toggle" class="toggle-btn" data-i18n="toggle_on">● Record: On</button>
             </div>
             <div class="cal-row">
               <div class="cal-row-left">
@@ -397,60 +420,60 @@
                   <svg width="22" height="22" viewBox="0 0 28 28" role="img" aria-label="Zoom"><use href="#logo-icon-zoom"/></svg>
                 </span>
                 <div>
-                  <div style="font-weight:700;font-size:14px;" data-i18n="f1_ev3_title">Sprint-Review</div>
-                  <div style="font-size:12px;color:var(--stone-500);" data-i18n="f1_ev3_meta">16:30 – 17:15 Uhr · Automatisch aktiv (eigene Serie)</div>
+                  <div style="font-weight:700;font-size:14px;" data-i18n="f1_ev3_title">Sprint Review</div>
+                  <div style="font-size:12px;color:var(--stone-500);" data-i18n="f1_ev3_meta">16:30 – 17:15 · Auto-enabled (recurring series)</div>
                 </div>
               </div>
-              <span class="toggle-btn" data-i18n="toggle_on">● Aufzeichnen: An</span>
+              <span class="toggle-btn" data-i18n="toggle_on">● Record: On</span>
             </div>
           </div>
         </div>
 
-        <!-- Feature Panel 2: Ad-hoc -->
+        <!-- Feature Panel 2: Ad-hoc & Multilingual ASR -->
         <div class="feature-panel" data-fpanel="adhoc">
           <div>
-            <h3 data-i18n="f2_title">Spontan in laufende Besprechungen holen – und sofort durchsuchen</h3>
+            <h3 data-i18n="f2_title">Join unplanned calls in ~15 seconds — and transcribe locally across 25 European languages</h3>
             <p class="lead" data-i18n="f2_lead">
-              Oft ergibt sich erst mitten im Gespräch, dass wichtige Entscheidungen festgehalten werden sollten. Mit wortlaut startest du die Aufzeichnung jederzeit spontan:
+              Paste any meeting URL when a spontaneous call turns important, and run state-of-the-art speech recognition entirely on your own GPU or CPU:
             </p>
             <ul class="check-list">
-              <li><span class="check-icon">✓</span><span data-i18n="f2_li1">Meeting-Link für Google Meet, Teams, Webex oder Zoom einfügen, gewünschte Dauer wählen und sofort starten.</span></li>
-              <li><span class="check-icon">✓</span><span data-i18n="f2_li2">Live-Statusanzeige in Echtzeit: Auf einen Blick sehen, ob der Bot noch im Warteraum wartet oder bereits mitschreibt.</span></li>
-              <li><span class="check-icon">✓</span><span data-i18n="f2_li3">Schon während des laufenden Gesprächs erscheint das Protokoll Absatz für Absatz im Browser und lässt sich sofort nach Stichworten durchsuchen.</span></li>
+              <li><span class="check-icon">✓</span><span data-i18n="f2_li1">Paste a Google Meet, Teams, Webex, or Zoom link — wortlaut spawns an isolated browser worker and joins within ~15 seconds.</span></li>
+              <li><span class="check-icon">✓</span><span data-i18n="f2_li2">Multilingual NVIDIA Parakeet TDT v3 supports automatic language detection across 25 European languages alongside a 2.95% WER German specialist checkpoint.</span></li>
+              <li><span class="check-icon">✓</span><span data-i18n="f2_li3">Bilingual EN / DE Web-UI with live lobby/capture stepper and real-time full-text search while the call is still running.</span></li>
             </ul>
           </div>
 
           <div class="preview-box">
-            <div style="font-weight:700;font-size:14.5px;" data-i18n="f2_demo_title">Spontane Aufzeichnung starten</div>
+            <div style="font-weight:700;font-size:14.5px;" data-i18n="f2_demo_title">Start Ad-hoc Recording</div>
             <div style="background:#ffffff;border:1px solid var(--stone-300);border-radius:var(--radius-sm);padding:10px 12px;font-family:var(--font-mono);font-size:12.5px;color:var(--stone-700);">
               https://meet.google.com/abc-defg-hij
             </div>
-            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
               <div style="display:flex;gap:6px;">
-                <span class="speaker-pill">30 Min.</span>
-                <span class="speaker-pill" style="background:var(--stone-900);color:#ffffff;">60 Min.</span>
-                <span class="speaker-pill">90 Min.</span>
+                <span class="speaker-pill" data-i18n="f2_dur_30">30 min</span>
+                <span class="speaker-pill" style="background:var(--stone-900);color:#ffffff;" data-i18n="f2_dur_60">60 min</span>
+                <span class="speaker-pill" data-i18n="f2_dur_90">90 min</span>
               </div>
-              <span class="btn btn-primary" style="padding:7px 14px;font-size:13px;" data-i18n="f2_demo_btn">Jetzt aufzeichnen</span>
+              <span class="btn btn-primary" style="padding:7px 14px;font-size:13px;" data-i18n="f2_demo_btn">Record Now</span>
             </div>
             <div style="background:var(--emerald-50);border:1px solid var(--emerald-100);color:var(--emerald-800);border-radius:var(--radius-sm);padding:10px 12px;font-size:13px;font-weight:600;display:flex;align-items:center;gap:10px;">
               <span class="site-waveform" aria-hidden="true"><span></span><span></span><span></span><span></span></span>
-              <span data-i18n="f2_demo_status">LIVE · Im Gespräch (3 aktive Teilnehmende erkannt)</span>
+              <span data-i18n="f2_demo_status">LIVE · Capturing 3 isolated tracks · Parakeet TDT (25 langs)</span>
             </div>
           </div>
         </div>
 
-        <!-- Feature Panel 3: Share & Export -->
+        <!-- Feature Panel 3: Verify, Edit, Ollama Summary & Share -->
         <div class="feature-panel" data-fpanel="share">
           <div>
-            <h3 data-i18n="f3_title">Sicher im Team teilen und nahtlos weiterverarbeiten</h3>
+            <h3 data-i18n="f3_title">Verify quotes by ear, polish domain terms, summarize with local Ollama, and export anywhere</h3>
             <p class="lead" data-i18n="f3_lead">
-              wortlaut erfindet keine unkontrollierten KI-Zusammenfassungen, sondern liefert ein verlässliches, unverfälschtes Wortprotokoll als Grundlage für deine Arbeit:
+              wortlaut keeps the verbatim speaker-attributed transcript as your source of truth while giving your team powerful review and export tools:
             </p>
             <ul class="check-list">
-              <li><span class="check-icon">✓</span><span data-i18n="f3_li1">Geschützte Lese-Links: Teile ein einzelnes Protokoll per Klick mit Kolleginnen und Kollegen – ohne dass externe Gäste im Meeting-Chat unbefugt mitlesen können.</span></li>
-              <li><span class="check-icon">✓</span><span data-i18n="f3_li2">Automatischer E-Mail-Versand: Nach dem Termin landen Protokoll und Lese-Link automatisch im Posteingang der einladenden Person.</span></li>
-              <li><span class="check-icon">✓</span><span data-i18n="f3_li3">Offene Exportformate &amp; REST-API: Lade Protokolle als Markdown (.md), Text (.txt), Untertitel (.vtt) oder strukturiertes JSON herunter – ideal für Confluence, Jira, GitLab oder eigene lokale KI-Modelle.</span></li>
+              <li><span class="check-icon">✓</span><span data-i18n="f3_li1">Click-to-listen verification &amp; inline editor: play back isolated 24h audio snippets to verify exact wording, rename guest speakers, and apply 1-click vocabulary replacements across the entire protocol.</span></li>
+              <li><span class="check-icon">✓</span><span data-i18n="f3_li2">Optional local AI summaries (Ollama): generate structured executive summaries, topic breakdowns, and action items on your own server with zero external API calls.</span></li>
+              <li><span class="check-icon">✓</span><span data-i18n="f3_li3">Scoped read-only links (wortlaut-read-…), automatic email delivery, and open exports (.md, .txt, .vtt, .json) plus an idempotent REST API (/docs).</span></li>
             </ul>
           </div>
 
@@ -458,19 +481,19 @@
             <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px;">
               <div style="background:#ffffff;border:1px solid var(--stone-200);border-radius:var(--radius-md);padding:14px;">
                 <div class="mono" style="font-size:12px;font-weight:700;color:var(--emerald-700);">Markdown (.md)</div>
-                <div style="font-size:13px;color:var(--stone-600);margin-top:4px;">Für Wikis, Notion, Confluence, GitLab &amp; lokale KI-Assistenten</div>
+                <div style="font-size:13px;color:var(--stone-600);margin-top:4px;" data-i18n="f3_exp_md_desc">Ready for Notion, Confluence, GitHub, GitLab &amp; Jira</div>
               </div>
               <div style="background:#ffffff;border:1px solid var(--stone-200);border-radius:var(--radius-md);padding:14px;">
-                <div class="mono" style="font-size:12px;font-weight:700;color:var(--emerald-700);">WebVTT (.vtt)</div>
-                <div style="font-size:13px;color:var(--stone-600);margin-top:4px;">Zeitgenaue Untertitel mit Sprechernamen</div>
+                <div class="mono" style="font-size:12px;font-weight:700;color:var(--emerald-700);">Local AI (Ollama)</div>
+                <div style="font-size:13px;color:var(--stone-600);margin-top:4px;" data-i18n="f3_exp_ai_desc">Opt-in executive summary, topics &amp; action items on your GPU</div>
               </div>
               <div style="background:#ffffff;border:1px solid var(--stone-200);border-radius:var(--radius-md);padding:14px;">
-                <div class="mono" style="font-size:12px;font-weight:700;color:var(--emerald-700);">Text (.txt)</div>
-                <div style="font-size:13px;color:var(--stone-600);margin-top:4px;">Sofort lesbares Protokoll für E-Mails &amp; Aktennotizen</div>
+                <div class="mono" style="font-size:12px;font-weight:700;color:var(--emerald-700);">WebVTT &amp; Text</div>
+                <div style="font-size:13px;color:var(--stone-600);margin-top:4px;" data-i18n="f3_exp_vtt_desc">Time-aligned .vtt captions &amp; clean .txt email protocols</div>
               </div>
               <div style="background:#ffffff;border:1px solid var(--stone-200);border-radius:var(--radius-md);padding:14px;">
-                <div class="mono" style="font-size:12px;font-weight:700;color:var(--emerald-700);">JSON &amp; REST-API</div>
-                <div style="font-size:13px;color:var(--stone-600);margin-top:4px;">Für automatisierte Workflows &amp; eigene Integrationen</div>
+                <div class="mono" style="font-size:12px;font-weight:700;color:var(--emerald-700);">JSON &amp; REST API</div>
+                <div style="font-size:13px;color:var(--stone-600);margin-top:4px;" data-i18n="f3_exp_json_desc">Structured segments, track diagnostics &amp; OpenAPI (/docs)</div>
               </div>
             </div>
           </div>
@@ -479,29 +502,33 @@
         <!-- Feature Panel 4: Speaker Attribution -->
         <div class="feature-panel" data-fpanel="speaker">
           <div>
-            <h3 data-i18n="f4_title">Klare Sprecherzuordnung – ganz ohne biometrische Stimmprofile</h3>
+            <h3 data-i18n="f4_title">Clean speaker attribution before audio mixing — with zero biometric voiceprints</h3>
             <p class="lead" data-i18n="f4_lead">
-              Herkömmliche Cloud-Dienste mischen alle Stimmen zusammen und versuchen nachträglich per Stimmprofil zu erraten, wer gesprochen hat. wortlaut geht einen besseren Weg:
+              Conventional meeting bots record mixed room audio and guess speakers afterward using voice diarization. wortlaut solves speaker attribution at the transport layer:
             </p>
             <ul class="check-list">
-              <li><span class="check-icon">✓</span><span data-i18n="f4_li1">Jede Tonspur wird bereits während der Konferenz getrennt erfasst und direkt dem jeweiligen Teilnehmernamen im Meeting zugeordnet.</span></li>
-              <li><span class="check-icon">✓</span><span data-i18n="f4_li2">Auch wenn mehrere Personen kurz gleichzeitig sprechen oder sich ins Wort fallen, bleiben die Aussagen sauber getrennt.</span></li>
-              <li><span class="check-icon">✓</span><span data-i18n="f4_li3">Es werden keinerlei biometrische Stimmprofile (Voiceprints) angelegt oder gespeichert.</span></li>
+              <li><span class="check-icon">✓</span><span data-i18n="f4_li1">Each incoming WebRTC receiver stream is captured separately before mixing and bound directly to the verified conference participant session.</span></li>
+              <li><span class="check-icon">✓</span><span data-i18n="f4_li2">Even when participants overlap or interrupt each other, statements remain cleanly separated per track.</span></li>
+              <li><span class="check-icon">✓</span><span data-i18n="f4_li3">Zero biometric voiceprints are ever computed or stored — and if a provider hides a binding, wortlaut marks it transparently instead of guessing.</span></li>
             </ul>
           </div>
 
           <div class="preview-box">
             <div class="cal-row">
-              <span style="font-weight:700;font-size:13.5px;">Anna Lindner</span>
-              <span class="badge-pill">Eigene Tonspur → Klare Zuordnung</span>
+              <span style="font-weight:700;font-size:13.5px;">Elena Rostova</span>
+              <span class="badge-pill" data-i18n="f4_badge">Isolated stream → Verified speaker</span>
             </div>
             <div class="cal-row">
-              <span style="font-weight:700;font-size:13.5px;">Markus Berg</span>
-              <span class="badge-pill">Eigene Tonspur → Klare Zuordnung</span>
+              <span style="font-weight:700;font-size:13.5px;">Marcus Vance</span>
+              <span class="badge-pill" data-i18n="f4_badge">Isolated stream → Verified speaker</span>
             </div>
             <div class="cal-row">
-              <span style="font-weight:700;font-size:13.5px;">Julia Vogt</span>
-              <span class="badge-pill">Eigene Tonspur → Klare Zuordnung</span>
+              <span style="font-weight:700;font-size:13.5px;">Clara Lindqvist</span>
+              <span class="badge-pill" data-i18n="f4_badge">Isolated stream → Verified speaker</span>
+            </div>
+            <div class="chat-optout-demo">
+              <span class="mono" data-i18n="f4_optout_cmd">Chat: "opt out" / "nein"</span>
+              <span style="color:var(--emerald-500);font-weight:600;" data-i18n="f4_optout_res">→ Stream dropped &amp; segments purged</span>
             </div>
           </div>
         </div>
@@ -512,41 +539,41 @@
     <section id="privacy" class="section">
       <div class="container">
         <div class="section-header">
-          <span class="section-kicker" data-i18n="priv_kicker">DATENSCHUTZ &amp; VERTRAUEN</span>
+          <span class="section-kicker" data-i18n="priv_kicker">PRIVACY, CONSENT &amp; SECURITY</span>
           <h2 class="section-title" data-i18n="priv_title">
-            Gebaut für vertrauliche Gespräche und strenge Datenschutz-Anforderungen
+            Built for confidential conversations, European DPOs, and strict compliance
           </h2>
           <p class="section-desc" data-i18n="priv_desc">
-            Warum Unternehmen, Kanzleien, Beratungen und öffentliche Auftraggeber wortlaut statt kommerzieller US-Cloud-Bots einsetzen.
+            Why engineering organizations, consultancies, legal teams, and public-sector agencies run wortlaut instead of commercial cloud bots.
           </p>
         </div>
 
         <div class="trust-grid">
           <div class="trust-card">
-            <h3 data-i18n="trust1_title">100 % auf euren eigenen Servern</h3>
+            <h3 data-i18n="trust1_title">100% Self-Hosted (Zero Cloud Leakage)</h3>
             <p data-i18n="trust1_desc">
-              Sowohl die Gesprächsannahme als auch die Spracherkennung laufen vollständig in eurem eigenen Cluster. Keine einzige Sekunde Audio wird an externe Cloud-Anbieter übertragen.
+              Sandboxed browser workers, NVIDIA Parakeet speech recognition, and optional Ollama summaries all run inside your own cluster or server. Not a single second of audio leaves your infrastructure.
             </p>
           </div>
 
           <div class="trust-card">
-            <h3 data-i18n="trust2_title">Transparent &amp; respektvoll im Meeting</h3>
+            <h3 data-i18n="trust2_title">Live In-Call Chat Opt-Out</h3>
             <p data-i18n="trust2_desc">
-              wortlaut zeichnet niemals Kamerabilder oder Bildschirminhalte auf. Beim Beitritt stellt sich der Bot im Chat mit dem Namen der einladenden Person und einem Link zur öffentlichen Datenschutz-Erklärung vor.
+              wortlaut joins as “wortlaut (Inviter Name)”, never records video or screen shares, and lets any participant type “opt out”, “no”, or “nein” in chat to immediately discard their stream and purge prior quotes.
             </p>
           </div>
 
           <div class="trust-card">
-            <h3 data-i18n="trust3_title">Automatische Löschfristen &amp; 1-Klick-Löschung</h3>
+            <h3 data-i18n="trust3_title">24h Audio Window &amp; Auto-Expiry</h3>
             <p data-i18n="trust3_desc">
-              Roh-Audiodaten werden nach 24 Stunden automatisch gelöscht, schriftliche Protokolle nach 30 Tagen. Vertrauliche Besprechungen lassen sich zudem jederzeit sofort mit einem Klick restlos entfernen.
+              Isolated audio chunks are deleted automatically from S3 after 24 hours; transcripts expire after 30 days by default and can be purged permanently at any moment with a single click.
             </p>
           </div>
 
           <div class="trust-card">
-            <h3 data-i18n="trust4_title">Mandantentrennung &amp; Single Sign-On</h3>
+            <h3 data-i18n="trust4_title">OIDC Single Sign-On &amp; Tenant Isolation</h3>
             <p data-i18n="trust4_desc">
-              Über Single Sign-On (OIDC) sieht jede Person standardmäßig nur ihre eigenen Aufnahmen und Kalendereinträge – geschützt vor unbefugtem Zugriff.
+              Connect Keycloak, Authentik, Dex, Zitadel, Microsoft Entra ID, or Google via OIDC PKCE. Users only see their own recordings and invited meetings, plus HMAC-scoped read-only share links.
             </p>
           </div>
         </div>
@@ -555,30 +582,35 @@
           <table class="comparison-table">
             <thead>
               <tr>
-                <th data-i18n="comp_th_crit">Kriterium</th>
-                <th data-i18n="comp_th_cloud">Kommerzielle US-Cloud-Notetaker</th>
+                <th data-i18n="comp_th_crit">Criterion</th>
+                <th data-i18n="comp_th_cloud">Commercial Cloud Note-Takers</th>
                 <th class="highlight-col" data-i18n="comp_th_wortlaut">wortlaut (Open Source &amp; Self-Hosted)</th>
               </tr>
             </thead>
             <tbody>
               <tr>
-                <td data-i18n="comp_r1_c">Wo werden Gespräche verarbeitet?</td>
-                <td data-i18n="comp_r1_cloud">In fremden Hersteller-Clouds (oft USA)</td>
-                <td class="highlight-col" data-i18n="comp_r1_w">100 % auf deiner eigenen Infrastruktur</td>
+                <td data-i18n="comp_r1_c">Where are calls &amp; summaries processed?</td>
+                <td data-i18n="comp_r1_cloud">External vendor clouds &amp; third-party LLM APIs</td>
+                <td class="highlight-col" data-i18n="comp_r1_w">100% on your own infrastructure (Parakeet ASR + optional Ollama)</td>
               </tr>
               <tr>
-                <td data-i18n="comp_r2_c">Wie werden Sprecher erkannt?</td>
-                <td data-i18n="comp_r2_cloud">Über biometrische Stimmprofile (Voiceprints)</td>
-                <td class="highlight-col" data-i18n="comp_r2_w">Direkt über die Teilnehmersitzung – ohne Stimmprofile</td>
+                <td data-i18n="comp_r2_c">How are speakers identified?</td>
+                <td data-i18n="comp_r2_cloud">Mixed audio + biometric voice profiles (voiceprints)</td>
+                <td class="highlight-col" data-i18n="comp_r2_w">Isolated pre-mix WebRTC tracks bound to session — zero voiceprints</td>
               </tr>
               <tr>
-                <td data-i18n="comp_r3_c">Wird Video aufgezeichnet?</td>
-                <td data-i18n="comp_r3_cloud">Häufig kompletter Video- &amp; Bildschirm-Mitschnitt</td>
-                <td class="highlight-col" data-i18n="comp_r3_w">Rein passives Audio – niemals Kamera- oder Bildschirmaufnahme</td>
+                <td data-i18n="comp_r6_c">Individual attendee opt-out</td>
+                <td data-i18n="comp_r6_cloud">All-or-nothing (remove bot for everyone or leave call)</td>
+                <td class="highlight-col" data-i18n="comp_r6_w">Type “opt out” / “nein” in chat — only that speaker is excluded &amp; purged</td>
               </tr>
               <tr>
-                <td data-i18n="comp_r4_c">Unterstützte Plattformen</td>
-                <td data-i18n="comp_r4_cloud">Oft Abo-gebunden je Nutzer &amp; Plattform</td>
+                <td data-i18n="comp_r3_c">Camera &amp; screen recording</td>
+                <td data-i18n="comp_r3_cloud">Frequently records full video &amp; screen shares</td>
+                <td class="highlight-col" data-i18n="comp_r3_w">Strictly passive audio — camera &amp; screen capture blocked</td>
+              </tr>
+              <tr>
+                <td data-i18n="comp_r4_c">Supported platforms</td>
+                <td data-i18n="comp_r4_cloud">Often restricted or billed per seat &amp; platform</td>
                 <td class="highlight-col">
                   <div class="table-platform-logos">
                     <span class="mini-logo-pill" title="Google Meet"><svg width="16" height="13" viewBox="0 0 87.5 72" aria-hidden="true"><use href="#logo-icon-meet"/></svg> Meet</span>
@@ -589,9 +621,9 @@
                 </td>
               </tr>
               <tr>
-                <td data-i18n="comp_r5_c">Lizenz &amp; Kosten</td>
-                <td data-i18n="comp_r5_cloud">Monatliche Lizenzkosten pro Sitzplatz</td>
-                <td class="highlight-col" data-i18n="comp_r5_w">Freie Open-Source-Software unter GNU AGPLv3</td>
+                <td data-i18n="comp_r5_c">License &amp; cost</td>
+                <td data-i18n="comp_r5_cloud">Recurring monthly per-seat subscription</td>
+                <td class="highlight-col" data-i18n="comp_r5_w">Free open-source software under GNU AGPL-3.0</td>
               </tr>
             </tbody>
           </table>
@@ -603,12 +635,12 @@
     <section id="self-hosting" class="section section-dark">
       <div class="container">
         <div class="section-header">
-          <span class="section-kicker" data-i18n="qs_kicker">SELBST HOSTEN (OPEN SOURCE)</span>
+          <span class="section-kicker" data-i18n="qs_kicker">SELF-HOSTING &amp; QUICKSTART</span>
           <h2 class="section-title" data-i18n="qs_title">
-            In wenigen Minuten auf dem eigenen Server oder Cluster starten
+            Up and running on your own server or Kubernetes cluster in minutes
           </h2>
           <p class="section-desc" data-i18n="qs_desc">
-            wortlaut ist freie Software unter der GNU AGPLv3. Starte das System per Docker Compose auf einem einzelnen Server, per Helm Chart in Kubernetes oder direkt lokal zur Evaluierung.
+            Free software under GNU AGPL-3.0 with multi-arch images on GHCR. Launch via hardened Docker Compose on a single VM, 1-command Helm Chart on Kubernetes, or locally.
           </p>
         </div>
 
@@ -618,58 +650,61 @@
               <div class="code-tabs">
                 <button type="button" class="code-tab active" data-ctab="compose" data-i18n="qs_tab1">Docker Compose</button>
                 <button type="button" class="code-tab" data-ctab="helm" data-i18n="qs_tab2">Helm (Kubernetes)</button>
-                <button type="button" class="code-tab" data-ctab="local" data-i18n="qs_tab3">Lokal / Kustomize</button>
+                <button type="button" class="code-tab" data-ctab="local" data-i18n="qs_tab3">Local / Contributors</button>
               </div>
-              <button type="button" class="copy-btn" data-copy="true" data-i18n="copy_btn">Kopieren</button>
+              <button type="button" class="copy-btn" data-copy="true" data-i18n="copy_btn">Copy</button>
             </div>
 
-            <pre class="code-pane active" data-cpane="compose"><code># 1. Repository klonen
-git clone https://github.com/mayflower/wortlaut.git
-cd wortlaut
+            <pre class="code-pane active" data-cpane="compose"><code data-i18n="qs_code_compose"># 1. Clone &amp; configure secrets
+git clone https://github.com/mayflower/wortlaut.git &amp;&amp; cd wortlaut
+cp .env.example .env
 
-# 2. Kompletten Stack (inkl. Postgres, MinIO &amp; CPU-Fallback) starten
-docker compose up -d --build
+# 2. Launch stack (non-root meeting, docker-socket-proxy, Postgres 17 &amp; RustFS S3)
+docker compose up -d
 
-# Web-Oberfläche:  http://127.0.0.1:8000/ui
-# API-Übersicht:   http://127.0.0.1:8000/docs</code></pre>
+# Recommended with NVIDIA GPU (real-time Parakeet ASR):
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
+# Web-UI: http://127.0.0.1:34601/ui · API Docs: http://127.0.0.1:34601/docs</code></pre>
 
-            <pre class="code-pane" data-cpane="helm"><code># Installation im Kubernetes-Cluster per Helm Chart
-helm install wortlaut ./charts/wortlaut \
-  --namespace wortlaut \
-  --create-namespace \
-  --set config.apiUrl=https://wortlaut.example.org/ \
-  --set config.sdkPageUrl=https://wortlaut.example.org/sdk/ \
-  --set secrets.apiToken="$WORTLAUT_API_TOKEN" \
-  --set secrets.databaseUrl="$DATABASE_URL"</code></pre>
+            <pre class="code-pane" data-cpane="helm"><code data-i18n="qs_code_helm"># Zero-dependency evaluation (embedded PostgreSQL 17 + RustFS S3):
+helm upgrade --install wortlaut oci://ghcr.io/mayflower/charts/wortlaut \
+  --namespace wortlaut --create-namespace \
+  --set host=wortlaut.local \
+  --set bundled.enabled=true \
+  --set asr.gpuCount=0 --set asr.allowCpu=true
 
-            <pre class="code-pane" data-cpane="local"><code># Option A: Direkt lokal auf Linux starten (ohne Kubernetes)
+# Production cluster (external DB/S3, GPU node &amp; OIDC SSO):
+helm upgrade --install wortlaut oci://ghcr.io/mayflower/charts/wortlaut \
+  --namespace wortlaut --create-namespace \
+  --set host=wortlaut.example.org \
+  --set oidc.issuer=https://auth.example.org</code></pre>
+
+            <pre class="code-pane" data-cpane="local"><code data-i18n="qs_code_local"># Option A: Bare-metal / local Linux process mode (no Kubernetes needed)
 ./scripts/run-local.sh
 
-# Option B: Deklarativ per Kustomize in Kubernetes ausrollen
-kubectl apply -k deploy/k8s/base
-
-# Option C: Lokale Entwicklungsumgebung mit Tilt
-make setup &amp;&amp; make dev</code></pre>
+# Option B: Contributor setup &amp; full integration test suite (Docker only)
+make setup-local
+make test-local</code></pre>
           </div>
 
           <div style="display:flex;flex-direction:column;gap:18px;">
             <div class="info-box">
-              <h3 data-i18n="qs_req_title">Was du für den Betrieb brauchst</h3>
+              <h3 data-i18n="qs_req_title">What’s included out of the box</h3>
               <ul class="check-list">
-                <li style="color:var(--stone-200);"><span class="check-icon">✓</span><span data-i18n="qs_req_1">Flexibles Deployment: Docker Compose (Einzelserver/VM), Kubernetes (Helm Chart oder Kustomize) oder direkt lokal</span></li>
-                <li style="color:var(--stone-200);"><span class="check-icon">✓</span><span data-i18n="qs_req_2">Spracherkennung: NVIDIA-GPU empfohlen für Echtzeit-Betrieb – dank CPU-Fallback auch ohne GPU test- und nutzbar</span></li>
-                <li style="color:var(--stone-200);"><span class="check-icon">✓</span><span data-i18n="qs_req_3">PostgreSQL-Datenbank &amp; S3-Speicher (bei Docker Compose bereits mit MinIO vorkonfiguriert)</span></li>
-                <li style="color:var(--stone-200);"><span class="check-icon">✓</span><span data-i18n="qs_req_4">Optional: Single Sign-On (OIDC), E-Mail-Versand (SMTP/IMAP) &amp; Kalender-Sync für Google Workspace / Microsoft 365</span></li>
+                <li style="color:var(--stone-200);"><span class="check-icon">✓</span><span data-i18n="qs_req_1">Hardened Docker Compose (isolated socket proxy, non-root) &amp; OCI Helm Chart with zero-dependency bundled mode (amd64 &amp; arm64)</span></li>
+                <li style="color:var(--stone-200);"><span class="check-icon">✓</span><span data-i18n="qs_req_2">NVIDIA Parakeet ASR: 25 European languages (parakeet-tdt-0.6b-v3) or 2.95% WER German specialist — GPU recommended, CPU fallback built in</span></li>
+                <li style="color:var(--stone-200);"><span class="check-icon">✓</span><span data-i18n="qs_req_3">PostgreSQL 17 &amp; RustFS S3 object storage pre-wired in both Docker Compose and Helm bundled mode</span></li>
+                <li style="color:var(--stone-200);"><span class="check-icon">✓</span><span data-i18n="qs_req_4">Optional: OIDC SSO, Google/M365 Calendar OAuth2 writeback, local Ollama summaries, and DKIM-verified IMAP/SMTP mail</span></li>
               </ul>
             </div>
 
             <div class="info-box" style="border-color:rgba(16,185,129,0.35);">
-              <h3 data-i18n="qs_oss_title">Quelloffen auf GitHub</h3>
+              <h3 data-i18n="qs_oss_title">100% Open Source on GitHub</h3>
               <p style="margin:0 0 16px;font-size:14px;color:var(--stone-300);" data-i18n="qs_oss_desc">
-                Der gesamte Quellcode, das Docker-Compose-Setup, das Helm-Chart und alle Kubernetes-Manifeste stehen frei unter der GNU Affero General Public License v3.0 bereit.
+                Explore the source code, configuration reference, OCI Helm chart, architecture docs, and security policy under the GNU Affero General Public License v3.0.
               </p>
               <a href="https://github.com/mayflower/wortlaut" target="_blank" rel="noopener noreferrer" class="btn btn-primary" style="width:100%;" data-i18n="qs_oss_btn">
-                Zum GitHub-Repository →
+                View GitHub Repository →
               </a>
             </div>
           </div>
@@ -691,22 +726,26 @@ make setup &amp;&amp; make dev</code></pre>
             </span>
             wortlaut.cloud
           </div>
-          <p style="margin:0;max-width:480px;" data-i18n="footer_tagline">
-            Automatische, sprechergetrennte Wortprotokolle für Google Meet, Microsoft Teams, Cisco Webex und Zoom – 100 % selbst gehostet.
+          <p style="margin:0;max-width:520px;" data-i18n="footer_tagline">
+            Speaker-accurate, self-hosted meeting transcripts and protocols for Google Meet, Microsoft Teams, Cisco Webex, and Zoom.
           </p>
         </div>
 
         <div class="footer-links">
-          <a href="#how-it-works" data-i18n="nav_how">So funktioniert’s</a>
-          <a href="#features" data-i18n="nav_features">Funktionen</a>
-          <a href="#privacy" data-i18n="nav_privacy">Datenschutz</a>
+          <a href="#how-it-works" data-i18n="nav_how">How it works</a>
+          <a href="#features" data-i18n="nav_features">Features</a>
+          <a href="#privacy" data-i18n="nav_privacy">Privacy &amp; Opt-Out</a>
+          <a href="https://github.com/mayflower/wortlaut/blob/main/docs/configuration.md" target="_blank" rel="noopener noreferrer" data-i18n="footer_docs">Configuration</a>
+          <a href="https://github.com/mayflower/wortlaut/blob/main/charts/wortlaut/README.md" target="_blank" rel="noopener noreferrer">Helm Chart</a>
+          <a href="https://github.com/mayflower/wortlaut/blob/main/CHANGELOG.md" target="_blank" rel="noopener noreferrer">Changelog</a>
+          <a href="https://github.com/mayflower/wortlaut/blob/main/SECURITY.md" target="_blank" rel="noopener noreferrer" data-i18n="footer_security">Security</a>
           <a href="https://github.com/mayflower/wortlaut" target="_blank" rel="noopener noreferrer">GitHub</a>
-          <a href="https://github.com/mayflower/wortlaut/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">AGPLv3</a>
+          <a href="https://github.com/mayflower/wortlaut/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">AGPL-3.0</a>
         </div>
       </div>
 
       <div class="footer-bottom">
-        <span data-i18n="footer_copy">© 2026 Mayflower GmbH · Freie Software unter GNU AGPLv3 · wortlaut.cloud</span>
+        <span data-i18n="footer_copy">© 2026 Mayflower GmbH · Free Software under GNU AGPL-3.0 · wortlaut.cloud</span>
         <div class="footer-platform-logos" aria-label="Google Meet, Microsoft Teams, Cisco Webex, Zoom">
           <span class="footer-logo-badge" title="Google Meet"><svg width="18" height="15" viewBox="0 0 87.5 72" role="img" aria-label="Google Meet"><use href="#logo-icon-meet"/></svg></span>
           <span class="footer-logo-badge" title="Microsoft Teams"><svg width="18" height="18" viewBox="0 0 24 24" role="img" aria-label="Microsoft Teams"><use href="#logo-icon-teams"/></svg></span>

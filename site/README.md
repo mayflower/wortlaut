@@ -1,38 +1,29 @@
-# wortlaut.cloud — Statische Produkt- & Open-Source-Website
+# wortlaut.cloud — Static Product & Open-Source Website
 
-Dieses Verzeichnis enthält die statische, zweisprachige (**Deutsch / Englisch**) Produkt- und Open-Source-Website für **`wortlaut.cloud`**.
+This directory contains the static, bilingual (**English / German**) product and open-source website for **`wortlaut.cloud`** (deployed via GitHub Pages).
 
-## Dateien
+## Files
 
-- [`index.html`](index.html) – Vollständige Landingpage im **Astryx Stone Editorial Design** mit 5 Hauptsektionen: Hero-Stage (`#top`) mit interaktiver Live-UI-Vorschau, 3-Schritte-Ablauf (`#how-it-works`), interaktive Feature-Tabs (`#features` für Einzelspur-Transkript, 1-Klick-Kalender-Sync, Ad-hoc-Sofort-Aufnahme und E-Mail-Einladung), Datenschutz- & Architektur-Vergleich (`#privacy`) sowie Self-Hosting-Quickstart (`#self-hosting` für Docker Compose und Helm, GNU AGPLv3).
-- [`styles.css`](styles.css) – Design-Tokens (`--stone-*`, `--emerald-*`), Layout-Grids, responsive Breakpoints und Wellenform-Animationen.
-- [`app.js`](app.js) – Zweisprachiges Wörterbuch (`DE` / `EN`, umschaltbar per Button, `localStorage` oder URL-Parameter `?lang=de|en`), interaktive Feature-Tabs (`role="tablist"` mit Tastaturnavigation), 1-Klick-Kalender-Toggle-Demo und Copy-to-Clipboard für alle Installationsbefehle.
-- [`favicon.svg`](favicon.svg) – `wortlaut` `AudioLines`-Signet.
-- [`CNAME`](CNAME) – Custom-Domain-Konfiguration (`wortlaut.cloud`) für GitHub Pages.
+- [`index.html`](index.html) – Landing page in **Astryx Stone Editorial Design** with OpenGraph/Twitter social preview metadata (`social-preview.png`) and 5 sections:
+  1. **Hero (`#top`)** – Interactive product preview featuring Executive Summary (optional local Ollama AI), speaker filter chips, live waveform indicator, and 24h audio-snippet verification badges across Google Meet, Microsoft Teams, Cisco Webex, and Zoom.
+  2. **How It Works (`#how-it-works`)** – 3-step workflow covering OAuth2 calendar sync / ad-hoc join, transparent presence + live in-call chat opt-out (`opt out` / `nein`), and automatic calendar event writeback.
+  3. **Product Workflows (`#features`)** – Interactive tabs for Calendar Sync & Writeback, Ad-hoc Join & 25-Language Parakeet ASR, Snippet Verification / Inline Editing / Local Ollama Summaries / Exports, and Pre-Mix WebRTC Speaker Separation.
+  4. **Privacy, Consent & Security (`#privacy`)** – Self-hosted architecture, live individual chat opt-out, 24h raw-audio / 30d transcript retention, OIDC SSO isolation, and cloud-bot comparison matrix.
+  5. **Self-Hosting & Quickstart (`#self-hosting`)** – Copy-ready commands for hardened Docker Compose (+ GPU overlay), OCI Helm Chart (`bundled.enabled=true` zero-dependency evaluation & production cluster), and local/contributor workflows (`make setup-local`, `make test-local`).
+- [`styles.css`](styles.css) – Astryx Stone & Emerald design tokens, responsive layout grids, and live waveform animations.
+- [`app.js`](app.js) – Bilingual dictionary (`EN` / `DE` with automatic browser locale detection, `localStorage` persistence, and `?lang=en|de` URL override), accessible feature tabs, interactive speaker filter & calendar toggle demos, and copy-to-clipboard buttons.
+- [`favicon.svg`](favicon.svg) – `wortlaut` `AudioLines` mark.
 
-## Lokale Vorschau
+## Local Preview
 
-Da die Website ohne Build-Schritt auskommt, reicht jeder statische Webserver:
+No build step is required — serve `site/` with any static HTTP server:
 
 ```bash
 python3 -m http.server 8080 --directory site
-# -> http://127.0.0.1:8080 (Deutsch)
-# -> http://127.0.0.1:8080/?lang=en (Englisch)
+# -> http://127.0.0.1:8080/?lang=en (English)
+# -> http://127.0.0.1:8080/?lang=de (Deutsch)
 ```
 
-## Hosting auf GitHub Pages (`wortlaut.cloud`)
+## Deployment (`pages.yml`)
 
-Der Workflow [`.github/workflows/pages.yml`](../.github/workflows/pages.yml) veröffentlicht das Verzeichnis `site/` bei jedem Push auf `main` automatisch auf GitHub Pages.
-
-### Einmalige Einrichtung in GitHub & DNS
-
-1. **In GitHub (`mayflower/wortlaut` → Settings → Pages)**:
-   - Unter *Build and deployment → Source* die Option **GitHub Actions** auswählen.
-   - Nach dem ersten Lauf von `pages.yml` **Enforce HTTPS** aktivieren.
-2. **Beim DNS-Provider für `wortlaut.cloud`**:
-   - **Apex-Domain (`wortlaut.cloud`)**: `A`-Records auf die GitHub-Pages-IPs setzen:
-     - `185.199.108.153`
-     - `185.199.109.153`
-     - `185.199.110.153`
-     - `185.199.111.153`
-   - **Subdomain (`www.wortlaut.cloud`)**: `CNAME`-Record auf `mayflower.github.io.` setzen.
+[`.github/workflows/pages.yml`](../.github/workflows/pages.yml) automatically publishes `site/` to GitHub Pages whenever changes on `site/**` land on `main`.

@@ -1,337 +1,477 @@
 (function () {
   const I18N = {
-    de: {
-      meta_title: "wortlaut.cloud — Automatische Wortprotokolle für deine Meetings. 100 % selbst gehostet.",
-      meta_desc:
-        "wortlaut erstellt verlässliche, nach Sprechern getrennte Wortprotokolle für Google Meet, Microsoft Teams, Cisco Webex und Zoom – komplett auf eurer eigenen Infrastruktur unter GNU AGPLv3.",
-
-      nav_how: "So funktioniert’s",
-      nav_features: "Funktionen",
-      nav_privacy: "Datenschutz",
-      nav_selfhost: "Selbst hosten",
-      cta_github: "GitHub",
-      cta_install: "Jetzt installieren",
-
-      hero_badge: "Open Source (AGPLv3) · 100 % Self-Hosted · DSGVO-konform",
-      hero_title_html:
-        'Automatische Wortprotokolle für deine Meetings.<br><span class="highlight">Auf deiner eigenen Infrastruktur.</span>',
-      hero_subtitle:
-        "wortlaut nimmt als stiller Zuhörer an Besprechungen in Google Meet, Microsoft Teams, Cisco Webex und Zoom teil, erkennt zuverlässig, wer spricht, und liefert direkt nach dem Gespräch ein durchsuchbares Wortprotokoll – ohne dass vertrauliche Gespräche in fremde Clouds abfließen.",
-      hero_cta_primary: "Kostenlos selbst hosten",
-      hero_cta_secondary: "So funktioniert’s ansehen",
-      platforms_label: "Funktioniert einheitlich mit:",
-
-      ui_nav_home: "Startseite",
-      ui_nav_rec: "Aufnahmen",
-      ui_nav_cal: "Kalender",
-      ui_nav_sys: "System & Hilfe",
-      ui_meeting_title: "Produkt- & Architektur-Abstimmung Q4",
-      ui_meeting_meta: "Heute, 14:00 – 14:45 Uhr · 3 Teilnehmende",
-      ui_badge_done: "Protokoll fertig",
-      ui_btn_share: "Lese-Link teilen",
-      ui_btn_export: "Markdown exportieren",
-      ui_turn1_text_html:
-        'Wir haben die <mark>Kalender-Anbindung</mark> für Google Workspace und Microsoft 365 abgeschlossen. Eigene Termine werden automatisch protokolliert, externe Kundentermine lassen sich mit einem Klick zuschalten.',
-      ui_turn2_text_html:
-        'Sehr gut. Besonders hilfreich ist, dass die <mark>Sprechererkennung</mark> auch dann sauber bleibt, wenn zwei Personen kurz gleichzeitig sprechen.',
-      ui_turn3_text_html:
-        'Für unsere Kunden ist entscheidend, dass alle Aufnahmen auf unseren eigenen Servern bleiben und im Meeting-Chat sofort transparent angezeigt wird, wer das Protokoll gestartet hat.',
-
-      how_kicker: "SO FUNKTIONIERT’S",
-      how_title: "In drei einfachen Schritten vom Gespräch zum fertigen Protokoll",
-      how_desc:
-        "Keine komplizierte Einrichtung für Teilnehmende, keine Browser-Plugins und kein manuelles Mitschreiben.",
-      step1_title: "1. Termin verbinden oder Link einfügen",
-      step1_desc:
-        "Verknüpfe einmalig deinen Google- oder Microsoft-365-Kalender, leite eine Termineinladung per E-Mail weiter oder füge spontan den Link eines laufenden Meetings in der Web-Oberfläche ein.",
-      step2_title: "2. Entspannt sprechen",
-      step2_desc:
-        "wortlaut tritt dem Meeting als rein passiver Audio-Zuhörer bei, stellt sich im Konferenz-Chat transparent mit dem Namen der einladenden Person vor und erfasst jeden Redebeitrag getrennt nach Sprecher.",
-      step3_title: "3. Nachlesen, suchen & teilen",
-      step3_desc:
-        "Direkt nach Gesprächsende erhältst du das fertige Wortprotokoll per E-Mail und in der Web-Oberfläche. Durchsuche alle Gespräche im Volltext, teile einen geschützten Lese-Link mit dem Team oder exportiere den Text.",
-
-      feat_kicker: "FUNKTIONEN IM ÜBERBLICK",
-      feat_title: "Alles, was Teams für verlässliche Besprechungsprotokolle brauchen",
-      feat_desc:
-        "Entwickelt für den täglichen Einsatz in Kundenprojekten, internen Abstimmungen und technischen Reviews.",
-
-      ftab1_title: "Kalender-Automatik",
-      ftab1_sub: "Google & Microsoft 365",
-      ftab2_title: "Spontane Aufnahme",
-      ftab2_sub: "In 10 Sekunden im Call",
-      ftab3_title: "Teilen & Exportieren",
-      ftab3_sub: "Lese-Links, Markdown & API",
-      ftab4_title: "Präzise Sprecher",
-      ftab4_sub: "Saubere Trennung ohne Stimmprofile",
-
-      f1_title: "Deine Termine automatisch protokolliert – Kundentermine mit einem Klick",
-      f1_lead:
-        "Verbinde deinen Google- oder Microsoft-365-Kalender einmalig per Klick. Du behältst jederzeit die volle Kontrolle darüber, bei welchen Gesprächen wortlaut dabei ist:",
-      f1_li1: "Selbst organisierte Termine mit Videokonferenz-Link werden automatisch eingeplant (jederzeit mit einem Klick abwählbar).",
-      f1_li2: "Externe Kundentermine erscheinen übersichtlich in deinem Kalender und können bei Bedarf mit einem einzigen Klick zugeschaltet werden – ohne einen Bot in die fremde Einladungsliste einzutragen.",
-      f1_li3: "Terminverschiebungen, Serien-Ausnahmen und Absagen werden automatisch übernommen.",
-      f1_demo_label: "Kalender-Übersicht (Klicke auf den Schalter zum Testen):",
-      f1_ev1_title: "Wöchentliches Team-Sync",
-      f1_ev1_meta: "10:00 – 10:45 Uhr · Automatisch aktiv (eigener Termin)",
-      f1_ev2_title: "Projektabstimmung mit Kunden",
-      f1_ev2_meta: "14:00 – 15:00 Uhr · Externer Termin · Per Klick zuschaltbar",
-      f1_ev3_title: "Sprint-Review",
-      f1_ev3_meta: "16:30 – 17:15 Uhr · Automatisch aktiv (eigene Serie)",
-      toggle_on: "● Aufzeichnen: An",
-      toggle_off: "○ Aufzeichnen: Aus",
-
-      f2_title: "Spontan in laufende Besprechungen holen – und sofort durchsuchen",
-      f2_lead:
-        "Oft ergibt sich erst mitten im Gespräch, dass wichtige Entscheidungen festgehalten werden sollten. Mit wortlaut startest du die Aufzeichnung jederzeit spontan:",
-      f2_li1: "Meeting-Link für Google Meet, Teams, Webex oder Zoom einfügen, gewünschte Dauer wählen und sofort starten.",
-      f2_li2: "Live-Statusanzeige in Echtzeit: Auf einen Blick sehen, ob der Bot noch im Warteraum wartet oder bereits mitschreibt.",
-      f2_li3: "Schon während des laufenden Gesprächs erscheint das Protokoll Absatz für Absatz im Browser und lässt sich sofort nach Stichworten durchsuchen.",
-      f2_demo_title: "Spontane Aufzeichnung starten",
-      f2_demo_btn: "Jetzt aufzeichnen",
-      f2_demo_status: "LIVE · Im Gespräch (3 aktive Teilnehmende erkannt)",
-
-      f3_title: "Sicher im Team teilen und nahtlos weiterverarbeiten",
-      f3_lead:
-        "wortlaut erfindet keine unkontrollierten KI-Zusammenfassungen, sondern liefert ein verlässliches, unverfälschtes Wortprotokoll als Grundlage für deine Arbeit:",
-      f3_li1: "Geschützte Lese-Links: Teile ein einzelnes Protokoll per Klick mit Kolleginnen und Kollegen – ohne dass externe Gäste im Meeting-Chat unbefugt mitlesen können.",
-      f3_li2: "Automatischer E-Mail-Versand: Nach dem Termin landen Protokoll und Lese-Link automatisch im Posteingang der einladenden Person.",
-      f3_li3: "Offene Exportformate & REST-API: Lade Protokolle als Markdown (.md), Text (.txt), Untertitel (.vtt) oder strukturiertes JSON herunter – ideal für Confluence, Jira, GitLab oder eigene lokale KI-Modelle.",
-
-      f4_title: "Klare Sprecherzuordnung – ganz ohne biometrische Stimmprofile",
-      f4_lead:
-        "Herkömmliche Cloud-Dienste mischen alle Stimmen zusammen und versuchen nachträglich per Stimmprofil zu erraten, wer gesprochen hat. wortlaut geht einen besseren Weg:",
-      f4_li1: "Jede Tonspur wird bereits während der Konferenz getrennt erfasst und direkt dem jeweiligen Teilnehmernamen im Meeting zugeordnet.",
-      f4_li2: "Auch wenn mehrere Personen kurz gleichzeitig sprechen oder sich ins Wort fallen, bleiben die Aussagen sauber getrennt.",
-      f4_li3: "Es werden keinerlei biometrische Stimmprofile (Voiceprints) angelegt oder gespeichert.",
-
-      priv_kicker: "DATENSCHUTZ & VERTRAUEN",
-      priv_title: "Gebaut für vertrauliche Gespräche und strenge Datenschutz-Anforderungen",
-      priv_desc:
-        "Warum Unternehmen, Kanzleien, Beratungen und öffentliche Auftraggeber wortlaut statt kommerzieller US-Cloud-Bots einsetzen.",
-      trust1_title: "100 % auf euren eigenen Servern",
-      trust1_desc:
-        "Sowohl die Gesprächsannahme als auch die Spracherkennung laufen vollständig in eurem eigenen Cluster. Keine einzige Sekunde Audio wird an externe Cloud-Anbieter übertragen.",
-      trust2_title: "Transparent & respektvoll im Meeting",
-      trust2_desc:
-        "wortlaut zeichnet niemals Kamerabilder oder Bildschirminhalte auf. Beim Beitritt stellt sich der Bot im Chat mit dem Namen der einladenden Person und einem Link zur öffentlichen Datenschutz-Erklärung vor.",
-      trust3_title: "Automatische Löschfristen & 1-Klick-Löschung",
-      trust3_desc:
-        "Roh-Audiodaten werden nach 24 Stunden automatisch gelöscht, schriftliche Protokolle nach 30 Tagen. Vertrauliche Besprechungen lassen sich zudem jederzeit sofort mit einem Klick restlos entfernen.",
-      trust4_title: "Mandantentrennung & Single Sign-On",
-      trust4_desc:
-        "Über Single Sign-On (OIDC) sieht jede Person standardmäßig nur ihre eigenen Aufnahmen und Kalendereinträge – geschützt vor unbefugtem Zugriff.",
-
-      comp_th_crit: "Kriterium",
-      comp_th_cloud: "Kommerzielle US-Cloud-Notetaker",
-      comp_th_wortlaut: "wortlaut (Open Source & Self-Hosted)",
-      comp_r1_c: "Wo werden Gespräche verarbeitet?",
-      comp_r1_cloud: "In fremden Hersteller-Clouds (oft USA)",
-      comp_r1_w: "100 % auf deiner eigenen Infrastruktur",
-      comp_r2_c: "Wie werden Sprecher erkannt?",
-      comp_r2_cloud: "Über biometrische Stimmprofile (Voiceprints)",
-      comp_r2_w: "Direkt über die Teilnehmersitzung – ohne Stimmprofile",
-      comp_r3_c: "Wird Video aufgezeichnet?",
-      comp_r3_cloud: "Häufig kompletter Video- & Bildschirm-Mitschnitt",
-      comp_r3_w: "Rein passives Audio – niemals Kamera- oder Bildschirmaufnahme",
-      comp_r4_c: "Unterstützte Plattformen",
-      comp_r4_cloud: "Oft Abo-gebunden je Nutzer & Plattform",
-      comp_r4_w: "Google Meet, Microsoft Teams, Cisco Webex & Zoom inklusive",
-      comp_r5_c: "Lizenz & Kosten",
-      comp_r5_cloud: "Monatliche Lizenzkosten pro Sitzplatz",
-      comp_r5_w: "Freie Open-Source-Software unter GNU AGPLv3",
-
-      qs_kicker: "SELBST HOSTEN (OPEN SOURCE)",
-      qs_title: "In wenigen Minuten auf dem eigenen Server oder Cluster starten",
-      qs_desc:
-        "wortlaut ist freie Software unter der GNU AGPLv3. Starte das System per Docker Compose auf einem einzelnen Server, per Helm Chart in Kubernetes oder direkt lokal zur Evaluierung.",
-      qs_tab1: "Docker Compose",
-      qs_tab2: "Helm (Kubernetes)",
-      qs_tab3: "Lokal / Kustomize",
-      copy_btn: "Kopieren",
-      copied_btn: "Kopiert!",
-      qs_req_title: "Was du für den Betrieb brauchst",
-      qs_req_1: "Flexibles Deployment: Docker Compose (Einzelserver/VM), Kubernetes (Helm Chart oder Kustomize) oder direkt lokal",
-      qs_req_2: "Spracherkennung: NVIDIA-GPU empfohlen für Echtzeit-Betrieb – dank CPU-Fallback auch ohne GPU test- und nutzbar",
-      qs_req_3: "PostgreSQL-Datenbank & S3-Speicher (bei Docker Compose bereits mit MinIO vorkonfiguriert)",
-      qs_req_4: "Optional: Single Sign-On (OIDC), E-Mail-Versand (SMTP/IMAP) & Kalender-Sync für Google Workspace / Microsoft 365",
-      qs_oss_title: "Quelloffen auf GitHub",
-      qs_oss_desc:
-        "Der gesamte Quellcode, das Docker-Compose-Setup, das Helm-Chart und alle Kubernetes-Manifeste stehen frei unter der GNU Affero General Public License v3.0 bereit.",
-      qs_oss_btn: "Zum GitHub-Repository →",
-
-      footer_tagline:
-        "Automatische, sprechergetrennte Wortprotokolle für Google Meet, Microsoft Teams, Cisco Webex und Zoom – 100 % selbst gehostet.",
-      footer_copy: "© 2026 Mayflower GmbH · Freie Software unter GNU AGPLv3 · wortlaut.cloud"
-    },
-
     en: {
-      meta_title: "wortlaut.cloud — Automatic Meeting Transcripts. 100% Self-Hosted & GDPR-Compliant.",
+      meta_title: "wortlaut.cloud — Speaker-Accurate Meeting Transcripts. 100% Self-Hosted.",
       meta_desc:
-        "wortlaut creates accurate, speaker-separated transcripts for Google Meet, Microsoft Teams, Cisco Webex, and Zoom — running entirely on your own infrastructure under GNU AGPLv3.",
+        "wortlaut creates speaker-accurate verbatim transcripts and protocols for Google Meet, Microsoft Teams, Cisco Webex, and Zoom — 100% self-hosted on your own infrastructure under GNU AGPL-3.0.",
 
       nav_how: "How it works",
       nav_features: "Features",
-      nav_privacy: "Privacy",
+      nav_privacy: "Privacy & Opt-Out",
       nav_selfhost: "Self-Hosting",
       cta_github: "GitHub",
       cta_install: "Get Started",
 
-      hero_badge: "Open Source (AGPLv3) · 100% Self-Hosted · GDPR-Compliant",
+      hero_badge: "Open Source (AGPL-3.0) · 100% Self-Hosted · 25 Languages · GDPR-Ready",
       hero_title_html:
-        'Automatic transcripts for your meetings.<br><span class="highlight">Running on your own infrastructure.</span>',
+        'Speaker-accurate transcripts for your meetings.<br><span class="highlight">100% on your own infrastructure.</span>',
       hero_subtitle:
-        "wortlaut joins meetings in Google Meet, Microsoft Teams, Cisco Webex, and Zoom as a quiet listener, reliably attributes every statement to the right speaker, and delivers a searchable verbatim transcript right after the call — without sending confidential conversations to third-party clouds.",
+        "wortlaut joins calls in Google Meet, Microsoft Teams, Cisco Webex, and Zoom as a transparent passive listener, captures each speaker’s isolated audio stream before mixing, and writes finished protocols straight back into your calendar invite — with live chat opt-out and zero third-party cloud leakage.",
       hero_cta_primary: "Self-Host for Free",
       hero_cta_secondary: "See How It Works",
-      platforms_label: "Works seamlessly across:",
+      platforms_label: "Runs side-by-side in a single instance across:",
 
+      ui_window_url: "wortlaut · Meeting Protocol",
+      ui_badge_done: "✓ Linked in calendar invite",
       ui_nav_home: "Home",
       ui_nav_rec: "Recordings",
       ui_nav_cal: "Calendar",
       ui_nav_sys: "System & Help",
-      ui_meeting_title: "Q4 Product & Architecture Alignment",
+      ui_sso_label: "OIDC Single Sign-On",
+      ui_meeting_title: "Q4 Product & Security Architecture Review",
       ui_meeting_meta: "Today, 14:00 – 14:45 · 3 participants",
-      ui_badge_done: "Transcript ready",
       ui_btn_share: "Share Read Link",
       ui_btn_export: "Export Markdown",
+      ui_summary_label: "Executive Summary & Action Items",
+      ui_summary_tag: "Optional Local AI · Ollama",
+      ui_summary_body:
+        "Calendar OAuth2 writeback for Google Workspace and Microsoft 365 is live; external client calls stay opt-in via 1-click toggle, and in-call chat opt-out passed security review.",
+      ui_filter_all: "All (3)",
+      ui_tracks_bound: "3 isolated tracks",
       ui_turn1_text_html:
-        'We completed the <mark>calendar integration</mark> for Google Workspace and Microsoft 365. Own meetings are recorded automatically, and external client calls can be toggled on with a single click.',
+        'Finished protocols are now written straight back into the <mark>Google Calendar and Outlook invite</mark> so every attendee finds the read-only link right where they look.',
       ui_turn2_text_html:
-        'Great. What helps most is that <mark>speaker attribution</mark> stays clean even when two people talk at the same time.',
+        'And because each participant’s WebRTC track is captured before mixing, <mark>speaker attribution</mark> stays accurate even when two people overlap — across 25 European languages.',
       ui_turn3_text_html:
-        'For our clients, the key point is that every recording stays on our own servers and the meeting chat immediately shows who invited the note-taker.',
+        'Our DPO especially liked the <mark>in-call chat opt-out</mark>: anyone can type <code>opt out</code> or <code>nein</code> in chat to exclude their voice immediately without stopping the call for everyone else.',
 
       how_kicker: "HOW IT WORKS",
-      how_title: "From conversation to finished transcript in three simple steps",
+      how_title: "From live conversation to verified protocol in three simple steps",
       how_desc:
-        "No complicated setup for attendees, no browser extensions required, and no manual note-taking.",
-      step1_title: "1. Connect your calendar or paste a link",
+        "No browser extensions for attendees, no cloud bots in third-party guest lists, and no manual note-taking.",
+      step1_title: "1. Connect calendar, paste link, or invite",
       step1_desc:
-        "Link your Google or Microsoft 365 calendar once, forward a calendar invite via email, or spontaneously paste a live meeting link into the web interface.",
-      step2_title: "2. Focus on the conversation",
+        "Link your Google Workspace or Microsoft 365 calendar once via OAuth2, paste a live meeting URL on the home screen, or invite your bot email address like a regular attendee.",
+      step2_title: "2. Transparent join & live chat opt-out",
       step2_desc:
-        "wortlaut joins the call as a strictly passive audio listener, introduces itself transparently in the meeting chat with the inviter’s name, and captures each participant separately.",
-      step3_title: "3. Read, search & share",
+        "wortlaut joins as a passive audio listener displaying the inviter’s name, posts a privacy link in chat, and lets any individual attendee type “opt out” or “no” in chat to exclude their stream on the spot.",
+      step3_title: "3. Calendar writeback, verify & export",
       step3_desc:
-        "Right after the call, receive the finished transcript via email and in the web app. Search across all meetings, share a protected read-only link with colleagues, or export the text.",
+        "Right after the call, wortlaut writes the read-only protocol link directly into your calendar event, emails the transcript, and lets you verify 24h audio snippets, edit terms, or export Markdown.",
 
-      feat_kicker: "FEATURES",
-      feat_title: "Everything teams need for reliable meeting transcripts",
+      feat_kicker: "PRODUCT WORKFLOWS",
+      feat_title: "Everything teams need for accurate, trustworthy meeting protocols",
       feat_desc:
-        "Built for daily use in client projects, team syncs, and technical reviews.",
+        "Designed for daily engineering syncs, confidential client engagements, architecture decisions, and compliance-sensitive teams.",
 
-      ftab1_title: "Calendar Sync",
+      ftab1_title: "Calendar & Writeback",
       ftab1_sub: "Google & Microsoft 365",
-      ftab2_title: "Ad-hoc Recording",
-      ftab2_sub: "Join a live call in 10s",
-      ftab3_title: "Share & Export",
-      ftab3_sub: "Read links, Markdown & API",
-      ftab4_title: "Accurate Speakers",
-      ftab4_sub: "Clean separation, no voiceprints",
+      ftab2_title: "Ad-hoc & 25 Languages",
+      ftab2_sub: "Join in ~15s · Local Parakeet ASR",
+      ftab3_title: "Verify, Edit & Summarize",
+      ftab3_sub: "Snippets, Ollama AI & Exports",
+      ftab4_title: "True Speaker Separation",
+      ftab4_sub: "Pre-mix WebRTC · Zero voiceprints",
 
-      f1_title: "Your own meetings recorded automatically — client calls with a single click",
+      f1_title:
+        "Auto-record your own meetings, toggle client calls in 1 click, and link protocols in the invite",
       f1_lead:
-        "Connect your Google or Microsoft 365 calendar with one click. You stay in full control of which meetings wortlaut attends:",
-      f1_li1: "Meetings you organize yourself are scheduled automatically (and can be opted out with one click anytime).",
-      f1_li2: "External client meetings appear in your personal calendar view and can be toggled on with a single click — without adding a bot to the client’s guest list.",
-      f1_li3: "Rescheduled meetings, recurring series exceptions, and cancellations sync automatically.",
-      f1_demo_label: "Calendar View (click the toggle switch to test):",
-      f1_ev1_title: "Weekly Team Sync",
-      f1_ev1_meta: "10:00 – 10:45 · Auto-enabled (organized by you)",
-      f1_ev2_title: "Client Project Alignment",
-      f1_ev2_meta: "14:00 – 15:00 · External meeting · Enable with 1 click",
+        "Connect Google Calendar or Microsoft 365 via OAuth2 PKCE in seconds. You stay in complete control of every call:",
+      f1_li1:
+        "Self-organized meetings with confirmed guests are scheduled automatically (and can be opted out with 1 click anytime).",
+      f1_li2:
+        "External client invitations can be toggled on with a single click — without adding a bot email to the client’s guest list.",
+      f1_li3:
+        "Automatic Calendar Writeback: once completed, wortlaut appends the protected read-only protocol link straight into your Google Calendar or Outlook event.",
+      f1_demo_label: "Calendar Workspace (click the toggle switch to test):",
+      f1_ev1_title: "Weekly Platform Sync",
+      f1_ev1_meta: "10:00 – 10:45 · Completed · Linked in calendar event",
+      f1_linked_badge: "✓ Protocol linked",
+      f1_ev2_title: "Client Architecture Workshop",
+      f1_ev2_meta: "14:00 – 15:00 · External invite · Enable with 1 click",
       f1_ev3_title: "Sprint Review",
       f1_ev3_meta: "16:30 – 17:15 · Auto-enabled (recurring series)",
       toggle_on: "● Record: On",
       toggle_off: "○ Record: Off",
 
-      f2_title: "Bring wortlaut into unplanned calls — and search in real time",
+      f2_title:
+        "Join unplanned calls in ~15 seconds — and transcribe locally across 25 European languages",
       f2_lead:
-        "Often you only realize mid-conversation that key decisions should be documented. With wortlaut, you can start recording anytime:",
-      f2_li1: "Paste a meeting link for Google Meet, Teams, Webex, or Zoom, choose a duration, and start immediately.",
-      f2_li2: "Live status indicator: see at a glance whether the bot is waiting in the lobby or actively transcribing.",
-      f2_li3: "Even while the meeting is still running, paragraphs appear live in the browser and can be searched by keyword.",
+        "Paste any meeting URL when a spontaneous call turns important, and run state-of-the-art speech recognition entirely on your own GPU or CPU:",
+      f2_li1:
+        "Paste a Google Meet, Teams, Webex, or Zoom link — wortlaut spawns an isolated browser worker and joins within ~15 seconds.",
+      f2_li2:
+        "Multilingual NVIDIA Parakeet TDT v3 supports automatic language detection across 25 European languages alongside a 2.95% WER German specialist checkpoint.",
+      f2_li3:
+        "Bilingual EN / DE Web-UI with live lobby/capture stepper and real-time full-text search while the call is still running.",
       f2_demo_title: "Start Ad-hoc Recording",
+      f2_dur_30: "30 min",
+      f2_dur_60: "60 min",
+      f2_dur_90: "90 min",
       f2_demo_btn: "Record Now",
-      f2_demo_status: "LIVE · In meeting (3 active participants detected)",
+      f2_demo_status: "LIVE · Capturing 3 isolated tracks · Parakeet TDT (25 langs)",
 
-      f3_title: "Share safely with your team and export anywhere",
+      f3_title:
+        "Verify quotes by ear, polish domain terms, summarize with local Ollama, and export anywhere",
       f3_lead:
-        "wortlaut avoids unverified AI summaries that invent facts, giving you an accurate verbatim transcript you can trust:",
-      f3_li1: "Protected read-only links: share a transcript with teammates in one click — while preventing external meeting guests from snooping on the chat link.",
-      f3_li2: "Automatic email delivery: finished transcripts and a read link are sent straight to the organizer’s inbox after the call.",
-      f3_li3: "Open export formats & REST API: download transcripts as Markdown (.md), plain text (.txt), subtitles (.vtt), or structured JSON — ready for Confluence, Jira, GitLab, or your own internal AI tools.",
+        "wortlaut keeps the verbatim speaker-attributed transcript as your source of truth while giving your team powerful review and export tools:",
+      f3_li1:
+        "Click-to-listen verification & inline editor: play back isolated 24h audio snippets to verify exact wording, rename guest speakers, and apply 1-click vocabulary replacements across the entire protocol.",
+      f3_li2:
+        "Optional local AI summaries (Ollama): generate structured executive summaries, topic breakdowns, and action items on your own server with zero external API calls.",
+      f3_li3:
+        "Scoped read-only links (wortlaut-read-…), automatic email delivery, and open exports (.md, .txt, .vtt, .json) plus an idempotent REST API (/docs).",
+      f3_exp_md_desc: "Ready for Notion, Confluence, GitHub, GitLab & Jira",
+      f3_exp_ai_desc: "Opt-in executive summary, topics & action items on your GPU",
+      f3_exp_vtt_desc: "Time-aligned .vtt captions & clean .txt email protocols",
+      f3_exp_json_desc: "Structured segments, track diagnostics & OpenAPI (/docs)",
 
-      f4_title: "Clean speaker attribution — with zero biometric voiceprints",
+      f4_title: "Clean speaker attribution before audio mixing — with zero biometric voiceprints",
       f4_lead:
-        "Conventional cloud bots mix all voices together and use biometric voice profiles to guess who spoke. wortlaut takes a fundamentally better approach:",
-      f4_li1: "Each audio stream is captured separately during the call and attributed directly to the participant’s meeting session.",
-      f4_li2: "Even when several people speak at the same time, their statements remain cleanly separated.",
-      f4_li3: "Zero biometric voiceprints are ever created or stored.",
+        "Conventional meeting bots record mixed room audio and guess speakers afterward using voice diarization. wortlaut solves speaker attribution at the transport layer:",
+      f4_li1:
+        "Each incoming WebRTC receiver stream is captured separately before mixing and bound directly to the verified conference participant session.",
+      f4_li2:
+        "Even when participants overlap or interrupt each other, statements remain cleanly separated per track.",
+      f4_li3:
+        "Zero biometric voiceprints are ever computed or stored — and if a provider hides a binding, wortlaut marks it transparently instead of guessing.",
+      f4_badge: "Isolated stream → Verified speaker",
+      f4_optout_cmd: 'Chat: "opt out" / "nein"',
+      f4_optout_res: "→ Stream dropped & segments purged",
 
-      priv_kicker: "PRIVACY & TRUST",
-      priv_title: "Built for confidential conversations and strict data protection rules",
+      priv_kicker: "PRIVACY, CONSENT & SECURITY",
+      priv_title: "Built for confidential conversations, European DPOs, and strict compliance",
       priv_desc:
-        "Why enterprises, consultancies, legal teams, and public-sector organizations choose wortlaut over commercial US cloud bots.",
-      trust1_title: "100% on your own servers",
+        "Why engineering organizations, consultancies, legal teams, and public-sector agencies run wortlaut instead of commercial cloud bots.",
+      trust1_title: "100% Self-Hosted (Zero Cloud Leakage)",
       trust1_desc:
-        "Both meeting participation and speech recognition run entirely inside your own cluster. Not a single second of audio is sent to external cloud providers.",
-      trust2_title: "Transparent & respectful in every call",
+        "Sandboxed browser workers, NVIDIA Parakeet speech recognition, and optional Ollama summaries all run inside your own cluster or server. Not a single second of audio leaves your infrastructure.",
+      trust2_title: "Live In-Call Chat Opt-Out",
       trust2_desc:
-        "wortlaut never records camera video or screen shares. Upon joining, it introduces itself in the meeting chat with the inviter’s name and a public privacy information link.",
-      trust3_title: "Automatic retention limits & 1-click deletion",
+        "wortlaut joins as “wortlaut (Inviter Name)”, never records video or screen shares, and lets any participant type “opt out”, “no”, or “nein” in chat to immediately discard their stream and purge prior quotes.",
+      trust3_title: "24h Audio Window & Auto-Expiry",
       trust3_desc:
-        "Raw audio is automatically purged after 24 hours and written transcripts after 30 days. Confidential recordings can also be permanently deleted at any time with a single click.",
-      trust4_title: "Multi-user isolation & Single Sign-On",
+        "Isolated audio chunks are deleted automatically from S3 after 24 hours; transcripts expire after 30 days by default and can be purged permanently at any moment with a single click.",
+      trust4_title: "OIDC Single Sign-On & Tenant Isolation",
       trust4_desc:
-        "With Single Sign-On (OIDC), every user only sees their own recordings and calendar events by default.",
+        "Connect Keycloak, Authentik, Dex, Zitadel, Microsoft Entra ID, or Google via OIDC PKCE. Users only see their own recordings and invited meetings, plus HMAC-scoped read-only share links.",
 
       comp_th_crit: "Criterion",
-      comp_th_cloud: "Commercial US Cloud Note-Takers",
+      comp_th_cloud: "Commercial Cloud Note-Takers",
       comp_th_wortlaut: "wortlaut (Open Source & Self-Hosted)",
-      comp_r1_c: "Where are conversations processed?",
-      comp_r1_cloud: "External vendor clouds (often US-based)",
-      comp_r1_w: "100% on your own infrastructure",
+      comp_r1_c: "Where are calls & summaries processed?",
+      comp_r1_cloud: "External vendor clouds & third-party LLM APIs",
+      comp_r1_w: "100% on your own infrastructure (Parakeet ASR + optional Ollama)",
       comp_r2_c: "How are speakers identified?",
-      comp_r2_cloud: "Biometric voice profiles (voiceprints)",
-      comp_r2_w: "Directly via the meeting session — zero voiceprints",
-      comp_r3_c: "Is video recorded?",
-      comp_r3_cloud: "Often records full video & screen shares",
-      comp_r3_w: "Strictly passive audio — never camera or screen video",
+      comp_r2_cloud: "Mixed audio + biometric voice profiles (voiceprints)",
+      comp_r2_w: "Isolated pre-mix WebRTC tracks bound to session — zero voiceprints",
+      comp_r6_c: "Individual attendee opt-out",
+      comp_r6_cloud: "All-or-nothing (remove bot for everyone or leave call)",
+      comp_r6_w: "Type “opt out” / “nein” in chat — only that speaker is excluded & purged",
+      comp_r3_c: "Camera & screen recording",
+      comp_r3_cloud: "Frequently records full video & screen shares",
+      comp_r3_w: "Strictly passive audio — camera & screen capture blocked",
       comp_r4_c: "Supported platforms",
-      comp_r4_cloud: "Often tied to per-seat subscriptions",
-      comp_r4_w: "Google Meet, Microsoft Teams, Cisco Webex & Zoom included",
+      comp_r4_cloud: "Often restricted or billed per seat & platform",
       comp_r5_c: "License & cost",
-      comp_r5_cloud: "Recurring monthly fee per user",
-      comp_r5_w: "Free open-source software under GNU AGPLv3",
+      comp_r5_cloud: "Recurring monthly per-seat subscription",
+      comp_r5_w: "Free open-source software under GNU AGPL-3.0",
 
-      qs_kicker: "SELF-HOSTING (OPEN SOURCE)",
-      qs_title: "Get started on your own server or cluster in minutes",
+      qs_kicker: "SELF-HOSTING & QUICKSTART",
+      qs_title: "Up and running on your own server or Kubernetes cluster in minutes",
       qs_desc:
-        "wortlaut is free software under the GNU AGPLv3. Run it with Docker Compose on a single VM, deploy via Helm Chart on Kubernetes, or launch locally for evaluation.",
+        "Free software under GNU AGPL-3.0 with multi-arch images on GHCR. Launch via hardened Docker Compose on a single VM, 1-command Helm Chart on Kubernetes, or locally.",
       qs_tab1: "Docker Compose",
       qs_tab2: "Helm (Kubernetes)",
-      qs_tab3: "Local / Kustomize",
+      qs_tab3: "Local / Contributors",
       copy_btn: "Copy",
       copied_btn: "Copied!",
-      qs_req_title: "What you need to run wortlaut",
-      qs_req_1: "Flexible deployment: Docker Compose (single server/VM), Kubernetes (Helm Chart or Kustomize), or local process mode",
-      qs_req_2: "Speech recognition: NVIDIA GPU recommended for real-time scale — built-in CPU fallback lets you evaluate and run without a GPU",
-      qs_req_3: "PostgreSQL database & S3 storage (pre-configured with MinIO in Docker Compose)",
-      qs_req_4: "Optional: Single Sign-On (OIDC), email delivery (SMTP/IMAP) & Google Workspace / Microsoft 365 calendar sync",
-      qs_oss_title: "Open Source on GitHub",
+      qs_code_compose: `# 1. Clone & configure secrets
+git clone https://github.com/mayflower/wortlaut.git && cd wortlaut
+cp .env.example .env
+
+# 2. Launch stack (non-root meeting, docker-socket-proxy, Postgres 17 & RustFS S3)
+docker compose up -d
+
+# Recommended with NVIDIA GPU (real-time Parakeet ASR):
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
+# Web-UI: http://127.0.0.1:34601/ui · API Docs: http://127.0.0.1:34601/docs`,
+      qs_code_helm: `# Zero-dependency evaluation (embedded PostgreSQL 17 + RustFS S3):
+helm upgrade --install wortlaut oci://ghcr.io/mayflower/charts/wortlaut \\
+  --namespace wortlaut --create-namespace \\
+  --set host=wortlaut.local \\
+  --set bundled.enabled=true \\
+  --set asr.gpuCount=0 --set asr.allowCpu=true
+
+# Production cluster (external DB/S3, GPU node & OIDC SSO):
+helm upgrade --install wortlaut oci://ghcr.io/mayflower/charts/wortlaut \\
+  --namespace wortlaut --create-namespace \\
+  --set host=wortlaut.example.org \\
+  --set oidc.issuer=https://auth.example.org`,
+      qs_code_local: `# Option A: Bare-metal / local Linux process mode (no Kubernetes needed)
+./scripts/run-local.sh
+
+# Option B: Contributor setup & full integration test suite (Docker only)
+make setup-local
+make test-local`,
+      qs_req_title: "What’s included out of the box",
+      qs_req_1:
+        "Hardened Docker Compose (isolated socket proxy, non-root) & OCI Helm Chart with zero-dependency bundled mode (amd64 & arm64)",
+      qs_req_2:
+        "NVIDIA Parakeet ASR: 25 European languages (parakeet-tdt-0.6b-v3) or 2.95% WER German specialist — GPU recommended, CPU fallback built in",
+      qs_req_3:
+        "PostgreSQL 17 & RustFS S3 object storage pre-wired in both Docker Compose and Helm bundled mode",
+      qs_req_4:
+        "Optional: OIDC SSO, Google/M365 Calendar OAuth2 writeback, local Ollama summaries, and DKIM-verified IMAP/SMTP mail",
+      qs_oss_title: "100% Open Source on GitHub",
       qs_oss_desc:
-        "The complete source code, Docker Compose stack, Helm chart, and Kubernetes manifests are freely available under the GNU Affero General Public License v3.0.",
+        "Explore the source code, configuration reference, OCI Helm chart, architecture docs, and security policy under the GNU Affero General Public License v3.0.",
       qs_oss_btn: "View GitHub Repository →",
 
       footer_tagline:
-        "Automatic, speaker-separated meeting transcripts for Google Meet, Microsoft Teams, Cisco Webex, and Zoom — 100% self-hosted.",
-      footer_copy: "© 2026 Mayflower GmbH · Free Software under GNU AGPLv3 · wortlaut.cloud"
+        "Speaker-accurate, self-hosted meeting transcripts and protocols for Google Meet, Microsoft Teams, Cisco Webex, and Zoom.",
+      footer_docs: "Configuration",
+      footer_security: "Security",
+      footer_copy: "© 2026 Mayflower GmbH · Free Software under GNU AGPL-3.0 · wortlaut.cloud"
+    },
+
+    de: {
+      meta_title: "wortlaut.cloud — Sprechergenaue Wortprotokolle für deine Meetings. 100 % selbst gehostet.",
+      meta_desc:
+        "wortlaut erstellt sprechergenaue Wortprotokolle für Google Meet, Microsoft Teams, Cisco Webex und Zoom – 100 % selbst gehostet auf eurer eigenen Infrastruktur unter GNU AGPL-3.0.",
+
+      nav_how: "So funktioniert’s",
+      nav_features: "Funktionen",
+      nav_privacy: "Datenschutz & Opt-Out",
+      nav_selfhost: "Selbst hosten",
+      cta_github: "GitHub",
+      cta_install: "Jetzt starten",
+
+      hero_badge: "Open Source (AGPL-3.0) · 100 % Self-Hosted · 25 Sprachen · DSGVO-konform",
+      hero_title_html:
+        'Sprechergenaue Wortprotokolle für deine Meetings.<br><span class="highlight">100 % auf deiner eigenen Infrastruktur.</span>',
+      hero_subtitle:
+        "wortlaut nimmt als transparenter, passiver Zuhörer an Google Meet, Microsoft Teams, Cisco Webex und Zoom teil, erfasst jede Tonspur vor dem Mischen getrennt nach Sprecher und verlinkt fertige Protokolle direkt im Kalendereintrag – inklusive Live-Opt-Out im Chat und ohne Datenabfluss an fremde Clouds.",
+      hero_cta_primary: "Kostenlos selbst hosten",
+      hero_cta_secondary: "So funktioniert’s ansehen",
+      platforms_label: "Läuft parallel in einer einzigen Instanz mit:",
+
+      ui_window_url: "wortlaut · Besprechungsprotokoll",
+      ui_badge_done: "✓ Im Kalendereintrag verlinkt",
+      ui_nav_home: "Startseite",
+      ui_nav_rec: "Aufnahmen",
+      ui_nav_cal: "Kalender",
+      ui_nav_sys: "System & Hilfe",
+      ui_sso_label: "OIDC Single Sign-On",
+      ui_meeting_title: "Q4 Produkt- & Sicherheits-Architektur-Review",
+      ui_meeting_meta: "Heute, 14:00 – 14:45 Uhr · 3 Teilnehmende",
+      ui_btn_share: "Lese-Link teilen",
+      ui_btn_export: "Markdown exportieren",
+      ui_summary_label: "Zusammenfassung & Aufgaben",
+      ui_summary_tag: "Optionale lokale KI · Ollama",
+      ui_summary_body:
+        "Kalender-Rückschreiben für Google Workspace und Microsoft 365 ist aktiv; externe Kundentermine bleiben per 1-Klick-Schalter zuschaltbar und der Live-Chat-Opt-Out hat das Security-Review bestanden.",
+      ui_filter_all: "Alle (3)",
+      ui_tracks_bound: "3 isolierte Spuren",
+      ui_turn1_text_html:
+        'Fertige Protokolle werden jetzt automatisch direkt in die <mark>Google-Calendar- und Outlook-Einladung</mark> zurückgeschrieben, sodass alle Eingeladenen den Lese-Link sofort im Termin finden.',
+      ui_turn2_text_html:
+        'Und weil jede WebRTC-Empfangsspur vor dem Mischen separat erfasst wird, bleibt die <mark>Sprecherzuordnung</mark> auch bei gleichzeitigem Sprechen sauber – in 25 europäischen Sprachen.',
+      ui_turn3_text_html:
+        'Unser Datenschutzbeauftragter hat besonders den <mark>Live-Opt-Out im Chat</mark> gelobt: Wer <code>nein</code> oder <code>opt out</code> in den Chat schreibt, wird sofort ausgeschlossen, während das Meeting für alle anderen weiterläuft.',
+
+      how_kicker: "SO FUNKTIONIERT’S",
+      how_title: "In drei einfachen Schritten vom Gespräch zum geprüften Protokoll",
+      how_desc:
+        "Keine Browser-Erweiterungen für Teilnehmende, keine Cloud-Bots in fremden Gästelisten und kein manuelles Mitschreiben.",
+      step1_title: "1. Kalender verbinden, Link einfügen oder einladen",
+      step1_desc:
+        "Verknüpfe einmalig deinen Google- oder Microsoft-365-Kalender per OAuth2, füge spontan einen Meeting-Link auf der Startseite ein oder lade die Bot-E-Mail-Adresse wie einen normalen Gast ein.",
+      step2_title: "2. Transparenter Beitritt & Live-Opt-Out im Chat",
+      step2_desc:
+        "wortlaut tritt als passiver Audio-Zuhörer mit dem Namen der einladenden Person bei, postet den Datenschutz-Link im Chat und erlaubt jeder Person, sich per „nein“ oder „opt out“ im Chat sofort auszunehmen.",
+      step3_title: "3. Kalender-Link, Audio-Check & Export",
+      step3_desc:
+        "Direkt nach Gesprächsende trägt wortlaut den Lese-Link automatisch in deinen Kalendereintrag ein, versendet das Protokoll per E-Mail und erlaubt Audio-Snippet-Prüfung (24 h), Korrekturen und Markdown-Export.",
+
+      feat_kicker: "FUNKTIONEN IM ALLTAG",
+      feat_title: "Alles, was Teams für verlässliche Besprechungsprotokolle brauchen",
+      feat_desc:
+        "Entwickelt für tägliche Engineering-Syncs, vertrauliche Kundenprojekte, Architekturentscheidungen und datenschutzsensible Organisationen.",
+
+      ftab1_title: "Kalender & Rückschreiben",
+      ftab1_sub: "Google & Microsoft 365",
+      ftab2_title: "Ad-hoc & 25 Sprachen",
+      ftab2_sub: "In ~15 s im Call · Lokales Parakeet",
+      ftab3_title: "Prüfen, Editieren & KI",
+      ftab3_sub: "Audio-Snippets, Ollama & Exporte",
+      ftab4_title: "Echte Sprechertrennung",
+      ftab4_sub: "Vor dem Mix · Ohne Stimmprofile",
+
+      f1_title:
+        "Eigene Termine automatisch protokollieren, Kundentermine per Klick zuschalten – inklusive Link im Termin",
+      f1_lead:
+        "Verbinde Google Calendar oder Microsoft 365 in wenigen Sekunden per OAuth2 PKCE. Du behältst bei jedem Gespräch die volle Kontrolle:",
+      f1_li1:
+        "Selbst organisierte Termine mit bestätigten Gästen werden automatisch eingeplant (und lassen sich jederzeit per Klick abwählen).",
+      f1_li2:
+        "Externe Kundentermine können mit einem einzigen Klick zugeschaltet werden – ohne einen Bot in die fremde Einladungsliste einzutragen.",
+      f1_li3:
+        "Automatisches Kalender-Rückschreiben: Nach Abschluss fügt wortlaut den geschützten Lese-Link direkt in deinen Google-Calendar- oder Outlook-Termin ein.",
+      f1_demo_label: "Kalender-Arbeitsbereich (Klicke auf den Schalter zum Testen):",
+      f1_ev1_title: "Wöchentliches Plattform-Sync",
+      f1_ev1_meta: "10:00 – 10:45 Uhr · Abgeschlossen · Im Termin verlinkt",
+      f1_linked_badge: "✓ Protokoll verlinkt",
+      f1_ev2_title: "Kunden-Architektur-Workshop",
+      f1_ev2_meta: "14:00 – 15:00 Uhr · Externer Termin · Per 1 Klick zuschaltbar",
+      f1_ev3_title: "Sprint-Review",
+      f1_ev3_meta: "16:30 – 17:15 Uhr · Automatisch aktiv (Terminserie)",
+      toggle_on: "● Aufzeichnen: An",
+      toggle_off: "○ Aufzeichnen: Aus",
+
+      f2_title:
+        "Spontan in ~15 Sekunden im laufenden Call – lokal transkribiert in 25 europäischen Sprachen",
+      f2_lead:
+        "Füge jederzeit einen Meeting-Link ein, wenn ein Gespräch wichtig wird, und transkribiere komplett lokal auf deiner eigenen GPU oder CPU:",
+      f2_li1:
+        "Link für Google Meet, Teams, Webex oder Zoom einfügen – wortlaut startet einen isolierten Browser-Worker und tritt in rund 15 Sekunden bei.",
+      f2_li2:
+        "Mehrsprachiges NVIDIA Parakeet TDT v3 erkennt automatisch 25 europäische Sprachen; alternativ steht das deutsche Spezialmodell mit 2,95 % WER bereit.",
+      f2_li3:
+        "Zweisprachige Oberfläche (DE / EN) mit Live-Status-Anzeige (Warteraum → Aufnahme) und Echtzeit-Volltextsuche noch während des Gesprächs.",
+      f2_demo_title: "Spontane Aufzeichnung starten",
+      f2_dur_30: "30 Min.",
+      f2_dur_60: "60 Min.",
+      f2_dur_90: "90 Min.",
+      f2_demo_btn: "Jetzt aufzeichnen",
+      f2_demo_status: "LIVE · 3 isolierte Tonspuren · Parakeet TDT (25 Sprachen)",
+
+      f3_title:
+        "Aussagen per Klick anhören, Fachbegriffe korrigieren, lokal per Ollama zusammenfassen & überallhin exportieren",
+      f3_lead:
+        "Das unverfälschte Wortprotokoll bleibt immer deine verlässliche Quelle – ergänzt um praktische Werkzeuge für Nachbereitung und Team-Freigabe:",
+      f3_li1:
+        "24-h-Audio-Prüfung & Inline-Editor: Höre dir einzelne Aussagen per Klick auf den Zeitstempel an, benenne Gäste um und ersetze Fachbegriffe im gesamten Protokoll mit einem Klick.",
+      f3_li2:
+        "Optionale lokale KI-Zusammenfassung (Ollama): Erzeuge Kurzfassungen, Themenblöcke und Aufgabenlisten auf deinem eigenen Server – ohne externe Cloud-APIs.",
+      f3_li3:
+        "Geschützte Lese-Links (wortlaut-read-…), automatischer E-Mail-Versand sowie Exporte als .md, .txt, .vtt, .json und idempotente REST-API (/docs).",
+      f3_exp_md_desc: "Direkt für Notion, Confluence, GitHub, GitLab & Jira",
+      f3_exp_ai_desc: "Optionale Zusammenfassung, Themen & Aufgaben auf eigener GPU",
+      f3_exp_vtt_desc: "Zeitgenaue .vtt-Untertitel & saubere .txt-Protokolle",
+      f3_exp_json_desc: "Strukturierte Segmente, Spur-Diagnose & OpenAPI (/docs)",
+
+      f4_title: "Saubere Sprecherzuordnung vor dem Mischen – ganz ohne biometrische Stimmprofile",
+      f4_lead:
+        "Herkömmliche Bots schneiden gemischtes Raumaudio mit und raten nachträglich per Stimmprofil, wer gesprochen hat. wortlaut löst das Problem an der Wurzel:",
+      f4_li1:
+        "Jede eingehende WebRTC-Empfangsspur wird vor dem Mischen separat erfasst und direkt der nachgewiesenen Teilnehmersitzung zugeordnet.",
+      f4_li2:
+        "Auch wenn mehrere Personen gleichzeitig sprechen oder sich ins Wort fallen, bleiben alle Aussagen sauber nach Spur getrennt.",
+      f4_li3:
+        "Es werden niemals biometrische Stimmprofile (Voiceprints) berechnet oder gespeichert – fehlt eine Zuordnung, kennzeichnet wortlaut das transparent statt zu raten.",
+      f4_badge: "Isolierte Tonspur → Geprüfte Sitzung",
+      f4_optout_cmd: 'Chat: "nein" / "opt out"',
+      f4_optout_res: "→ Tonspur verworfen & Segmente gelöscht",
+
+      priv_kicker: "DATENSCHUTZ, WIDERSPRUCH & SICHERHEIT",
+      priv_title: "Gebaut für vertrauliche Gespräche, Datenschutzbeauftragte und strenge Compliance",
+      priv_desc:
+        "Warum Engineering-Teams, Beratungen, Kanzleien und öffentliche Auftraggeber wortlaut statt kommerzieller US-Cloud-Bots betreiben.",
+      trust1_title: "100 % Self-Hosted (Kein Cloud-Abfluss)",
+      trust1_desc:
+        "Isolierte Browser-Worker, NVIDIA-Parakeet-Spracherkennung und optionale Ollama-Zusammenfassungen laufen komplett auf euren eigenen Servern. Keine Sekunde Audio verlässt eure Infrastruktur.",
+      trust2_title: "Individueller Live-Opt-Out im Chat",
+      trust2_desc:
+        "wortlaut tritt als „wortlaut (Name der einladenden Person)“ bei, zeichnet niemals Video auf und erlaubt jeder Person im Call, per „nein“ oder „opt out“ im Chat ihre Spur und bisherige Zitate sofort zu löschen.",
+      trust3_title: "24-h-Audiofenster & automatische Löschfristen",
+      trust3_desc:
+        "Isolierte Roh-Audioschnipsel werden nach 24 Stunden automatisch aus S3 gelöscht, Protokolle standardmäßig nach 30 Tagen – oder jederzeit sofort per 1-Klick-Löschung.",
+      trust4_title: "OIDC Single Sign-On & Mandantentrennung",
+      trust4_desc:
+        "Anbindung an Keycloak, Authentik, Dex, Zitadel, Microsoft Entra ID oder Google per OIDC PKCE. Jede Person sieht nur eigene und eingeladene Termine sowie explizite Read-Only-Freigabelinks.",
+
+      comp_th_crit: "Kriterium",
+      comp_th_cloud: "Kommerzielle Cloud-Notetaker",
+      comp_th_wortlaut: "wortlaut (Open Source & Self-Hosted)",
+      comp_r1_c: "Wo werden Audio & Zusammenfassungen verarbeitet?",
+      comp_r1_cloud: "Fremde Hersteller-Clouds & externe LLM-APIs",
+      comp_r1_w: "100 % auf eigener Infrastruktur (Parakeet ASR + optional Ollama)",
+      comp_r2_c: "Wie werden Sprecher erkannt?",
+      comp_r2_cloud: "Misch-Audio + biometrische Stimmprofile (Voiceprints)",
+      comp_r2_w: "Isolierte WebRTC-Spuren vor dem Mix – keinerlei Stimmprofile",
+      comp_r6_c: "Widerspruch einzelner Teilnehmender",
+      comp_r6_cloud: "Alles-oder-nichts (Bot für alle entfernen oder Call verlassen)",
+      comp_r6_w: "„nein“ / „opt out“ im Chat tippen – nur diese Person wird sofort ausgenommen",
+      comp_r3_c: "Kamera- & Bildschirmaufnahme",
+      comp_r3_cloud: "Häufig kompletter Video- & Bildschirm-Mitschnitt",
+      comp_r3_w: "Rein passives Audio – Kamera- & Screen-Aufnahme gesperrt",
+      comp_r4_c: "Unterstützte Plattformen",
+      comp_r4_cloud: "Oft eingeschränkt oder pro Sitzplatz & Plattform lizenziert",
+      comp_r5_c: "Lizenz & Kosten",
+      comp_r5_cloud: "Monatliche Abo-Kosten pro Sitzplatz",
+      comp_r5_w: "Freie Open-Source-Software unter GNU AGPL-3.0",
+
+      qs_kicker: "SELBST HOSTEN & SCHNELLSTART",
+      qs_title: "In wenigen Minuten auf dem eigenen Server oder Kubernetes-Cluster startklar",
+      qs_desc:
+        "Freie Software unter GNU AGPL-3.0 mit Multi-Arch-Images auf GHCR. Starte per gehärtetem Docker Compose auf einer VM, per 1-Befehl-Helm-Chart in Kubernetes oder direkt lokal.",
+      qs_tab1: "Docker Compose",
+      qs_tab2: "Helm (Kubernetes)",
+      qs_tab3: "Lokal / Entwicklung",
+      copy_btn: "Kopieren",
+      copied_btn: "Kopiert!",
+      qs_code_compose: `# 1. Repository klonen & Zugangsdaten anlegen
+git clone https://github.com/mayflower/wortlaut.git && cd wortlaut
+cp .env.example .env
+
+# 2. Stack starten (non-root meeting, docker-socket-proxy, Postgres 17 & RustFS S3)
+docker compose up -d
+
+# Empfohlen mit NVIDIA-GPU (Echtzeit-Parakeet-ASR):
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
+# Web-UI: http://127.0.0.1:34601/ui · API-Docs: http://127.0.0.1:34601/docs`,
+      qs_code_helm: `# Schnelltest ohne Vorarbeiten (integriertes PostgreSQL 17 + RustFS S3):
+helm upgrade --install wortlaut oci://ghcr.io/mayflower/charts/wortlaut \\
+  --namespace wortlaut --create-namespace \\
+  --set host=wortlaut.local \\
+  --set bundled.enabled=true \\
+  --set asr.gpuCount=0 --set asr.allowCpu=true
+
+# Produktiv-Cluster (externe DB/S3, GPU-Node & OIDC SSO):
+helm upgrade --install wortlaut oci://ghcr.io/mayflower/charts/wortlaut \\
+  --namespace wortlaut --create-namespace \\
+  --set host=wortlaut.example.org \\
+  --set oidc.issuer=https://auth.example.org`,
+      qs_code_local: `# Option A: Direkt lokal auf Linux starten (ohne Kubernetes)
+./scripts/run-local.sh
+
+# Option B: Contributor-Setup & komplette Integrationstests (nur Docker nötig)
+make setup-local
+make test-local`,
+      qs_req_title: "Direkt einsatzbereit im Lieferumfang",
+      qs_req_1:
+        "Gehärtetes Docker Compose (isolierter Socket-Proxy, non-root) & OCI-Helm-Chart inkl. Zero-Dependency-Bundled-Modus (amd64 & arm64)",
+      qs_req_2:
+        "NVIDIA Parakeet ASR: 25 europäische Sprachen (parakeet-tdt-0.6b-v3) oder deutsches Spezialmodell (2,95 % WER) – GPU empfohlen, CPU-Fallback integriert",
+      qs_req_3:
+        "PostgreSQL 17 & RustFS S3-Objektspeicher sowohl in Docker Compose als auch im Helm-Bundled-Modus fertig vorkonfiguriert",
+      qs_req_4:
+        "Optional: OIDC SSO, Google/M365-Kalender-Rückschreiben, lokale Ollama-Zusammenfassungen und DKIM-geprüfter IMAP/SMTP-Mailversand",
+      qs_oss_title: "100 % Open Source auf GitHub",
+      qs_oss_desc:
+        "Quellcode, Konfigurationsreferenz, OCI-Helm-Chart, Architekturdokumentation und Sicherheitsrichtlinie stehen frei unter der GNU Affero General Public License v3.0 bereit.",
+      qs_oss_btn: "Zum GitHub-Repository →",
+
+      footer_tagline:
+        "Sprechergenaue, selbst gehostete Wortprotokolle für Google Meet, Microsoft Teams, Cisco Webex und Zoom.",
+      footer_docs: "Konfiguration",
+      footer_security: "Sicherheit",
+      footer_copy: "© 2026 Mayflower GmbH · Freie Software unter GNU AGPL-3.0 · wortlaut.cloud"
     }
   };
 
-  let currentLang = "de";
+  let currentLang = "en";
 
   function detectInitialLang() {
     const params = new URLSearchParams(window.location.search);
@@ -341,11 +481,13 @@
       const saved = localStorage.getItem("wortlaut_cloud_lang");
       if (saved === "en" || saved === "de") return saved;
     } catch (_) {}
-    return "de";
+    const browserLang = (navigator.language || (navigator.languages && navigator.languages[0]) || "").toLowerCase();
+    if (browserLang.startsWith("de")) return "de";
+    return "en";
   }
 
   function applyLanguage(lang) {
-    currentLang = lang === "en" ? "en" : "de";
+    currentLang = lang === "de" ? "de" : "en";
     const dict = I18N[currentLang];
     document.documentElement.lang = currentLang;
     document.title = dict.meta_title;
@@ -387,11 +529,18 @@
   function initFeatureTabs() {
     const buttons = Array.from(document.querySelectorAll(".feature-tab-btn"));
     const panels = Array.from(document.querySelectorAll(".feature-panel"));
-    buttons.forEach((btn) => {
+    buttons.forEach((btn, idx) => {
       btn.addEventListener("click", () => {
         const target = btn.getAttribute("data-ftab");
         buttons.forEach((b) => b.classList.toggle("active", b === btn));
         panels.forEach((p) => p.classList.toggle("active", p.getAttribute("data-fpanel") === target));
+      });
+      btn.addEventListener("keydown", (ev) => {
+        if (ev.key !== "ArrowRight" && ev.key !== "ArrowLeft") return;
+        ev.preventDefault();
+        const nextIdx = (idx + (ev.key === "ArrowRight" ? 1 : buttons.length - 1)) % buttons.length;
+        buttons[nextIdx].focus();
+        buttons[nextIdx].click();
       });
     });
   }
