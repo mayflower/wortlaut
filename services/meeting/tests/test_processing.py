@@ -604,3 +604,65 @@ def test_job_capacity_keeps_unsegmented_audio_and_resumes_after_result_commit(
             assert read_pcm(run.chunks, job.start_sample, job.end_sample)
     finally:
         get_settings.cache_clear()
+
+
+def test_coalesce_protocol_segments_filters_fillers_and_merges_broken_sentences():
+    from wortlaut.exports import _coalesce_protocol_segments, _is_noise_or_filler
+
+    assert _is_noise_or_filler("", 0.0)
+    assert _is_noise_or_filler("Yeah.", 0.32)
+    assert _is_noise_or_filler("Mm-hmm.", 0.48)
+    assert _is_noise_or_filler("Yeah, genau.", 1.2)
+    assert _is_noise_or_filler("I don't know.", 0.8)
+    assert not _is_noise_or_filler(
+        "Wir besprechen heute den aktuellen Projektstatus im Team.", 3.5
+    )
+
+    raw_segments = [
+        {
+            "id": "s1",
+            "stream_id": "st1",
+            "speaker_label": "Volkmar Erben",
+            "start": 10.0,
+            "end": 18.0,
+            "text": "Dann kann man noch.",
+            "words": [],
+        },
+        {
+            "id": "s2",
+            "stream_id": "st2",
+            "speaker_label": "Johann Peter Hartmann",
+            "start": 14.0,
+            "end": 14.8,
+            "text": "Genau richtig.",
+            "words": [],
+        },
+        {
+            "id": "s3",
+            "stream_id": "st1",
+            "speaker_label": "Volkmar Erben",
+            "start": 18.4,
+            "end": 26.0,
+            "text": "das gewollte Feature direkt im System aktivieren.",
+            "words": [],
+        },
+        {
+            "id": "s4",
+            "stream_id": "st2",
+            "speaker_label": "Johann Peter Hartmann",
+            "start": 27.0,
+            "end": 34.0,
+            "text": "Super, dann nehmen wir das so in das Protokoll auf.",
+            "words": [],
+        },
+    ]
+    coalesced = _coalesce_protocol_segments(raw_segments)
+    assert len(coalesced) == 2
+    assert coalesced[0]["speaker_label"] == "Volkmar Erben"
+    assert (
+        coalesced[0]["text"]
+        == "Dann kann man noch das gewollte Feature direkt im System aktivieren."
+    )
+    assert coalesced[1]["speaker_label"] == "Johann Peter Hartmann"
+    assert coalesced[1]["text"] == "Super, dann nehmen wir das so in das Protokoll auf."
+

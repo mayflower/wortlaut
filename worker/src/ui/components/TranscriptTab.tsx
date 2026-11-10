@@ -133,7 +133,7 @@ export function TranscriptTab({
       if (prev && prev.speakerLabel === seg.speaker_label) {
         prev.end = seg.end;
         const lastPara = prev.paragraphs[prev.paragraphs.length - 1];
-        if (lastPara && seg.start - lastPara.end <= 8.0) {
+        if (lastPara && seg.start - lastPara.end <= 20.0) {
           lastPara.end = seg.end;
           lastPara.text = `${lastPara.text} ${seg.text}`;
         } else {
@@ -376,17 +376,8 @@ export function TranscriptTab({
                       </HStack>
 
                       <VStack gap={1.5} paddingBlockStart={1}>
-                        {turn.paragraphs.map((para, idx) => (
+                        {turn.paragraphs.map((para) => (
                           <div key={para.id}>
-                            {idx > 0 && (
-                              <Text
-                                type="supporting"
-                                color="secondary"
-                                hasTabularNumbers
-                              >
-                                [{formatWallClockTime(para.start, timeOriginUtc)}]
-                              </Text>
-                            )}
                             <Text type="body" color="primary">
                               {renderHighlightedText(para.text, searchQuery)}
                             </Text>

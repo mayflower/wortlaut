@@ -1,5 +1,6 @@
 import hmac
 import json
+import re
 from datetime import UTC, datetime, timedelta
 from html import escape
 from zoneinfo import ZoneInfo
@@ -150,6 +151,246 @@ _SHORT_BOUND_NOISE_TOKENS = frozenset(
         "talk to",
     }
 )
+
+_FILLER_WORDS = frozenset(
+    {
+        "yeah",
+        "yea",
+        "yes",
+        "yep",
+        "no",
+        "nope",
+        "okay",
+        "ok",
+        "mm",
+        "mhm",
+        "mm-hmm",
+        "mmhmm",
+        "uh",
+        "uh-huh",
+        "um",
+        "äh",
+        "ähm",
+        "hm",
+        "hmm",
+        "oh",
+        "ah",
+        "aha",
+        "ach",
+        "so",
+        "well",
+        "sure",
+        "right",
+        "alright",
+        "all",
+        "good",
+        "cool",
+        "super",
+        "fine",
+        "great",
+        "nice",
+        "exact",
+        "exactly",
+        "genau",
+        "ja",
+        "jap",
+        "jo",
+        "nee",
+        "ne",
+        "nein",
+        "doch",
+        "klar",
+        "stimmt",
+        "ebend",
+        "eben",
+        "gut",
+        "alles",
+        "danke",
+        "thanks",
+        "thank",
+        "you",
+        "sorry",
+        "bitte",
+        "please",
+        "and",
+        "but",
+        "or",
+        "then",
+        "also",
+        "oder",
+        "und",
+        "aber",
+        "halt",
+        "mal",
+        "schon",
+        "noch",
+        "too",
+        "either",
+        "oui",
+        "si",
+        "sí",
+        "ha",
+        "video",
+        "naja",
+        "na",
+    }
+)
+
+_ENGLISH_HALLUCINATION_MARKERS = frozenset(
+    {
+        "the",
+        "that",
+        "that's",
+        "it",
+        "it's",
+        "don't",
+        "didn't",
+        "i'm",
+        "i'll",
+        "what",
+        "what's",
+        "who",
+        "where",
+        "when",
+        "have",
+        "you",
+        "your",
+        "my",
+        "can",
+        "should",
+        "would",
+        "could",
+        "want",
+        "know",
+        "maybe",
+        "thank",
+        "thanks",
+        "sorry",
+        "well",
+        "yes",
+        "yeah",
+        "not",
+        "but",
+        "and",
+        "for",
+        "with",
+        "this",
+        "these",
+        "from",
+        "like",
+        "moved",
+        "earnest",
+        "album",
+        "automatically",
+        "basket",
+        "magic",
+        "higher",
+        "known",
+        "spring",
+        "second",
+        "four",
+        "six",
+        "sun",
+        "leave",
+        "let's",
+        "tip",
+        "check",
+        "talk",
+        "guest",
+        "either",
+        "as",
+        "see",
+        "done",
+    }
+)
+
+
+def _is_noise_or_filler(text: str, dur: float) -> bool:
+    clean = " ".join(text.split()).strip()
+    if not clean:
+        return True
+    tokens = [
+        re.sub(r"^[^\w'äöüÄÖÜß-]+|[^\w'äöüÄÖÜß-]+$", "", t).lower()
+        for t in clean.split()
+    ]
+    tokens = [t for t in tokens if t]
+    if not tokens:
+        return True
+    if len(tokens) == 1 and (dur <= 0.75 or len(tokens[0]) <= 3):
+        return True
+    if len(tokens) <= 2 and dur <= 0.45:
+        return True
+    if len(tokens) <= 5 and dur <= 2.2 and all(t in _FILLER_WORDS for t in tokens):
+        return True
+    if (
+        len(tokens) <= 6
+        and dur <= 1.6
+        and any(t in _ENGLISH_HALLUCINATION_MARKERS for t in tokens)
+    ):
+        return True
+    return False
+
+
+def _merge_segment_into(target: dict, source: dict) -> None:
+    target["end"] = max(target["end"], source["end"])
+    prev_text = target["text"].rstrip()
+    next_text = source["text"].lstrip()
+    if prev_text.endswith(".") and next_text and next_text[0].islower():
+        prev_text = prev_text[:-1]
+    target["text"] = f"{prev_text} {next_text}".strip()
+    target["words"] = target.get("words", []) + source.get("words", [])
+
+
+def _coalesce_protocol_segments(segments: list[dict]) -> list[dict]:
+    if not segments:
+        return []
+    by_speaker: dict[str, list[dict]] = {}
+    for seg in segments:
+        by_speaker.setdefault(seg["speaker_label"], []).append(seg)
+
+    speaker_merged: list[dict] = []
+    for spk_segs in by_speaker.values():
+        spk_segs.sort(key=lambda s: (s["start"], s["stream_id"], s["id"]))
+        cur: dict | None = None
+        for seg in spk_segs:
+            if cur is not None and (seg["start"] - cur["end"]) <= 3.5:
+                _merge_segment_into(cur, seg)
+            else:
+                if cur is not None:
+                    speaker_merged.append(cur)
+                cur = dict(seg)
+                cur["words"] = list(seg.get("words", []))
+        if cur is not None:
+            speaker_merged.append(cur)
+
+    non_backchannel: list[dict] = []
+    for seg in speaker_merged:
+        dur = max(0.0, seg["end"] - seg["start"])
+        word_count = len(seg["text"].split())
+        if dur <= 2.2 and word_count <= 6:
+            overlapped = any(
+                other["speaker_label"] != seg["speaker_label"]
+                and (other["end"] - other["start"]) >= max(4.0, dur * 2.5)
+                and other["start"] <= seg["start"] + 0.8
+                and other["end"] >= seg["end"] - 0.8
+                for other in speaker_merged
+            )
+            if overlapped:
+                continue
+        non_backchannel.append(seg)
+
+    non_backchannel.sort(key=lambda s: (s["start"], s["stream_id"], s["id"]))
+    final_turns: list[dict] = []
+    for seg in non_backchannel:
+        if (
+            final_turns
+            and final_turns[-1]["speaker_label"] == seg["speaker_label"]
+            and (seg["start"] - final_turns[-1]["end"]) <= 15.0
+        ):
+            _merge_segment_into(final_turns[-1], seg)
+        else:
+            final_turns.append(seg)
+    return final_turns
 
 
 def group_transcript_turns(segments: list[dict], max_turn_chars: int = 900) -> list[dict]:
@@ -342,11 +583,13 @@ def export_data(db: Session, recording: Recording):
             timeline.sort(key=lambda x: x[0])
             stream_bind_timeline[key] = timeline
 
+    apply_protocol_cleanup = len(segments) > 3
     resolved_segments: list[dict] = []
     for segment in segments:
         clean_text = " ".join((segment.get("text") or "").split())
         if not clean_text:
             continue
+        segment["text"] = clean_text
         delta = (datetime.fromisoformat(segment["session_utc_origin"]) - origin).total_seconds()
         segment["start"] += delta
         segment["end"] += delta
@@ -356,6 +599,8 @@ def export_data(db: Session, recording: Recording):
         ]
         stream_key = (segment.get("stream_id"), segment.get("epoch"))
         dur = max(0.0, segment["end"] - segment["start"])
+        if apply_protocol_cleanup and _is_noise_or_filler(clean_text, dur):
+            continue
         has_stream_bindings = (
             stream_key in unambiguous_stream_bindings
             or bool(stream_bind_timeline.get(stream_key))
@@ -410,7 +655,11 @@ def export_data(db: Session, recording: Recording):
             else ("bound" if pid else "unbound")
         )
         resolved_segments.append(segment)
-    segments = resolved_segments
+    segments = (
+        _coalesce_protocol_segments(resolved_segments)
+        if apply_protocol_cleanup
+        else resolved_segments
+    )
     segments.sort(key=lambda s: (s["start"], s["stream_id"], s["id"]))
     qualities = [
         {

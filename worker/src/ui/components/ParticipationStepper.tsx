@@ -5,7 +5,6 @@ import {
   MetadataList,
   MetadataListItem,
 } from '@astryxdesign/core/MetadataList';
-import { ProgressBar } from '@astryxdesign/core/ProgressBar';
 import { Divider } from '@astryxdesign/core/Divider';
 import { Heading } from '@astryxdesign/core/Heading';
 import { Text } from '@astryxdesign/core/Text';
@@ -230,7 +229,7 @@ export function ParticipationStepper({
             </HStack>
 
             <VStack gap={2}>
-              {sources.map((src) => {
+              {sources.map((src, idx) => {
                 const filterKey = getSourceFilterKey(src);
                 const isSelected = selectedSourceFilter === filterKey;
                 const pct = Math.min(
@@ -241,6 +240,17 @@ export function ParticipationStepper({
                   src.participant_name ||
                   src.speaker_label ||
                   src.provider_source_id;
+                const barPalette = [
+                  '#10b981',
+                  '#3b82f6',
+                  '#8b5cf6',
+                  '#f59e0b',
+                  '#ec4899',
+                  '#14b8a6',
+                ];
+                const barColor = isSelected
+                  ? 'var(--color-background-accent-emphasis, #059669)'
+                  : barPalette[idx % barPalette.length];
 
                 return (
                   <div
@@ -248,18 +258,52 @@ export function ParticipationStepper({
                     onClick={() =>
                       onSelectSourceFilter?.(isSelected ? '' : filterKey)
                     }
-                    className="cursor-pointer rounded-md p-1.5 transition-colors hover:bg-[var(--color-background-muted)]"
+                    className={`cursor-pointer rounded-md p-2 transition-colors hover:bg-[var(--color-background-muted)] ${
+                      isSelected
+                        ? 'bg-[var(--color-background-muted)] ring-1 ring-[var(--color-border-accent)]'
+                        : ''
+                    }`}
                   >
-                    <ProgressBar
-                      variant={isSelected ? 'accent' : 'neutral'}
-                      label={speakerName}
-                      value={pct}
-                      max={100}
-                      hasValueLabel
-                      formatValueLabel={() =>
-                        `${formatDurationHuman(src.speech_seconds)} (${src.segment_count})`
-                      }
-                    />
+                    <HStack justify="between" vAlign="center" gap={2}>
+                      <HStack gap={1.5} vAlign="center" className="min-w-0">
+                        <span
+                          className="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
+                          style={{ background: barColor }}
+                        />
+                        <Text
+                          type="supporting"
+                          weight={isSelected ? 'semibold' : 'medium'}
+                          color="primary"
+                        >
+                          {speakerName}
+                        </Text>
+                      </HStack>
+                      <Text
+                        type="supporting"
+                        color="secondary"
+                        hasTabularNumbers
+                      >
+                        <strong className="text-[var(--color-text-primary)] font-semibold">
+                          {pct} %
+                        </strong>{' '}
+                        · {formatDurationHuman(src.speech_seconds)}
+                      </Text>
+                    </HStack>
+                    <div
+                      className="mt-1.5 w-full overflow-hidden rounded-full"
+                      style={{
+                        height: '7px',
+                        background: 'var(--color-border)',
+                      }}
+                    >
+                      <div
+                        className="h-full rounded-full transition-all duration-300"
+                        style={{
+                          width: `${Math.max(pct > 0 ? 4 : 0, pct)}%`,
+                          background: barColor,
+                        }}
+                      />
+                    </div>
                   </div>
                 );
               })}
