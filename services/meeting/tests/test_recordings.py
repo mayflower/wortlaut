@@ -654,6 +654,8 @@ def test_web_ui_live_status_and_browser_participant_names_in_exports(
     get_settings.cache_clear()
 
     class FakeOllamaResponse:
+        status_code = 200
+
         def raise_for_status(self):
             pass
 
@@ -675,9 +677,9 @@ def test_web_ui_live_status_and_browser_participant_names_in_exports(
     assert sum_res.json()["summary"]["summary"] == "Kurzes Kickoff-Treffen zur Begrüßung."
     assert sum_res.json()["summary"]["action_items"][0]["owner"] == "Dr. Alice Beispiel"
     md_after = client.get(f"/v1/recordings/{recording}/exports/md", headers=API).text
-    assert "## Kurzfassung" in md_after
+    assert "## Zusammenfassung" in md_after
     assert "Kurzes Kickoff-Treffen zur Begrüßung." in md_after
-    assert "**Dr. Alice Beispiel**: Agenda versenden" in md_after
+    assert "**Dr. Alice Beispiel:** Agenda versenden" in md_after
 
 
 def test_recording_title_guest_name_empty_room_timeout_and_otlp_telemetry(

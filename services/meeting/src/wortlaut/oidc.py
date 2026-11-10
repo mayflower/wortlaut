@@ -319,6 +319,7 @@ def user_recording_access_predicate(principal: Principal):
                     func.lower(CalendarEntry.original).like(f"%mailto:{user_email}%"),
                 ),
             )
+            .correlate(Recording)
             .exists()
         )
         predicates.append(
@@ -327,6 +328,7 @@ def user_recording_access_predicate(principal: Principal):
                 Delivery.recording_id == Recording.id,
                 Delivery.recipients.contains([user_email]),
             )
+            .correlate(Recording)
             .exists()
         )
         predicates.append(
@@ -345,6 +347,7 @@ def user_recording_access_predicate(principal: Principal):
                     ),
                 ),
             )
+            .correlate(Recording)
             .exists()
         )
     return or_(*predicates) if predicates else False

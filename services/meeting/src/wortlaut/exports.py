@@ -1197,7 +1197,7 @@ def generate_protocol_summary(db: Session, recording: Recording) -> dict:
         },
         timeout=float(settings.ollama_timeout_seconds),
     )
-    if resp.status_code != 200:
+    if getattr(resp, "status_code", 200) != 200:
         raise RuntimeError(f"ollama_http_{resp.status_code}")
 
     raw_content = (resp.json().get("message") or {}).get("content") or "{}"
