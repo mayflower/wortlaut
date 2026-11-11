@@ -580,12 +580,26 @@ async function joinRoomAsSpeaker(page: Page, provider: Provider, meetingUrl: str
 
     if (provider === 'google_meet') {
     const enterMillis = Date.now();
+    const meetWaitingRe =
+      /Please wait until a meeting host brings you into the call|Asking to be let in|You[’']ll join the call when someone lets you|Someone in the call (?:will|can) let you in|Waiting (?:for the host|to be let in)|Host hasn[’']t joined yet|Um Teilnahme (?:gebeten|bitten)|Teilnahme wird angefragt|(?:Sie|Du)\s+(?:können|kannst|nehmen|nimmst)\s+teil(?:nehmen)?,\s*sobald|Jemand.*(?:(?:lässt|lassen)\s+(?:Sie|dich).*(?:ein|teilnehmen)|kann\s+(?:Sie|dich).*einlassen)|Bitte warten(?:\s+Sie)?,\s*bis.*einlässt|noch nicht eingelassen/i;
     while (Date.now() < deadline) {
-      // Check if already in call via CSS attribute selector (immune to aria-modal="true" Gemini overlays)
+      // Check if already in call (NOT in knocking lobby, which also renders a Leave button!)
       const leaveCss = page.locator(
         'button[aria-label*="Anruf verlassen" i], button[aria-label*="Leave call" i], button[aria-label*="Besprechung verlassen" i], button[aria-label*="Leave meeting" i]',
       );
-      if (await leaveCss.first().isVisible().catch(() => false)) {
+      const inCallToolbar = page
+        .locator('button[data-panel-id="1"], button[data-panel-id="2"]')
+        .or(
+          page.getByRole('button', {
+            name: /^(?:People|Participants|Show everyone|Alle anzeigen|Teilnehmer|Personen|Chat with everyone|Mit allen chatten|In-call messages|Nachrichten im Anruf|Raise hand|Hand heben)(?:\b|\s|$)/i,
+          }),
+        );
+      const waitingVisible = await page.getByText(meetWaitingRe).first().isVisible().catch(() => false);
+      if (
+        !waitingVisible &&
+        (await leaveCss.first().isVisible().catch(() => false)) &&
+        (await inCallToolbar.first().isVisible().catch(() => false))
+      ) {
         await page.keyboard.press('Escape').catch(() => {});
         const inCallUnmute = page.locator(
           'button[data-is-muted="true"][aria-label*="Mikrofon" i], button[data-is-muted="true"][aria-label*="microphone" i], button[aria-label*="Mikrofon aktivieren" i], button[aria-label*="Turn on microphone" i]',
@@ -1112,7 +1126,7 @@ function startLobbyAdmitWatcher(page: Page, provider?: Provider): () => void {
                 name: /^(?:People|Participants|Show everyone|Alle anzeigen|Teilnehmer|Personen)(?:\b|\s|$)/i,
               }),
             )
-            .and(page.locator('[aria-expanded="false"], [aria-pressed="false"]'))
+            .and(page.locator(':not([aria-expanded="true"]):not([aria-pressed="true"])'))
             .first();
           if (await peopleToggle.isVisible().catch(() => false)) {
             console.log(`      [Lobby-Watcher] Öffne Google-Meet-Teilnehmerleiste für Warteraum-Einlass...`);

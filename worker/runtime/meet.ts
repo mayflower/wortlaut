@@ -562,7 +562,7 @@ export class MeetBrowser {
             const toggle = this.page.getByRole('button', {
               name: /^(?:People|Participants|Show everyone|Alle anzeigen|Teilnehmer|Personen)(?:\b|\s|$)/i,
             }).or(this.page.locator('button[data-panel-id="1"]'))
-              .and(this.page.locator('[aria-expanded="false"], [aria-pressed="false"]')).first();
+              .and(this.page.locator(':not([aria-expanded="true"]):not([aria-pressed="true"])')).first();
             if (await visible(toggle)) {
               await this.input.click(toggle).catch(() => {});
             }
@@ -571,7 +571,7 @@ export class MeetBrowser {
             const chatToggle = this.page.getByRole('button', {
               name: /^(?:Chat with everyone|Mit allen chatten|Chat|Nachricht an alle|In-call messages|Nachrichten im Anruf)(?:\b|\s|$)/i,
             }).or(this.page.locator('button[data-panel-id="2"]'))
-              .and(this.page.locator('[aria-expanded="false"], [aria-pressed="false"]')).first();
+              .and(this.page.locator(':not([aria-expanded="true"]):not([aria-pressed="true"])')).first();
             if (await visible(chatToggle)) {
               await this.input.click(chatToggle).catch(() => {});
             }

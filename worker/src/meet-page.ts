@@ -70,7 +70,7 @@ type EncodedEvidence = {state: 'unsupported' | 'failed' | 'waiting_frames' | 'ob
   'metadata_unavailable' | 'provider_transform' | 'provider_reserved' | 'replaced' | 'stopped';
   frame_count: number; last_frame: Record<string, unknown> | null};
 type EncodedObservation = {id: number; pc: RTCPeerConnection; transform?: RTCRtpScriptTransform;
-  requestedAt?: number; evidence: EncodedEvidence};
+  requestedAt?: number; waitingSince?: number; evidence: EncodedEvidence};
 
 // The small receiver hook runs before Meet; this bundle is loaded before join. It has no backend
 // credentials, provider login cookies, API URL or direct backend connection.
@@ -1570,8 +1570,17 @@ function install(config: MeetCaptureConfig) {
         const live = new Set<RTCRtpReceiver>();
         for (const pc of connections) {
           if (pc.connectionState === 'closed') { connections.delete(pc); continue; }
+          const recvTransceivers = new Set<RTCRtpReceiver>();
+          if (typeof pc.getTransceivers === 'function') {
+            for (const tr of pc.getTransceivers()) {
+              if (tr.receiver && (tr.currentDirection === 'recvonly' || tr.currentDirection === 'sendrecv')) {
+                recvTransceivers.add(tr.receiver);
+              }
+            }
+          }
           for (const receiver of pc.getReceivers()) {
-            if (received.has(receiver) && receiver.track?.kind === 'audio' && receiver.track.readyState === 'live') {
+            if ((received.has(receiver) || recvTransceivers.has(receiver)) &&
+                receiver.track?.kind === 'audio' && receiver.track.readyState === 'live') {
               observe(receiver, pc); live.add(receiver);
             }
           }
@@ -1614,10 +1623,11 @@ function install(config: MeetCaptureConfig) {
             } catch { /* ignore headless audio element errors */ }
           }
         }
+        const hasSignaledOrDomParticipants = participants.size > 0 || liveDomCount > 0;
         const silentCaptureWithParticipants =
           state.active_audio_samples === 0 &&
           state.audio_samples >= 16000 * 10 &&
-          (participants.size > 0 || liveDomCount > 0);
+          hasSignaledOrDomParticipants;
         for (const [receiver, entry] of observations) {
           if (!live.has(receiver)) { detachObservation(receiver); continue; }
           if (!entry.transform) continue;
@@ -1625,8 +1635,16 @@ function install(config: MeetCaptureConfig) {
             if (entry.evidence.state !== 'replaced') observer?.postMessage({type: 'forget', id: entry.id});
             entry.evidence.state = 'replaced'; continue;
           }
-          if (silentCaptureWithParticipants && entry.evidence.state === 'waiting_frames' && entry.evidence.frame_count === 0) {
-            receiver.transform = null; entry.transform = undefined;
+          if (entry.evidence.state === 'waiting_frames' && entry.evidence.frame_count === 0) {
+            entry.waitingSince = hasSignaledOrDomParticipants ? (entry.waitingSince ?? performance.now()) : undefined;
+          } else {
+            entry.waitingSince = undefined;
+          }
+          const stalledWaitingFrames =
+            entry.waitingSince !== undefined && performance.now() - entry.waitingSince >= 3000;
+          if ((silentCaptureWithParticipants || stalledWaitingFrames) &&
+              entry.evidence.state === 'waiting_frames' && entry.evidence.frame_count === 0) {
+            receiver.transform = null; entry.transform = undefined; entry.waitingSince = undefined;
             entry.evidence.state = 'unsupported';
             observer?.postMessage({type: 'forget', id: entry.id});
             continue;
