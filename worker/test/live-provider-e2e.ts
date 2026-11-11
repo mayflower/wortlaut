@@ -610,6 +610,26 @@ async function createLoopedSpeakerWav(fixtureFilename: string, outPath: string):
   return pcmData.byteLength / bytesPerSample / sampleRate;
 }
 
+async function leaveAndCloseBrowser(browser?: Browser): Promise<void> {
+  if (!browser) return;
+  try {
+    for (const ctx of browser.contexts()) {
+      for (const page of ctx.pages()) {
+        const leaveBtn = page.locator(
+          'button[aria-label*="Anruf verlassen" i], button[aria-label*="Leave call" i], button[aria-label*="Besprechung verlassen" i], button[aria-label*="Leave meeting" i], button#hangup-button',
+        );
+        if (await leaveBtn.first().isVisible().catch(() => false)) {
+          await leaveBtn.first().click({timeout: 2000, force: true}).catch(() => {});
+          await delay(600);
+        }
+      }
+    }
+  } catch {
+    // ignore teardown navigation errors
+  }
+  await browser.close().catch(() => {});
+}
+
 async function clickIfVisible(locator: Locator): Promise<boolean> {
   try {
     if (await locator.first().isVisible()) {
@@ -1802,11 +1822,13 @@ async function runProviderLiveTest(provider: Provider, config: LiveConfig) {
     console.log(`[6/6] Beende Aufnahme und warte auf Abschluss der Verarbeitung...`);
     await apiRequest(config, 'POST', `/v1/recordings/${recordingId}/cancel`);
     stopLobbyWatcher?.();
-    await browserHost?.close().catch(() => {});
-    await browserA.close().catch(() => {});
-    await browserB.close().catch(() => {});
-    await browserC?.close().catch(() => {});
-    await browserD?.close().catch(() => {});
+    await Promise.all([
+      leaveAndCloseBrowser(browserHost),
+      leaveAndCloseBrowser(browserA),
+      leaveAndCloseBrowser(browserB),
+      leaveAndCloseBrowser(browserC),
+      leaveAndCloseBrowser(browserD),
+    ]);
     browserHost = undefined;
     browserA = undefined;
     browserB = undefined;
@@ -1972,11 +1994,13 @@ async function runProviderLiveTest(provider: Provider, config: LiveConfig) {
     return report;
   } finally {
     stopLobbyWatcher?.();
-    await browserHost?.close().catch(() => {});
-    await browserA?.close().catch(() => {});
-    await browserB?.close().catch(() => {});
-    await browserC?.close().catch(() => {});
-    await browserD?.close().catch(() => {});
+    await Promise.all([
+      leaveAndCloseBrowser(browserHost),
+      leaveAndCloseBrowser(browserA),
+      leaveAndCloseBrowser(browserB),
+      leaveAndCloseBrowser(browserC),
+      leaveAndCloseBrowser(browserD),
+    ]);
     await rm(wavDir, {recursive: true, force: true}).catch(() => {});
   }
 }
