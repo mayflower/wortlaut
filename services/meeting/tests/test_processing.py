@@ -666,3 +666,42 @@ def test_coalesce_protocol_segments_filters_fillers_and_merges_broken_sentences(
     assert coalesced[1]["speaker_label"] == "Johann Peter Hartmann"
     assert coalesced[1]["text"] == "Super, dann nehmen wir das so in das Protokoll auf."
 
+
+def test_coalesce_protocol_segments_preserves_distinct_speaker_ids_sharing_display_name():
+    from wortlaut.exports import _coalesce_protocol_segments, group_transcript_turns
+
+    same_name_segments = [
+        {
+            "id": "s1",
+            "stream_id": "stream-a",
+            "speaker_id": "spaces/room/devices/268",
+            "participant_id": "spaces/room/devices/268",
+            "speaker_label": "Johann-Peter Hartmann",
+            "start": 5.0,
+            "end": 11.0,
+            "text": "Wir prüfen die getrennten Audioquellen.",
+            "words": [],
+        },
+        {
+            "id": "s2",
+            "stream_id": "stream-b",
+            "speaker_id": "spaces/room/devices/270",
+            "participant_id": "spaces/room/devices/270",
+            "speaker_label": "Johann-Peter Hartmann",
+            "start": 13.0,
+            "end": 19.0,
+            "text": "Der zweite Teilnehmer spricht zur gleichen Zeit.",
+            "words": [],
+        },
+    ]
+    coalesced = _coalesce_protocol_segments(same_name_segments)
+    assert len(coalesced) == 2
+    assert coalesced[0]["speaker_id"] == "spaces/room/devices/268"
+    assert coalesced[0]["stream_id"] == "stream-a"
+    assert coalesced[1]["speaker_id"] == "spaces/room/devices/270"
+    assert coalesced[1]["stream_id"] == "stream-b"
+
+    turns = group_transcript_turns(coalesced)
+    assert len(turns) == 2
+
+

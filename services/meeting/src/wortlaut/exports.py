@@ -360,12 +360,23 @@ def _merge_segment_into(target: dict, source: dict) -> None:
     target["words"] = target.get("words", []) + source.get("words", [])
 
 
+def _coalesce_speaker_key(seg: dict) -> tuple[str, str]:
+    identity = str(
+        seg.get("speaker_id")
+        or seg.get("participant_id")
+        or seg.get("provider_source_id")
+        or seg.get("stream_id")
+        or ""
+    )
+    return (identity, str(seg.get("speaker_label") or ""))
+
+
 def _coalesce_protocol_segments(segments: list[dict]) -> list[dict]:
     if not segments:
         return []
-    by_speaker: dict[str, list[dict]] = {}
+    by_speaker: dict[tuple[str, str], list[dict]] = {}
     for seg in segments:
-        by_speaker.setdefault(seg["speaker_label"], []).append(seg)
+        by_speaker.setdefault(_coalesce_speaker_key(seg), []).append(seg)
 
     speaker_merged: list[dict] = []
     for spk_segs in by_speaker.values():
@@ -384,11 +395,12 @@ def _coalesce_protocol_segments(segments: list[dict]) -> list[dict]:
 
     non_backchannel: list[dict] = []
     for seg in speaker_merged:
+        seg_key = _coalesce_speaker_key(seg)
         dur = max(0.0, seg["end"] - seg["start"])
         word_count = len(seg["text"].split())
         if dur <= 2.2 and word_count <= 6:
             overlapped = any(
-                other["speaker_label"] != seg["speaker_label"]
+                _coalesce_speaker_key(other) != seg_key
                 and (other["end"] - other["start"]) >= max(4.0, dur * 2.5)
                 and other["start"] <= seg["start"] + 0.8
                 and other["end"] >= seg["end"] - 0.8
@@ -403,7 +415,7 @@ def _coalesce_protocol_segments(segments: list[dict]) -> list[dict]:
     for seg in non_backchannel:
         if (
             final_turns
-            and final_turns[-1]["speaker_label"] == seg["speaker_label"]
+            and _coalesce_speaker_key(final_turns[-1]) == _coalesce_speaker_key(seg)
             and (seg["start"] - final_turns[-1]["end"]) <= 15.0
         ):
             _merge_segment_into(final_turns[-1], seg)
@@ -414,16 +426,18 @@ def _coalesce_protocol_segments(segments: list[dict]) -> list[dict]:
 
 def group_transcript_turns(segments: list[dict], max_turn_chars: int = 900) -> list[dict]:
     turns: list[dict] = []
+    last_key: tuple[str, str] | None = None
     for seg in segments:
         text = " ".join((seg.get("text") or "").split())
         if not text:
             continue
         label = " ".join((seg.get("speaker_label") or "Sprecher").split())
+        spk_key = _coalesce_speaker_key(seg)
         start = float(seg.get("start") or 0.0)
         end = float(seg.get("end") or start)
         if (
             turns
-            and turns[-1]["speaker"] == label
+            and last_key == spk_key
             and (start - turns[-1]["end"]) <= 15.0
             and len(turns[-1]["text"]) + 1 + len(text) <= max_turn_chars
         ):
@@ -438,6 +452,7 @@ def group_transcript_turns(segments: list[dict], max_turn_chars: int = 900) -> l
                     "text": text,
                 }
             )
+            last_key = spk_key
     return turns
 
 
