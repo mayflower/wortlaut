@@ -33,9 +33,9 @@ asr:
   enabled: true
   allowCpu: false
   gpuCount: 1
-  # Default: German high-accuracy Parakeet ("primeline/parakeet-primeline").
-  # Set to "nvidia/parakeet-tdt-0.6b-v3" for 25-language European multilingual ASR.
-  modelRepo: primeline/parakeet-primeline
+  # Default: 25-language European multilingual Parakeet ("nvidia/parakeet-tdt-0.6b-v3").
+  # Optional German-only fine-tune: "primeline/parakeet-primeline".
+  modelRepo: nvidia/parakeet-tdt-0.6b-v3
   storageClassName: ""
   cacheSize: 20Gi
 

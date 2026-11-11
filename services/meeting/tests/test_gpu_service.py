@@ -143,18 +143,18 @@ def test_cpu_fallback_loads_model_on_cpu_when_enabled(monkeypatch):
     loaded = asr_service.load_model()
     assert isinstance(loaded, DummyModel)
     assert restored == {
-        "filename": "/tmp/2_95_WER.nemo",
+        "filename": "/tmp/parakeet-tdt-0.6b-v3.nemo",
         "map_location": "cpu",
         "frozen": True,
         "eval": True,
     }
 
     restored.clear()
-    monkeypatch.setenv("WORTLAUT_ASR_MODEL_REPO", "nvidia/parakeet-tdt-0.6b-v3")
-    loaded_multilingual = asr_service.load_model()
-    assert isinstance(loaded_multilingual, DummyModel)
+    monkeypatch.setenv("WORTLAUT_ASR_MODEL_REPO", "custom-org/parakeet-custom")
+    loaded_custom = asr_service.load_model()
+    assert isinstance(loaded_custom, DummyModel)
     assert restored == {
-        "pretrained": "nvidia/parakeet-tdt-0.6b-v3",
+        "pretrained": "custom-org/parakeet-custom",
         "map_location": "cpu",
         "frozen": True,
         "eval": True,

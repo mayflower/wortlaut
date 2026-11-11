@@ -50,7 +50,7 @@ services:
     environment:
       WORTLAUT_ASR_TOKEN: ${WORTLAUT_ASR_TOKEN:-wortlaut-local-asr-token}
       WORTLAUT_ASR_ALLOW_CPU: ${WORTLAUT_ASR_ALLOW_CPU:-true}
-      WORTLAUT_ASR_MODEL_REPO: ${WORTLAUT_ASR_MODEL_REPO:-primeline/parakeet-primeline}
+      WORTLAUT_ASR_MODEL_REPO: ${WORTLAUT_ASR_MODEL_REPO:-nvidia/parakeet-tdt-0.6b-v3}
     volumes:
       - model-cache:/model-cache
 

@@ -371,19 +371,45 @@ def _coalesce_speaker_key(seg: dict) -> tuple[str, str]:
     return (identity, str(seg.get("speaker_label") or ""))
 
 
+_MAX_ADJACENT_TURN_GAP_SECONDS = 4.5
+_MAX_COALESCED_TURN_DURATION_SECONDS = 45.0
+
+
+def _is_short_backchannel_candidate(seg: dict) -> bool:
+    dur = max(0.0, seg["end"] - seg["start"])
+    return dur <= 2.2 and len(seg["text"].split()) <= 6
+
+
 def _coalesce_protocol_segments(segments: list[dict]) -> list[dict]:
     if not segments:
         return []
+    ordered = sorted(segments, key=lambda s: (s["start"], s["stream_id"], s["id"]))
+
     by_speaker: dict[tuple[str, str], list[dict]] = {}
-    for seg in segments:
+    for seg in ordered:
         by_speaker.setdefault(_coalesce_speaker_key(seg), []).append(seg)
 
+    # Bridge sub-second intra-sentence splits of the same speaker only when no other
+    # speaker took a turn in the pause (simultaneous short backchannels may straddle).
     speaker_merged: list[dict] = []
-    for spk_segs in by_speaker.values():
-        spk_segs.sort(key=lambda s: (s["start"], s["stream_id"], s["id"]))
+    for spk_key, spk_segs in by_speaker.items():
         cur: dict | None = None
         for seg in spk_segs:
-            if cur is not None and (seg["start"] - cur["end"]) <= 3.5:
+            gap = seg["start"] - cur["end"] if cur is not None else 999.0
+            can_bridge = cur is not None and gap <= 1.2
+            if can_bridge and cur is not None:
+                for other in ordered:
+                    if _coalesce_speaker_key(other) == spk_key:
+                        continue
+                    if other["end"] <= cur["end"] or other["start"] >= seg["start"]:
+                        continue
+                    overlaps_speech = (
+                        other["start"] < cur["end"] - 0.1 or other["end"] > seg["start"] + 0.1
+                    )
+                    if not (overlaps_speech and _is_short_backchannel_candidate(other)):
+                        can_bridge = False
+                        break
+            if can_bridge and cur is not None:
                 _merge_segment_into(cur, seg)
             else:
                 if cur is not None:
@@ -397,8 +423,7 @@ def _coalesce_protocol_segments(segments: list[dict]) -> list[dict]:
     for seg in speaker_merged:
         seg_key = _coalesce_speaker_key(seg)
         dur = max(0.0, seg["end"] - seg["start"])
-        word_count = len(seg["text"].split())
-        if dur <= 2.2 and word_count <= 6:
+        if _is_short_backchannel_candidate(seg):
             overlapped = any(
                 _coalesce_speaker_key(other) != seg_key
                 and (other["end"] - other["start"]) >= max(4.0, dur * 2.5)
@@ -416,7 +441,8 @@ def _coalesce_protocol_segments(segments: list[dict]) -> list[dict]:
         if (
             final_turns
             and _coalesce_speaker_key(final_turns[-1]) == _coalesce_speaker_key(seg)
-            and (seg["start"] - final_turns[-1]["end"]) <= 15.0
+            and (seg["start"] - final_turns[-1]["end"]) <= _MAX_ADJACENT_TURN_GAP_SECONDS
+            and (seg["end"] - final_turns[-1]["start"]) <= _MAX_COALESCED_TURN_DURATION_SECONDS
         ):
             _merge_segment_into(final_turns[-1], seg)
         else:
@@ -438,7 +464,8 @@ def group_transcript_turns(segments: list[dict], max_turn_chars: int = 900) -> l
         if (
             turns
             and last_key == spk_key
-            and (start - turns[-1]["end"]) <= 15.0
+            and (start - turns[-1]["end"]) <= _MAX_ADJACENT_TURN_GAP_SECONDS
+            and (end - turns[-1]["start"]) <= _MAX_COALESCED_TURN_DURATION_SECONDS
             and len(turns[-1]["text"]) + 1 + len(text) <= max_turn_chars
         ):
             turns[-1]["text"] = f"{turns[-1]['text']} {text}"

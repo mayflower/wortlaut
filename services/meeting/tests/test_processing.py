@@ -705,3 +705,163 @@ def test_coalesce_protocol_segments_preserves_distinct_speaker_ids_sharing_displ
     assert len(turns) == 2
 
 
+def test_micro_noise_blips_are_discarded_and_sentence_pauses_stay_intact(
+    client, database, storage
+):
+    import struct
+
+    from wortlaut.processing import POST_ROLL
+
+    attempt, credential, identity = source(client)
+    raw = audio("german-a.wav")
+    orig = struct.unpack(f"<{len(raw) // 2}h", raw)
+
+    def scale(samples, factor):
+        clipped = [max(-32768, min(32767, int(x * factor))) for x in samples]
+        return struct.pack(f"<{len(clipped)}h", *clipped)
+
+    # Faint 180 ms breath/click (~418 peak, ~140 RMS) triggers WebRTC VAD briefly,
+    # followed by 1.2 s silence, then two voiced clauses separated by a 630 ms
+    # natural intra-sentence pause (< 870 ms SILENCE, > old 600 ms), then a tail click.
+    faint_breath = scale(orig[1600 : 1600 + 2880], 0.03)
+    voiced_clause = raw[16000 * 2 : 24000 * 2]  # 0.5 s continuously voiced speech
+    intra_pause_630ms = b"\0\0" * 10080  # 630 ms (< SILENCE = 870 ms)
+    pcm = (
+        b"\0\0" * 8000
+        + faint_breath
+        + b"\0\0" * 19200
+        + voiced_clause
+        + intra_pause_630ms
+        + voiced_clause
+        + b"\0\0" * 19200
+        + faint_breath
+        + b"\0\0" * 8000
+    )
+    total_samples = len(pcm) // 2
+    speech_start_sample = 8000 + (len(faint_breath) // 2) + 19200
+    speech_end_sample = (
+        speech_start_sample + (len(voiced_clause) // 2) * 2 + 10080
+    )
+
+    with client.websocket_connect(f"/v1/attempts/{attempt}/audio") as socket:
+        authenticate(socket, credential)
+        socket.send_json(begin(identity))
+        assert socket.receive_json()["type"] == "ack"
+        last_seq = 0
+        for last_seq, start in enumerate(range(0, total_samples, 80000)):
+            send_pcm(
+                socket,
+                identity,
+                pcm[start * 2 : (start + 80000) * 2],
+                last_seq,
+                start,
+            )
+        socket.send_json(
+            {
+                "type": "end",
+                "id": begin(identity)["id"] + "/end",
+                "stream_id": identity["stream_id"],
+                "epoch": identity["epoch"],
+                "final_sample": total_samples,
+                "last_sequence": last_seq,
+            }
+        )
+        assert socket.receive_json()["type"] == "ack"
+
+    for _ in range(3):
+        segmentation_pass(database)
+
+    with Session(database) as db:
+        stream = db.scalar(select(AudioStream))
+        jobs = db.scalars(select(AsrJob).order_by(AsrJob.start_sample)).all()
+        assert stream.scan_complete and stream.scan_sample == total_samples
+        # Neither leading/trailing faint breath blips create phantom jobs,
+        # nor does the 700 ms intra-sentence pause split the real utterance.
+        assert len(jobs) == 1
+        job = jobs[0]
+        assert job.start_sample >= speech_start_sample - 4800
+        assert job.end_sample >= speech_end_sample + POST_ROLL - 960
+
+
+def test_coalesce_protocol_segments_keeps_intervening_qna_chronological_and_bounds_turns():
+    from wortlaut.exports import _coalesce_protocol_segments, group_transcript_turns
+
+    qna_segments = [
+        {
+            "id": "q1",
+            "stream_id": "st-alex",
+            "speaker_id": "spk-alex",
+            "speaker_label": "Alexander",
+            "start": 10.0,
+            "end": 18.0,
+            "text": "Wie wollt ihr das denn bei Digitale Leute aufbauen?",
+            "words": [],
+        },
+        {
+            "id": "a1",
+            "stream_id": "st-ben",
+            "speaker_id": "spk-ben",
+            "speaker_label": "Ben",
+            "start": 18.4,
+            "end": 20.3,
+            "text": "Wir starten im Herbst.",
+            "words": [],
+        },
+        {
+            "id": "r1",
+            "stream_id": "st-alex",
+            "speaker_id": "spk-alex",
+            "speaker_label": "Alexander",
+            "start": 20.8,
+            "end": 27.0,
+            "text": "Ah super, das passt gut in unseren Zeitplan.",
+            "words": [],
+        },
+        {
+            "id": "r2",
+            "stream_id": "st-alex",
+            "speaker_id": "spk-alex",
+            "speaker_label": "Alexander",
+            "start": 35.0,
+            "end": 42.0,
+            "text": "Nach acht Sekunden Pause beginnt ein neuer Gedanke.",
+            "words": [],
+        },
+    ]
+    coalesced = _coalesce_protocol_segments(qna_segments)
+    assert [c["id"] for c in coalesced] == ["q1", "a1", "r1", "r2"]
+    assert [c["speaker_label"] for c in coalesced] == [
+        "Alexander",
+        "Ben",
+        "Alexander",
+        "Alexander",
+    ]
+
+    turns = group_transcript_turns(coalesced)
+    assert [t["speaker"] for t in turns] == [
+        "Alexander",
+        "Ben",
+        "Alexander",
+        "Alexander",
+    ]
+
+    # Long monologue splits cleanly once merged turn span exceeds 45 seconds.
+    long_monologue = [
+        {
+            "id": f"m{i}",
+            "stream_id": "st-alex",
+            "speaker_id": "spk-alex",
+            "speaker_label": "Alexander",
+            "start": float(i * 20),
+            "end": float(i * 20 + 18),
+            "text": f"Abschnitt {i}.",
+            "words": [],
+        }
+        for i in range(4)
+    ]
+    mono_coalesced = _coalesce_protocol_segments(long_monologue)
+    assert len(mono_coalesced) == 2
+    assert mono_coalesced[0]["end"] - mono_coalesced[0]["start"] <= 45.0
+    assert mono_coalesced[1]["end"] - mono_coalesced[1]["start"] <= 45.0
+
+

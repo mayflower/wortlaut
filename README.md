@@ -125,8 +125,8 @@ The `wortlaut-asr` service ([services/asr/app.py](services/asr/app.py)) loads an
 
 | Use Case | `WORTLAUT_ASR_MODEL_REPO` | Supported Languages |
 | :--- | :--- | :--- |
-| **Multilingual (25 European languages)** | `nvidia/parakeet-tdt-0.6b-v3` | Automatic language detection across English, German, French, Spanish, Italian, Dutch, Polish, Portuguese, Swedish, Czech, Danish, Finnish, Greek, Ukrainian, and 11 more European languages |
-| **German Domain Specialist (Default)** | `primeline/parakeet-primeline` | Fine-tuned for high-accuracy German technical & business speech (`2_95_WER.nemo`, `2.95%` WER) |
+| **Multilingual (25 European languages, Default)** | `nvidia/parakeet-tdt-0.6b-v3` | Automatic language detection across English, German, French, Spanish, Italian, Dutch, Polish, Portuguese, Swedish, Czech, Danish, Finnish, Greek, Ukrainian, and 11 more European languages |
+| **German Domain Specialist (Optional)** | `primeline/parakeet-primeline` | Fine-tuned for German-only technical & business speech (`2_95_WER.nemo`, `2.95%` WER) |
 
 Set `WORTLAUT_DEFAULT_LOCALE=en` (already enabled in [`.env.example`](.env.example) and [`docker-compose.yml`](docker-compose.yml)) to default the Web-UI, `/privacy` page, and in-call chat announcements to English.
 

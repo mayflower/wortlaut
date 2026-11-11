@@ -2,6 +2,7 @@
 
 import hashlib
 import logging
+import math
 import struct
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -28,8 +29,8 @@ RATE = 16000
 FRAME = 480  # WebRTC VAD: 30 ms, aggressiveness 2.
 MIN_SPEECH_PEAK = 150  # Ignore digital comfort noise (-46 dBFS threshold on int16 PCM).
 PRE_ROLL = 4800  # 300 ms
-POST_ROLL = 2400  # 150 ms
-SILENCE = 9600  # 600 ms
+POST_ROLL = 5760  # 360 ms
+SILENCE = 13920  # 870 ms
 MAX_SEGMENT = RATE * 30
 OVERLAP = 3200  # 200 ms, words assigned by midpoint in the disjoint core.
 SILENCE_CHECKPOINT = RATE * 10
@@ -372,6 +373,27 @@ def read_pcm(chunks: list[AudioChunk], start: int, end: int) -> bytes:
     return result
 
 
+def _is_micro_noise_section(
+    first: int,
+    last: int,
+    cursor: int,
+    voiced_frames: int,
+    voiced_peak: int,
+    voiced_energy_sum: int,
+) -> bool:
+    if voiced_frames <= 0:
+        return True
+    # Never drop the trailing tail of speech continuing across a durable cut/cursor.
+    if cursor > 0 and first == cursor:
+        return False
+    if last - first > RATE or voiced_frames > 8:
+        return False
+    voiced_rms = math.sqrt(voiced_energy_sum / (voiced_frames * FRAME))
+    if voiced_frames <= 2 and (voiced_peak < 900 or voiced_rms < 220.0):
+        return True
+    return voiced_peak < 600 and voiced_rms < 200.0
+
+
 def speech_section(pcm: bytes, cursor: int, terminal: bool):
     """Replay from a durable reset boundary; adaptive VAD state is not guessed.
 
@@ -380,6 +402,9 @@ def speech_section(pcm: bytes, cursor: int, terminal: bool):
     """
     vad = webrtcvad.Vad(2)
     first = last = None
+    voiced_frames = 0
+    voiced_peak = 0
+    voiced_energy_sum = 0
     samples = len(pcm) // 2
     available = cursor + samples
     for offset in range(0, samples, FRAME):
@@ -394,6 +419,9 @@ def speech_section(pcm: bytes, cursor: int, terminal: bool):
         if frame_peak >= MIN_SPEECH_PEAK and vad.is_speech(frame, RATE):
             first = frame_start if first is None else first
             last = frame_end
+            voiced_frames += 1
+            voiced_peak = max(voiced_peak, frame_peak)
+            voiced_energy_sum += sum(x * x for x in frame_samples)
         if first is None and frame_end - cursor >= SILENCE_CHECKPOINT:
             return None, cursor + SILENCE_CHECKPOINT
         if first is not None:
@@ -404,10 +432,16 @@ def speech_section(pcm: bytes, cursor: int, terminal: bool):
                     return None, cursor
                 return (audio_start, min(available, cut + OVERLAP), cut), cut
             if frame_end - last >= SILENCE:
+                if _is_micro_noise_section(
+                    first, last, cursor, voiced_frames, voiced_peak, voiced_energy_sum
+                ):
+                    return None, frame_end
                 end = min(available, last + POST_ROLL)
                 return (audio_start, end, end), frame_end
     if terminal:
-        if first is not None:
+        if first is not None and not _is_micro_noise_section(
+            first, last, cursor, voiced_frames, voiced_peak, voiced_energy_sum
+        ):
             return (max(cursor, first - PRE_ROLL), available, available), available
         return None, available
     return None, cursor
@@ -672,49 +706,54 @@ def segment_stream(db: Session, stream: AudioStream):
         if stream_binding_opted_out(db, stream, run.binding):
             stream.scan_sample = run.end
             continue
-        cursor = max(stream.scan_sample, run.start)
-        # At most 10 s silence + 30 s voice + overlap; RAM remains bounded.
-        limit = min(run.end, cursor + SCAN_WINDOW)
-        final = limit == run.end and (index < len(runs) - 1 or terminal)
-        pcm = read_pcm(run.chunks, cursor, limit)
-        span, following = speech_section(pcm, cursor, final)
-        if span:
-            start, end, core_end = span
-            # Pre-roll across a long-speech cut stays within the same source binding.
-            if start == cursor:
-                start = max(run.start, cursor - OVERLAP)
-            identity = {
-                "stream": str(stream.id),
-                "start": start,
-                "end": end,
-                "core_start": cursor,
-                "core_end": core_end,
-                "binding": run.binding,
-            }
-            identifier = hashlib.sha256(canonical(identity).encode()).hexdigest()
-            if db.get(AsrJob, identifier) is None:
-                db.execute(select(func.pg_advisory_xact_lock(749836123)))
-                count = db.scalar(
-                    select(func.count())
-                    .select_from(AsrJob)
-                    .where(AsrJob.status.in_(["pending", "processing"]))
-                )
-                if count >= get_settings().max_open_asr_jobs:
-                    return  # Keep the checkpoint and stored audio for later work.
-                db.add(
-                    AsrJob(
-                        id=identifier,
-                        stream_id=stream.id,
-                        start_sample=start,
-                        end_sample=end,
-                        core_start=cursor,
-                        core_end=core_end,
-                        binding=run.binding,
+        while stream.scan_sample < run.end:
+            cursor = max(stream.scan_sample, run.start)
+            # At most 10 s silence + 30 s voice + overlap; RAM remains bounded.
+            limit = min(run.end, cursor + SCAN_WINDOW)
+            final = limit == run.end and (index < len(runs) - 1 or terminal)
+            pcm = read_pcm(run.chunks, cursor, limit)
+            span, following = speech_section(pcm, cursor, final)
+            if span:
+                start, end, core_end = span
+                # Pre-roll across a long-speech cut stays within the same source binding.
+                if start == cursor:
+                    start = max(run.start, cursor - OVERLAP)
+                identity = {
+                    "stream": str(stream.id),
+                    "start": start,
+                    "end": end,
+                    "core_start": cursor,
+                    "core_end": core_end,
+                    "binding": run.binding,
+                }
+                identifier = hashlib.sha256(canonical(identity).encode()).hexdigest()
+                if db.get(AsrJob, identifier) is None:
+                    db.execute(select(func.pg_advisory_xact_lock(749836123)))
+                    count = db.scalar(
+                        select(func.count())
+                        .select_from(AsrJob)
+                        .where(AsrJob.status.in_(["pending", "processing"]))
                     )
-                )
-        stream.scan_sample = following
-        if following < run.end:
-            return
+                    if count >= get_settings().max_open_asr_jobs:
+                        return  # Keep the checkpoint and stored audio for later work.
+                    db.add(
+                        AsrJob(
+                            id=identifier,
+                            stream_id=stream.id,
+                            start_sample=start,
+                            end_sample=end,
+                            core_start=cursor,
+                            core_end=core_end,
+                            binding=run.binding,
+                        )
+                    )
+                stream.scan_sample = following
+                if following < run.end:
+                    return
+                break
+            stream.scan_sample = following
+            if following <= cursor:
+                return
     if terminal:
         stream.scan_complete = True
 

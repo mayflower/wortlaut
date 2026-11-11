@@ -125,8 +125,8 @@ Der `wortlaut-asr`-Dienst ([services/asr/app.py](services/asr/app.py)) unterstü
 
 | Einsatzszenario | `WORTLAUT_ASR_MODEL_REPO` | Unterstützte Sprachen |
 | :--- | :--- | :--- |
-| **Mehrsprachig (25 Sprachen)** | `nvidia/parakeet-tdt-0.6b-v3` | Englisch, Deutsch, Französisch, Spanisch, Italienisch, Niederländisch, Polnisch, Portugiesisch, Schwedisch u. a. (automatische Spracherkennung) |
-| **Deutsch-Spezialmodell (Default)** | `primeline/parakeet-primeline` | Optimiert auf deutsche Fachsprache (`2_95_WER.nemo`, `2,95 %` WER) |
+| **Mehrsprachig (25 Sprachen, Default)** | `nvidia/parakeet-tdt-0.6b-v3` | Englisch, Deutsch, Französisch, Spanisch, Italienisch, Niederländisch, Polnisch, Portugiesisch, Schwedisch u. a. (automatische Spracherkennung) |
+| **Deutsch-Spezialmodell (Optional)** | `primeline/parakeet-primeline` | Optimiert auf rein deutsche Fachsprache (`2_95_WER.nemo`, `2,95 %` WER) |
 
 Für eine komplett englischsprachige Standard-Oberfläche samt englischem Bot-Chathinweis genügt zusätzlich `WORTLAUT_DEFAULT_LOCALE=en`.
 
