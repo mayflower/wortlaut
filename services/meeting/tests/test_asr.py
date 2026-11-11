@@ -432,43 +432,39 @@ def test_segment_result_preserves_word_confidence_and_rejects_low_confidence_hal
         binding={"speaker_id": "speaker-A"},
     )
 
-    # Clear speech mixed with a lower-confidence domain noun stays intact with confidence metadata.
-    valid = segment_result(
-        job,
-        stream,
-        {
-            "text": "Maystack läuft stabil.",
-            "words": [
-                {"word": "Maystack", "start": 0.2, "end": 0.8, "confidence": 0.41},
-                {"word": "läuft", "start": 0.9, "end": 1.3, "confidence": 0.94},
-                {"word": "stabil.", "start": 1.4, "end": 2.0, "confidence": 0.96},
-            ],
-        },
-    )
-    assert valid["text"] == "Maystack läuft stabil."
-    assert valid["confidence"] == round((0.41 + 0.94 + 0.96) / 3, 4)
-    assert [w["confidence"] for w in valid["words"]] == [0.41, 0.94, 0.96]
+    # Word confidences below are parakeet-tdt-0.6b-v3 max_prob values measured
+    # on a real recording (e21ee66f), not invented posteriors.
+    def words(*pairs):
+        return [
+            {"word": w, "start": 0.3 * i, "end": 0.3 * i + 0.25, "confidence": c}
+            for i, (w, c) in enumerate(pairs)
+        ]
 
-    # Acoustic noise hallucination (flat high-entropy posterior across all tokens) is dropped.
-    hallucinated = segment_result(
-        job,
-        stream,
-        {
-            "text": "Small made a pistol Weźmie w wasz.",
-            "words": [
-                {"word": "Small", "start": 0.1, "end": 0.4, "confidence": 0.19},
-                {"word": "made", "start": 0.4, "end": 0.7, "confidence": 0.24},
-                {"word": "a", "start": 0.7, "end": 0.8, "confidence": 0.14},
-                {"word": "pistol", "start": 0.8, "end": 1.3, "confidence": 0.31},
-                {"word": "Weźmie", "start": 1.5, "end": 2.1, "confidence": 0.16},
-                {"word": "w", "start": 2.1, "end": 2.3, "confidence": 0.21},
-                {"word": "wasz.", "start": 2.3, "end": 2.9, "confidence": 0.28},
-            ],
-        },
+    def result(*pairs):
+        return segment_result(
+            job, stream, {"text": " ".join(w for w, _ in pairs), "words": words(*pairs)}
+        )
+
+    clear = (("Haben", 0.923), ("wir", 1.0), ("wieviel", 0.895), ("Bildschirme", 0.999))
+    valid = result(*clear)
+    assert valid["text"] == "Haben wir wieviel Bildschirme"
+    assert valid["confidence"] == round((0.923 + 1.0 + 0.895 + 0.999) / 4, 4)
+    assert [w["confidence"] for w in valid["words"]] == [0.923, 1.0, 0.895, 0.999]
+
+    # Hard-to-recognise real speech has a low mean but keeps confident words.
+    weak = (
+        ("Da", 0.333), ("hast", 0.831), ("du", 0.987), ("jetzt", 0.57), ("zum", 0.474),
+        ("Zeit,", 0.742), ("aber", 0.398), ("jetzt", 0.285), ("will", 0.425), ("ich.", 0.552),
     )
+    assert result(*weak)["text"] == "Da hast du jetzt zum Zeit, aber jetzt will ich."
+
+    # Rustling noise decoded as foreign words: no word reaches a confident posterior.
+    hallucinated = result(("Small", 0.552), ("made", 0.516), ("a", 0.438), ("pistol.", 0.609))
     assert hallucinated["text"] == ""
     assert hallucinated["words"] == []
     assert "confidence" not in hallucinated
+    assert result(("Jaknął", 0.42))["words"] == []
+    assert result(("Genau.", 0.65))["text"] == "Genau."
 
     with pytest.raises(InvalidResult, match="invalid_word_confidence"):
         segment_result(

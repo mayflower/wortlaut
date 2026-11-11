@@ -58,12 +58,10 @@ def _configure_decoding_confidence(loaded) -> None:
         decoding_cfg.confidence_cfg.exclude_blank = True
         decoding_cfg.confidence_cfg.aggregation = "mean"
         decoding_cfg.confidence_cfg.tdt_include_duration = False
-        decoding_cfg.confidence_cfg.method_cfg = {
-            "name": "entropy",
-            "entropy_type": "tsallis",
-            "alpha": 0.33,
-            "entropy_norm": "exp",
-        }
+        # Unscaled maximum token probability. Tsallis-exp (alpha 0.33) over the
+        # 8193-token multilingual vocabulary pushed clear German speech to a
+        # median below 0.25; max_prob keeps it near 0.9 and noise near 0.3-0.5.
+        decoding_cfg.confidence_cfg.method_cfg = {"name": "max_prob", "alpha": 1.0}
     loaded.change_decoding_strategy(decoding_cfg, verbose=False)
 
 
@@ -251,6 +249,11 @@ def infer(pcm, identifier):
         # liveness probe replaces only this process, not shared GPU services.
         accelerator_failed.set()
         raise HTTPException(503, "GPU unavailable") from None
+    except torch.OutOfMemoryError:
+        # The GPU is shared; a transient allocation failure leaves this CUDA
+        # client usable. Release cached blocks and let the job retry later.
+        torch.cuda.empty_cache()
+        raise HTTPException(503, "GPU memory exhausted", headers={"Retry-After": "30"}) from None
     finally:
         lock.release()
 

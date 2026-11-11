@@ -114,7 +114,10 @@ def wall_clock_time_de(origin_iso: str | None, offset_seconds: float) -> str:
         return short_timestamp(offset_seconds)
 
 
-MIN_EXPORT_SEGMENT_CONFIDENCE = 0.38
+# max_prob scale (see wortlaut.asr): a safety net below the ASR hallucination
+# rule, and a stricter bar for sub-300 ms fragments on ambiguous streams.
+MIN_EXPORT_SEGMENT_CONFIDENCE = 0.45
+MIN_SHORT_FRAGMENT_CONFIDENCE = 0.80
 _MAX_ADJACENT_TURN_GAP_SECONDS = 4.5
 _MAX_COALESCED_TURN_DURATION_SECONDS = 45.0
 
@@ -557,7 +560,7 @@ def export_data(db: Session, recording: Recording):
                 and stream_key not in unambiguous_stream_bindings
                 and dur <= 0.30
                 and isinstance(seg_conf, (int, float))
-                and seg_conf < 0.55
+                and seg_conf < MIN_SHORT_FRAGMENT_CONFIDENCE
             ):
                 continue
             if stream_key in unambiguous_stream_bindings:
@@ -589,7 +592,7 @@ def export_data(db: Session, recording: Recording):
             and len(observed_by_stream.get(stream_key, ())) > 1
             and dur <= 0.30
             and isinstance(seg_conf, (int, float))
-            and seg_conf < 0.55
+            and seg_conf < MIN_SHORT_FRAGMENT_CONFIDENCE
         ):
             continue
         pid = segment.get("participant_id") or segment.get("speaker_id")

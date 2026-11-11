@@ -25,9 +25,12 @@ class InvalidResult(ValueError):
     pass
 
 
-MIN_SEGMENT_CONFIDENCE = 0.38
-MIN_PEAK_WORD_CONFIDENCE = 0.50
-MIN_SINGLE_WORD_CONFIDENCE = 0.42
+# Calibrated on parakeet-tdt-0.6b-v3 max_prob word confidences: real German
+# sentences keep a word at >= 0.9 even when their mean is low, while noise
+# hallucinations stay below 0.75 for every word.
+MIN_SEGMENT_CONFIDENCE = 0.60
+MIN_PEAK_WORD_CONFIDENCE = 0.90
+MIN_SINGLE_WORD_CONFIDENCE = 0.60
 
 
 def _is_low_confidence_hallucination(word_confidences: list[float], word_count: int) -> bool:

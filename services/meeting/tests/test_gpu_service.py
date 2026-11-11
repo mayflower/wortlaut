@@ -94,6 +94,56 @@ def test_accelerator_failure_rejects_jobs_and_marks_gpu_process_unhealthy(monkey
     assert client.get("/health/live").status_code == 503
 
 
+def test_shared_gpu_out_of_memory_is_retryable_and_keeps_process_healthy(monkeypatch):
+    path = Path(__file__).resolve().parents[2] / "asr/app.py"
+    spec = importlib.util.spec_from_file_location("gpu_oom_fixture", path)
+    gpu = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gpu)
+
+    class AcceleratorFailure(Exception):
+        pass
+
+    class OutOfMemory(Exception):
+        pass
+
+    emptied, calls = [], []
+
+    def transcribe(*args, **kwargs):
+        calls.append(True)
+        if len(calls) == 1:
+            raise OutOfMemory("fixture shared GPU allocation failure")
+        return [
+            SimpleNamespace(
+                text="Wortlaut",
+                timestamp={"word": [{"word": "Wortlaut", "start": 0.1, "end": 0.2}]},
+            )
+        ]
+
+    monkeypatch.setitem(
+        sys.modules,
+        "torch",
+        SimpleNamespace(
+            AcceleratorError=AcceleratorFailure,
+            OutOfMemoryError=OutOfMemory,
+            cuda=SimpleNamespace(empty_cache=lambda: emptied.append(True)),
+            inference_mode=nullcontext,
+        ),
+    )
+    monkeypatch.setenv("WORTLAUT_ASR_TOKEN", "fixture-oom-token")
+    gpu.model = SimpleNamespace(transcribe=transcribe)
+    client = TestClient(gpu.app)
+    headers = {"Authorization": "Bearer fixture-oom-token", "X-Job-ID": "c" * 64}
+    failed = client.post("/v1/transcribe", content=b"\0\0", headers=headers)
+    assert failed.status_code == 503
+    assert failed.headers["retry-after"] == "30"
+    assert emptied == [True]
+    assert client.get("/health/live").status_code == 200
+    assert client.get("/health/ready").status_code == 200
+    retried = client.post("/v1/transcribe", content=b"\0\0", headers=headers)
+    assert retried.status_code == 200
+    assert retried.json()["words"][0]["word"] == "Wortlaut"
+
+
 def test_cpu_fallback_loads_model_on_cpu_when_enabled(monkeypatch):
     path = Path(__file__).resolve().parents[2] / "asr/app.py"
     spec = importlib.util.spec_from_file_location("cpu_fallback_fixture", path)
@@ -290,7 +340,7 @@ def test_decoding_confidence_config_and_subword_token_confidence_alignment(monke
     assert decoding_cfg.confidence_cfg.preserve_frame_confidence is True
     assert decoding_cfg.confidence_cfg.preserve_token_confidence is True
     assert decoding_cfg.confidence_cfg.preserve_word_confidence is False
-    assert decoding_cfg.confidence_cfg.method_cfg["entropy_type"] == "tsallis"
+    assert decoding_cfg.confidence_cfg.method_cfg == {"name": "max_prob", "alpha": 1.0}
 
     monkeypatch.setattr(service, "load_model", lambda: m)
     headers = {"Authorization": "Bearer fixture-conf-token", "X-Job-ID": "b" * 64}
