@@ -924,6 +924,8 @@ function install(config: MeetCaptureConfig) {
     return updated;
   }
 
+  let sdpHasApplication = false;
+
   function onRemoteDescription(sdp: string) {
     if (typeof sdp !== 'string' || !sdp || sdp.length > 524288) return;
     sdpStats.descriptions++;
@@ -938,6 +940,7 @@ function install(config: MeetCaptureConfig) {
       } else if (line.startsWith('m=video ')) {
         currentMedia = 'video'; sdpStats.video_sections++; sectionMsid = null;
       } else if (line.startsWith('m=')) {
+        if (line.startsWith('m=application ')) sdpHasApplication = true;
         currentMedia = 'other'; sectionMsid = null;
       } else if (line.startsWith('a=msid:')) {
         const parts = line.slice(7).trim().split(/\s+/);
@@ -1377,8 +1380,10 @@ function install(config: MeetCaptureConfig) {
       if (old.track.readyState === 'ended' || entry.pc.connectionState === 'closed') detachObservation(old);
     }
     if (observations.size >= 64) { state.reason = 'audio_source_limit'; return; }
-    const hasCollectionsChannel =
+    const isRealSfuConnection =
+      sdpHasApplication ||
       channelStats.has('collections') ||
+      (pc.getConfiguration?.().iceServers?.length ?? 0) > 0 ||
       [...(window.wortlautMeetReceivers.dataChannels ?? [])].some((dc) => dc.label === 'collections') ||
       /\bm=application\b/.test(pc.remoteDescription?.sdp ?? '') ||
       /\bm=application\b/.test(pc.localDescription?.sdp ?? '');
@@ -1391,7 +1396,7 @@ function install(config: MeetCaptureConfig) {
     if (receiver.transform) entry.evidence.state = 'provider_transform';
     else if (encodedReserved.has(pc)) entry.evidence.state = 'provider_reserved';
     else if (observerState === 'ready' && observer) {
-      if ((config.provider ?? 'google_meet') === 'google_meet' && !hasCollectionsChannel) {
+      if ((config.provider ?? 'google_meet') === 'google_meet' && !isRealSfuConnection) {
         try {
           entry.transform = new RTCRtpScriptTransform(observer, {id: entry.id});
           receiver.transform = entry.transform;
