@@ -304,7 +304,7 @@ const actions = {
   cameraOff: /^(Turn off camera|Kamera ausschalten|Kamera deaktivieren)(?: \(.*\))?$/i,
   cameraOn: /^(Turn on camera|Show more info(?: about the camera problem)?|Kamera einschalten|Kamera aktivieren|Weitere Informationen(?: zum Kameraproblem)? anzeigen)(?: \(.*\))?$/i,
 };
-const waiting = /Please wait until a meeting host brings you into the call|Asking to be let in|You[’']ll join the call when someone lets you|Someone in the call will let you in|Waiting for the host|waiting room|Um Teilnahme (?:gebeten|bitten)|Teilnahme wird angefragt|Anfrage.*Teilnahme|(?:Sie|Du)\s+(?:können|kannst|nehmen|nimmst)\s+teil(?:nehmen)?,\s*sobald|Jemand.*(?:lässt|lassen)\s+(?:Sie|dich).*(?:ein|teilnehmen)|Bitte warten Sie,\s*bis.*einlässt|Warten.*(?:Zulassung|Gastgeber|Host|einlässt|eingelassen)|Sobald.*(?:zugelassen|teilnehmen|einlässt)/i;
+const waiting = /Please wait until a meeting host brings you into the call|Asking to be let in|You[’']ll join the call when someone lets you|Someone in the call (?:will|can) let you in|Waiting (?:for the host|to be let in)|Host hasn[’']t joined yet|waiting room|Um Teilnahme (?:gebeten|bitten)|Teilnahme wird angefragt|Anfrage.*Teilnahme|(?:Sie|Du)\s+(?:können|kannst|nehmen|nimmst)\s+teil(?:nehmen)?,\s*sobald|Jemand.*(?:(?:lässt|lassen)\s+(?:Sie|dich).*(?:ein|teilnehmen)|kann\s+(?:Sie|dich).*einlassen)|Bitte warten(?:\s+Sie)?,\s*bis.*einlässt|Warten.*(?:Zulassung|Gastgeber|Host|einlässt|eingelassen)|Sobald.*(?:zugelassen|teilnehmen|einlässt)|noch nicht eingelassen/i;
 const denied = /You (?:can[’']t|cannot) join this video call|denied your request|request to join was denied|not allowed to join|weren[’']t allowed|Anfrage.*abgelehnt|Teilnahme.*(?:abgelehnt|nicht gestattet)|Sie können nicht an diesem Videoanruf teilnehmen/i;
 const removed = /removed from (?:the )?(?:call|meeting)|aus.*(?:Besprechung|Anruf).*entfernt/i;
 const ended = /^(?:This )?(?:meeting|call) (?:has )?ended\.?$|Besprechung.*beendet|Anruf.*beendet/i;
@@ -524,22 +524,33 @@ export class MeetBrowser {
       } else if (await visible(this.page.getByText(waiting))) this.participation = 'waiting_admission';
       else if (this.joinSent && !await visible(joinButton(this.page))) {
         const hasLeave = await visible(this.page.getByRole('button', {name: actions.leave}));
-        const hasRtpOrDomParticipants =
-          (state?.participant_sources?.dom_participants ?? 0) > 0 ||
+        const hasRtp =
+          (state?.streams ?? 0) > 0 ||
           (state?.receiver_sources ?? []).some((r: Record<string, any>) =>
             (r.ssrc?.length ?? 0) > 0 ||
             (r.csrc?.length ?? 0) > 0 ||
-            (r.encoded_transform?.frame_count ?? 0) > 0) ||
-          await this.page.locator('[data-participant-id]:not([data-self-name])').count() > 0;
+            (r.encoded_transform?.frame_count ?? 0) > 0);
+        const hasRtpOrDomParticipants =
+          hasRtp ||
+          (state?.participant_sources?.dom_participants ?? 0) > 0;
+        const collectionsChannel = (state?.data_channels ?? []).find(
+          (dc: Record<string, any>) => dc.label === 'collections',
+        );
+        const isPrewarmedLobbyChannel =
+          collectionsChannel != null &&
+          (collectionsChannel.binary_frames ?? 0) +
+            (collectionsChannel.text_frames ?? 0) +
+            (collectionsChannel.json_frames ?? 0) === 0 &&
+          !hasRtp;
         const hasInCallControls = hasLeave && await visible(
-          this.page.locator('button[data-panel-id]').or(
+          this.page.locator('button[data-panel-id="1"], button[data-panel-id="2"]').or(
             this.page.getByRole('button', {
               name: /^(?:People|Participants|Show everyone|Alle anzeigen|Teilnehmer|Personen|Chat with everyone|Mit allen chatten|In-call messages|Nachrichten im Anruf|Raise hand|Hand heben)(?:\b|\s|$)/i,
             }),
           ),
         );
         if (this.participation === 'capturing' ||
-            (hasLeave && (hasRtpOrDomParticipants || hasInCallControls) &&
+            (hasLeave && !isPrewarmedLobbyChannel && (hasRtpOrDomParticipants || hasInCallControls) &&
               await this.page.locator('[data-self-name], [data-participant-id]').count() > 0)) {
           this.participation = 'capturing';
           if (!this.chatSent && this.chatAttempts < 8) {

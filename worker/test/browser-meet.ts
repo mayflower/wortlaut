@@ -533,9 +533,15 @@ try {
     await lobbyPrewarmed.meet.join();
     await lobbyPrewarmed.page.evaluate(async (waitingText) => {
       document.querySelector('#waiting')!.textContent = waitingText;
-      const selfTile = document.createElement('div');
+      const selfOuter = document.createElement('div');
+      selfOuter.dataset.participantId = 'spaces/testroom/devices/self';
+      const selfTile = document.createElement('span');
       selfTile.dataset.selfName = 'wortlaut';
-      document.body.append(selfTile);
+      selfOuter.append(selfTile);
+      const effectsBtn = document.createElement('button');
+      effectsBtn.setAttribute('data-panel-id', '3');
+      effectsBtn.setAttribute('aria-label', 'Visual effects');
+      document.body.append(selfOuter, effectsBtn);
       const offerer = new RTCPeerConnection({iceServers: []});
       const answerer = new RTCPeerConnection({iceServers: []});
       const dc = offerer.createDataChannel('collections');

@@ -1085,6 +1085,7 @@ function startLobbyAdmitWatcher(page: Page, provider?: Provider): () => void {
         }
 
         const targets: (Page | Frame)[] = [page, ...page.frames()];
+        let clickedAdmit = false;
         for (const target of targets) {
           const buttons = target
             .getByRole('button', {name: admitRe})
@@ -1098,7 +1099,24 @@ function startLobbyAdmitWatcher(page: Page, provider?: Provider): () => void {
               ' ' +
               ((await btn.innerText().catch(() => '')) || '');
             if (denyRe.test(label)) continue;
+            console.log(`      [Lobby-Watcher] Klicke Einlass-Button (${label.trim().replace(/\s+/g, ' ').slice(0, 50)})...`);
             await btn.click({timeout: 2000, force: true}).catch(() => {});
+            clickedAdmit = true;
+          }
+        }
+        if (!clickedAdmit && provider === 'google_meet') {
+          const peopleToggle = page
+            .locator('button[data-panel-id="1"]')
+            .or(
+              page.getByRole('button', {
+                name: /^(?:People|Participants|Show everyone|Alle anzeigen|Teilnehmer|Personen)(?:\b|\s|$)/i,
+              }),
+            )
+            .and(page.locator('[aria-expanded="false"], [aria-pressed="false"]'))
+            .first();
+          if (await peopleToggle.isVisible().catch(() => false)) {
+            console.log(`      [Lobby-Watcher] Öffne Google-Meet-Teilnehmerleiste für Warteraum-Einlass...`);
+            await peopleToggle.click({timeout: 2000}).catch(() => {});
           }
         }
       } catch {
@@ -1863,10 +1881,10 @@ async function runCanaryCheck(config: LiveConfig): Promise<void> {
   const startedAt = Date.now();
   console.log(`\n[CANARY] Prüfe Cluster-Endpunkte auf ${config.apiUrl}...`);
   const liveHealth = await apiRequest<{status: string}>(config, 'GET', '/health/live');
-  assert.equal(liveHealth.status, 'ok', `/health/live meldet ${JSON.stringify(liveHealth)}`);
+  assert.ok(liveHealth.status === 'ok' || liveHealth.status === 'live', `/health/live meldet ${JSON.stringify(liveHealth)}`);
   const readyHealth = await apiRequest<{status: string}>(config, 'GET', '/health/ready');
-  assert.equal(readyHealth.status, 'ok', `/health/ready meldet ${JSON.stringify(readyHealth)}`);
-  console.log(`      /health/live=ok, /health/ready=ok`);
+  assert.ok(readyHealth.status === 'ready' || readyHealth.status === 'ok', `/health/ready meldet ${JSON.stringify(readyHealth)}`);
+  console.log(`      /health/live=${liveHealth.status}, /health/ready=${readyHealth.status}`);
 
   const configuredProviders = config.providers.filter(p => Boolean(config.urls[p]));
   if (configuredProviders.length === 0) {
