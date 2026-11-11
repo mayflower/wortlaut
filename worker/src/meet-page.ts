@@ -1119,7 +1119,7 @@ function install(config: MeetCaptureConfig) {
   }
 
   function parseProtobufPayload(bytes: Uint8Array, stat: ReturnType<typeof getChannelStat>, depth = 0): boolean {
-    if (depth > 8 || bytes.byteLength < 2 || bytes.byteLength > 65536) return false;
+    if (depth > 8 || bytes.byteLength < 2 || bytes.byteLength > 262144) return false;
     let offset = 0, tags = 0, updated = false;
     const strings: string[] = [];
     const ints: number[] = [];
@@ -1133,7 +1133,7 @@ function install(config: MeetCaptureConfig) {
       }
       return null;
     };
-    while (offset < bytes.byteLength && tags < 128) {
+    while (offset < bytes.byteLength && tags < 512) {
       const tag = readVarint();
       if (tag === null || tag <= 0) break;
       const fieldNo = Math.floor(tag / 8);
@@ -1162,13 +1162,16 @@ function install(config: MeetCaptureConfig) {
         if (len === null || len < 0 || offset + len > bytes.byteLength) break;
         const slice = bytes.subarray(offset, offset + len);
         offset += len;
-        if (len > 0 && len <= 4096) {
+        if (len > 0 && len <= 65536 && (slice[0] === 0x7b || slice[0] === 0x5b)) {
           const decoded = new TextDecoder('utf-8', {fatal: false}).decode(slice);
-          if (decoded && (decoded[0] === '{' || decoded[0] === '[')) {
-            if (parseJsonText(decoded, stat)) updated = true;
+          if (parseJsonText(decoded, stat)) {
+            updated = true;
             continue;
           }
-          if (len <= 200 && /^[\x20-\x7e\u00a0-\uffff]+$/.test(decoded)) {
+        }
+        if (len > 0 && len <= 200) {
+          const decoded = new TextDecoder('utf-8', {fatal: false}).decode(slice);
+          if (/^[\x20-\x7e\u00a0-\uffff]+$/.test(decoded)) {
             const trimmed = decoded.trim();
             if (/^\d{3,10}$/.test(trimmed)) {
               const num = Number(trimmed);
@@ -1177,9 +1180,9 @@ function install(config: MeetCaptureConfig) {
               strings.push(trimmed);
             }
           }
-          if (depth < 8 && len >= 2 && parseProtobufPayload(slice, stat, depth + 1)) {
-            updated = true;
-          }
+        }
+        if (depth < 8 && len >= 2 && parseProtobufPayload(slice, stat, depth + 1)) {
+          updated = true;
         }
       } else {
         break;
@@ -1655,6 +1658,11 @@ function install(config: MeetCaptureConfig) {
         for (const receiver of live) {
           let source = sources.get(receiver);
           if (!source) {
+            const obs = observations.get(receiver);
+            const hasRtp = receiver.getSynchronizationSources().length > 0 ||
+              receiver.getContributingSources().length > 0 ||
+              (obs?.evidence.frame_count ?? 0) > 0;
+            if (!hasRtp) continue;
             source = {id: `${config.provider ?? 'google_meet'}:${config.meeting_id}:receiver:${++nextSource}`};
             sources.set(receiver, source);
           }

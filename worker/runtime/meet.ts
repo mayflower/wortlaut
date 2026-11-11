@@ -304,7 +304,7 @@ const actions = {
   cameraOff: /^(Turn off camera|Kamera ausschalten|Kamera deaktivieren)(?: \(.*\))?$/i,
   cameraOn: /^(Turn on camera|Show more info(?: about the camera problem)?|Kamera einschalten|Kamera aktivieren|Weitere Informationen(?: zum Kameraproblem)? anzeigen)(?: \(.*\))?$/i,
 };
-const waiting = /Please wait until a meeting host brings you into the call|Asking to be let in|You[’']ll join the call when someone lets you|Waiting for the host|waiting room|Um Teilnahme gebeten|Warten.*(?:Zulassung|Gastgeber)|Sobald.*(?:zugelassen|teilnehmen)/i;
+const waiting = /Please wait until a meeting host brings you into the call|Asking to be let in|You[’']ll join the call when someone lets you|Someone in the call will let you in|Waiting for the host|waiting room|Um Teilnahme (?:gebeten|bitten)|Teilnahme wird angefragt|Anfrage.*Teilnahme|(?:Sie|Du)\s+(?:können|kannst|nehmen|nimmst)\s+teil(?:nehmen)?,\s*sobald|Jemand.*(?:lässt|lassen)\s+(?:Sie|dich).*(?:ein|teilnehmen)|Bitte warten Sie,\s*bis.*einlässt|Warten.*(?:Zulassung|Gastgeber|Host|einlässt|eingelassen)|Sobald.*(?:zugelassen|teilnehmen|einlässt)/i;
 const denied = /You (?:can[’']t|cannot) join this video call|denied your request|request to join was denied|not allowed to join|weren[’']t allowed|Anfrage.*abgelehnt|Teilnahme.*(?:abgelehnt|nicht gestattet)|Sie können nicht an diesem Videoanruf teilnehmen/i;
 const removed = /removed from (?:the )?(?:call|meeting)|aus.*(?:Besprechung|Anruf).*entfernt/i;
 const ended = /^(?:This )?(?:meeting|call) (?:has )?ended\.?$|Besprechung.*beendet|Anruf.*beendet/i;
@@ -521,23 +521,42 @@ export class MeetBrowser {
       else if (await visible(this.page.getByRole('dialog').filter({hasText: /take notes for me|taking notes|Notizen.*(?:zustimmen|Einwilligung)/i}))) {
         this.reason = 'consent_required';
       } else if (await visible(this.page.getByText(waiting))) this.participation = 'waiting_admission';
-      else if (this.joinSent && !await visible(joinButton(this.page)) &&
-          await visible(this.page.getByRole('button', {name: actions.leave})) &&
-          await this.page.locator('[data-self-name], [data-participant-id]').count()) {
-        this.participation = 'capturing';
-        if (!this.chatSent && this.chatAttempts < 8) {
-          this.chatAttempts += 1;
-          await this.sendChatIntro();
-        }
-        if (!this.rosterOpened && (this.chatSent || !this.bootstrap.chat_intro?.trim() || this.chatAttempts >= 3)) {
-          this.rosterOpened = true;
-          const toggle = this.page.getByRole('button', {
-            name: /^(?:People|Participants|Show everyone|Alle anzeigen|Teilnehmer|Personen)(?:\b|\s|$)/i,
-          }).or(this.page.locator('button[data-panel-id="1"]'))
-            .and(this.page.locator('[aria-expanded="false"], [aria-pressed="false"]')).first();
-          if (await visible(toggle)) {
-            await this.input.click(toggle).catch(() => {});
+      else if (this.joinSent && !await visible(joinButton(this.page))) {
+        const hasLeave = await visible(this.page.getByRole('button', {name: actions.leave}));
+        const hasRtpOrDomParticipants =
+          (state?.participant_sources?.dom_participants ?? 0) > 0 ||
+          (state?.receiver_sources ?? []).some((r: Record<string, any>) =>
+            (r.ssrc?.length ?? 0) > 0 ||
+            (r.csrc?.length ?? 0) > 0 ||
+            (r.encoded_transform?.frame_count ?? 0) > 0) ||
+          await this.page.locator('[data-participant-id]:not([data-self-name])').count() > 0;
+        const hasInCallControls = hasLeave && await visible(
+          this.page.locator('button[data-panel-id]').or(
+            this.page.getByRole('button', {
+              name: /^(?:People|Participants|Show everyone|Alle anzeigen|Teilnehmer|Personen|Chat with everyone|Mit allen chatten|In-call messages|Nachrichten im Anruf|Raise hand|Hand heben)(?:\b|\s|$)/i,
+            }),
+          ),
+        );
+        if (this.participation === 'capturing' ||
+            (hasLeave && (hasRtpOrDomParticipants || hasInCallControls) &&
+              await this.page.locator('[data-self-name], [data-participant-id]').count() > 0)) {
+          this.participation = 'capturing';
+          if (!this.chatSent && this.chatAttempts < 8) {
+            this.chatAttempts += 1;
+            await this.sendChatIntro();
           }
+          if (!this.rosterOpened && (this.chatSent || !this.bootstrap.chat_intro?.trim() || this.chatAttempts >= 3)) {
+            this.rosterOpened = true;
+            const toggle = this.page.getByRole('button', {
+              name: /^(?:People|Participants|Show everyone|Alle anzeigen|Teilnehmer|Personen)(?:\b|\s|$)/i,
+            }).or(this.page.locator('button[data-panel-id="1"]'))
+              .and(this.page.locator('[aria-expanded="false"], [aria-pressed="false"]')).first();
+            if (await visible(toggle)) {
+              await this.input.click(toggle).catch(() => {});
+            }
+          }
+        } else {
+          this.participation = 'waiting_admission';
         }
       }
     }

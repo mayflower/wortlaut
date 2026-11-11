@@ -502,11 +502,94 @@ try {
   assert.equal((await blockedGuest.meet.inspect()).reason, 'prejoin_denied');
   await blockedGuest.meet.stop('prejoin_denied'); await blockedGuest.context.close();
 
+  const lobbyPrewarmed = await preparePage('guest', true);
+  const framesBeforeLobby = frames.length;
+  await lobbyPrewarmed.page.locator('#join').evaluate((el) => { el.textContent = 'Teilnahme erbitten'; });
+  await lobbyPrewarmed.meet.join();
+  await lobbyPrewarmed.page.evaluate(async () => {
+    document.querySelector('#waiting')!.textContent = 'Sie können teilnehmen, sobald jemand Ihre Anfrage annimmt';
+    const selfTile = document.createElement('div');
+    selfTile.dataset.selfName = 'wortlaut';
+    document.body.append(selfTile);
+    const offerer = new RTCPeerConnection({iceServers: []});
+    const answerer = new RTCPeerConnection({iceServers: []});
+    const dc = offerer.createDataChannel('collections');
+    for (let i = 0; i < 3; i++) offerer.addTransceiver('audio', {direction: 'sendonly'});
+    offerer.onicecandidate = (e) => { if (e.candidate) void answerer.addIceCandidate(e.candidate); };
+    answerer.onicecandidate = (e) => { if (e.candidate) void offerer.addIceCandidate(e.candidate); };
+    await offerer.setLocalDescription(await offerer.createOffer());
+    await answerer.setRemoteDescription(offerer.localDescription!);
+    await answerer.setLocalDescription(await answerer.createAnswer());
+    await offerer.setRemoteDescription(answerer.localDescription!);
+    await new Promise<void>((resolve) => {
+      if (dc.readyState === 'open') resolve();
+      else dc.onopen = () => resolve();
+    });
+    const encodeVarint = (n: number): number[] => {
+      const out: number[] = [];
+      let v = n >>> 0;
+      while (v >= 0x80) { out.push((v & 0x7f) | 0x80); v >>>= 7; }
+      out.push(v);
+      return out;
+    };
+    const encodeBytes = (fieldNo: number, payload: Uint8Array): Uint8Array => {
+      const tag = encodeVarint((fieldNo << 3) | 2);
+      const len = encodeVarint(payload.byteLength);
+      const res = new Uint8Array(tag.length + len.length + payload.byteLength);
+      res.set(tag, 0);
+      res.set(len, tag.length);
+      res.set(payload, tag.length + len.length);
+      return res;
+    };
+    const enc = new TextEncoder();
+    const parts: Uint8Array[] = [];
+    for (let i = 1; i <= 10; i++) {
+      const pid = encodeBytes(1, enc.encode(`spaces/testroom/devices/${100 + i}`));
+      const pname = encodeBytes(2, enc.encode(`Participant ${i}`));
+      const pad = encodeBytes(3, new Uint8Array(500).fill(0x61));
+      const csiTag = encodeVarint((4 << 3) | 0);
+      const csiVal = encodeVarint(5000 + i);
+      const entry = new Uint8Array(pid.length + pname.length + pad.length + csiTag.length + csiVal.length);
+      let off = 0;
+      for (const b of [pid, pname, pad, new Uint8Array(csiTag), new Uint8Array(csiVal)]) {
+        entry.set(b, off); off += b.byteLength;
+      }
+      parts.push(encodeBytes(2, entry));
+    }
+    const innerLen = parts.reduce((acc, b) => acc + b.byteLength, 0);
+    const inner = new Uint8Array(innerLen);
+    let pos = 0;
+    for (const b of parts) { inner.set(b, pos); pos += b.byteLength; }
+    const outer = encodeBytes(1, inner);
+    const cs = new CompressionStream('gzip');
+    const writer = cs.writable.getWriter();
+    void writer.write(new Uint8Array(outer));
+    void writer.close();
+    const gz = await new Response(cs.readable).arrayBuffer();
+    dc.send(gz);
+    (window as any).closeLobbyPeers = () => { dc.close(); offerer.close(); answerer.close(); };
+  });
+  await lobbyPrewarmed.page.waitForFunction(() =>
+    window.wortlautMeet.inspect().participant_sources.total === 10, undefined, {timeout: 10000});
+  await lobbyPrewarmed.page.waitForTimeout(400);
+  const lobbyInspected = await lobbyPrewarmed.meet.inspect();
+  assert.equal(lobbyInspected.participation, 'waiting_admission',
+    'Prewarmed lobby transceivers + self-tile + Leave button must remain waiting_admission');
+  assert.equal(lobbyInspected.streams, 0);
+  assert.equal(lobbyInspected.audio_samples, 0);
+  assert.equal(lobbyInspected.participant_sources.total, 10);
+  await lobbyPrewarmed.page.locator('#waiting').evaluate((el) => { el.textContent = 'Unbekannter Warteraumhinweis'; });
+  assert.equal((await lobbyPrewarmed.meet.inspect()).participation, 'waiting_admission');
+  assert.equal(frames.slice(framesBeforeLobby).length, 0);
+  await lobbyPrewarmed.meet.stop('lobby_timeout');
+  await lobbyPrewarmed.page.evaluate(() => (window as any).closeLobbyPeers());
+  await lobbyPrewarmed.context.close();
+
   const account = await preparePage('account');
   await assert.rejects(account.meet.join(), (error: unknown) => error instanceof MeetError && error.reason === 'auth_session_missing');
   assert.equal(await account.page.locator('#join').count(), 1);
   await account.meet.stop('auth_session_missing'); await account.context.close();
-  assert.equal(authenticated, 22);
+  assert.equal(authenticated, 23);
   const webexContext = await browser.newContext();
   const webexPage = await webexContext.newPage();
   const webexUrl = 'https://example.webex.com/meet/fixture';
