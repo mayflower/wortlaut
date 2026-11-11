@@ -483,8 +483,36 @@ async function installSenderGate(context: BrowserContext, wavPath?: string): Pro
   });
 }
 
+async function readOutboundAudioStats(page: Page): Promise<{packetsSent: number; bytesSent: number; audioLevel: number}> {
+  return page
+    .evaluate(async () => {
+      let packetsSent = 0;
+      let bytesSent = 0;
+      let audioLevel = 0;
+      const pcs = (window as unknown as {__wortlautPeerConnections?: Set<RTCPeerConnection>}).__wortlautPeerConnections;
+      for (const pc of pcs ?? []) {
+        try {
+          const stats = await pc.getStats();
+          stats.forEach((v: Record<string, any>) => {
+            if (v.type === 'outbound-rtp' && v.kind === 'audio') {
+              packetsSent += Number(v.packetsSent || 0);
+              bytesSent += Number(v.bytesSent || 0);
+            }
+            if (v.type === 'media-source' && v.kind === 'audio' && typeof v.audioLevel === 'number') {
+              audioLevel = Math.max(audioLevel, v.audioLevel);
+            }
+          });
+        } catch {
+          // ignore closed pc
+        }
+      }
+      return {packetsSent, bytesSent, audioLevel: Math.round(audioLevel * 1000) / 1000};
+    })
+    .catch(() => ({packetsSent: 0, bytesSent: 0, audioLevel: 0}));
+}
+
 async function setSpeakerTransmitting(page: Page, open: boolean): Promise<void> {
-  for (const target of [page, ...page.frames()]) {
+  for (const target of page.frames()) {
     try {
       await target.evaluate(isOpen => {
         const fn = (window as unknown as {__wortlautSetMicGate?: (o: boolean) => number}).__wortlautSetMicGate;
@@ -499,11 +527,27 @@ async function setSpeakerTransmitting(page: Page, open: boolean): Promise<void> 
         }
       }
       if (open && target.url().startsWith('https://meet.google.com/')) {
-        const meetUnmute = target.locator(
-          'button[data-is-muted="true"][aria-label*="Mikrofon" i], button[data-is-muted="true"][aria-label*="microphone" i]',
-        );
+        const meetUnmute = target
+          .getByRole('button', {
+            name: /^(Turn on microphone|Mikrofon einschalten|Mikrofon aktivieren)(?: \(.*\))?$/i,
+          })
+          .or(
+            target.locator(
+              'button[data-is-muted="true"][aria-label*="Mikrofon" i], button[data-is-muted="true"][aria-label*="microphone" i]',
+            ),
+          );
         if (await meetUnmute.first().isVisible().catch(() => false)) {
-          await meetUnmute.first().evaluate(el => (el as HTMLElement).click()).catch(() => {});
+          await page.keyboard.press('Escape').catch(() => {});
+          const clicked = await meetUnmute.first().click({timeout: 2000}).then(() => true).catch(() => false);
+          if (!clicked || (await meetUnmute.first().isVisible().catch(() => false))) {
+            await page.keyboard.press('Control+d').catch(() => {});
+          }
+          // Re-apply sender track gate in case Meet replaced the audio track on unmute
+          await delay(250);
+          await target.evaluate(isOpen => {
+            const fn = (window as unknown as {__wortlautSetMicGate?: (o: boolean) => number}).__wortlautSetMicGate;
+            if (fn) fn(isOpen);
+          }, open);
         }
       }
       if (open && /(?:^|\.)zoom\.us$/.test(new URL(target.url() || 'about:blank').hostname)) {
@@ -609,11 +653,20 @@ async function joinRoomAsSpeaker(page: Page, provider: Provider, meetingUrl: str
         (await inCallToolbar.first().isVisible().catch(() => false))
       ) {
         await page.keyboard.press('Escape').catch(() => {});
-        const inCallUnmute = page.locator(
-          'button[data-is-muted="true"][aria-label*="Mikrofon" i], button[data-is-muted="true"][aria-label*="microphone" i], button[aria-label*="Mikrofon aktivieren" i], button[aria-label*="Turn on microphone" i]',
-        );
+        const inCallUnmute = page
+          .getByRole('button', {
+            name: /^(Turn on microphone|Mikrofon einschalten|Mikrofon aktivieren)(?: \(.*\))?$/i,
+          })
+          .or(
+            page.locator(
+              'button[data-is-muted="true"][aria-label*="Mikrofon" i], button[data-is-muted="true"][aria-label*="microphone" i]',
+            ),
+          );
         if (await inCallUnmute.first().isVisible().catch(() => false)) {
-          await inCallUnmute.first().click({timeout: 3000}).catch(() => {});
+          const clicked = await inCallUnmute.first().click({timeout: 3000}).then(() => true).catch(() => false);
+          if (!clicked || (await inCallUnmute.first().isVisible().catch(() => false))) {
+            await page.keyboard.press('Control+d').catch(() => {});
+          }
         }
         return;
       }
@@ -1627,6 +1680,8 @@ async function runProviderLiveTest(provider: Provider, config: LiveConfig) {
     await setSpeakerTransmitting(pageB, false);
     if (pageC) await setSpeakerTransmitting(pageC, false);
     await delay(Math.ceil((durationA * 2 + 1.6) * 1000));
+    const statsA = await readOutboundAudioStats(pageA);
+    console.log(`         [RTP-A] packetsSent=${statsA.packetsSent}, bytesSent=${statsA.bytesSent}, audioLevel=${statsA.audioLevel}`);
     await setSpeakerTransmitting(pageA, false);
     await delay(3000);
 
@@ -1634,6 +1689,8 @@ async function runProviderLiveTest(provider: Provider, config: LiveConfig) {
     await setSpeakerTransmitting(pageA, false);
     await setSpeakerTransmitting(pageB, true);
     await delay(Math.ceil((durationB * 2 + 1.6) * 1000));
+    const statsB = await readOutboundAudioStats(pageB);
+    console.log(`         [RTP-B] packetsSent=${statsB.packetsSent}, bytesSent=${statsB.bytesSent}, audioLevel=${statsB.audioLevel}`);
     await setSpeakerTransmitting(pageB, false);
     await delay(3000);
 
