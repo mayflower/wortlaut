@@ -709,6 +709,7 @@ function install(config: MeetCaptureConfig) {
     const chatItems = document.querySelectorAll(
       '[data-message-text], [data-sender-name], ' +
       '[data-tid="chat-pane-item"], [data-tid="chat-pane-message"], ' +
+      '[role="alert"][data-sender-name], [aria-live] [data-message-text], ' +
       '.chat-item__container, .new-chat-message__container, .chat-message__text-box, ' +
       '[class*="chat-message"], [class*="chatMessage"], [class*="message-item"]'
     );
@@ -1631,10 +1632,18 @@ function install(config: MeetCaptureConfig) {
             continue;
           }
           if (entry.requestedAt !== undefined && performance.now() - entry.requestedAt > 5000) {
-            receiver.transform = null; entry.transform = undefined;
-            entry.evidence.state = 'failed'; state.reason = 'encoded_transform_failed';
-            observer?.postMessage({type: 'forget', id: entry.id});
-            continue;
+            observerState = 'failed';
+            state.reason = 'encoded_transform_failed';
+            for (const [otherReceiver, otherEntry] of observations) {
+              if (otherEntry.transform && otherReceiver.transform === otherEntry.transform) {
+                otherReceiver.transform = null;
+                otherEntry.transform = undefined;
+                otherEntry.requestedAt = undefined;
+                otherEntry.evidence.state = 'failed';
+              }
+            }
+            observer?.terminate();
+            break;
           }
           if (entry.requestedAt === undefined && observerState === 'ready') {
             entry.requestedAt = performance.now(); observer?.postMessage({type: 'snapshot', id: entry.id});

@@ -3,7 +3,7 @@ WORTLAUT_NAMESPACE ?= wortlaut-$(shell id -un)
 KUBECONFIG := $(CURDIR)/.dev/kubeconfig
 export KUBECONFIG WORTLAUT_NAMESPACE
 
-.PHONY: setup setup-local dev render test test-local test-live test-live-login lint
+.PHONY: setup setup-local dev render test test-local test-live test-live-sfu4 test-canary test-live-login lint
 setup:
 	./scripts/setup.sh
 
@@ -27,6 +27,12 @@ test-local:
 
 test-live:
 	PROVIDER="$(PROVIDER)" npm --prefix worker run test:live
+
+test-live-sfu4:
+	PROVIDER="$(PROVIDER)" npm --prefix worker run test:live -- --four-speakers
+
+test-canary:
+	PROVIDER="$(PROVIDER)" npm --prefix worker run test:live -- --canary
 
 test-live-login:
 	npm --prefix worker run test:live -- --save-host-session "$${PROVIDER:-google_meet}"

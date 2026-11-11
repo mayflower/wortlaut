@@ -841,6 +841,18 @@ def export_data(db: Session, recording: Recording):
             "has_audio_gaps": any(q["known_gaps"] for q in qualities),
             "capture_end_unknown": not streams or any(q["capture_end_unknown"] for q in qualities),
             "no_audio_received": not any(q["accepted_samples"] for q in qualities),
+            "capture_anomaly": bool(
+                not segments
+                and not opted_out_list
+                and recording.participation_reason
+                not in ("lobby_timeout", "admission_denied", "prejoin_denied")
+                and any(
+                    a.end_reason not in ("lobby_timeout", "admission_denied", "prejoin_denied")
+                    and (a.diagnostics.get("participant_sources", {}).get("total") or 0) > 0
+                    and (a.diagnostics.get("active_audio_samples") or 0) == 0
+                    for a in attempts
+                )
+            ),
             "incomplete_drain": any(a.diagnostics.get("drained") is False for a in attempts),
             "audio_clock_interrupted": any(
                 a.diagnostics.get("audio_clock", {}).get("total_interruptions", 0) > 0

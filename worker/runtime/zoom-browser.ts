@@ -36,6 +36,7 @@ export class ZoomBrowser {
   private stopping?: Promise<void>;
   private reason = '';
   private joined = false;
+  private capturing = false;
   private initializedCapture = false;
   private audioJoined = false;
   private videoStopped = false;
@@ -273,11 +274,19 @@ export class ZoomBrowser {
     const leaveVisible = await this.page.locator(
       'button.footer-button-base__button[aria-label*="Leave" i], button[aria-label*="Verlassen" i], .footer__leave-btn'
     ).or(this.page.getByRole('button', {name: leaveLabel})).first().isVisible().catch(() => false);
-    const inMeetingDom = leaveVisible || await this.page.locator(
-      '#wc-container-left, .meeting-client-inner, .speaker-active-container__video-frame, .gallery-video-container__main-view'
+    const hasInCallControls = await this.page.locator(
+      'button[aria-label*="Participants" i], button[aria-label*="Teilnehmer" i], .footer-button__participants-icon, ' +
+      'button[aria-label*="open the chat" i], .footer-button__chat-icon, ' +
+      'button.join-audio-by-voip__join-btn, button[aria-label*="Join Audio by Computer" i], button[aria-label*="Per Computeraudio teilnehmen" i], ' +
+      '.speaker-active-container__video-frame, .gallery-video-container__main-view'
+    ).or(
+      this.page.getByRole('button', {
+        name: /^(?:Join Audio by Computer|Join Audio|Per Computeraudio teilnehmen|Computeraudio beitreten|Participants|Teilnehmer)(?:\b|\s|$)/i,
+      })
     ).first().isVisible().catch(() => false);
+    const inMeetingDom = leaveVisible && hasInCallControls;
 
-    if (inMeetingDom && !this.initializedCapture) {
+    if ((inMeetingDom || leaveVisible) && !this.initializedCapture) {
       await this.initialize?.().catch(() => {});
       this.initializedCapture = true;
     }
@@ -286,15 +295,27 @@ export class ZoomBrowser {
     if (!this.reason && capture?.reason) this.reason = capture.reason;
 
     const isWaiting = waitingRoomPattern.test(text);
-    const inCall = !isWaiting && (inMeetingDom || Boolean(capture && (capture.streams > 0 || capture.audio_samples > 0)));
+    const hasCaptureEvidence = Boolean(
+      capture && (capture.streams > 0 || capture.audio_samples > 0 || capture.participant_sources.total > 0)
+    );
+    const inCall = !isWaiting && (this.capturing || inMeetingDom || hasCaptureEvidence);
     if (inCall) {
+      this.capturing = true;
       await this.ensureComputerAudioJoined();
       if (!this.videoStopped) await this.stopIncomingVideoIfPossible();
       if (!this.rosterOpened) await this.ensureRosterOpen();
       if (!this.chatSent) await this.sendChatIntro();
     }
 
-    const participation = this.stopping ? 'ended' : isWaiting ? 'waiting_admission' : inCall ? 'capturing' : 'joining';
+    const participation = this.stopping
+      ? 'ended'
+      : isWaiting
+        ? 'waiting_admission'
+        : inCall
+          ? 'capturing'
+          : this.joined
+            ? 'waiting_admission'
+            : 'joining';
     return {
       ...capture,
       participation,

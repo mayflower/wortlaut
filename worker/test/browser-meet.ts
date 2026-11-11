@@ -502,94 +502,385 @@ try {
   assert.equal((await blockedGuest.meet.inspect()).reason, 'prejoin_denied');
   await blockedGuest.meet.stop('prejoin_denied'); await blockedGuest.context.close();
 
-  const lobbyPrewarmed = await preparePage('guest', true);
-  const framesBeforeLobby = frames.length;
-  await lobbyPrewarmed.page.locator('#join').evaluate((el) => { el.textContent = 'Teilnahme erbitten'; });
-  await lobbyPrewarmed.meet.join();
-  await lobbyPrewarmed.page.evaluate(async () => {
-    document.querySelector('#waiting')!.textContent = 'Sie können teilnehmen, sobald jemand Ihre Anfrage annimmt';
-    const selfTile = document.createElement('div');
-    selfTile.dataset.selfName = 'wortlaut';
-    document.body.append(selfTile);
-    const offerer = new RTCPeerConnection({iceServers: []});
-    const answerer = new RTCPeerConnection({iceServers: []});
-    const dc = offerer.createDataChannel('collections');
-    for (let i = 0; i < 3; i++) offerer.addTransceiver('audio', {direction: 'sendonly'});
-    offerer.onicecandidate = (e) => { if (e.candidate) void answerer.addIceCandidate(e.candidate); };
-    answerer.onicecandidate = (e) => { if (e.candidate) void offerer.addIceCandidate(e.candidate); };
-    await offerer.setLocalDescription(await offerer.createOffer());
-    await answerer.setRemoteDescription(offerer.localDescription!);
-    await answerer.setLocalDescription(await answerer.createAnswer());
-    await offerer.setRemoteDescription(answerer.localDescription!);
-    await new Promise<void>((resolve) => {
-      if (dc.readyState === 'open') resolve();
-      else dc.onopen = () => resolve();
-    });
-    const encodeVarint = (n: number): number[] => {
-      const out: number[] = [];
-      let v = n >>> 0;
-      while (v >= 0x80) { out.push((v & 0x7f) | 0x80); v >>>= 7; }
-      out.push(v);
-      return out;
-    };
-    const encodeBytes = (fieldNo: number, payload: Uint8Array): Uint8Array => {
-      const tag = encodeVarint((fieldNo << 3) | 2);
-      const len = encodeVarint(payload.byteLength);
-      const res = new Uint8Array(tag.length + len.length + payload.byteLength);
-      res.set(tag, 0);
-      res.set(len, tag.length);
-      res.set(payload, tag.length + len.length);
-      return res;
-    };
-    const enc = new TextEncoder();
-    const parts: Uint8Array[] = [];
-    for (let i = 1; i <= 10; i++) {
-      const pid = encodeBytes(1, enc.encode(`spaces/testroom/devices/${100 + i}`));
-      const pname = encodeBytes(2, enc.encode(`Participant ${i}`));
-      const pad = encodeBytes(3, new Uint8Array(500).fill(0x61));
-      const csiTag = encodeVarint((4 << 3) | 0);
-      const csiVal = encodeVarint(5000 + i);
-      const entry = new Uint8Array(pid.length + pname.length + pad.length + csiTag.length + csiVal.length);
-      let off = 0;
-      for (const b of [pid, pname, pad, new Uint8Array(csiTag), new Uint8Array(csiVal)]) {
-        entry.set(b, off); off += b.byteLength;
+  for (const localeCase of [
+    {
+      german: true,
+      joinLabel: 'Teilnahme erbitten',
+      waitingText: 'Sie können teilnehmen, sobald jemand Ihre Anfrage annimmt',
+      unknownWaitingText: 'Unbekannter Warteraumhinweis',
+      peopleLabel: 'Alle anzeigen',
+      chatToggleLabel: 'Mit allen chatten',
+      chatInputLabel: 'Nachricht an alle senden',
+      chatSendLabel: 'Nachricht senden',
+      chatIntro: 'Aufnahme aktiv (DE)',
+    },
+    {
+      german: false,
+      joinLabel: 'Ask to join',
+      waitingText: 'Someone in the call will let you in soon',
+      unknownWaitingText: 'Custom waiting room banner',
+      peopleLabel: 'People',
+      chatToggleLabel: 'Chat with everyone',
+      chatInputLabel: 'Send a message to everyone',
+      chatSendLabel: 'Send a message',
+      chatIntro: 'Recording active (EN)',
+    },
+  ]) {
+    const lobbyPrewarmed = await preparePage('guest', localeCase.german);
+    (lobbyPrewarmed.meet as any).bootstrap.chat_intro = localeCase.chatIntro;
+    const framesBeforeLobby = frames.length;
+    await lobbyPrewarmed.page.locator('#join').evaluate((el, text) => { el.textContent = text; }, localeCase.joinLabel);
+    await lobbyPrewarmed.meet.join();
+    await lobbyPrewarmed.page.evaluate(async (waitingText) => {
+      document.querySelector('#waiting')!.textContent = waitingText;
+      const selfTile = document.createElement('div');
+      selfTile.dataset.selfName = 'wortlaut';
+      document.body.append(selfTile);
+      const offerer = new RTCPeerConnection({iceServers: []});
+      const answerer = new RTCPeerConnection({iceServers: []});
+      const dc = offerer.createDataChannel('collections');
+      const transceivers = [
+        offerer.addTransceiver('audio', {direction: 'sendonly'}),
+        offerer.addTransceiver('audio', {direction: 'sendonly'}),
+        offerer.addTransceiver('audio', {direction: 'sendonly'}),
+      ];
+      offerer.onicecandidate = (e) => { if (e.candidate) void answerer.addIceCandidate(e.candidate); };
+      answerer.onicecandidate = (e) => { if (e.candidate) void offerer.addIceCandidate(e.candidate); };
+      await offerer.setLocalDescription(await offerer.createOffer());
+      await answerer.setRemoteDescription(offerer.localDescription!);
+      await answerer.setLocalDescription(await answerer.createAnswer());
+      await offerer.setRemoteDescription(answerer.localDescription!);
+      await new Promise<void>((resolve) => {
+        if (dc.readyState === 'open') resolve();
+        else dc.onopen = () => resolve();
+      });
+      const encodeVarint = (n: number): number[] => {
+        const out: number[] = [];
+        let v = n >>> 0;
+        while (v >= 0x80) { out.push((v & 0x7f) | 0x80); v >>>= 7; }
+        out.push(v);
+        return out;
+      };
+      const encodeBytes = (fieldNo: number, payload: Uint8Array): Uint8Array => {
+        const tag = encodeVarint((fieldNo << 3) | 2);
+        const len = encodeVarint(payload.byteLength);
+        const res = new Uint8Array(tag.length + len.length + payload.byteLength);
+        res.set(tag, 0);
+        res.set(len, tag.length);
+        res.set(payload, tag.length + len.length);
+        return res;
+      };
+      const enc = new TextEncoder();
+      const parts: Uint8Array[] = [];
+      // 35 participants (~21 KB nested protobuf container) to cover large colleague calls.
+      for (let i = 1; i <= 35; i++) {
+        const pid = encodeBytes(1, enc.encode(`spaces/testroom/devices/${100 + i}`));
+        const pname = encodeBytes(2, enc.encode(`Participant ${i}`));
+        const pad = encodeBytes(3, new Uint8Array(550).fill(0x61));
+        const csiTag = encodeVarint((4 << 3) | 0);
+        const csiVal = encodeVarint(5000 + i);
+        const entry = new Uint8Array(pid.length + pname.length + pad.length + csiTag.length + csiVal.length);
+        let off = 0;
+        for (const b of [pid, pname, pad, new Uint8Array(csiTag), new Uint8Array(csiVal)]) {
+          entry.set(b, off); off += b.byteLength;
+        }
+        parts.push(encodeBytes(2, entry));
       }
-      parts.push(encodeBytes(2, entry));
+      const innerLen = parts.reduce((acc, b) => acc + b.byteLength, 0);
+      const inner = new Uint8Array(innerLen);
+      let pos = 0;
+      for (const b of parts) { inner.set(b, pos); pos += b.byteLength; }
+      const outer = encodeBytes(1, inner);
+      const cs = new CompressionStream('gzip');
+      const writer = cs.writable.getWriter();
+      void writer.write(new Uint8Array(outer));
+      void writer.close();
+      const gz = await new Response(cs.readable).arrayBuffer();
+      dc.send(gz);
+      let oscCtx: AudioContext | undefined;
+      let oscNode: OscillatorNode | undefined;
+      (window as any).admitFromLobby = async (cfg: {
+        peopleLabel: string; chatToggleLabel: string; chatInputLabel: string; chatSendLabel: string;
+      }) => {
+        document.querySelector('#waiting')!.textContent = '';
+        const uiEvents: string[] = [];
+        (window as any).admittedUiEvents = uiEvents;
+        const chatToggle = document.createElement('button');
+        chatToggle.setAttribute('aria-label', cfg.chatToggleLabel);
+        chatToggle.setAttribute('data-panel-id', '2');
+        chatToggle.setAttribute('aria-expanded', 'false');
+        const peopleBtn = document.createElement('button');
+        peopleBtn.setAttribute('aria-label', cfg.peopleLabel);
+        peopleBtn.setAttribute('data-panel-id', '1');
+        peopleBtn.setAttribute('aria-expanded', 'false');
+        peopleBtn.onclick = () => {
+          // Real Meet shares a single side panel: opening People collapses Chat!
+          peopleBtn.setAttribute('aria-expanded', 'true');
+          chatToggle.setAttribute('aria-expanded', 'false');
+          uiEvents.push('roster-open');
+        };
+        let chatInputsCreated = false;
+        chatToggle.onclick = () => {
+          const wasExpanded = chatToggle.getAttribute('aria-expanded') === 'true';
+          chatToggle.setAttribute('aria-expanded', wasExpanded ? 'false' : 'true');
+          if (!wasExpanded) peopleBtn.setAttribute('aria-expanded', 'false');
+          uiEvents.push(chatInputsCreated ? 'chat-reopen' : 'chat-open');
+          if (!chatInputsCreated) {
+            chatInputsCreated = true;
+            const box = document.createElement('textarea');
+            box.setAttribute('aria-label', cfg.chatInputLabel);
+            const send = document.createElement('button');
+            send.setAttribute('aria-label', cfg.chatSendLabel);
+            send.onclick = () => { uiEvents.push(`chat-send:${box.value}`); };
+            document.body.append(box, send);
+          }
+        };
+        document.body.append(peopleBtn, chatToggle);
+        oscCtx = new AudioContext();
+        const dest = oscCtx.createMediaStreamDestination();
+        oscNode = oscCtx.createOscillator();
+        oscNode.frequency.value = 440;
+        oscNode.connect(dest);
+        oscNode.start();
+        await oscCtx.resume();
+        // Activate RTP only on the first transceiver; the other 2 remain idle prewarmed receivers.
+        await transceivers[0].sender.replaceTrack(dest.stream.getAudioTracks()[0]);
+      };
+      (window as any).closeLobbyPeers = async () => {
+        oscNode?.stop();
+        await oscCtx?.close().catch(() => {});
+        dc.close(); offerer.close(); answerer.close();
+      };
+    }, localeCase.waitingText);
+    await lobbyPrewarmed.page.waitForFunction(() =>
+      window.wortlautMeet.inspect().participant_sources.total === 35, undefined, {timeout: 10000});
+    await lobbyPrewarmed.page.waitForTimeout(400);
+    const lobbyInspected = await lobbyPrewarmed.meet.inspect();
+    assert.equal(lobbyInspected.participation, 'waiting_admission',
+      'Prewarmed lobby transceivers + self-tile + Leave button must remain waiting_admission');
+    assert.equal(lobbyInspected.streams, 0);
+    assert.equal(lobbyInspected.audio_samples, 0);
+    assert.equal(lobbyInspected.participant_sources.total, 35);
+    await lobbyPrewarmed.page.locator('#waiting').evaluate((el, text) => { el.textContent = text; }, localeCase.unknownWaitingText);
+    assert.equal((await lobbyPrewarmed.meet.inspect()).participation, 'waiting_admission');
+    assert.equal(frames.slice(framesBeforeLobby).length, 0);
+
+    // Simulate host admitting the bot into the call: RTP starts on 1 of 3 receivers + localized controls appear.
+    await lobbyPrewarmed.page.evaluate((cfg) => (window as any).admitFromLobby(cfg), localeCase);
+    await lobbyPrewarmed.page.waitForFunction(() => {
+      const st = window.wortlautMeet.inspect();
+      return st.streams === 1 && st.audio_samples > 0;
+    }, undefined, {timeout: 10000});
+    const admittedInspected = await lobbyPrewarmed.meet.inspect();
+    assert.equal(admittedInspected.participation, 'capturing');
+    assert.equal(admittedInspected.streams, 1, 'Only the RTP-active receiver may attach AudioCapture; idle receivers stay unattached');
+    assert.ok(admittedInspected.audio_samples > 0);
+    assert.deepEqual(await lobbyPrewarmed.page.evaluate(() => (window as any).admittedUiEvents), [
+      'chat-open',
+      `chat-send:${localeCase.chatIntro}`,
+      'roster-open',
+    ]);
+    // Second inspect() tick must restore the Chat sidebar after People collapsed it so DOM opt-outs stay live!
+    await lobbyPrewarmed.meet.inspect();
+    assert.deepEqual(await lobbyPrewarmed.page.evaluate(() => (window as any).admittedUiEvents), [
+      'chat-open',
+      `chat-send:${localeCase.chatIntro}`,
+      'roster-open',
+      'chat-reopen',
+    ]);
+    assert.equal(await lobbyPrewarmed.page.locator('button[data-panel-id="2"]').getAttribute('aria-expanded'), 'true');
+    // Inject live in-call chat opt-out from Participant 1 (both chat panel item and popup toast)
+    await lobbyPrewarmed.page.evaluate((optOutWord) => {
+      const msg = document.createElement('div');
+      msg.setAttribute('data-sender-name', 'Participant 1');
+      msg.setAttribute('data-message-text', optOutWord);
+      document.body.append(msg);
+      const toast = document.createElement('div');
+      toast.setAttribute('role', 'alert');
+      toast.setAttribute('data-sender-name', 'Participant 2');
+      toast.textContent = 'Participant 2\nstop';
+      document.body.append(toast);
+    }, localeCase.german ? 'nein' : 'no');
+    const optOutInspected = await lobbyPrewarmed.meet.inspect();
+    assert.ok(optOutInspected.participant_sources.opted_out?.includes('Participant 1'));
+    assert.ok(optOutInspected.participant_sources.opted_out?.includes('spaces/testroom/devices/101'));
+    assert.ok(optOutInspected.participant_sources.opted_out?.includes('Participant 2'));
+    assert.ok(optOutInspected.participant_sources.opted_out?.includes('spaces/testroom/devices/102'));
+    await lobbyPrewarmed.meet.stop('normal');
+    assert.ok(frames.slice(framesBeforeLobby).some(f => Boolean(f.pcm && f.pcm.byteLength > 0)));
+    await lobbyPrewarmed.page.evaluate(() => (window as any).closeLobbyPeers());
+    await lobbyPrewarmed.context.close();
+  }
+
+  // 4-Speaker dynamic SFU Loudest-N transceiver switching + mid-call late joiner on 2 shared RTCRtpReceivers
+  {
+    const sfuDynamic = await preparePage('guest');
+    const sfuAttemptId = (sfuDynamic.meet as any).bootstrap.attempt_id as string;
+    const beforeSfu = frames.length;
+    await sfuDynamic.meet.join();
+    await sfuDynamic.page.evaluate('window.admit()');
+    await sfuDynamic.page.waitForFunction(() => window.wortlautMeet.inspect().streams === 2, undefined, {timeout: 10000});
+    await sfuDynamic.page.evaluate(async () => {
+      const offerer = new RTCPeerConnection({iceServers: []});
+      const answerer = new RTCPeerConnection({iceServers: []});
+      const dc = offerer.createDataChannel('collections');
+      offerer.onicecandidate = (e) => { if (e.candidate) void answerer.addIceCandidate(e.candidate); };
+      answerer.onicecandidate = (e) => { if (e.candidate) void offerer.addIceCandidate(e.candidate); };
+      await offerer.setLocalDescription(await offerer.createOffer());
+      await answerer.setRemoteDescription(offerer.localDescription!);
+      await answerer.setLocalDescription(await answerer.createAnswer());
+      await offerer.setRemoteDescription(answerer.localDescription!);
+      await new Promise<void>((resolve) => {
+        if (dc.readyState === 'open') resolve();
+        else dc.onopen = () => resolve();
+      });
+
+      const encodeVarint = (n: number): number[] => {
+        const out: number[] = [];
+        let v = n >>> 0;
+        while (v >= 0x80) { out.push((v & 0x7f) | 0x80); v >>>= 7; }
+        out.push(v);
+        return out;
+      };
+      const encodeBytes = (fieldNo: number, payload: Uint8Array): Uint8Array => {
+        const tag = encodeVarint((fieldNo << 3) | 2);
+        const len = encodeVarint(payload.byteLength);
+        const res = new Uint8Array(tag.length + len.length + payload.byteLength);
+        res.set(tag, 0);
+        res.set(len, tag.length);
+        res.set(payload, tag.length + len.length);
+        return res;
+      };
+      const sendCollections = async (entries: {id: string; name: string; csi: number}[]) => {
+        const enc = new TextEncoder();
+        const parts = entries.map((item) => {
+          const pid = encodeBytes(1, enc.encode(item.id));
+          const pname = encodeBytes(2, enc.encode(item.name));
+          const csiTag = encodeVarint((4 << 3) | 0);
+          const csiVal = encodeVarint(item.csi);
+          const entry = new Uint8Array(pid.length + pname.length + csiTag.length + csiVal.length);
+          let off = 0;
+          for (const b of [pid, pname, new Uint8Array(csiTag), new Uint8Array(csiVal)]) {
+            entry.set(b, off); off += b.byteLength;
+          }
+          return encodeBytes(2, entry);
+        });
+        const inner = new Uint8Array(parts.reduce((acc, b) => acc + b.byteLength, 0));
+        let pos = 0;
+        for (const b of parts) { inner.set(b, pos); pos += b.byteLength; }
+        const outer = encodeBytes(1, inner);
+        const cs = new CompressionStream('gzip');
+        const writer = cs.writable.getWriter();
+        void writer.write(new Uint8Array(outer));
+        void writer.close();
+        dc.send(await new Response(cs.readable).arrayBuffer());
+      };
+
+      const receivers = (window as any).fixtureReceiver.getReceivers() as RTCRtpReceiver[];
+      let r0History: {csi: number; offsetMs: number}[] = [{csi: 7001, offsetMs: 0}];
+      receivers[0].getContributingSources = () => {
+        const now = performance.now();
+        return r0History.map((h) => ({source: h.csi, timestamp: now - h.offsetMs, rtpTimestamp: 0}));
+      };
+      receivers[1].getContributingSources = () => [{source: 7002, timestamp: performance.now(), rtpTimestamp: 0}];
+
+      await sendCollections([
+        {id: 'spaces/testroom/devices/alice', name: 'Alice SFU', csi: 7001},
+        {id: 'spaces/testroom/devices/bob', name: 'Bob SFU', csi: 7002},
+        {id: 'spaces/testroom/devices/clara', name: 'Clara SFU', csi: 7003},
+      ]);
+
+      (window as any).switchSfuToClara = () => {
+        // Keep Alice in Chromium's 10s CSRC window with an older timestamp (400ms ago) while Clara is current!
+        r0History = [{csi: 7001, offsetMs: 400}, {csi: 7003, offsetMs: 0}];
+      };
+      (window as any).lateJoinDavidAndSwitch = async () => {
+        await sendCollections([
+          {id: 'spaces/testroom/devices/david', name: 'David Late', csi: 7004},
+        ]);
+        r0History = [{csi: 7001, offsetMs: 900}, {csi: 7003, offsetMs: 450}, {csi: 7004, offsetMs: 0}];
+      };
+      (window as any).closeSfuCollections = () => {
+        dc.close(); offerer.close(); answerer.close();
+      };
+    });
+
+    // Phase 1: Alice on Receiver 0, Bob on Receiver 1 (>= 2.1s so capture.ts 2s rebind hysteresis passes)
+    await sfuDynamic.page.waitForFunction(() => {
+      const rs = window.wortlautMeet.inspect().receiver_sources as any[];
+      return rs.some(r => r.signaled_participant_id === 'spaces/testroom/devices/alice') &&
+        rs.some(r => r.signaled_participant_id === 'spaces/testroom/devices/bob');
+    }, undefined, {timeout: 10000});
+    await sfuDynamic.page.waitForTimeout(2300);
+
+    // Phase 2: Loudest-N switches Receiver 0 from Alice -> Clara (flushes Alice's PCM chunk & binds Clara)
+    await sfuDynamic.page.evaluate(() => (window as any).switchSfuToClara());
+    await sfuDynamic.page.waitForFunction(() => {
+      const rs = window.wortlautMeet.inspect().receiver_sources as any[];
+      return rs.some(r => r.signaled_participant_id === 'spaces/testroom/devices/clara') &&
+        rs.some(r => r.signaled_participant_id === 'spaces/testroom/devices/bob');
+    }, undefined, {timeout: 10000});
+    await sfuDynamic.page.waitForTimeout(2300);
+
+    // Phase 3: Mid-call late joiner David arrives via collections delta and takes Receiver 0
+    await sfuDynamic.page.evaluate(() => (window as any).lateJoinDavidAndSwitch());
+    await sfuDynamic.page.waitForFunction(() => {
+      const st = window.wortlautMeet.inspect();
+      const rs = st.receiver_sources as any[];
+      return st.participant_sources.total === 4 &&
+        rs.some(r => r.signaled_participant_id === 'spaces/testroom/devices/david');
+    }, undefined, {timeout: 10000});
+    await sfuDynamic.page.waitForTimeout(2300);
+
+    const sfuState = await sfuDynamic.meet.inspect();
+    assert.equal(sfuState.streams, 2, '4 speakers across 2 SFU transceivers must keep exactly 2 streams');
+    assert.equal(sfuState.participant_sources.total, 4);
+    await sfuDynamic.meet.stop('normal');
+    assert.equal((await sfuDynamic.meet.inspect()).drained, true);
+    await sfuDynamic.page.evaluate(async () => {
+      (window as any).closeSfuCollections();
+      await (window as any).finishProducer();
+    });
+    await sfuDynamic.context.close();
+
+    const sfuFrames = frames.slice(beforeSfu);
+    assert.equal(sfuFrames.filter(f => f.metadata.type === 'gap').length, 0,
+      'Dynamic SFU CSRC switching must not emit audio gap frames');
+    for (const expectedSpeaker of [
+      {id: 'spaces/testroom/devices/alice', name: 'Alice SFU', switchedMidStream: false},
+      {id: 'spaces/testroom/devices/bob', name: 'Bob SFU', switchedMidStream: false},
+      {id: 'spaces/testroom/devices/clara', name: 'Clara SFU', switchedMidStream: true},
+      {id: 'spaces/testroom/devices/david', name: 'David Late', switchedMidStream: true},
+    ]) {
+      assert.ok(
+        sfuFrames.some(f =>
+          (expectedSpeaker.switchedMidStream
+            ? f.metadata.type === 'bind'
+            : (f.metadata.type === 'begin' || f.metadata.type === 'bind')) &&
+          f.metadata.speaker_id === expectedSpeaker.id &&
+          f.metadata.participant_name === expectedSpeaker.name &&
+          f.metadata.attribution_unknown === false),
+        `Missing ${expectedSpeaker.switchedMidStream ? 'bind' : 'begin/bind'} frame for ${expectedSpeaker.name}`,
+      );
+      assert.ok(
+        sfuFrames.some(f => Boolean(f.pcm && f.pcm.byteLength > 0) &&
+          f.metadata.speaker_id === expectedSpeaker.id &&
+          f.metadata.attribution_unknown === false),
+        `Missing attributed PCM chunk for ${expectedSpeaker.name}`,
+      );
     }
-    const innerLen = parts.reduce((acc, b) => acc + b.byteLength, 0);
-    const inner = new Uint8Array(innerLen);
-    let pos = 0;
-    for (const b of parts) { inner.set(b, pos); pos += b.byteLength; }
-    const outer = encodeBytes(1, inner);
-    const cs = new CompressionStream('gzip');
-    const writer = cs.writable.getWriter();
-    void writer.write(new Uint8Array(outer));
-    void writer.close();
-    const gz = await new Response(cs.readable).arrayBuffer();
-    dc.send(gz);
-    (window as any).closeLobbyPeers = () => { dc.close(); offerer.close(); answerer.close(); };
-  });
-  await lobbyPrewarmed.page.waitForFunction(() =>
-    window.wortlautMeet.inspect().participant_sources.total === 10, undefined, {timeout: 10000});
-  await lobbyPrewarmed.page.waitForTimeout(400);
-  const lobbyInspected = await lobbyPrewarmed.meet.inspect();
-  assert.equal(lobbyInspected.participation, 'waiting_admission',
-    'Prewarmed lobby transceivers + self-tile + Leave button must remain waiting_admission');
-  assert.equal(lobbyInspected.streams, 0);
-  assert.equal(lobbyInspected.audio_samples, 0);
-  assert.equal(lobbyInspected.participant_sources.total, 10);
-  await lobbyPrewarmed.page.locator('#waiting').evaluate((el) => { el.textContent = 'Unbekannter Warteraumhinweis'; });
-  assert.equal((await lobbyPrewarmed.meet.inspect()).participation, 'waiting_admission');
-  assert.equal(frames.slice(framesBeforeLobby).length, 0);
-  await lobbyPrewarmed.meet.stop('lobby_timeout');
-  await lobbyPrewarmed.page.evaluate(() => (window as any).closeLobbyPeers());
-  await lobbyPrewarmed.context.close();
+    const streamOf = (speakerId: string) =>
+      sfuFrames.find(f => Boolean(f.pcm) && f.metadata.speaker_id === speakerId)?.metadata.stream_id;
+    assert.equal(streamOf('spaces/testroom/devices/alice'), streamOf('spaces/testroom/devices/clara'));
+    assert.equal(streamOf('spaces/testroom/devices/clara'), streamOf('spaces/testroom/devices/david'));
+    assert.notEqual(streamOf('spaces/testroom/devices/alice'), streamOf('spaces/testroom/devices/bob'));
+  }
 
   const account = await preparePage('account');
   await assert.rejects(account.meet.join(), (error: unknown) => error instanceof MeetError && error.reason === 'auth_session_missing');
   assert.equal(await account.page.locator('#join').count(), 1);
   await account.meet.stop('auth_session_missing'); await account.context.close();
-  assert.equal(authenticated, 23);
+  assert.equal(authenticated, 25);
   const webexContext = await browser.newContext();
   const webexPage = await webexContext.newPage();
   const webexUrl = 'https://example.webex.com/meet/fixture';
@@ -634,6 +925,7 @@ try {
     const url = 'https://teams.microsoft.com/meet/123456789?p=fixture';
     const join = german ? 'Jetzt teilnehmen' : 'Join now';
     const lobby = german ? 'Sie sind im Wartebereich' : "Someone will let you in shortly";
+    const unknownLobby = german ? 'Bitte gedulden Sie sich einen Augenblick' : 'Hold tight, checking room policy';
     const leave = german ? 'Verlassen' : 'Leave';
     await page.route('https://teams.microsoft.com/**', route => {
       if (route.request().url().endsWith('/roster-sync')) {
@@ -648,6 +940,7 @@ try {
         <button id="join">${join}</button><p id="waiting"></p>
         <script>
         let clicks = 0;
+        window.teamsUiEvents = [];
         document.querySelector('#join').onclick = () => {
           if (++clicks === 1) {
             const modal = document.createElement('button');
@@ -661,20 +954,47 @@ try {
             leave.textContent = '${leave}';
             leave.onclick = () => leave.remove();
             document.body.append(leave);
-            const people = document.createElement('button');
-            people.textContent = '${german ? 'Teilnehmer' : 'People'}';
-            people.setAttribute('aria-expanded', 'false');
-            people.onclick = () => {
-              people.setAttribute('aria-expanded', 'true');
-              const bobItem = document.createElement('div');
-              bobItem.setAttribute('role', 'listitem');
-              bobItem.setAttribute('data-participant-id', 'bob-session');
-              bobItem.setAttribute('aria-label', 'Bob Example');
-              document.body.append(bobItem);
-              void fetch('https://teams.microsoft.com/roster-sync');
-            };
-            document.body.append(people);
           }
+        };
+        window.admitTeamsInCall = () => {
+          document.querySelector('#waiting').textContent = '';
+          const chatBtn = document.createElement('button');
+          chatBtn.id = 'chat-button';
+          chatBtn.textContent = 'Chat';
+          chatBtn.setAttribute('aria-expanded', 'false');
+          let chatBoxCreated = false;
+          const people = document.createElement('button');
+          people.id = 'roster-button';
+          people.textContent = '${german ? 'Teilnehmer' : 'People'}';
+          people.setAttribute('aria-expanded', 'false');
+          people.onclick = () => {
+            people.setAttribute('aria-expanded', 'true');
+            chatBtn.setAttribute('aria-expanded', 'false');
+            window.teamsUiEvents.push('roster-open');
+            const bobItem = document.createElement('div');
+            bobItem.setAttribute('role', 'listitem');
+            bobItem.setAttribute('data-participant-id', 'bob-session');
+            bobItem.setAttribute('aria-label', 'Bob Example');
+            document.body.append(bobItem);
+            void fetch('https://teams.microsoft.com/roster-sync');
+          };
+          chatBtn.onclick = () => {
+            chatBtn.setAttribute('aria-expanded', 'true');
+            people.setAttribute('aria-expanded', 'false');
+            window.teamsUiEvents.push(chatBoxCreated ? 'chat-reopen' : 'chat-open');
+            if (!chatBoxCreated) {
+              chatBoxCreated = true;
+              const box = document.createElement('div');
+              box.setAttribute('role', 'textbox');
+              box.setAttribute('contenteditable', 'true');
+              box.setAttribute('aria-label', '${german ? 'Nachricht eingeben' : 'Type a message'}');
+              const send = document.createElement('button');
+              send.setAttribute('aria-label', '${german ? 'Senden' : 'Send'}');
+              send.onclick = () => window.teamsUiEvents.push('chat-send');
+              document.body.append(box, send);
+            }
+          };
+          document.body.append(people, chatBtn);
         };
         </script>`,
       });
@@ -682,6 +1002,7 @@ try {
     const teamsAttemptId = randomUUID();
     const beforeTeams = frames.length;
     const teams = new TeamsBrowser(page, {...bootstrap, provider: 'teams', attempt_id: teamsAttemptId, meeting_url: url,
+      chat_intro: german ? 'Aufnahme aktiv (Teams DE)' : 'Recording active (Teams EN)',
       deadline: new Date(Date.now() + 60000).toISOString(),
       teams: {display_name: 'wortlaut fixture', locale: german ? 'de-DE' : 'en-US'}},
       `http://127.0.0.1:${address.port}`, 'fixture-node-secret', randomUUID(), assets);
@@ -690,8 +1011,23 @@ try {
     assert.equal(await page.getByRole('radio').isChecked(), true);
     assert.equal((await teams.inspect()).participation, 'waiting_admission',
       'Leave button must not count as admission in lobby');
+    // Unrecognized lobby text + Leave button (without in-call controls or RTP) must ALSO stay waiting_admission!
+    await page.locator('#waiting').evaluate((element, text) => { element.textContent = text; }, unknownLobby);
+    assert.equal((await teams.inspect()).participation, 'waiting_admission',
+      'Unrecognized Teams lobby text with Leave button alone must remain waiting_admission');
     await page.locator('#waiting').evaluate(element => { element.textContent = ''; });
+    assert.equal((await teams.inspect()).participation, 'waiting_admission',
+      'Empty Teams lobby text with Leave button alone (no RTP, no in-call controls) must remain waiting_admission');
+    await page.evaluate(() => (window as any).admitTeamsInCall());
     assert.equal((await teams.inspect()).participation, 'capturing');
+    // Second inspect() tick must restore Chat panel after People closed it
+    await teams.inspect();
+    assert.deepEqual(await page.evaluate(() => (window as any).teamsUiEvents), [
+      'chat-open',
+      'chat-send',
+      'roster-open',
+      'chat-reopen',
+    ]);
     await page.evaluate(async () => {
       const producer = new AudioContext();
       const oscillator = producer.createOscillator();
@@ -813,6 +1149,7 @@ try {
         contentType: 'text/html',
         body: `<label>Your Name<input id="input-for-name"></label>
         <button id="join-btn" class="preview-join-button">Join</button>
+        <div id="wc-container-left"></div>
         <p id="waiting"></p>
         <script>
         document.querySelector('#join-btn').onclick = () => {
@@ -827,13 +1164,18 @@ try {
             document.body.append(confirmLeave);
           };
           document.body.append(leave);
+        };
+        window.admitZoomInCall = () => {
+          document.querySelector('#waiting').textContent = '';
+          const participantsBtn = document.createElement('button');
+          participantsBtn.setAttribute('aria-label', 'Participants (2)');
           const audioBtn = document.createElement('button');
           audioBtn.textContent = 'Join Audio by Computer';
           audioBtn.onclick = () => {
             audioBtn.remove();
             void fetch('https://app.zoom.us/zoom-roster');
           };
-          document.body.append(audioBtn);
+          document.body.append(participantsBtn, audioBtn);
         };
         </script>`,
       });
@@ -859,7 +1201,16 @@ try {
     await zoom.join();
     assert.equal(await zoomPage.locator('#input-for-name').inputValue(), 'wortlaut zoom fixture');
     assert.equal((await zoom.inspect()).participation, 'waiting_admission');
+    // Unrecognized Zoom waiting room text + #wc-container-left + Leave button must ALSO remain waiting_admission!
+    await zoomPage.locator('#waiting').evaluate(element => {
+      element.textContent = 'Host is preparing the session';
+    });
+    assert.equal((await zoom.inspect()).participation, 'waiting_admission',
+      'Unrecognized Zoom waiting room text with #wc-container-left + Leave must remain waiting_admission');
     await zoomPage.locator('#waiting').evaluate(element => { element.textContent = ''; });
+    assert.equal((await zoom.inspect()).participation, 'waiting_admission',
+      '#wc-container-left + Leave alone without in-call controls or RTP must remain waiting_admission');
+    await zoomPage.evaluate(() => (window as any).admitZoomInCall());
     assert.equal((await zoom.inspect()).participation, 'capturing');
     await zoomPage.waitForFunction(() => {
       const inspected = window.wortlautMeet.inspect();

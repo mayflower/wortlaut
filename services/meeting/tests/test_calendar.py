@@ -364,3 +364,412 @@ def test_instant_invitations_plain_html_identity_and_replay(client, database, si
         from_address="owner@mayflower.de", domain=b"mayflower.de",
     ))
     assert (webex_instant["status"], webex_instant["provider"]) == ("accepted", "webex")
+
+
+def test_oauth_calendar_to_asr_summary_mail_and_writeback_end_to_end(
+    client, database, storage, monkeypatch
+):
+    """End-to-end integration over real PostgreSQL, S3, local HTTP APIs, and local SMTP:
+    1) Google Calendar & Microsoft Graph OAuth2 sync schedules recordings,
+    2) Real WebSocket PCM ingest -> segmentation -> ASR -> Ollama summary -> finalize_processing,
+    3) Automatic protocol-link + summary PATCH write-back into Google & M365 events + SMTP mail,
+    4) Negative cases: lobby_timeout and silent room_empty must NOT write empty protocol links to
+       calendars, and capture_anomaly surfaces an explicit diagnostic warning in mail/exports.
+    """
+    import hashlib
+    import json
+    import socket
+    import threading
+    from datetime import timedelta
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    from aiosmtpd.controller import Controller
+    from test_ingest import authenticate, begin
+    from test_mail import Receiver
+    from test_processing import audio, send_pcm
+
+    import wortlaut.calendar_oauth as cal_oauth
+    from wortlaut.asr import finalize_processing, inference_pass
+    from wortlaut.mail import smtp_pass
+    from wortlaut.models import CalendarConnection, CalendarSyncedEvent
+    from wortlaut.processing import segmentation_pass
+
+    now = datetime.now(UTC).replace(microsecond=0)
+    starts_iso = (now + timedelta(minutes=2)).isoformat()
+    ends_iso = (now + timedelta(minutes=32)).isoformat()
+
+    google_events = {
+        "g-evt-active": {
+            "id": "g-evt-active",
+            "iCalUID": "ical-g-active@mayflower.de",
+            "status": "confirmed",
+            "summary": "Architektur-Sync Google",
+            "description": "Agenda: Quartalsplanung",
+            "hangoutLink": "https://meet.google.com/abc-defg-hij",
+            "organizer": {"email": "owner@mayflower.de", "self": True},
+            "attendees": [
+                {"email": "owner@mayflower.de", "responseStatus": "accepted"},
+                {"email": "alice@mayflower.de", "responseStatus": "accepted"},
+            ],
+            "start": {"dateTime": starts_iso},
+            "end": {"dateTime": ends_iso},
+        },
+        "g-evt-lobby-timeout": {
+            "id": "g-evt-lobby-timeout",
+            "iCalUID": "ical-g-lobby@mayflower.de",
+            "status": "confirmed",
+            "summary": "Skills und Kollegen Negativfall",
+            "description": "Nur bei echtem Transkript verlinken",
+            "hangoutLink": "https://meet.google.com/qwj-xons-uxb",
+            "organizer": {"email": "owner@mayflower.de", "self": True},
+            "attendees": [
+                {"email": "owner@mayflower.de", "responseStatus": "accepted"},
+                {"email": "colleague@mayflower.de", "responseStatus": "accepted"},
+            ],
+            "start": {"dateTime": starts_iso},
+            "end": {"dateTime": ends_iso},
+        },
+    }
+    ms_events = {
+        "ms-evt-active": {
+            "id": "ms-evt-active",
+            "iCalUId": "ical-ms-active@mayflower.de",
+            "isCancelled": False,
+            "isOrganizer": True,
+            "subject": "Teams Sprint Review",
+            "organizer": {"emailAddress": {"address": "owner@mayflower.de"}},
+            "attendees": [
+                {
+                    "emailAddress": {"address": "bob@mayflower.de"},
+                    "status": {"response": "accepted"},
+                }
+            ],
+            "onlineMeeting": {"joinUrl": "https://teams.microsoft.com/meet/987654321?p=secret"},
+            "body": {"contentType": "HTML", "content": "<p>Sprint-Ziele</p>"},
+            "start": {"dateTime": starts_iso, "timeZone": "UTC"},
+            "end": {"dateTime": ends_iso, "timeZone": "UTC"},
+        },
+    }
+    patches: list[tuple[str, str, dict]] = []
+
+    class UpstreamHandler(BaseHTTPRequestHandler):
+        def log_message(self, fmt, *args):
+            return
+
+        def _json(self, code: int, payload: dict):
+            raw = json.dumps(payload).encode("utf-8")
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+
+        def do_GET(self):
+            path = self.path.split("?", 1)[0]
+            if path == "/google/events":
+                return self._json(200, {"items": list(google_events.values())})
+            if path.startswith("/google/events/"):
+                eid = path.rsplit("/", 1)[-1]
+                return self._json(200, google_events[eid])
+            if path == "/ms/calendarView":
+                return self._json(200, {"value": list(ms_events.values())})
+            if path.startswith("/ms/events/"):
+                eid = path.rsplit("/", 1)[-1]
+                return self._json(200, ms_events[eid])
+            self._json(404, {"error": "not_found"})
+
+        def do_PATCH(self):
+            length = int(self.headers.get("Content-Length", "0"))
+            body = json.loads(self.rfile.read(length) or b"{}")
+            path = self.path.split("?", 1)[0]
+            if path.startswith("/google/events/"):
+                eid = path.rsplit("/", 1)[-1]
+                google_events[eid]["description"] = body["description"]
+                patches.append(("google", eid, body))
+                return self._json(200, google_events[eid])
+            if path.startswith("/ms/events/"):
+                eid = path.rsplit("/", 1)[-1]
+                ms_events[eid]["body"] = body["body"]
+                patches.append(("microsoft", eid, body))
+                return self._json(200, ms_events[eid])
+            self._json(404, {"error": "not_found"})
+
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length", "0"))
+            raw_body = self.rfile.read(length)
+            if self.path == "/v1/transcribe":
+                job_id = self.headers["X-Job-ID"]
+                is_silent = all(b == 0 for b in raw_body)
+                text = "" if is_silent else "Wir beschließen das Release für Freitag."
+                words = [
+                    {"word": w, "start": round(i * 0.12, 2), "end": round((i + 1) * 0.12, 2)}
+                    for i, w in enumerate(text.split())
+                ]
+                return self._json(
+                    200,
+                    {
+                        "job_id": job_id,
+                        "pcm_sha256": hashlib.sha256(raw_body).hexdigest(),
+                        "text": text,
+                        "words": words,
+                    },
+                )
+            if self.path == "/api/chat":
+                summary_payload = {
+                    "summary": "Das Team hat das Release verbindlich für Freitag beschlossen.",
+                    "topics": [{"title": "Release-Planung", "details": "Go-Live am Freitag."}],
+                    "action_items": [{"owner": "Alice", "task": "Deployment vorbereiten"}],
+                }
+                return self._json(
+                    200, {"message": {"content": json.dumps(summary_payload)}}
+                )
+            self._json(404, {"error": "not_found"})
+
+    http_server = ThreadingHTTPServer(("127.0.0.1", 0), UpstreamHandler)
+    http_port = http_server.server_address[1]
+    http_thread = threading.Thread(target=http_server.serve_forever, daemon=True)
+    http_thread.start()
+
+    with socket.socket() as reserve:
+        reserve.bind(("127.0.0.1", 0))
+        smtp_port = reserve.getsockname()[1]
+    smtp_receiver = Receiver()
+    smtp_server = Controller(smtp_receiver, hostname="127.0.0.1", port=smtp_port)
+    smtp_server.start()
+
+    base = f"http://127.0.0.1:{http_port}"
+    monkeypatch.setattr(cal_oauth, "GOOGLE_CALENDAR_EVENTS_URL", f"{base}/google/events")
+    monkeypatch.setattr(cal_oauth, "MICROSOFT_CALENDAR_VIEW_URL", f"{base}/ms/calendarView")
+    monkeypatch.setattr(cal_oauth, "MICROSOFT_EVENTS_URL", f"{base}/ms/events")
+    monkeypatch.setenv("WORTLAUT_ENABLE_GOOGLE_MEET", "true")
+    monkeypatch.setenv("WORTLAUT_ENABLE_TEAMS", "true")
+    monkeypatch.setenv("WORTLAUT_API_URL", "https://wortlaut.data.mayflower.tech")
+    monkeypatch.setenv("WORTLAUT_ASR_URL", base)
+    monkeypatch.setenv("WORTLAUT_ASR_TOKEN", "fixture-asr-token")
+    monkeypatch.setenv("WORTLAUT_ENABLE_LLM_SUMMARY", "true")
+    monkeypatch.setenv("WORTLAUT_OLLAMA_URL", base)
+    monkeypatch.setenv("WORTLAUT_SMTP_HOST", "127.0.0.1")
+    monkeypatch.setenv("WORTLAUT_SMTP_PORT", str(smtp_port))
+    monkeypatch.setenv("WORTLAUT_SMTP_TLS", "none")
+    monkeypatch.setenv("WORTLAUT_SMTP_FROM", "wortlaut@mayflower.de")
+    monkeypatch.setenv("WORTLAUT_RESULT_RECIPIENTS", '{"default":["owner@mayflower.de"]}')
+    get_settings.cache_clear()
+
+    try:
+        with Session(database) as db:
+            g_conn = CalendarConnection(
+                owner_sub="sub-owner",
+                owner_email="owner@mayflower.de",
+                provider="google",
+                account_email="owner@mayflower.de",
+                encrypted_access_token=cal_oauth.encrypt_secret("google-token"),
+                encrypted_refresh_token=cal_oauth.encrypt_secret("google-refresh"),
+                token_expires_at=now + timedelta(hours=1),
+            )
+            ms_conn = CalendarConnection(
+                owner_sub="sub-owner",
+                owner_email="owner@mayflower.de",
+                provider="microsoft",
+                account_email="owner@mayflower.de",
+                encrypted_access_token=cal_oauth.encrypt_secret("ms-token"),
+                encrypted_refresh_token=cal_oauth.encrypt_secret("ms-refresh"),
+                token_expires_at=now + timedelta(hours=1),
+            )
+            db.add_all([g_conn, ms_conn])
+            db.commit()
+            cal_oauth.sync_connection(db, g_conn, now=now)
+            cal_oauth.sync_connection(db, ms_conn, now=now)
+            db.commit()
+
+            synced = {
+                e.external_event_id: e
+                for e in db.scalars(select(CalendarSyncedEvent)).all()
+            }
+            assert set(synced) == {"g-evt-active", "g-evt-lobby-timeout", "ms-evt-active"}
+            g_rec_id = synced["g-evt-active"].recording_id
+            lobby_rec_id = synced["g-evt-lobby-timeout"].recording_id
+            ms_rec_id = synced["ms-evt-active"].recording_id
+            assert g_rec_id and lobby_rec_id and ms_rec_id
+
+        speech_pcm = audio("german-a.wav")
+        sample_count = len(speech_pcm) // 2
+
+        # Complete both active Google Meet & Teams recordings with real speech + ASR + summary
+        for rec_id, prov in ((g_rec_id, "google_meet"), (ms_rec_id, "teams")):
+            with Session(database) as db:
+                rec = db.get(Recording, rec_id)
+                rec.starts_at = now - timedelta(minutes=1)
+                db.commit()
+            attempt_id, headers = prepare(client, str(rec_id))
+            assert (
+                client.post(
+                    f"/v1/attempts/{attempt_id}/claim",
+                    headers=headers,
+                    json={"worker_id": "fixture-worker"},
+                ).status_code
+                == 200
+            )
+            credential = headers["Authorization"][7:]
+            stream_id = str(uuid.uuid4())
+            epoch = str(uuid.uuid4())
+            ident = {
+                "meeting_id": str(rec_id),
+                "attempt_id": attempt_id,
+                "stream_id": stream_id,
+                "epoch": epoch,
+                "source_kind": "speaker",
+                "provider_source_id": f"{prov}:{rec_id}:receiver:1",
+                "speaker_id": "alice-session",
+                "participant_id": "alice-session",
+                "participant_name": "Alice Example",
+                "attribution_unknown": False,
+                "sample_rate": 16000,
+                "channels": 1,
+                "encoding": "pcm_s16le",
+                "monotonic_origin_ms": 1200,
+                "session_monotonic_origin_ms": 1000,
+                "session_utc_origin": "2026-10-06T09:00:00Z",
+            }
+            with client.websocket_connect(f"/v1/attempts/{attempt_id}/audio") as ws:
+                authenticate(ws, credential)
+                ws.send_json(begin(ident))
+                assert ws.receive_json()["type"] == "ack"
+                send_pcm(ws, ident, speech_pcm, 0, 0)
+                ws.send_json(
+                    {
+                        "type": "end",
+                        "id": begin(ident)["id"] + "/end",
+                        "stream_id": stream_id,
+                        "epoch": epoch,
+                        "final_sample": sample_count,
+                        "last_sequence": 0,
+                    }
+                )
+                assert ws.receive_json()["type"] == "ack"
+            res = client.post(
+                f"/v1/attempts/{attempt_id}/status",
+                headers={**headers, "X-Worker-ID": "fixture-worker"},
+                json={"participation": "ended", "reason": "normal", "drained": True},
+            )
+            assert res.status_code == 200
+
+        # Negative case: silent chunk + 10 signaled participants + room_empty -> capture_anomaly,
+        # and NO empty protocol link written into calendar event g-evt-lobby-timeout!
+        with Session(database) as db:
+            lrec = db.get(Recording, lobby_rec_id)
+            lrec.starts_at = now - timedelta(minutes=1)
+            db.commit()
+        l_attempt, l_headers = prepare(client, str(lobby_rec_id))
+        assert (
+            client.post(
+                f"/v1/attempts/{l_attempt}/claim",
+                headers=l_headers,
+                json={"worker_id": "fixture-worker"},
+            ).status_code
+            == 200
+        )
+        l_cred = l_headers["Authorization"][7:]
+        l_stream = str(uuid.uuid4())
+        l_epoch = str(uuid.uuid4())
+        l_ident = {
+            "meeting_id": str(lobby_rec_id),
+            "attempt_id": l_attempt,
+            "stream_id": l_stream,
+            "epoch": l_epoch,
+            "source_kind": "speaker",
+            "provider_source_id": f"google_meet:{lobby_rec_id}:receiver:1",
+            "speaker_id": None,
+            "attribution_unknown": True,
+            "sample_rate": 16000,
+            "channels": 1,
+            "encoding": "pcm_s16le",
+            "monotonic_origin_ms": 1200,
+            "session_monotonic_origin_ms": 1000,
+            "session_utc_origin": "2026-10-06T09:00:00Z",
+        }
+        with client.websocket_connect(f"/v1/attempts/{l_attempt}/audio") as ws:
+            authenticate(ws, l_cred)
+            ws.send_json(begin(l_ident))
+            assert ws.receive_json()["type"] == "ack"
+            send_pcm(ws, l_ident, bytes(32000), 0, 0)
+            ws.send_json(
+                {
+                    "type": "end",
+                    "id": begin(l_ident)["id"] + "/end",
+                    "stream_id": l_stream,
+                    "epoch": l_epoch,
+                    "final_sample": 16000,
+                    "last_sequence": 0,
+                }
+            )
+            assert ws.receive_json()["type"] == "ack"
+        res_neg = client.post(
+            f"/v1/attempts/{l_attempt}/status",
+            headers={**l_headers, "X-Worker-ID": "fixture-worker"},
+            json={
+                "participation": "ended",
+                "reason": "room_empty",
+                "drained": True,
+                "streams": 1,
+                "audio_samples": 16000,
+                "active_audio_samples": 0,
+                "participant_sources": {
+                    "available": True,
+                    "total": 10,
+                    "truncated": False,
+                    "sources": [],
+                },
+            },
+        )
+        assert res_neg.status_code == 200
+
+        for _ in range(5):
+            segmentation_pass(database)
+        for _ in range(10):
+            inference_pass(database)
+        for _ in range(5):
+            finalize_processing(database)
+        for _ in range(5):
+            smtp_pass(database)
+
+        # Verify ONLY the 2 real-speech events received calendar PATCH write-backs
+        patched_ids = {(prov, eid) for prov, eid, _ in patches}
+        assert patched_ids == {("google", "g-evt-active"), ("microsoft", "ms-evt-active")}
+        from html import unescape
+
+        token_prefix = "https://wortlaut.data.mayflower.tech/ui#view=meetings&id="
+        g_desc = google_events["g-evt-active"]["description"]
+        ms_body = unescape(ms_events["ms-evt-active"]["body"]["content"])
+        assert token_prefix in g_desc and "token=wortlaut-read-" in g_desc
+        assert "Release verbindlich für Freitag beschlossen" in g_desc
+        assert token_prefix in ms_body and "token=wortlaut-read-" in ms_body
+        assert (
+            google_events["g-evt-lobby-timeout"]["description"]
+            == "Nur bei echtem Transkript verlinken"
+        )
+
+        # Verify capture_anomaly flag & diagnostic warning in export + SMTP mail
+        neg_export = client.get(f"/v1/recordings/{lobby_rec_id}/exports/json", headers=API).json()
+        assert neg_export["quality"]["capture_anomaly"] is True
+
+        assert len(smtp_receiver.messages) == 3
+        subjects_and_bodies = [
+            (str(m["Subject"]), m.get_body(preferencelist=("plain",)).get_content())
+            for m in smtp_receiver.messages
+        ]
+        assert any(
+            "Architektur-Sync Google" in subj and "Alice Example" in body and "Freitag" in body
+            for subj, body in subjects_and_bodies
+        )
+        assert any(
+            "Teams Sprint Review" in subj and "Alice Example" in body
+            for subj, body in subjects_and_bodies
+        )
+        assert any(
+            "Skills und Kollegen Negativfall" in subj and "mögliche Erfassungsstörung" in body
+            for subj, body in subjects_and_bodies
+        )
+    finally:
+        smtp_server.stop()
+        http_server.shutdown()
+        get_settings.cache_clear()

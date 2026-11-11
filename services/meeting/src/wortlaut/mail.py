@@ -412,16 +412,26 @@ def build_message(db, recording, delivery):
     ui_url = f"{settings.api_url.rstrip('/')}/ui"
     title = recording.title or f"Besprechung ({human_provider})"
 
+    capture_anomaly = bool(quality.get("capture_anomaly"))
+    anomaly_hint = (
+        "Im Raum wurden Teilnehmer signalisiert, aber keine aktiven Sprachpakete empfangen "
+        "(mögliche Erfassungsstörung)."
+    )
+
     if quality["no_audio_received"]:
+        is_anomaly = capture_anomaly and reason in (None, "room_empty")
+        effective_reason = "capture_anomaly" if is_anomaly else reason
+        effective_explanation = anomaly_hint if is_anomaly else explanation
+        reason_label = effective_reason or "no_audio_received"
         message["Subject"] = (
-            f"wortlaut · Keine Aufnahme: {title} — fehlgeschlagen ({reason or 'no_audio_received'})"
+            f"wortlaut · Keine Aufnahme: {title} — fehlgeschlagen ({reason_label})"
         )
         plain_body, html_body = _build_failed_join_bodies(
             title=title,
             human_provider=human_provider,
             human_period=human_period,
-            reason=reason,
-            explanation=explanation,
+            reason=effective_reason,
+            explanation=effective_explanation,
             ui_url=ui_url,
         )
         message.set_content(plain_body)
@@ -440,6 +450,8 @@ def build_message(db, recording, delivery):
         else None
     )
     notices: list[str] = []
+    if capture_anomaly:
+        notices.append(anomaly_hint)
     if explanation:
         notices.append(explanation)
     if quality["has_audio_gaps"]:

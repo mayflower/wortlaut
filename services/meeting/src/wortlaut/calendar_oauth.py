@@ -24,7 +24,6 @@ from wortlaut.ingest import capacity_reached
 from wortlaut.models import (
     AsrJob,
     Attempt,
-    AudioChunk,
     AudioStream,
     CalendarConnection,
     CalendarSyncedEvent,
@@ -50,6 +49,7 @@ def _microsoft_token_url(tenant_id: str) -> str:
 
 
 MICROSOFT_CALENDAR_VIEW_URL = "https://graph.microsoft.com/v1.0/me/calendarView"
+MICROSOFT_EVENTS_URL = "https://graph.microsoft.com/v1.0/me/events"
 MICROSOFT_ME_URL = "https://graph.microsoft.com/v1.0/me"
 
 
@@ -1101,7 +1101,7 @@ def _patch_provider_event_protocol_link(
                 raise ValueError(f"google_event_patch_http_{patch_resp.status_code}")
             return
 
-        event_url = f"https://graph.microsoft.com/v1.0/me/events/{encoded_id}"
+        event_url = f"{MICROSOFT_EVENTS_URL}/{encoded_id}"
         get_resp = httpx.get(
             event_url,
             params={"$select": "id,body,isOrganizer"},
@@ -1149,23 +1149,24 @@ def publish_protocol_link_to_calendar_events(
     if not protocol_url:
         return {"updated_events": 0, "status": "not_ready", "protocol_url": None}
 
+    meta = dict(recording.protocol_meta or {})
+    summary_obj = meta.get("summary")
+    summary_text = (
+        str(summary_obj.get("summary") or "").strip()
+        if isinstance(summary_obj, dict)
+        else None
+    )
+
     if not force_empty_audio:
-        has_content = db.scalar(
-            select(TranscriptSegment.id)
-            .join(AsrJob, AsrJob.id == TranscriptSegment.id)
-            .join(AudioStream, AudioStream.id == AsrJob.stream_id)
-            .join(Attempt, Attempt.id == AudioStream.attempt_id)
-            .where(Attempt.recording_id == recording.id)
-            .limit(1)
-        ) or db.scalar(
-            select(AudioChunk.id)
-            .join(AudioStream, AudioStream.id == AudioChunk.stream_id)
-            .join(Attempt, Attempt.id == AudioStream.attempt_id)
-            .where(
-                Attempt.recording_id == recording.id,
-                AudioChunk.sample_count > 0,
+        has_content = bool(summary_text) or bool(
+            db.scalar(
+                select(TranscriptSegment.id)
+                .join(AsrJob, AsrJob.id == TranscriptSegment.id)
+                .join(AudioStream, AudioStream.id == AsrJob.stream_id)
+                .join(Attempt, Attempt.id == AudioStream.attempt_id)
+                .where(Attempt.recording_id == recording.id)
+                .limit(1)
             )
-            .limit(1)
         )
         if not has_content:
             return {"updated_events": 0, "status": "no_audio_content", "protocol_url": protocol_url}
@@ -1194,14 +1195,6 @@ def publish_protocol_link_to_calendar_events(
             "status": "no_matching_calendar_event",
             "protocol_url": protocol_url,
         }
-
-    meta = dict(recording.protocol_meta or {})
-    summary_obj = meta.get("summary")
-    summary_text = (
-        str(summary_obj.get("summary") or "").strip()
-        if isinstance(summary_obj, dict)
-        else None
-    )
 
     updated_count = 0
     organizer_patched = False

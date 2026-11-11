@@ -340,6 +340,7 @@ export class MeetBrowser {
   private chatSent = false;
   private chatAttempts = 0;
   private rosterOpened = false;
+  private chatRestored = false;
   private initialize?: () => Promise<void>;
 
   constructor(private readonly page: Page, private readonly bootstrap: MeetBootstrap,
@@ -553,6 +554,15 @@ export class MeetBrowser {
               .and(this.page.locator('[aria-expanded="false"], [aria-pressed="false"]')).first();
             if (await visible(toggle)) {
               await this.input.click(toggle).catch(() => {});
+            }
+          } else if (this.rosterOpened && this.chatSent && Boolean(this.bootstrap.chat_intro?.trim()) && !this.chatRestored) {
+            this.chatRestored = true;
+            const chatToggle = this.page.getByRole('button', {
+              name: /^(?:Chat with everyone|Mit allen chatten|Chat|Nachricht an alle|In-call messages|Nachrichten im Anruf)(?:\b|\s|$)/i,
+            }).or(this.page.locator('button[data-panel-id="2"]'))
+              .and(this.page.locator('[aria-expanded="false"], [aria-pressed="false"]')).first();
+            if (await visible(chatToggle)) {
+              await this.input.click(chatToggle).catch(() => {});
             }
           }
         } else {

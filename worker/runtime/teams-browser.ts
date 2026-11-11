@@ -20,10 +20,12 @@ export class TeamsBrowser {
   private stopping?: Promise<void>;
   private reason = '';
   private joined = false;
+  private capturing = false;
   private browserClicked = false;
   private chatSent = false;
   private chatAttempts = 0;
   private rosterOpened = false;
+  private chatRestored = false;
   private drained: boolean | null = null;
 
   constructor(private readonly page: Page, private readonly bootstrap: TeamsBootstrap,
@@ -180,22 +182,50 @@ export class TeamsBrowser {
     const state = trusted ? await this.page.evaluate(() => window.wortlautMeet?.inspect()).catch(() => undefined) : undefined;
     this.reason ||= state?.reason ?? '';
     let participation = 'joining';
-    if (waiting.test(text)) participation = 'waiting_admission';
-    else if (trusted && this.joined && !await this.page.getByRole('button', {name: joinLabel}).isVisible()
-      && await this.page.getByRole('button', {name: leaveLabel}).first().isVisible()) {
-      participation = 'capturing';
-      if (!this.chatSent && this.chatAttempts < 8) {
-        this.chatAttempts += 1;
-        await this.sendChatIntro();
-      }
-      if (!this.rosterOpened && (this.chatSent || !this.bootstrap.chat_intro?.trim() || this.chatAttempts >= 3)) {
-        this.rosterOpened = true;
-        const toggle = this.page.getByRole('button', {
-          name: /^(?:People|Participants|Show participants|Teilnehmer|Personen|Teilnehmer anzeigen)(?:\b|\s|$)/i,
-        }).and(this.page.locator('[aria-expanded="false"], [aria-pressed="false"]')).first();
-        if (await toggle.isVisible().catch(() => false)) {
-          await toggle.click({timeout: 2000}).catch(() => {});
+    if (waiting.test(text)) {
+      participation = 'waiting_admission';
+    } else if (trusted && this.joined && !await this.page.getByRole('button', {name: joinLabel}).isVisible()) {
+      const hasLeave = await this.page.getByRole('button', {name: leaveLabel}).first().isVisible();
+      const hasRtpOrParticipants =
+        (state?.participant_sources?.total ?? 0) > 0 ||
+        (state?.participant_sources?.dom_participants ?? 0) > 0 ||
+        (state?.receiver_sources ?? []).some((r: Record<string, any>) =>
+          (r.ssrc?.length ?? 0) > 0 ||
+          (r.csrc?.length ?? 0) > 0 ||
+          (r.encoded_transform?.frame_count ?? 0) > 0);
+      const hasInCallControls = hasLeave && await this.page.locator(
+        '#roster-button, #chat-button, #raisehands-button, #callingButtons-showMoreBtn'
+      ).or(
+        this.page.getByRole('button', {
+          name: /^(?:People|Participants|Show participants|Teilnehmer|Personen|Teilnehmer anzeigen|Chat|Show conversation|Unterhaltung anzeigen|Raise|Raise hand|Hand heben)(?:\b|\s|$)/i,
+        })
+      ).first().isVisible().catch(() => false);
+      if (this.capturing || (hasLeave && (hasRtpOrParticipants || hasInCallControls))) {
+        this.capturing = true;
+        participation = 'capturing';
+        if (!this.chatSent && this.chatAttempts < 8) {
+          this.chatAttempts += 1;
+          await this.sendChatIntro();
         }
+        if (!this.rosterOpened && (this.chatSent || !this.bootstrap.chat_intro?.trim() || this.chatAttempts >= 3)) {
+          this.rosterOpened = true;
+          const toggle = this.page.getByRole('button', {
+            name: /^(?:People|Participants|Show participants|Teilnehmer|Personen|Teilnehmer anzeigen)(?:\b|\s|$)/i,
+          }).and(this.page.locator('[aria-expanded="false"], [aria-pressed="false"]')).first();
+          if (await toggle.isVisible().catch(() => false)) {
+            await toggle.click({timeout: 2000}).catch(() => {});
+          }
+        } else if (this.rosterOpened && this.chatSent && Boolean(this.bootstrap.chat_intro?.trim()) && !this.chatRestored) {
+          this.chatRestored = true;
+          const chatToggle = this.page.getByRole('button', {
+            name: /^(?:Chat|Show conversation|Unterhaltung anzeigen)(?:\b|\s|$)/i,
+          }).and(this.page.locator('[aria-expanded="false"], [aria-pressed="false"]')).first();
+          if (await chatToggle.isVisible().catch(() => false)) {
+            await chatToggle.click({timeout: 2000}).catch(() => {});
+          }
+        }
+      } else {
+        participation = 'waiting_admission';
       }
     }
     return {...state, participation: this.stopping ? 'ended' : participation,
