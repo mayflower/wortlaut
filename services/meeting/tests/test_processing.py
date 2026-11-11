@@ -722,10 +722,10 @@ def test_micro_noise_blips_are_discarded_and_sentence_pauses_stay_intact(
 
     # Faint 180 ms breath/click (~418 peak, ~140 RMS) triggers WebRTC VAD briefly,
     # followed by 1.2 s silence, then two voiced clauses separated by a 630 ms
-    # natural intra-sentence pause (< 870 ms SILENCE, > old 600 ms), then a tail click.
+    # natural intra-sentence pause (< 720 ms SILENCE, > old 600 ms), then a tail click.
     faint_breath = scale(orig[1600 : 1600 + 2880], 0.03)
     voiced_clause = raw[16000 * 2 : 24000 * 2]  # 0.5 s continuously voiced speech
-    intra_pause_630ms = b"\0\0" * 10080  # 630 ms (< SILENCE = 870 ms)
+    intra_pause_630ms = b"\0\0" * 10080  # 630 ms (< SILENCE = 720 ms)
     pcm = (
         b"\0\0" * 8000
         + faint_breath
@@ -863,5 +863,25 @@ def test_coalesce_protocol_segments_keeps_intervening_qna_chronological_and_boun
     assert len(mono_coalesced) == 2
     assert mono_coalesced[0]["end"] - mono_coalesced[0]["start"] <= 45.0
     assert mono_coalesced[1]["end"] - mono_coalesced[1]["start"] <= 45.0
+
+
+def test_speech_section_cuts_long_monologue_at_breath_pause_before_hard_limit():
+    from wortlaut.processing import RATE, SOFT_MAX_SEGMENT, speech_section
+
+    half_sec_voiced = audio("german-a.wav")[16000:32000]  # 0.5 s voiced PCM
+    # 16.0 s continuous speech (> SOFT_MAX_SEGMENT = 14 s), then 420 ms breath pause
+    # (< SILENCE = 720 ms, >= SOFT_SILENCE = 360 ms), then 8.0 s more speech.
+    pcm = half_sec_voiced * 32 + (b"\0\0" * 6720) + half_sec_voiced * 16
+    section, cursor = speech_section(pcm, 0, terminal=True)
+    assert section is not None
+    start, end, core_end = section
+    assert start == 0
+    assert SOFT_MAX_SEGMENT <= core_end < 18 * RATE
+    assert end == core_end
+    next_section, next_cursor = speech_section(pcm[cursor * 2 :], cursor, terminal=True)
+    assert next_section is not None
+    assert next_section[0] >= cursor
+    assert next_cursor == len(pcm) // 2
+
 
 

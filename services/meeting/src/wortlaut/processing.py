@@ -30,7 +30,9 @@ FRAME = 480  # WebRTC VAD: 30 ms, aggressiveness 2.
 MIN_SPEECH_PEAK = 150  # Ignore digital comfort noise (-46 dBFS threshold on int16 PCM).
 PRE_ROLL = 4800  # 300 ms
 POST_ROLL = 5760  # 360 ms
-SILENCE = 13920  # 870 ms
+SILENCE = 11520  # 720 ms
+SOFT_MAX_SEGMENT = RATE * 14
+SOFT_SILENCE = 5760  # 360 ms breath pause closes >=14 s monologues before hard 30 s cut.
 MAX_SEGMENT = RATE * 30
 OVERLAP = 3200  # 200 ms, words assigned by midpoint in the disjoint core.
 SILENCE_CHECKPOINT = RATE * 10
@@ -431,7 +433,10 @@ def speech_section(pcm: bytes, cursor: int, terminal: bool):
                 if not terminal and available < cut + OVERLAP:
                     return None, cursor
                 return (audio_start, min(available, cut + OVERLAP), cut), cut
-            if frame_end - last >= SILENCE:
+            required_silence = (
+                SOFT_SILENCE if frame_end - audio_start >= SOFT_MAX_SEGMENT else SILENCE
+            )
+            if frame_end - last >= required_silence:
                 if _is_micro_noise_section(
                     first, last, cursor, voiced_frames, voiced_peak, voiced_energy_sum
                 ):
