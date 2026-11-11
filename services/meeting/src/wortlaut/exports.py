@@ -1,7 +1,6 @@
 import hmac
 import io
 import json
-import re
 import secrets
 import wave
 from datetime import UTC, datetime, timedelta
@@ -115,239 +114,9 @@ def wall_clock_time_de(origin_iso: str | None, offset_seconds: float) -> str:
         return short_timestamp(offset_seconds)
 
 
-_BOUNDARY_NOISE_PHRASES = frozenset(
-    {
-        "yeah",
-        "yeah.",
-        "okay",
-        "okay.",
-        "mm",
-        "mm.",
-        "mm-hmm",
-        "mm-hmm.",
-        "oh",
-        "oh.",
-        "yes",
-        "yes.",
-        "uh",
-        "um",
-        "and",
-        "well",
-        "well.",
-        "so",
-        "thank you",
-        "thank you.",
-        "thanks",
-        "thanks.",
-        "right",
-        "right.",
-        "sure",
-        "sure.",
-        "i don't know.",
-        "i don't want to.",
-        "that's okay.",
-        "second.",
-        "six.",
-        "talk to",
-    }
-)
-
-_SHORT_BOUND_NOISE_TOKENS = frozenset(
-    {
-        "yeah",
-        "yeah.",
-        "okay",
-        "okay.",
-        "mm",
-        "mm.",
-        "mm-hmm",
-        "mm-hmm.",
-        "oh",
-        "oh.",
-        "well.",
-        "so",
-        "sure.",
-        "talk to",
-    }
-)
-
-_FILLER_WORDS = frozenset(
-    {
-        "yeah",
-        "yea",
-        "yes",
-        "yep",
-        "no",
-        "nope",
-        "okay",
-        "ok",
-        "mm",
-        "mhm",
-        "mm-hmm",
-        "mmhmm",
-        "uh",
-        "uh-huh",
-        "um",
-        "äh",
-        "ähm",
-        "hm",
-        "hmm",
-        "oh",
-        "ah",
-        "aha",
-        "ach",
-        "so",
-        "well",
-        "sure",
-        "right",
-        "alright",
-        "all",
-        "good",
-        "cool",
-        "super",
-        "fine",
-        "great",
-        "nice",
-        "exact",
-        "exactly",
-        "genau",
-        "ja",
-        "jap",
-        "jo",
-        "nee",
-        "ne",
-        "nein",
-        "doch",
-        "klar",
-        "stimmt",
-        "ebend",
-        "eben",
-        "gut",
-        "alles",
-        "danke",
-        "thanks",
-        "thank",
-        "you",
-        "sorry",
-        "bitte",
-        "please",
-        "and",
-        "but",
-        "or",
-        "then",
-        "also",
-        "oder",
-        "und",
-        "aber",
-        "halt",
-        "mal",
-        "schon",
-        "noch",
-        "too",
-        "either",
-        "oui",
-        "si",
-        "sí",
-        "ha",
-        "video",
-        "naja",
-        "na",
-    }
-)
-
-_ENGLISH_HALLUCINATION_MARKERS = frozenset(
-    {
-        "the",
-        "that",
-        "that's",
-        "it",
-        "it's",
-        "don't",
-        "didn't",
-        "i'm",
-        "i'll",
-        "what",
-        "what's",
-        "who",
-        "where",
-        "when",
-        "have",
-        "you",
-        "your",
-        "my",
-        "can",
-        "should",
-        "would",
-        "could",
-        "want",
-        "know",
-        "maybe",
-        "thank",
-        "thanks",
-        "sorry",
-        "well",
-        "yes",
-        "yeah",
-        "not",
-        "but",
-        "and",
-        "for",
-        "with",
-        "this",
-        "these",
-        "from",
-        "like",
-        "moved",
-        "earnest",
-        "album",
-        "automatically",
-        "basket",
-        "magic",
-        "higher",
-        "known",
-        "spring",
-        "second",
-        "four",
-        "six",
-        "sun",
-        "leave",
-        "let's",
-        "tip",
-        "check",
-        "talk",
-        "guest",
-        "either",
-        "as",
-        "see",
-        "done",
-    }
-)
-
-
-def _is_noise_or_filler(text: str, dur: float) -> bool:
-    clean = " ".join(text.split()).strip()
-    if not clean:
-        return True
-    tokens = [
-        re.sub(r"^[^\w'äöüÄÖÜß-]+|[^\w'äöüÄÖÜß-]+$", "", t).lower()
-        for t in clean.split()
-    ]
-    tokens = [t for t in tokens if t]
-    if not tokens:
-        return True
-    if len(tokens) == 1 and (dur <= 0.75 or len(tokens[0]) <= 3):
-        return True
-    if len(tokens) <= 2 and dur <= 0.45:
-        return True
-    if len(tokens) <= 5 and dur <= 2.2 and all(t in _FILLER_WORDS for t in tokens):
-        return True
-    if (
-        len(tokens) <= 6
-        and dur <= 1.6
-        and any(t in _ENGLISH_HALLUCINATION_MARKERS for t in tokens)
-    ):
-        return True
-    return False
+MIN_EXPORT_SEGMENT_CONFIDENCE = 0.38
+_MAX_ADJACENT_TURN_GAP_SECONDS = 4.5
+_MAX_COALESCED_TURN_DURATION_SECONDS = 45.0
 
 
 def _merge_segment_into(target: dict, source: dict) -> None:
@@ -357,7 +126,15 @@ def _merge_segment_into(target: dict, source: dict) -> None:
     if prev_text.endswith(".") and next_text and next_text[0].islower():
         prev_text = prev_text[:-1]
     target["text"] = f"{prev_text} {next_text}".strip()
-    target["words"] = target.get("words", []) + source.get("words", [])
+    merged_words = target.get("words", []) + source.get("words", [])
+    target["words"] = merged_words
+    word_confs = [w["confidence"] for w in merged_words if "confidence" in w]
+    if word_confs:
+        target["confidence"] = round(sum(word_confs) / len(word_confs), 4)
+    elif "confidence" in target and "confidence" in source:
+        t_conf, s_conf = target.get("confidence"), source.get("confidence")
+        if isinstance(t_conf, (int, float)) and isinstance(s_conf, (int, float)):
+            target["confidence"] = round((float(t_conf) + float(s_conf)) / 2.0, 4)
 
 
 def _coalesce_speaker_key(seg: dict) -> tuple[str, str]:
@@ -371,13 +148,9 @@ def _coalesce_speaker_key(seg: dict) -> tuple[str, str]:
     return (identity, str(seg.get("speaker_label") or ""))
 
 
-_MAX_ADJACENT_TURN_GAP_SECONDS = 4.5
-_MAX_COALESCED_TURN_DURATION_SECONDS = 45.0
-
-
 def _is_short_backchannel_candidate(seg: dict) -> bool:
     dur = max(0.0, seg["end"] - seg["start"])
-    return dur <= 2.2 and len(seg["text"].split()) <= 6
+    return dur <= 1.6 and len(seg["text"].split()) <= 3
 
 
 def _overlap_seconds(a_start: float, a_end: float, b_start: float, b_end: float) -> float:
@@ -395,9 +168,32 @@ def _voiced_overlap_seconds(start: float, end: float, raw_segments: list[dict]) 
     return min(max(0.0, end - start), total)
 
 
-def _coalesce_protocol_segments(segments: list[dict]) -> list[dict]:
+def _can_merge_turn_pair(
+    cur: dict,
+    nxt: dict,
+    protected_ids: set[str],
+    edit_bounds: dict[str, float],
+) -> bool:
+    nxt_id = str(nxt.get("segment_id") or nxt.get("id") or "")
+    if nxt_id and nxt_id in protected_ids:
+        return False
+    cur_id = str(cur.get("segment_id") or cur.get("id") or "")
+    if cur_id and cur_id in edit_bounds:
+        if float(nxt["end"]) > float(edit_bounds[cur_id]) + 1e-3:
+            return False
+    return True
+
+
+def _coalesce_protocol_segments(
+    segments: list[dict],
+    *,
+    protected_ids: set[str] | None = None,
+    edit_bounds: dict[str, float] | None = None,
+) -> list[dict]:
     if not segments:
         return []
+    protected = protected_ids or set()
+    bounds = edit_bounds or {}
     ordered = sorted(segments, key=lambda s: (s["start"], s["stream_id"], s["id"]))
 
     by_speaker: dict[tuple[str, str], list[dict]] = {}
@@ -416,6 +212,7 @@ def _coalesce_protocol_segments(segments: list[dict]) -> list[dict]:
                 cur is not None
                 and gap <= 1.2
                 and (seg["end"] - cur["start"]) <= _MAX_COALESCED_TURN_DURATION_SECONDS
+                and _can_merge_turn_pair(cur, seg, protected, bounds)
             )
             if can_bridge and cur is not None:
                 for other in ordered:
@@ -445,9 +242,10 @@ def _coalesce_protocol_segments(segments: list[dict]) -> list[dict]:
 
     non_backchannel: list[dict] = []
     for seg in speaker_merged:
+        seg_id = str(seg.get("segment_id") or seg.get("id") or "")
         seg_key = _coalesce_speaker_key(seg)
         dur = max(0.0, seg["end"] - seg["start"])
-        if _is_short_backchannel_candidate(seg):
+        if seg_id not in protected and _is_short_backchannel_candidate(seg):
             min_ov = max(0.2, dur * 0.6)
             overlapped = any(
                 (other_key := _coalesce_speaker_key(other)) != seg_key
@@ -472,6 +270,7 @@ def _coalesce_protocol_segments(segments: list[dict]) -> list[dict]:
             and _coalesce_speaker_key(final_turns[-1]) == _coalesce_speaker_key(seg)
             and (seg["start"] - final_turns[-1]["end"]) <= _MAX_ADJACENT_TURN_GAP_SECONDS
             and (seg["end"] - final_turns[-1]["start"]) <= _MAX_COALESCED_TURN_DURATION_SECONDS
+            and _can_merge_turn_pair(final_turns[-1], seg, protected, bounds)
         ):
             _merge_segment_into(final_turns[-1], seg)
         else:
@@ -708,11 +507,27 @@ def export_data(db: Session, recording: Recording):
             timeline.sort(key=lambda x: x[0])
             stream_bind_timeline[key] = timeline
 
+    meta = dict(recording.protocol_meta or {})
+    speaker_overrides: dict[str, str] = dict(meta.get("speaker_overrides") or {})
+    term_replacements: dict[str, str] = dict(meta.get("term_replacements") or {})
+    segment_edits: dict[str, str] = dict(meta.get("segment_edits") or {})
+    raw_edit_bounds = meta.get("segment_edit_bounds") or {}
+    segment_edit_bounds: dict[str, float] = {
+        str(k): float(v)
+        for k, v in raw_edit_bounds.items()
+        if isinstance(v, (int, float)) and not isinstance(v, bool)
+    }
+    protected_segment_ids = {
+        str(k) for k, v in segment_edits.items() if isinstance(v, str) and v.strip()
+    }
+
     apply_protocol_cleanup = len(segments) > 3
     resolved_segments: list[dict] = []
     for segment in segments:
+        raw_seg_id = str(segment.get("id") or "")
+        is_protected = raw_seg_id in protected_segment_ids
         clean_text = " ".join((segment.get("text") or "").split())
-        if not clean_text:
+        if not clean_text and not is_protected:
             continue
         segment["text"] = clean_text
         delta = (datetime.fromisoformat(segment["session_utc_origin"]) - origin).total_seconds()
@@ -724,7 +539,13 @@ def export_data(db: Session, recording: Recording):
         ]
         stream_key = (segment.get("stream_id"), segment.get("epoch"))
         dur = max(0.0, segment["end"] - segment["start"])
-        if apply_protocol_cleanup and _is_noise_or_filler(clean_text, dur):
+        seg_conf = segment.get("confidence")
+        if (
+            not is_protected
+            and isinstance(seg_conf, (int, float))
+            and not isinstance(seg_conf, bool)
+            and seg_conf < MIN_EXPORT_SEGMENT_CONFIDENCE
+        ):
             continue
         has_stream_bindings = (
             stream_key in unambiguous_stream_bindings
@@ -732,9 +553,11 @@ def export_data(db: Session, recording: Recording):
         )
         if segment.get("attribution_unknown") and has_stream_bindings:
             if (
-                stream_key not in unambiguous_stream_bindings
-                and clean_text.lower() in _BOUNDARY_NOISE_PHRASES
-                and dur <= 0.65
+                not is_protected
+                and stream_key not in unambiguous_stream_bindings
+                and dur <= 0.30
+                and isinstance(seg_conf, (int, float))
+                and seg_conf < 0.55
             ):
                 continue
             if stream_key in unambiguous_stream_bindings:
@@ -761,10 +584,12 @@ def export_data(db: Session, recording: Recording):
             if resolved_name and not segment.get("participant_name"):
                 segment["participant_name"] = resolved_name
         elif (
-            not segment.get("attribution_unknown")
+            not is_protected
+            and not segment.get("attribution_unknown")
             and len(observed_by_stream.get(stream_key, ())) > 1
-            and clean_text.lower() in _SHORT_BOUND_NOISE_TOKENS
-            and dur <= 0.35
+            and dur <= 0.30
+            and isinstance(seg_conf, (int, float))
+            and seg_conf < 0.55
         ):
             continue
         pid = segment.get("participant_id") or segment.get("speaker_id")
@@ -790,15 +615,15 @@ def export_data(db: Session, recording: Recording):
             continue
         resolved_segments.append(segment)
     segments = (
-        _coalesce_protocol_segments(resolved_segments)
+        _coalesce_protocol_segments(
+            resolved_segments,
+            protected_ids=protected_segment_ids,
+            edit_bounds=segment_edit_bounds,
+        )
         if apply_protocol_cleanup
         else resolved_segments
     )
     segments.sort(key=lambda s: (s["start"], s["stream_id"], s["id"]))
-    meta = dict(recording.protocol_meta or {})
-    speaker_overrides: dict[str, str] = dict(meta.get("speaker_overrides") or {})
-    term_replacements: dict[str, str] = dict(meta.get("term_replacements") or {})
-    segment_edits: dict[str, str] = dict(meta.get("segment_edits") or {})
     if speaker_overrides:
         for k, v in speaker_overrides.items():
             if v and v.strip():

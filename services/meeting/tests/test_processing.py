@@ -606,17 +606,55 @@ def test_job_capacity_keeps_unsegmented_audio_and_resumes_after_result_commit(
         get_settings.cache_clear()
 
 
-def test_coalesce_protocol_segments_filters_fillers_and_merges_broken_sentences():
-    from wortlaut.exports import _coalesce_protocol_segments, _is_noise_or_filler
+def test_coalesce_protocol_segments_merges_broken_sentences_without_lexical_blacklists():
+    from wortlaut.exports import _coalesce_protocol_segments
 
-    assert _is_noise_or_filler("", 0.0)
-    assert _is_noise_or_filler("Yeah.", 0.32)
-    assert _is_noise_or_filler("Mm-hmm.", 0.48)
-    assert _is_noise_or_filler("Yeah, genau.", 1.2)
-    assert _is_noise_or_filler("I don't know.", 0.8)
-    assert not _is_noise_or_filler(
-        "Wir besprechen heute den aktuellen Projektstatus im Team.", 3.5
-    )
+    # Standalone short answers in any language must never be dropped by lexical blacklists.
+    short_dialogue = [
+        {
+            "id": "d1",
+            "stream_id": "st1",
+            "speaker_label": "Alice",
+            "start": 1.0,
+            "end": 2.4,
+            "text": "Do we deploy today?",
+            "words": [],
+        },
+        {
+            "id": "d2",
+            "stream_id": "st2",
+            "speaker_label": "Bob",
+            "start": 2.7,
+            "end": 3.5,
+            "text": "I don't know.",
+            "words": [],
+        },
+        {
+            "id": "d3",
+            "stream_id": "st1",
+            "speaker_label": "Alice",
+            "start": 4.0,
+            "end": 4.5,
+            "text": "Okay.",
+            "words": [],
+        },
+        {
+            "id": "d4",
+            "stream_id": "st2",
+            "speaker_label": "Bob",
+            "start": 5.0,
+            "end": 5.4,
+            "text": "Yes.",
+            "words": [],
+        },
+    ]
+    preserved = _coalesce_protocol_segments(short_dialogue)
+    assert [s["text"] for s in preserved] == [
+        "Do we deploy today?",
+        "I don't know.",
+        "Okay.",
+        "Yes.",
+    ]
 
     raw_segments = [
         {
@@ -666,6 +704,31 @@ def test_coalesce_protocol_segments_filters_fillers_and_merges_broken_sentences(
     assert coalesced[1]["speaker_label"] == "Johann Peter Hartmann"
     assert coalesced[1]["text"] == "Super, dann nehmen wir das so in das Protokoll auf."
 
+    # Post-meeting edit on coalesced turn s1 (bound=26.0) still merges s3 without duplication,
+    # while a new live segment s5 arriving at 28.0..31.0 (> 26.0) is never swallowed into s1.
+    live_extended = [
+        raw_segments[0],
+        raw_segments[2],
+        {
+            "id": "s5",
+            "stream_id": "st1",
+            "speaker_label": "Volkmar Erben",
+            "start": 28.0,
+            "end": 31.0,
+            "text": "Und danach testen wir den Rollout.",
+            "words": [],
+        },
+    ]
+    bounded = _coalesce_protocol_segments(
+        live_extended,
+        protected_ids={"s1"},
+        edit_bounds={"s1": 26.0},
+    )
+    assert [(b["id"], b["start"], b["end"]) for b in bounded] == [
+        ("s1", 10.0, 26.0),
+        ("s5", 28.0, 31.0),
+    ]
+
 
 def test_coalesce_protocol_segments_preserves_distinct_speaker_ids_sharing_display_name():
     from wortlaut.exports import _coalesce_protocol_segments, group_transcript_turns
@@ -710,6 +773,8 @@ def test_micro_noise_blips_are_discarded_and_sentence_pauses_stay_intact(
 ):
     import struct
 
+    import numpy as np
+
     from wortlaut.processing import POST_ROLL
 
     attempt, credential, identity = source(client)
@@ -720,14 +785,17 @@ def test_micro_noise_blips_are_discarded_and_sentence_pauses_stay_intact(
         clipped = [max(-32768, min(32767, int(x * factor))) for x in samples]
         return struct.pack(f"<{len(clipped)}h", *clipped)
 
-    # Faint 180 ms breath/click (~418 peak, ~140 RMS) triggers WebRTC VAD briefly,
-    # followed by 1.2 s silence, then two voiced clauses separated by a 630 ms
-    # natural intra-sentence pause (< 720 ms SILENCE, > old 600 ms), then a tail click.
+    # High-energy broadband rustle/white-noise burst (2.0 s, peak 2500 — triggered old GMM VAD 100%)
+    # plus faint breath click, followed by two voiced clauses separated by a 630 ms natural pause.
+    rng = np.random.default_rng(42)
+    white_noise_2s = rng.integers(-2500, 2501, size=32000, dtype="<i2").tobytes()
     faint_breath = scale(orig[1600 : 1600 + 2880], 0.03)
     voiced_clause = raw[16000 * 2 : 24000 * 2]  # 0.5 s continuously voiced speech
     intra_pause_630ms = b"\0\0" * 10080  # 630 ms (< SILENCE = 720 ms)
     pcm = (
         b"\0\0" * 8000
+        + white_noise_2s
+        + b"\0\0" * 8000
         + faint_breath
         + b"\0\0" * 19200
         + voiced_clause
@@ -738,7 +806,7 @@ def test_micro_noise_blips_are_discarded_and_sentence_pauses_stay_intact(
         + b"\0\0" * 8000
     )
     total_samples = len(pcm) // 2
-    speech_start_sample = 8000 + (len(faint_breath) // 2) + 19200
+    speech_start_sample = 8000 + 32000 + 8000 + (len(faint_breath) // 2) + 19200
     speech_end_sample = (
         speech_start_sample + (len(voiced_clause) // 2) * 2 + 10080
     )
@@ -954,16 +1022,15 @@ def test_coalesce_protocol_segments_keeps_intervening_qna_chronological_and_boun
 def test_segment_stream_bounds_silence_scan_steps_and_avoids_duplicate_s3_reads(
     client, database, storage, monkeypatch
 ):
-    from wortlaut.processing import FRAME, SILENCE_CHECKPOINT, _is_micro_noise_section
+    from wortlaut.processing import FRAME, SILENCE_CHECKPOINT, _is_short_noise_blip
 
     assert (
-        _is_micro_noise_section(
+        _is_short_noise_blip(
             first=480000 + 2 * FRAME,
             last=480000 + 4 * FRAME,
             cursor=480000,
             voiced_frames=2,
-            voiced_peak=700,
-            voiced_energy_sum=2 * FRAME * 180 * 180,
+            max_prob=0.55,
         )
         is False
     )

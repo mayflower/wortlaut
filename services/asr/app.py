@@ -1,6 +1,7 @@
 """One loaded Parakeet model and one non-cancellable inference at a time."""
 
 import hashlib
+import math
 import os
 import secrets
 import tempfile
@@ -26,6 +27,123 @@ MAX_BYTES = 16000 * 2 * 32
 lock = threading.Lock()
 model = None
 accelerator_failed = threading.Event()
+
+
+def _clamp_confidence(value) -> float | None:
+    try:
+        score = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(score):
+        return None
+    return max(0.0, min(1.0, score))
+
+
+def _configure_decoding_confidence(loaded) -> None:
+    if not (hasattr(loaded, "cfg") and hasattr(loaded, "change_decoding_strategy")):
+        return
+    decoding_cfg = getattr(loaded.cfg, "decoding", None)
+    if decoding_cfg is None:
+        return
+    from omegaconf import open_dict
+
+    with open_dict(decoding_cfg):
+        decoding_cfg.preserve_alignments = True
+        decoding_cfg.compute_timestamps = True
+        if "confidence_cfg" not in decoding_cfg or decoding_cfg.confidence_cfg is None:
+            decoding_cfg.confidence_cfg = {}
+        decoding_cfg.confidence_cfg.preserve_frame_confidence = True
+        decoding_cfg.confidence_cfg.preserve_token_confidence = True
+        decoding_cfg.confidence_cfg.preserve_word_confidence = False
+        decoding_cfg.confidence_cfg.exclude_blank = True
+        decoding_cfg.confidence_cfg.aggregation = "mean"
+        decoding_cfg.confidence_cfg.tdt_include_duration = False
+        decoding_cfg.confidence_cfg.method_cfg = {
+            "name": "entropy",
+            "entropy_type": "tsallis",
+            "alpha": 0.33,
+            "entropy_norm": "exp",
+        }
+    loaded.change_decoding_strategy(decoding_cfg, verbose=False)
+
+
+def _extract_word_confidences(hypothesis, words: list[dict]) -> list[float | None]:
+    if not words:
+        return []
+    direct_wc = getattr(hypothesis, "word_confidence", None)
+    if isinstance(direct_wc, (list, tuple)) and len(direct_wc) == len(words):
+        return [_clamp_confidence(c) for c in direct_wc]
+
+    token_confs = getattr(hypothesis, "token_confidence", None)
+    timestamp_map = getattr(hypothesis, "timestamp", None)
+    char_offsets = timestamp_map.get("char", []) if isinstance(timestamp_map, dict) else []
+    if not isinstance(token_confs, (list, tuple)) or not token_confs:
+        return [None] * len(words)
+
+    parsed_tc = [_clamp_confidence(c) for c in token_confs]
+    valid_tc = [c for c in parsed_tc if c is not None]
+    if not valid_tc:
+        return [None] * len(words)
+
+    if not isinstance(char_offsets, list) or len(char_offsets) != len(parsed_tc):
+        fallback = sum(valid_tc) / len(valid_tc)
+        return [fallback] * len(words)
+
+    results: list[float | None] = []
+    tok_idx = 0
+    total_tokens = len(char_offsets)
+    for w_idx, w in enumerate(words):
+        use_offset = "start_offset" in w and "end_offset" in w
+        w_start = float(w["start_offset"] if use_offset else w["start"])
+        w_end = float(w["end_offset"] if use_offset else w["end"])
+        next_start = None
+        if w_idx + 1 < len(words):
+            nw = words[w_idx + 1]
+            next_key = "start_offset" if (use_offset and "start_offset" in nw) else "start"
+            next_start = float(nw[next_key])
+        target_chars = max(1, len(str(w.get("word") or "").replace(" ", "")))
+
+        while tok_idx < total_tokens:
+            c = char_offsets[tok_idx]
+            c_end = float(c.get("end_offset" if use_offset else "end", 0.0))
+            c_text = str(c.get("char") or "")
+            if c_end < w_start - 1e-6 or not c_text.strip():
+                if c_end <= w_start + 1e-6 and (c_end < w_start - 1e-6 or not c_text.strip()):
+                    tok_idx += 1
+                    continue
+            break
+
+        matched_non_space: list[float] = []
+        matched_any: list[float] = []
+        built_chars = 0
+        while tok_idx < total_tokens:
+            c = char_offsets[tok_idx]
+            c_start = float(c.get("start_offset" if use_offset else "start", 0.0))
+            c_end = float(c.get("end_offset" if use_offset else "end", c_start))
+            if c_start > w_end + 1e-6 or c_end > w_end + 1e-6:
+                break
+            if (
+                next_start is not None
+                and c_start >= next_start - 1e-6
+                and built_chars >= target_chars
+                and (matched_non_space or matched_any)
+            ):
+                break
+            c_text = str(c.get("char") or "")
+            tc_val = parsed_tc[tok_idx]
+            if tc_val is not None:
+                matched_any.append(tc_val)
+                if c_text.strip():
+                    matched_non_space.append(tc_val)
+            built_chars += len(c_text.replace(" ", ""))
+            tok_idx += 1
+
+        chosen = matched_non_space or matched_any
+        if chosen:
+            results.append(sum(chosen) / len(chosen))
+        else:
+            results.append(sum(valid_tc) / len(valid_tc))
+    return results
 
 
 def load_model():
@@ -59,6 +177,7 @@ def load_model():
         MODEL_REVISION = explicit_rev or repo
     loaded.freeze()
     loaded.eval()
+    _configure_decoding_confidence(loaded)
     return loaded
 
 
@@ -114,14 +233,18 @@ def infer(pcm, identifier):
                     [filename], batch_size=1, timestamps=True, return_hypotheses=True, verbose=False
                 )[0]
             words = hypothesis.timestamp.get("word", [])
+            confidences = _extract_word_confidences(hypothesis, words)
+            serialized_words = []
+            for w, conf in zip(words, confidences, strict=False):
+                item = {"word": w["word"], "start": float(w["start"]), "end": float(w["end"])}
+                if conf is not None:
+                    item["confidence"] = round(conf, 4)
+                serialized_words.append(item)
             return {
                 "job_id": identifier,
                 "pcm_sha256": hashlib.sha256(pcm).hexdigest(),
                 "text": hypothesis.text,
-                "words": [
-                    {"word": w["word"], "start": float(w["start"]), "end": float(w["end"])}
-                    for w in words
-                ],
+                "words": serialized_words,
             }
     except torch.AcceleratorError:
         # An unusable CUDA/MPS client must stop receiving more jobs. The

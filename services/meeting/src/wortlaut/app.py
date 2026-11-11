@@ -1458,7 +1458,12 @@ def update_recording_protocol(
                 cur_terms.pop(key, None)
         meta["term_replacements"] = cur_terms
     if body.segment_edits is not None:
+        prior_turn_ends = {
+            str(seg.get("segment_id") or seg.get("id") or ""): float(seg["end"])
+            for seg in export_data(db, recording)["segments"]
+        }
         cur_edits = dict(meta.get("segment_edits") or {})
+        cur_bounds = dict(meta.get("segment_edit_bounds") or {})
         for k, v in body.segment_edits.items():
             key = str(k).strip()[:120]
             if not key:
@@ -1466,9 +1471,13 @@ def update_recording_protocol(
             val = str(v).strip()[:10000]
             if val:
                 cur_edits[key] = val
+                if key in prior_turn_ends:
+                    cur_bounds[key] = prior_turn_ends[key]
             else:
                 cur_edits.pop(key, None)
+                cur_bounds.pop(key, None)
         meta["segment_edits"] = cur_edits
+        meta["segment_edit_bounds"] = cur_bounds
     if body.opted_out_speakers is not None:
         cleaned_opt_out: list[str] = []
         seen_opt_out: set[str] = set()

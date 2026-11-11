@@ -25,6 +25,21 @@ class InvalidResult(ValueError):
     pass
 
 
+MIN_SEGMENT_CONFIDENCE = 0.38
+MIN_PEAK_WORD_CONFIDENCE = 0.50
+MIN_SINGLE_WORD_CONFIDENCE = 0.42
+
+
+def _is_low_confidence_hallucination(word_confidences: list[float], word_count: int) -> bool:
+    if not word_confidences or len(word_confidences) != word_count:
+        return False
+    mean_conf = sum(word_confidences) / len(word_confidences)
+    peak_conf = max(word_confidences)
+    if word_count == 1:
+        return peak_conf < MIN_SINGLE_WORD_CONFIDENCE
+    return mean_conf < MIN_SEGMENT_CONFIDENCE and peak_conf < MIN_PEAK_WORD_CONFIDENCE
+
+
 def segment_result(job: AsrJob, stream: AudioStream, response: dict):
     words = response.get("words")
     if not isinstance(words, list) or (response.get("text") and not words):
@@ -36,9 +51,12 @@ def segment_result(job: AsrJob, stream: AudioStream, response: dict):
     accepted = []
     for word in words:
         start, end = word.get("start"), word.get("end")
+        raw_conf = word.get("confidence")
         if (
             not isinstance(start, (int, float))
+            or isinstance(start, bool)
             or not isinstance(end, (int, float))
+            or isinstance(end, bool)
             or not math.isfinite(start)
             or not math.isfinite(end)
             or start < 0
@@ -47,16 +65,32 @@ def segment_result(job: AsrJob, stream: AudioStream, response: dict):
             or not isinstance(word.get("word"), str)
         ):
             raise InvalidResult("invalid_word_timestamps")
+        if raw_conf is not None and (
+            not isinstance(raw_conf, (int, float))
+            or isinstance(raw_conf, bool)
+            or not math.isfinite(raw_conf)
+            or raw_conf < 0.0
+            or raw_conf > 1.0
+        ):
+            raise InvalidResult("invalid_word_confidence")
         midpoint = job.start_sample + (start + end) / 2 * RATE
         if job.core_start <= midpoint < job.core_end:
-            accepted.append(
-                {
-                    "word": word["word"],
-                    "start": offset + job.start_sample / RATE + start,
-                    "end": offset + job.start_sample / RATE + min(end, duration),
-                }
-            )
-    return {
+            item = {
+                "word": word["word"],
+                "start": offset + job.start_sample / RATE + start,
+                "end": offset + job.start_sample / RATE + min(end, duration),
+            }
+            if raw_conf is not None:
+                item["confidence"] = round(float(raw_conf), 4)
+            accepted.append(item)
+
+    word_confs = [w["confidence"] for w in accepted if "confidence" in w]
+    if _is_low_confidence_hallucination(word_confs, len(accepted)):
+        accepted = []
+        word_confs = []
+
+    seg_confidence = round(sum(word_confs) / len(word_confs), 4) if word_confs else None
+    result = {
         "id": job.id,
         "stream_id": str(stream.stream_id),
         "epoch": str(stream.epoch),
@@ -67,6 +101,9 @@ def segment_result(job: AsrJob, stream: AudioStream, response: dict):
         "text": " ".join(word["word"] for word in accepted),
         "words": accepted,
     }
+    if seg_confidence is not None:
+        result["confidence"] = seg_confidence
+    return result
 
 
 def claim_job(db: Session):

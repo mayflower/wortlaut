@@ -407,3 +407,75 @@ def test_word_midpoint_has_one_owner_at_long_section_boundary():
     assert a["words"] == []
     assert b["text"] == "Grenze"
     assert b["words"][0]["start"] == 10.4
+
+
+def test_segment_result_preserves_word_confidence_and_rejects_low_confidence_hallucinations():
+    import pytest
+
+    from wortlaut.asr import InvalidResult
+
+    stream = AudioStream(
+        stream_id=uuid.uuid4(),
+        epoch=uuid.uuid4(),
+        contract={
+            "monotonic_origin_ms": 1000,
+            "session_monotonic_origin_ms": 1000,
+            "session_utc_origin": "2026-10-06T09:00:00Z",
+        },
+    )
+    job = AsrJob(
+        id="conf-job",
+        start_sample=0,
+        end_sample=16000 * 4,
+        core_start=0,
+        core_end=16000 * 4,
+        binding={"speaker_id": "speaker-A"},
+    )
+
+    # Clear speech mixed with a lower-confidence domain noun stays intact with confidence metadata.
+    valid = segment_result(
+        job,
+        stream,
+        {
+            "text": "Maystack läuft stabil.",
+            "words": [
+                {"word": "Maystack", "start": 0.2, "end": 0.8, "confidence": 0.41},
+                {"word": "läuft", "start": 0.9, "end": 1.3, "confidence": 0.94},
+                {"word": "stabil.", "start": 1.4, "end": 2.0, "confidence": 0.96},
+            ],
+        },
+    )
+    assert valid["text"] == "Maystack läuft stabil."
+    assert valid["confidence"] == round((0.41 + 0.94 + 0.96) / 3, 4)
+    assert [w["confidence"] for w in valid["words"]] == [0.41, 0.94, 0.96]
+
+    # Acoustic noise hallucination (flat high-entropy posterior across all tokens) is dropped.
+    hallucinated = segment_result(
+        job,
+        stream,
+        {
+            "text": "Small made a pistol Weźmie w wasz.",
+            "words": [
+                {"word": "Small", "start": 0.1, "end": 0.4, "confidence": 0.19},
+                {"word": "made", "start": 0.4, "end": 0.7, "confidence": 0.24},
+                {"word": "a", "start": 0.7, "end": 0.8, "confidence": 0.14},
+                {"word": "pistol", "start": 0.8, "end": 1.3, "confidence": 0.31},
+                {"word": "Weźmie", "start": 1.5, "end": 2.1, "confidence": 0.16},
+                {"word": "w", "start": 2.1, "end": 2.3, "confidence": 0.21},
+                {"word": "wasz.", "start": 2.3, "end": 2.9, "confidence": 0.28},
+            ],
+        },
+    )
+    assert hallucinated["text"] == ""
+    assert hallucinated["words"] == []
+    assert "confidence" not in hallucinated
+
+    with pytest.raises(InvalidResult, match="invalid_word_confidence"):
+        segment_result(
+            job,
+            stream,
+            {
+                "text": "Ungültig",
+                "words": [{"word": "Ungültig", "start": 0.1, "end": 0.5, "confidence": 1.5}],
+            },
+        )

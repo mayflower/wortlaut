@@ -182,3 +182,122 @@ def test_cpu_fallback_loads_model_on_cpu_when_enabled(monkeypatch):
         "frozen": True,
         "eval": True,
     }
+
+
+def test_decoding_confidence_config_and_subword_token_confidence_alignment(monkeypatch):
+    path = Path(__file__).resolve().parents[2] / "asr/app.py"
+    spec = importlib.util.spec_from_file_location("gpu_confidence_fixture", path)
+    service = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(service)
+
+    applied = {}
+
+    class AttrDict(dict):
+        def __getattr__(self, key):
+            try:
+                return self[key]
+            except KeyError as exc:
+                raise AttributeError(key) from exc
+
+        def __setattr__(self, key, value):
+            self[key] = value
+
+    decoding_cfg = AttrDict(confidence_cfg=AttrDict())
+
+    class ConfigurableModel:
+        cfg = SimpleNamespace(decoding=decoding_cfg)
+
+        def change_decoding_strategy(self, cfg, verbose=False):
+            applied["cfg"] = cfg
+            applied["verbose"] = verbose
+
+        def transcribe(self, filenames, **kwargs):
+            return [
+                SimpleNamespace(
+                    text="Mit dem Zug?",
+                    token_confidence=[0.92, 0.88, 0.96, 0.90],
+                    timestamp={
+                        "char": [
+                            {
+                                "char": "Mit",
+                                "start_offset": 2,
+                                "end_offset": 4,
+                                "start": 0.16,
+                                "end": 0.32,
+                            },
+                            {
+                                "char": "dem",
+                                "start_offset": 5,
+                                "end_offset": 7,
+                                "start": 0.40,
+                                "end": 0.56,
+                            },
+                            {
+                                "char": "Zug",
+                                "start_offset": 8,
+                                "end_offset": 10,
+                                "start": 0.64,
+                                "end": 0.80,
+                            },
+                            {
+                                "char": "?",
+                                "start_offset": 10,
+                                "end_offset": 11,
+                                "start": 0.80,
+                                "end": 0.88,
+                            },
+                        ],
+                        "word": [
+                            {
+                                "word": "Mit",
+                                "start_offset": 2,
+                                "end_offset": 4,
+                                "start": 0.16,
+                                "end": 0.32,
+                            },
+                            {
+                                "word": "dem",
+                                "start_offset": 5,
+                                "end_offset": 7,
+                                "start": 0.40,
+                                "end": 0.56,
+                            },
+                            {
+                                "word": "Zug?",
+                                "start_offset": 8,
+                                "end_offset": 11,
+                                "start": 0.64,
+                                "end": 0.88,
+                            },
+                        ],
+                    },
+                )
+            ]
+
+    monkeypatch.setitem(sys.modules, "omegaconf", SimpleNamespace(open_dict=nullcontext))
+    monkeypatch.setitem(
+        sys.modules,
+        "torch",
+        SimpleNamespace(AcceleratorError=RuntimeError, inference_mode=nullcontext),
+    )
+    monkeypatch.setenv("WORTLAUT_ASR_TOKEN", "fixture-conf-token")
+
+    m = ConfigurableModel()
+    service._configure_decoding_confidence(m)
+    assert applied["verbose"] is False
+    assert decoding_cfg.preserve_alignments is True
+    assert decoding_cfg.compute_timestamps is True
+    assert decoding_cfg.confidence_cfg.preserve_frame_confidence is True
+    assert decoding_cfg.confidence_cfg.preserve_token_confidence is True
+    assert decoding_cfg.confidence_cfg.preserve_word_confidence is False
+    assert decoding_cfg.confidence_cfg.method_cfg["entropy_type"] == "tsallis"
+
+    monkeypatch.setattr(service, "load_model", lambda: m)
+    headers = {"Authorization": "Bearer fixture-conf-token", "X-Job-ID": "b" * 64}
+    pcm = b"\x00\x01" * 16000
+    with TestClient(service.app) as client:
+        resp = client.post("/v1/transcribe", headers=headers, content=pcm)
+        assert resp.status_code == 200
+        words = resp.json()["words"]
+        assert [w["word"] for w in words] == ["Mit", "dem", "Zug?"]
+        assert [w["confidence"] for w in words] == [0.92, 0.88, 0.93]

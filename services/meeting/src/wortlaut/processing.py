@@ -2,12 +2,13 @@
 
 import hashlib
 import logging
-import math
-import struct
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from functools import lru_cache
+from pathlib import Path
 
-import webrtcvad
+import numpy as np
+import onnxruntime as ort
 from botocore.exceptions import BotoCoreError, ClientError
 from sqlalchemy import case, func, literal, select, union_all
 from sqlalchemy.orm import Session
@@ -26,8 +27,12 @@ from wortlaut.settings import get_settings
 from wortlaut.storage import canonical, get_storage
 
 RATE = 16000
-FRAME = 480  # WebRTC VAD: 30 ms, aggressiveness 2.
-MIN_SPEECH_PEAK = 150  # Ignore digital comfort noise (-46 dBFS threshold on int16 PCM).
+FRAME = 512  # Silero VAD v6.2 native 32 ms window at 16 kHz.
+SILERO_CONTEXT = 64  # 4 ms recurrent audio context prepended to each 512-sample frame.
+SILERO_VAD_MODEL_PATH = Path(__file__).resolve().parent / "assets" / "silero_vad.onnx"
+MIN_SPEECH_PEAK = 150  # Ignore digital comfort noise (-46.7 dBFS floor on int16 PCM).
+VAD_ONSET_THRESHOLD = 0.50  # Neural speech probability onset threshold.
+VAD_OFFSET_THRESHOLD = 0.35  # Hysteresis offset threshold maintaining active speech.
 PRE_ROLL = 4800  # 300 ms
 POST_ROLL = 5760  # 360 ms
 SILENCE = 11520  # 720 ms
@@ -42,6 +47,20 @@ SCAN_WINDOW = SILENCE_CHECKPOINT + MAX_SEGMENT + OVERLAP
 MAX_SCAN_STEPS = 8
 if not (POST_ROLL <= SOFT_SILENCE <= SILENCE):
     raise RuntimeError("VAD silence thresholds must not be shorter than POST_ROLL")
+
+
+@lru_cache(maxsize=1)
+def _silero_session() -> ort.InferenceSession:
+    ort.set_default_logger_severity(3)
+    opts = ort.SessionOptions()
+    opts.intra_op_num_threads = 1
+    opts.inter_op_num_threads = 1
+    opts.log_severity_level = 3
+    return ort.InferenceSession(
+        str(SILERO_VAD_MODEL_PATH),
+        sess_options=opts,
+        providers=["CPUExecutionProvider"],
+    )
 
 
 @dataclass
@@ -378,56 +397,82 @@ def read_pcm(chunks: list[AudioChunk], start: int, end: int) -> bytes:
     return result
 
 
-def _is_micro_noise_section(
+def _is_short_noise_blip(
     first: int,
     last: int,
     cursor: int,
     voiced_frames: int,
-    voiced_peak: int,
-    voiced_energy_sum: int,
+    max_prob: float,
 ) -> bool:
     if voiced_frames <= 0:
         return True
     # Never drop the trailing tail of speech continuing across a durable cut/cursor
-    # (allowing up to 4 frames / 120 ms for a voiceless stop closure right on the cut).
+    # (allowing up to 4 frames / 128 ms for a voiceless stop closure right on the cut).
     if cursor > 0 and first - cursor <= 4 * FRAME:
         return False
-    if last - first > RATE or voiced_frames > 8:
+    if last - first > RATE or voiced_frames >= 6:
         return False
-    voiced_rms = math.sqrt(voiced_energy_sum / (voiced_frames * FRAME))
-    if voiced_frames <= 2 and (voiced_peak < 900 or voiced_rms < 220.0):
+    if voiced_frames <= 3:
         return True
-    return voiced_peak < 600 and voiced_rms < 200.0
+    return max_prob < 0.65
 
 
 def speech_section(pcm: bytes, cursor: int, terminal: bool):
-    """Replay from a durable reset boundary; adaptive VAD state is not guessed.
+    """Replay from a durable reset boundary; neural Silero VAD LSTM state is deterministic.
 
     Silent resets occur at fixed ten-second boundaries, speech resets after a
     closed section. Replaying the same prefix reconstructs an open section.
     """
-    vad = webrtcvad.Vad(2)
-    first = last = None
-    voiced_frames = 0
-    voiced_peak = 0
-    voiced_energy_sum = 0
     samples = len(pcm) // 2
     available = cursor + samples
+    if samples == 0:
+        return None, (available if terminal else cursor)
+
+    pcm_i16 = np.frombuffer(pcm[: samples * 2], dtype="<i2")
+    sess = _silero_session()
+    state = np.zeros((2, 1, 128), dtype=np.float32)
+    ctx = np.zeros(SILERO_CONTEXT, dtype=np.float32)
+    inp = np.empty((1, SILERO_CONTEXT + FRAME), dtype=np.float32)
+    sr_tensor = np.array(RATE, dtype=np.int64)
+
+    first = last = None
+    speaking = False
+    silent_zero_run = True
+    voiced_frames = 0
+    max_prob = 0.0
+
     for offset in range(0, samples, FRAME):
-        frame = pcm[offset * 2 : (offset + FRAME) * 2]
-        if len(frame) != FRAME * 2:
+        raw_frame = pcm_i16[offset : offset + FRAME]
+        if len(raw_frame) != FRAME:
             if not terminal:
                 break
-            frame = frame.ljust(FRAME * 2, b"\0")  # VAD-only padding, never sent to ASR.
+            padded = np.zeros(FRAME, dtype=np.int16)  # VAD-only padding, never sent to ASR.
+            padded[: len(raw_frame)] = raw_frame
+            raw_frame = padded
         frame_start, frame_end = cursor + offset, min(cursor + offset + FRAME, available)
-        frame_samples = struct.unpack(f"<{FRAME}h", frame)
-        frame_peak = max(abs(x) for x in frame_samples)
-        if frame_peak >= MIN_SPEECH_PEAK and vad.is_speech(frame, RATE):
+        frame_peak = max(-int(raw_frame.min()), int(raw_frame.max()))
+
+        if not speaking and frame_peak == 0 and silent_zero_run:
+            prob = 0.0
+        else:
+            silent_zero_run = False
+            chunk_f32 = raw_frame.astype(np.float32) * (1.0 / 32768.0)
+            inp[0, :SILERO_CONTEXT] = ctx
+            inp[0, SILERO_CONTEXT:] = chunk_f32
+            out, state = sess.run(None, {"input": inp, "state": state, "sr": sr_tensor})
+            ctx[:] = chunk_f32[-SILERO_CONTEXT:]
+            prob = float(out[0, 0])
+
+        threshold = VAD_OFFSET_THRESHOLD if speaking else VAD_ONSET_THRESHOLD
+        is_speech = frame_peak >= MIN_SPEECH_PEAK and prob >= threshold
+        speaking = is_speech
+
+        if is_speech:
             first = frame_start if first is None else first
             last = frame_end
             voiced_frames += 1
-            voiced_peak = max(voiced_peak, frame_peak)
-            voiced_energy_sum += sum(x * x for x in frame_samples)
+            if prob > max_prob:
+                max_prob = prob
         if first is None and frame_end - cursor >= SILENCE_CHECKPOINT:
             return None, cursor + SILENCE_CHECKPOINT
         if first is not None:
@@ -441,15 +486,13 @@ def speech_section(pcm: bytes, cursor: int, terminal: bool):
                 SOFT_SILENCE if frame_end - audio_start >= SOFT_MAX_SEGMENT else SILENCE
             )
             if frame_end - last >= required_silence:
-                if _is_micro_noise_section(
-                    first, last, cursor, voiced_frames, voiced_peak, voiced_energy_sum
-                ):
+                if _is_short_noise_blip(first, last, cursor, voiced_frames, max_prob):
                     return None, frame_end
                 end = min(available, last + POST_ROLL)
                 return (audio_start, end, end), frame_end
     if terminal:
-        if first is not None and not _is_micro_noise_section(
-            first, last, cursor, voiced_frames, voiced_peak, voiced_energy_sum
+        if first is not None and not _is_short_noise_blip(
+            first, last, cursor, voiced_frames, max_prob
         ):
             return (max(cursor, first - PRE_ROLL), available, available), available
         return None, available
