@@ -680,6 +680,8 @@ try {
     const admittedInspected = await lobbyPrewarmed.meet.inspect();
     assert.equal(admittedInspected.participation, 'capturing');
     assert.equal(admittedInspected.streams, 1, 'Only the RTP-active receiver may attach AudioCapture; idle receivers stay unattached');
+    assert.equal((admittedInspected.receiver_sources[0] as any)?.encoded_transform?.state, 'unsupported',
+      'Google Meet SFU collections connection must skip RTCRtpScriptTransform so Chromium jitter buffer stays intact');
     assert.ok(admittedInspected.audio_samples > 0);
     assert.deepEqual(await lobbyPrewarmed.page.evaluate(() => (window as any).admittedUiEvents), [
       'chat-open',
@@ -695,7 +697,7 @@ try {
       'chat-reopen',
     ]);
     assert.equal(await lobbyPrewarmed.page.locator('button[data-panel-id="2"]').getAttribute('aria-expanded'), 'true');
-    // Inject live in-call chat opt-out from Participant 1 (both chat panel item and popup toast)
+    // Inject live in-call chat opt-out across legacy + 2026 Google Meet chat panel ([data-message-id]) & toast ([data-key^="notification-"])
     await lobbyPrewarmed.page.evaluate((optOutWord) => {
       const msg = document.createElement('div');
       msg.setAttribute('data-sender-name', 'Participant 1');
@@ -706,12 +708,45 @@ try {
       toast.setAttribute('data-sender-name', 'Participant 2');
       toast.textContent = 'Participant 2\nstop';
       document.body.append(toast);
+
+      const group = document.createElement('div');
+      const header = document.createElement('div');
+      const senderSpan = document.createElement('span');
+      senderSpan.textContent = 'Participant 3';
+      const timeSpan = document.createElement('span');
+      timeSpan.textContent = '15:40';
+      header.append(senderSpan, timeSpan);
+      const msgWrap = document.createElement('div');
+      const msgBubble = document.createElement('div');
+      msgBubble.setAttribute('data-message-id', 'spaces/testroom/messages/1');
+      const msgBody = document.createElement('div');
+      msgBody.setAttribute('jsname', 'dTKtvb');
+      msgBody.textContent = optOutWord;
+      msgBubble.append(msgBody);
+      msgWrap.append(msgBubble);
+      group.append(header, msgWrap);
+      document.body.append(group);
+
+      const meetToast = document.createElement('div');
+      meetToast.setAttribute('data-key', 'notification-0');
+      const pair = document.createElement('div');
+      const toastSender = document.createElement('div');
+      toastSender.textContent = 'Participant 4';
+      const toastText = document.createElement('div');
+      toastText.textContent = 'stop';
+      pair.append(toastSender, toastText);
+      meetToast.append(pair);
+      document.body.append(meetToast);
     }, localeCase.german ? 'nein' : 'no');
     const optOutInspected = await lobbyPrewarmed.meet.inspect();
     assert.ok(optOutInspected.participant_sources.opted_out?.includes('Participant 1'));
     assert.ok(optOutInspected.participant_sources.opted_out?.includes('spaces/testroom/devices/101'));
     assert.ok(optOutInspected.participant_sources.opted_out?.includes('Participant 2'));
     assert.ok(optOutInspected.participant_sources.opted_out?.includes('spaces/testroom/devices/102'));
+    assert.ok(optOutInspected.participant_sources.opted_out?.includes('Participant 3'));
+    assert.ok(optOutInspected.participant_sources.opted_out?.includes('spaces/testroom/devices/103'));
+    assert.ok(optOutInspected.participant_sources.opted_out?.includes('Participant 4'));
+    assert.ok(optOutInspected.participant_sources.opted_out?.includes('spaces/testroom/devices/104'));
     await lobbyPrewarmed.meet.stop('normal');
     assert.ok(frames.slice(framesBeforeLobby).some(f => Boolean(f.pcm && f.pcm.byteLength > 0)));
     await lobbyPrewarmed.page.evaluate(() => (window as any).closeLobbyPeers());

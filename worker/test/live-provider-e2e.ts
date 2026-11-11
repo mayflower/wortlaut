@@ -498,6 +498,14 @@ async function setSpeakerTransmitting(page: Page, open: boolean): Promise<void> 
           await unmuteInCall.first().evaluate(el => (el as HTMLElement).click()).catch(() => {});
         }
       }
+      if (open && target.url().startsWith('https://meet.google.com/')) {
+        const meetUnmute = target.locator(
+          'button[data-is-muted="true"][aria-label*="Mikrofon" i], button[data-is-muted="true"][aria-label*="microphone" i]',
+        );
+        if (await meetUnmute.first().isVisible().catch(() => false)) {
+          await meetUnmute.first().evaluate(el => (el as HTMLElement).click()).catch(() => {});
+        }
+      }
       if (open && /(?:^|\.)zoom\.us$/.test(new URL(target.url() || 'about:blank').hostname)) {
         const zoomUnmute = target.locator(
           'button[aria-label*="unmute my microphone" i], button[aria-label*="Audio-Stummschaltung aufheben" i], button[aria-label*="Stummschaltung aufheben" i]',
@@ -1216,23 +1224,35 @@ async function apiRequest<T = any>(
 async function sendMeetingChatMessage(page: Page, provider: Provider, message: string): Promise<boolean> {
   try {
     if (provider === 'google_meet') {
+      await page.keyboard.press('Escape').catch(() => {});
       const chatInput = page
         .getByRole('textbox', {name: /Send a message|Nachricht.*senden/i})
-        .or(page.locator('textarea[aria-label*="message" i], textarea[aria-label*="Nachricht" i]'));
+        .or(
+          page.locator(
+            'textarea[aria-label*="message" i], textarea[aria-label*="Nachricht" i], ' +
+              '[contenteditable="true"][aria-label*="message" i], [contenteditable="true"][aria-label*="Nachricht" i]',
+          ),
+        );
       if (!(await chatInput.first().isVisible().catch(() => false))) {
         const toggle = page
-          .locator('button[data-panel-id="2"]')
+          .locator('button[data-panel-id="2"]:not([aria-expanded="true"]):not([aria-pressed="true"])')
           .or(page.getByRole('button', {name: /^(Chat with everyone|Chat|Mit allen chatten|Nachrichten im Anruf)$/i}));
         if (await toggle.first().isVisible().catch(() => false)) {
-          await toggle.first().click({timeout: 3000}).catch(() => {});
-          await delay(800);
+          const clicked = await toggle.first().click({timeout: 1500}).then(() => true).catch(() => false);
+          if (!clicked) {
+            await toggle.first().evaluate((el: HTMLElement) => el.click()).catch(() => {});
+          }
+          await chatInput.first().waitFor({state: 'visible', timeout: 3000}).catch(() => {});
         }
       }
       if (await chatInput.first().isVisible().catch(() => false)) {
         await chatInput.first().fill(message, {timeout: 3000});
         const sendBtn = page.getByRole('button', {name: /^(Send a message|Send|Nachricht senden|Senden)$/i});
         if (await sendBtn.first().isVisible().catch(() => false)) {
-          await sendBtn.first().click({timeout: 3000}).catch(() => {});
+          const sent = await sendBtn.first().click({timeout: 1500}).then(() => true).catch(() => false);
+          if (!sent) {
+            await sendBtn.first().evaluate((el: HTMLElement) => el.click()).catch(() => {});
+          }
         } else {
           await chatInput.first().press('Enter').catch(() => {});
         }
@@ -1783,22 +1803,29 @@ async function runProviderLiveTest(provider: Provider, config: LiveConfig) {
       segments.length > 0 && segments.every(s => !s.attribution_unknown && Boolean(s.speaker_id));
 
     const optedOutDiag: string[] = finalRecording.attempts?.[0]?.diagnostics?.participant_sources?.opted_out ?? [];
+    const sharedAccountOptedOut = useHostForGuests && chatOptOutSent;
     const speakerBOptedOut = chatOptOutSent && optOutSpeakerName === config.speakerBName;
     const chatOptOutDetected = chatOptOutSent ? optedOutDiag.length > 0 : null;
     const chatOptOutPurged = chatOptOutSent && optOutSpeakerName
-      ? (speakerBOptedOut
-          ? segmentsB.length === 0
-          : !segments.some(s => (s.speaker_name ?? s.participant_name) === optOutSpeakerName))
+      ? (sharedAccountOptedOut
+          ? segments.length === 0
+          : speakerBOptedOut
+            ? segmentsB.length === 0
+            : !segments.some(s => (s.speaker_name ?? s.participant_name) === optOutSpeakerName))
       : null;
     const chatOptOutVerified = chatOptOutSent ? Boolean(chatOptOutDetected && chatOptOutPurged) : null;
 
-    const effectiveDisjointStreams = speakerBOptedOut
+    const effectiveDisjointStreams = (speakerBOptedOut || sharedAccountOptedOut)
       ? (liveDisjointStreams || liveDisjointSpeakers)
       : multiStreamCapture;
-    const effectiveDisjointSpeakers = speakerBOptedOut ? liveDisjointSpeakers : disjointSpeakers;
-    const effectiveAttributionVerified = speakerBOptedOut
-      ? Boolean(effectiveDisjointStreams && liveDisjointSpeakers && liveAllBound && allBound && chatOptOutVerified)
-      : Boolean(multiStreamCapture && disjointSpeakers && allBound && distinctSpeakers.size >= 2);
+    const effectiveDisjointSpeakers = (speakerBOptedOut || sharedAccountOptedOut)
+      ? liveDisjointSpeakers
+      : disjointSpeakers;
+    const effectiveAttributionVerified = sharedAccountOptedOut
+      ? Boolean(effectiveDisjointStreams && liveDisjointSpeakers && liveAllBound && chatOptOutVerified)
+      : speakerBOptedOut
+        ? Boolean(effectiveDisjointStreams && liveDisjointSpeakers && liveAllBound && allBound && chatOptOutVerified)
+        : Boolean(multiStreamCapture && disjointSpeakers && allBound && distinctSpeakers.size >= 2);
 
     const report = {
       timestamp: new Date().toISOString(),
@@ -1823,13 +1850,14 @@ async function runProviderLiveTest(provider: Provider, config: LiveConfig) {
       distinct_stream_count: distinctStreams.size,
       distinct_speaker_ids: [...distinctSpeakers],
       distinct_speaker_names: [...distinctSpeakerNames],
-      phrase_a_matched: segmentsA.length > 0,
-      phrase_b_matched: speakerBOptedOut ? liveSegmentsB.length > 0 : segmentsB.length > 0,
-      phrase_b_purged_after_opt_out: speakerBOptedOut ? segmentsB.length === 0 : undefined,
+      phrase_a_matched: sharedAccountOptedOut ? liveSegmentsA.length > 0 : segmentsA.length > 0,
+      phrase_b_matched: (speakerBOptedOut || sharedAccountOptedOut) ? liveSegmentsB.length > 0 : segmentsB.length > 0,
+      phrase_b_purged_after_opt_out: (speakerBOptedOut || sharedAccountOptedOut) ? segmentsB.length === 0 : undefined,
       disjoint_streams_for_a_and_b: effectiveDisjointStreams,
       disjoint_speakers_for_a_and_b: effectiveDisjointSpeakers,
       speaker_attribution_verified: effectiveAttributionVerified,
-      exports_verified: exportedTxt.length > 0 && exportedVtt.startsWith('WEBVTT'),
+      exports_verified: (sharedAccountOptedOut ? typeof exportedTxt === 'string' : exportedTxt.length > 0) &&
+        exportedVtt.startsWith('WEBVTT'),
       segments,
     };
 
@@ -1850,7 +1878,12 @@ async function runProviderLiveTest(provider: Provider, config: LiveConfig) {
     console.log(`  - Getrennte Sprecher A vs. B:  ${report.disjoint_speakers_for_a_and_b}`);
     console.log(`  - Sprecherbindung verifiziert: ${report.speaker_attribution_verified}`);
 
-    assert.ok(report.segment_count > 0, 'Keine Transkript-Segmente erzeugt');
+    if (sharedAccountOptedOut) {
+      assert.ok(liveStreamedSegments.length > 0, 'Keine Live-Segmente vor dem Chat-Opt-Out empfangen');
+      assert.equal(report.segment_count, 0, 'Trotz Account-weitem Chat-Opt-Out blieben Segmente im finalen Export erhalten');
+    } else {
+      assert.ok(report.segment_count > 0, 'Keine Transkript-Segmente erzeugt');
+    }
     assert.ok(report.phrase_a_matched, 'Referenzsatz A ("getrennten Audioquellen") wurde im Transkript nicht gefunden');
     assert.ok(report.phrase_b_matched, 'Referenzsatz B ("zweite Teilnehmer") wurde im Transkript nicht gefunden');
     assert.ok(report.exports_verified, 'TXT/VTT-Exporte unvollständig');

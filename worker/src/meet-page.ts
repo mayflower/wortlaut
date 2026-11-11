@@ -770,6 +770,49 @@ function install(config: MeetCaptureConfig) {
         if (recordOptOutAuthor(authorId, authorName)) updated = true;
       }
     }
+    for (const msgEl of Array.from(document.querySelectorAll('[data-message-id]')).slice(0, 128)) {
+      const msgText = (
+        msgEl.querySelector('[jsname="dTKtvb"]')?.textContent ??
+        msgEl.textContent ??
+        ''
+      ).trim();
+      if (!msgText || !isChatOptOutMessage(msgText)) continue;
+      let senderName: string | null = null;
+      let cur: Element | null = msgEl.parentElement;
+      for (let depth = 0; depth < 5 && cur && cur !== document.body; depth++) {
+        if (cur.children.length >= 2 && !cur.children[0].contains(msgEl)) {
+          const headerEl = cur.children[0];
+          const rawHeader = (
+            headerEl.children.length >= 2
+              ? headerEl.children[0].textContent
+              : headerEl.textContent?.replace(/\s*\d{1,2}:\d{2}(?:\s*[AP]M)?$/i, '')
+          )?.trim() || '';
+          if (rawHeader && rawHeader.length <= 120) {
+            senderName = rawHeader;
+            break;
+          }
+        }
+        cur = cur.parentElement;
+      }
+      if (senderName && SELF_OR_UI_TEXT_RE.test(senderName)) continue;
+      if (recordOptOutAuthor(null, senderName)) updated = true;
+    }
+    for (const toastEl of Array.from(document.querySelectorAll('[data-key^="notification-"]')).slice(0, 32)) {
+      for (const pair of Array.from(toastEl.querySelectorAll('div'))) {
+        if (
+          pair.children.length === 2 &&
+          pair.children[0].children.length === 0 &&
+          pair.children[1].children.length === 0
+        ) {
+          const senderName = (pair.children[0].textContent ?? '').trim();
+          const msgText = (pair.children[1].textContent ?? '').trim();
+          if (!senderName || !msgText || SELF_OR_UI_TEXT_RE.test(senderName)) continue;
+          if (isChatOptOutMessage(msgText)) {
+            if (recordOptOutAuthor(null, senderName)) updated = true;
+          }
+        }
+      }
+    }
     return updated;
   }
 
@@ -1334,6 +1377,11 @@ function install(config: MeetCaptureConfig) {
       if (old.track.readyState === 'ended' || entry.pc.connectionState === 'closed') detachObservation(old);
     }
     if (observations.size >= 64) { state.reason = 'audio_source_limit'; return; }
+    const hasCollectionsChannel =
+      channelStats.has('collections') ||
+      [...(window.wortlautMeetReceivers.dataChannels ?? [])].some((dc) => dc.label === 'collections') ||
+      /\bm=application\b/.test(pc.remoteDescription?.sdp ?? '') ||
+      /\bm=application\b/.test(pc.localDescription?.sdp ?? '');
     const entry: EncodedObservation = {
       id: ++nextObservation, pc,
       evidence: {state: observerState === 'ready' ? 'waiting_frames' : observerState,
@@ -1343,10 +1391,14 @@ function install(config: MeetCaptureConfig) {
     if (receiver.transform) entry.evidence.state = 'provider_transform';
     else if (encodedReserved.has(pc)) entry.evidence.state = 'provider_reserved';
     else if (observerState === 'ready' && observer) {
-      try {
-        entry.transform = new RTCRtpScriptTransform(observer, {id: entry.id});
-        receiver.transform = entry.transform;
-      } catch { entry.transform = undefined; entry.evidence.state = 'failed'; }
+      if ((config.provider ?? 'google_meet') === 'google_meet' && !hasCollectionsChannel) {
+        try {
+          entry.transform = new RTCRtpScriptTransform(observer, {id: entry.id});
+          receiver.transform = entry.transform;
+        } catch { entry.transform = undefined; entry.evidence.state = 'failed'; }
+      } else {
+        entry.evidence.state = 'unsupported';
+      }
     }
   }
   async function initializeObserver() {
@@ -1581,7 +1633,15 @@ function install(config: MeetCaptureConfig) {
           for (const receiver of pc.getReceivers()) {
             if ((received.has(receiver) || recvTransceivers.has(receiver)) &&
                 receiver.track?.kind === 'audio' && receiver.track.readyState === 'live') {
-              observe(receiver, pc); live.add(receiver);
+              const receiverActive =
+                !receiver.track.muted ||
+                receiver.getSynchronizationSources().length > 0 ||
+                receiver.getContributingSources().length > 0 ||
+                Boolean(receiver.transform) ||
+                encodedReserved.has(pc) ||
+                observations.has(receiver);
+              if (receiverActive) observe(receiver, pc);
+              live.add(receiver);
             }
           }
         }
@@ -1608,7 +1668,11 @@ function install(config: MeetCaptureConfig) {
           }
         }
         for (const receiver of live) {
-          if (!domAudioTracks.has(receiver.track) && !keepaliveAudios.has(receiver)) {
+          const receiverStarted =
+            !receiver.track.muted ||
+            receiver.getSynchronizationSources().length > 0 ||
+            receiver.getContributingSources().length > 0;
+          if (receiverStarted && !domAudioTracks.has(receiver.track) && !keepaliveAudios.has(receiver)) {
             try {
               const el = document.createElement('audio');
               el.dataset.wortlautKeepalive = '1';
@@ -1636,12 +1700,12 @@ function install(config: MeetCaptureConfig) {
             entry.evidence.state = 'replaced'; continue;
           }
           if (entry.evidence.state === 'waiting_frames' && entry.evidence.frame_count === 0) {
-            entry.waitingSince = hasSignaledOrDomParticipants ? (entry.waitingSince ?? performance.now()) : undefined;
+            entry.waitingSince ??= performance.now();
           } else {
             entry.waitingSince = undefined;
           }
           const stalledWaitingFrames =
-            entry.waitingSince !== undefined && performance.now() - entry.waitingSince >= 3000;
+            entry.waitingSince !== undefined && performance.now() - entry.waitingSince >= 1000;
           if ((silentCaptureWithParticipants || stalledWaitingFrames) &&
               entry.evidence.state === 'waiting_frames' && entry.evidence.frame_count === 0) {
             receiver.transform = null; entry.transform = undefined; entry.waitingSince = undefined;
@@ -1686,7 +1750,8 @@ function install(config: MeetCaptureConfig) {
           let source = sources.get(receiver);
           if (!source) {
             const obs = observations.get(receiver);
-            const hasRtp = receiver.getSynchronizationSources().length > 0 ||
+            const hasRtp = !receiver.track.muted ||
+              receiver.getSynchronizationSources().length > 0 ||
               receiver.getContributingSources().length > 0 ||
               (obs?.evidence.frame_count ?? 0) > 0;
             if (!hasRtp) continue;

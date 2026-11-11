@@ -485,9 +485,11 @@ export class MeetBrowser {
         const chatToggle = this.page.getByRole('button', {
           name: /^(?:Chat with everyone|Mit allen chatten|Chat|Nachricht an alle|In-call messages|Nachrichten im Anruf)(?:\b|\s|$)/i,
         }).or(this.page.locator('button[data-panel-id="2"]'))
-          .and(this.page.locator('[aria-expanded="false"], [aria-pressed="false"], :not([aria-expanded="true"]):not([aria-pressed="true"])')).first();
+          .and(this.page.locator(':not([aria-expanded="true"]):not([aria-pressed="true"])')).first();
         if (!await visible(chatToggle)) return;
-        await chatToggle.click({timeout: 2500}).catch(() => {});
+        await chatToggle.click({timeout: 2500}).catch(async () => {
+          await chatToggle.evaluate((el: HTMLElement) => el.click()).catch(() => {});
+        });
         await chatBox.first().waitFor({state: 'visible', timeout: 2500}).catch(() => {});
       }
       if (!await visible(chatBox)) return;
