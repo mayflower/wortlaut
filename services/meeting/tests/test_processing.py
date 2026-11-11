@@ -845,7 +845,7 @@ def test_coalesce_protocol_segments_keeps_intervening_qna_chronological_and_boun
         "Alexander",
     ]
 
-    # Long monologue splits cleanly once merged turn span exceeds 45 seconds.
+    # Long monologue splits cleanly once merged turn span exceeds 45 s (both >1.2 s & <=1.2 s gaps).
     long_monologue = [
         {
             "id": f"m{i}",
@@ -863,6 +863,161 @@ def test_coalesce_protocol_segments_keeps_intervening_qna_chronological_and_boun
     assert len(mono_coalesced) == 2
     assert mono_coalesced[0]["end"] - mono_coalesced[0]["start"] <= 45.0
     assert mono_coalesced[1]["end"] - mono_coalesced[1]["start"] <= 45.0
+
+    breath_split_monologue = [
+        {
+            "id": f"bm{i}",
+            "stream_id": "st-alex",
+            "speaker_id": "spk-alex",
+            "speaker_label": "Alexander",
+            "start": float(i * 15),
+            "end": float(i * 15 + 14.5),
+            "text": f"Atemabschnitt {i}.",
+            "words": [],
+        }
+        for i in range(4)
+    ]
+    breath_coalesced = _coalesce_protocol_segments(breath_split_monologue)
+    assert len(breath_coalesced) == 2
+    assert breath_coalesced[0]["end"] - breath_coalesced[0]["start"] <= 45.0
+    assert breath_coalesced[1]["end"] - breath_coalesced[1]["start"] <= 45.0
+
+    # Sequential or slightly overlapping turn-taking replies in a pause are preserved,
+    # while genuinely simultaneous short backchannels spoken mostly over speech are suppressed.
+    reply_vs_backchannel = [
+        {
+            "id": "turn-1a",
+            "stream_id": "st-alex",
+            "speaker_id": "spk-alex",
+            "speaker_label": "Alexander",
+            "start": 0.0,
+            "end": 5.0,
+            "text": "Wir planen morgen schon früh",
+            "words": [],
+        },
+        {
+            "id": "bc-mid",
+            "stream_id": "st-ben",
+            "speaker_id": "spk-ben",
+            "speaker_label": "Ben",
+            "start": 2.2,
+            "end": 2.9,
+            "text": "Mhm.",
+            "words": [],
+        },
+        {
+            "id": "bc-straddle",
+            "stream_id": "st-ben",
+            "speaker_id": "spk-ben",
+            "speaker_label": "Ben",
+            "start": 4.65,
+            "end": 5.15,
+            "text": "Genau.",
+            "words": [],
+        },
+        {
+            "id": "turn-1b",
+            "stream_id": "st-alex",
+            "speaker_id": "spk-alex",
+            "speaker_label": "Alexander",
+            "start": 5.6,
+            "end": 10.0,
+            "text": "nach Köln zum Kunden zu fahren.",
+            "words": [],
+        },
+        {
+            "id": "pause-question",
+            "stream_id": "st-ben",
+            "speaker_id": "spk-ben",
+            "speaker_label": "Ben",
+            "start": 9.85,
+            "end": 10.75,
+            "text": "Mit dem Zug?",
+            "words": [],
+        },
+        {
+            "id": "turn-2",
+            "stream_id": "st-alex",
+            "speaker_id": "spk-alex",
+            "speaker_label": "Alexander",
+            "start": 11.1,
+            "end": 14.0,
+            "text": "Ja, direkt ab Hauptbahnhof.",
+            "words": [],
+        },
+    ]
+    filtered = _coalesce_protocol_segments(reply_vs_backchannel)
+    assert [s["id"] for s in filtered] == ["turn-1a", "pause-question", "turn-2"]
+    assert "nach Köln zum Kunden" in filtered[0]["text"]
+
+
+def test_segment_stream_bounds_silence_scan_steps_and_avoids_duplicate_s3_reads(
+    client, database, storage, monkeypatch
+):
+    from wortlaut.processing import FRAME, SILENCE_CHECKPOINT, _is_micro_noise_section
+
+    assert (
+        _is_micro_noise_section(
+            first=480000 + 2 * FRAME,
+            last=480000 + 4 * FRAME,
+            cursor=480000,
+            voiced_frames=2,
+            voiced_peak=700,
+            voiced_energy_sum=2 * FRAME * 180 * 180,
+        )
+        is False
+    )
+
+    attempt, credential, identity = source(client)
+    total_samples = 16000 * 100  # 100 s pure silence (> 2 * 40 s SCAN_WINDOW pages)
+    five_sec_silence = b"\0\0" * 80000
+
+    with client.websocket_connect(f"/v1/attempts/{attempt}/audio") as socket:
+        authenticate(socket, credential)
+        socket.send_json(begin(identity))
+        assert socket.receive_json()["type"] == "ack"
+        last_seq = 0
+        for last_seq, start in enumerate(range(0, total_samples, 80000)):
+            send_pcm(socket, identity, five_sec_silence, last_seq, start)
+        socket.send_json(
+            {
+                "type": "end",
+                "id": begin(identity)["id"] + "/end",
+                "stream_id": identity["stream_id"],
+                "epoch": identity["epoch"],
+                "final_sample": total_samples,
+                "last_sequence": last_seq,
+            }
+        )
+        assert socket.receive_json()["type"] == "ack"
+
+    read_keys: list[str] = []
+    orig_read = storage.read
+
+    def counting_read(key: str) -> bytes:
+        read_keys.append(key)
+        return orig_read(key)
+
+    monkeypatch.setattr(storage, "read", counting_read)
+
+    segmentation_pass(database)
+    assert len(read_keys) == len(set(read_keys)) == 9
+    with Session(database) as db:
+        stream = db.scalar(select(AudioStream))
+        assert stream.scan_sample == 4 * SILENCE_CHECKPOINT
+        assert stream.scan_complete is False
+
+    segmentation_pass(database)
+    with Session(database) as db:
+        stream = db.scalar(select(AudioStream))
+        assert stream.scan_sample == 8 * SILENCE_CHECKPOINT
+        assert stream.scan_complete is False
+
+    segmentation_pass(database)
+    with Session(database) as db:
+        stream = db.scalar(select(AudioStream))
+        assert stream.scan_sample == total_samples
+        assert stream.scan_complete is True
 
 
 def test_speech_section_cuts_long_monologue_at_breath_pause_before_hard_limit():

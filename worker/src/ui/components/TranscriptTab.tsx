@@ -208,19 +208,12 @@ export function TranscriptTab({
             ? 'bound'
             : 'unbound');
       const prev = turns[turns.length - 1];
-      if (prev && prev.speakerLabel === seg.speaker_label) {
-        prev.end = seg.end;
+      if (prev && prev.id === segId) {
+        prev.end = Math.max(prev.end, seg.end);
         const lastPara = prev.paragraphs[prev.paragraphs.length - 1];
-        if (lastPara && seg.start - lastPara.end <= 20.0) {
-          lastPara.end = seg.end;
+        if (lastPara) {
+          lastPara.end = Math.max(lastPara.end, seg.end);
           lastPara.text = `${lastPara.text} ${seg.text}`;
-        } else {
-          prev.paragraphs.push({
-            id: segId,
-            start: seg.start,
-            end: seg.end,
-            text: seg.text,
-          });
         }
       } else {
         turns.push({

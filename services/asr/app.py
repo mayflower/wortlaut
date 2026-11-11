@@ -14,6 +14,13 @@ from starlette.concurrency import run_in_threadpool
 DEFAULT_MODEL_REPO = "nvidia/parakeet-tdt-0.6b-v3"
 DEFAULT_MODEL_FILENAME = "parakeet-tdt-0.6b-v3.nemo"
 DEFAULT_MODEL_REVISION = "541d1f99c6b0c3cd0b11a95167540bb8edefd82b"
+KNOWN_MODEL_CHECKPOINTS = {
+    DEFAULT_MODEL_REPO: (DEFAULT_MODEL_FILENAME, DEFAULT_MODEL_REVISION),
+    "primeline/parakeet-primeline": (
+        "2_95_WER.nemo",
+        "3f1a9bcb611dfeda53fe74fe5f1a3d5701e8023e",
+    ),
+}
 MODEL_REVISION = os.environ.get("WORTLAUT_ASR_MODEL_REVISION", DEFAULT_MODEL_REVISION)
 MAX_BYTES = 16000 * 2 * 32
 lock = threading.Lock()
@@ -22,6 +29,7 @@ accelerator_failed = threading.Event()
 
 
 def load_model():
+    global MODEL_REVISION
     import nemo.collections.asr as nemo_asr
     import torch
     from huggingface_hub import hf_hub_download
@@ -33,16 +41,22 @@ def load_model():
         device = "cpu"
     else:
         raise RuntimeError("Parakeet service requires an NVIDIA GPU")
-    repo = os.environ.get("WORTLAUT_ASR_MODEL_REPO", DEFAULT_MODEL_REPO).strip()
+    repo = (
+        os.environ.get("WORTLAUT_ASR_MODEL_REPO", DEFAULT_MODEL_REPO).strip()
+        or DEFAULT_MODEL_REPO
+    )
     explicit_name = os.environ.get("WORTLAUT_ASR_MODEL_FILENAME", "").strip()
     explicit_rev = os.environ.get("WORTLAUT_ASR_MODEL_REVISION", "").strip()
-    if repo == DEFAULT_MODEL_REPO or explicit_name:
-        name = explicit_name or DEFAULT_MODEL_FILENAME
-        revision = explicit_rev or (DEFAULT_MODEL_REVISION if repo == DEFAULT_MODEL_REPO else None)
+    known = KNOWN_MODEL_CHECKPOINTS.get(repo)
+    if known or explicit_name:
+        name = explicit_name or known[0]
+        revision = explicit_rev or (known[1] if known else None)
         filename = hf_hub_download(repo, name, revision=revision)
         loaded = nemo_asr.models.ASRModel.restore_from(filename, map_location=device)
+        MODEL_REVISION = revision or f"{repo}:{name}"
     else:
         loaded = nemo_asr.models.ASRModel.from_pretrained(model_name=repo, map_location=device)
+        MODEL_REVISION = explicit_rev or repo
     loaded.freeze()
     loaded.eval()
     return loaded

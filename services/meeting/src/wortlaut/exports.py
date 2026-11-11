@@ -380,6 +380,21 @@ def _is_short_backchannel_candidate(seg: dict) -> bool:
     return dur <= 2.2 and len(seg["text"].split()) <= 6
 
 
+def _overlap_seconds(a_start: float, a_end: float, b_start: float, b_end: float) -> float:
+    return max(0.0, min(a_end, b_end) - max(a_start, b_start))
+
+
+def _voiced_overlap_seconds(start: float, end: float, raw_segments: list[dict]) -> float:
+    total = 0.0
+    for raw in raw_segments:
+        if raw["end"] <= start:
+            continue
+        if raw["start"] >= end:
+            break
+        total += _overlap_seconds(start, end, raw["start"], raw["end"])
+    return min(max(0.0, end - start), total)
+
+
 def _coalesce_protocol_segments(segments: list[dict]) -> list[dict]:
     if not segments:
         return []
@@ -390,23 +405,32 @@ def _coalesce_protocol_segments(segments: list[dict]) -> list[dict]:
         by_speaker.setdefault(_coalesce_speaker_key(seg), []).append(seg)
 
     # Bridge sub-second intra-sentence splits of the same speaker only when no other
-    # speaker took a turn in the pause (simultaneous short backchannels may straddle).
+    # speaker took a turn in the pause (simultaneous short backchannels spoken mostly
+    # over actual voiced speech may straddle the boundary).
     speaker_merged: list[dict] = []
     for spk_key, spk_segs in by_speaker.items():
         cur: dict | None = None
         for seg in spk_segs:
             gap = seg["start"] - cur["end"] if cur is not None else 999.0
-            can_bridge = cur is not None and gap <= 1.2
+            can_bridge = (
+                cur is not None
+                and gap <= 1.2
+                and (seg["end"] - cur["start"]) <= _MAX_COALESCED_TURN_DURATION_SECONDS
+            )
             if can_bridge and cur is not None:
                 for other in ordered:
                     if _coalesce_speaker_key(other) == spk_key:
                         continue
                     if other["end"] <= cur["end"] or other["start"] >= seg["start"]:
                         continue
-                    overlaps_speech = (
-                        other["start"] < cur["end"] - 0.1 or other["end"] > seg["start"] + 0.1
+                    other_dur = max(0.0, other["end"] - other["start"])
+                    voiced_ov = _voiced_overlap_seconds(
+                        other["start"], other["end"], spk_segs
                     )
-                    if not (overlaps_speech and _is_short_backchannel_candidate(other)):
+                    if not (
+                        _is_short_backchannel_candidate(other)
+                        and voiced_ov >= max(0.2, other_dur * 0.6)
+                    ):
                         can_bridge = False
                         break
             if can_bridge and cur is not None:
@@ -424,11 +448,16 @@ def _coalesce_protocol_segments(segments: list[dict]) -> list[dict]:
         seg_key = _coalesce_speaker_key(seg)
         dur = max(0.0, seg["end"] - seg["start"])
         if _is_short_backchannel_candidate(seg):
+            min_ov = max(0.2, dur * 0.6)
             overlapped = any(
-                _coalesce_speaker_key(other) != seg_key
+                (other_key := _coalesce_speaker_key(other)) != seg_key
                 and (other["end"] - other["start"]) >= max(4.0, dur * 2.5)
-                and other["start"] <= seg["start"] + 0.8
-                and other["end"] >= seg["end"] - 0.8
+                and _overlap_seconds(seg["start"], seg["end"], other["start"], other["end"])
+                >= min_ov
+                and _voiced_overlap_seconds(
+                    seg["start"], seg["end"], by_speaker.get(other_key, [])
+                )
+                >= min_ov
                 for other in speaker_merged
             )
             if overlapped:

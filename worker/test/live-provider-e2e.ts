@@ -615,12 +615,35 @@ async function leaveAndCloseBrowser(browser?: Browser): Promise<void> {
   try {
     for (const ctx of browser.contexts()) {
       for (const page of ctx.pages()) {
-        const leaveBtn = page.locator(
-          'button[aria-label*="Anruf verlassen" i], button[aria-label*="Leave call" i], button[aria-label*="Besprechung verlassen" i], button[aria-label*="Leave meeting" i], button#hangup-button',
-        );
-        if (await leaveBtn.first().isVisible().catch(() => false)) {
-          await leaveBtn.first().click({timeout: 2000, force: true}).catch(() => {});
-          await delay(600);
+        for (const frame of page.frames()) {
+          if (frame.url().includes('preload=true')) continue;
+          const leaveBtn = frame.locator(
+            'button[aria-label*="Anruf verlassen" i], button[aria-label*="Leave call" i], button[aria-label*="Besprechung verlassen" i], button[aria-label*="Leave meeting" i], button[aria-label*="Verlassen" i], button.footer-button-base__button[aria-label*="Leave" i], .footer__leave-btn, button#hangup-button',
+          ).or(
+            frame.getByRole('button', {
+              name: /^(Leave|Leave Meeting|Leave meeting|Verlassen|Meeting verlassen|Meeting verlassen oder Meeting für alle beenden)(?: \(.*\))?$/i,
+            }),
+          );
+          if (await leaveBtn.first().isVisible().catch(() => false)) {
+            await leaveBtn.first().click({timeout: 2000, force: true}).catch(() =>
+              leaveBtn.first().evaluate(el => (el as HTMLElement).click()).catch(() => {}),
+            );
+            await delay(300);
+            const confirmBtn = frame.locator(
+              'button.leave-meeting-options__btn--danger, button.leave-meeting-options__btn',
+            ).or(
+              frame.getByRole('button', {
+                name: /^(Leave Meeting|Leave meeting|Meeting verlassen)$/i,
+              }),
+            );
+            if (await confirmBtn.first().isVisible().catch(() => false)) {
+              await confirmBtn.first().click({timeout: 2000, force: true}).catch(() =>
+                confirmBtn.first().evaluate(el => (el as HTMLElement).click()).catch(() => {}),
+              );
+            }
+            await delay(500);
+            break;
+          }
         }
       }
     }

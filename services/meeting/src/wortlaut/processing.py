@@ -39,6 +39,9 @@ SILENCE_CHECKPOINT = RATE * 10
 DRAIN_SECONDS = 20
 MAX_CHUNK = RATE * 5
 SCAN_WINDOW = SILENCE_CHECKPOINT + MAX_SEGMENT + OVERLAP
+MAX_SCAN_STEPS = 8
+if not (POST_ROLL <= SOFT_SILENCE <= SILENCE):
+    raise RuntimeError("VAD silence thresholds must not be shorter than POST_ROLL")
 
 
 @dataclass
@@ -385,8 +388,9 @@ def _is_micro_noise_section(
 ) -> bool:
     if voiced_frames <= 0:
         return True
-    # Never drop the trailing tail of speech continuing across a durable cut/cursor.
-    if cursor > 0 and first == cursor:
+    # Never drop the trailing tail of speech continuing across a durable cut/cursor
+    # (allowing up to 4 frames / 120 ms for a voiceless stop closure right on the cut).
+    if cursor > 0 and first - cursor <= 4 * FRAME:
         return False
     if last - first > RATE or voiced_frames > 8:
         return False
@@ -702,6 +706,7 @@ def stream_binding_opted_out(
 
 def segment_stream(db: Session, stream: AudioStream):
     runs, terminal, _ = timeline(db, stream, incremental=True)
+    steps = 0
     for index, run in enumerate(runs):
         if run.end <= stream.scan_sample:
             continue
@@ -711,12 +716,22 @@ def segment_stream(db: Session, stream: AudioStream):
         if stream_binding_opted_out(db, stream, run.binding):
             stream.scan_sample = run.end
             continue
-        while stream.scan_sample < run.end:
+        if steps >= MAX_SCAN_STEPS:
+            return
+        window_origin = max(stream.scan_sample, run.start)
+        # At most 10 s silence + 30 s voice + overlap; RAM remains bounded (~1.3 MB)
+        # and each chunk in the window is fetched from object storage only once.
+        limit = min(run.end, window_origin + SCAN_WINDOW)
+        final = limit == run.end and (index < len(runs) - 1 or terminal)
+        window_pcm = read_pcm(run.chunks, window_origin, limit)
+        while stream.scan_sample < limit:
+            if steps >= MAX_SCAN_STEPS:
+                return
             cursor = max(stream.scan_sample, run.start)
-            # At most 10 s silence + 30 s voice + overlap; RAM remains bounded.
-            limit = min(run.end, cursor + SCAN_WINDOW)
-            final = limit == run.end and (index < len(runs) - 1 or terminal)
-            pcm = read_pcm(run.chunks, cursor, limit)
+            if not final and limit - cursor < FRAME:
+                return
+            steps += 1
+            pcm = window_pcm[(cursor - window_origin) * 2 :]
             span, following = speech_section(pcm, cursor, final)
             if span:
                 start, end, core_end = span
@@ -759,6 +774,8 @@ def segment_stream(db: Session, stream: AudioStream):
             stream.scan_sample = following
             if following <= cursor:
                 return
+        if stream.scan_sample < run.end:
+            return
     if terminal:
         stream.scan_complete = True
 

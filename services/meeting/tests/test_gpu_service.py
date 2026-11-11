@@ -137,13 +137,35 @@ def test_cpu_fallback_loads_model_on_cpu_when_enabled(monkeypatch):
     monkeypatch.setitem(
         sys.modules,
         "huggingface_hub",
-        SimpleNamespace(hf_hub_download=lambda repo, name, revision: f"/tmp/{name}"),
+        SimpleNamespace(
+            hf_hub_download=lambda repo, name, revision: f"/tmp/{repo}:{name}@{revision}"
+        ),
     )
+    monkeypatch.setattr(asr_service, "MODEL_REVISION", asr_service.DEFAULT_MODEL_REVISION)
     monkeypatch.setenv("WORTLAUT_ASR_ALLOW_CPU", "true")
     loaded = asr_service.load_model()
     assert isinstance(loaded, DummyModel)
+    assert asr_service.MODEL_REVISION == "541d1f99c6b0c3cd0b11a95167540bb8edefd82b"
     assert restored == {
-        "filename": "/tmp/parakeet-tdt-0.6b-v3.nemo",
+        "filename": (
+            "/tmp/nvidia/parakeet-tdt-0.6b-v3:"
+            "parakeet-tdt-0.6b-v3.nemo@541d1f99c6b0c3cd0b11a95167540bb8edefd82b"
+        ),
+        "map_location": "cpu",
+        "frozen": True,
+        "eval": True,
+    }
+
+    restored.clear()
+    monkeypatch.setenv("WORTLAUT_ASR_MODEL_REPO", "primeline/parakeet-primeline")
+    loaded_primeline = asr_service.load_model()
+    assert isinstance(loaded_primeline, DummyModel)
+    assert asr_service.MODEL_REVISION == "3f1a9bcb611dfeda53fe74fe5f1a3d5701e8023e"
+    assert restored == {
+        "filename": (
+            "/tmp/primeline/parakeet-primeline:"
+            "2_95_WER.nemo@3f1a9bcb611dfeda53fe74fe5f1a3d5701e8023e"
+        ),
         "map_location": "cpu",
         "frozen": True,
         "eval": True,
@@ -153,6 +175,7 @@ def test_cpu_fallback_loads_model_on_cpu_when_enabled(monkeypatch):
     monkeypatch.setenv("WORTLAUT_ASR_MODEL_REPO", "custom-org/parakeet-custom")
     loaded_custom = asr_service.load_model()
     assert isinstance(loaded_custom, DummyModel)
+    assert asr_service.MODEL_REVISION == "custom-org/parakeet-custom"
     assert restored == {
         "pretrained": "custom-org/parakeet-custom",
         "map_location": "cpu",
