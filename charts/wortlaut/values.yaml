@@ -33,8 +33,9 @@ asr:
   enabled: true
   allowCpu: false
   gpuCount: 1
-  # Qwen3-ASR 1.7B (Transformers), 30 languages with per-segment detection.
+  # Qwen3-ASR 1.7B (Transformers), constrained by default to German,English (`*` for all 30 languages).
   modelRepo: Qwen/Qwen3-ASR-1.7B-hf
+  languages: German,English
   storageClassName: ""
   cacheSize: 20Gi
 

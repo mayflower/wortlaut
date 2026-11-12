@@ -167,6 +167,8 @@ spec:
               value: {{ .Values.asr.allowCpu | ternary "true" "false" | quote }}
             - name: WORTLAUT_ASR_MODEL_REPO
               value: {{ .Values.asr.modelRepo | quote }}
+            - name: WORTLAUT_ASR_LANGUAGES
+              value: {{ .Values.asr.languages | quote }}
           envFrom:
             - secretRef:
                 name: {{ .Values.secrets.asrSecretName }}

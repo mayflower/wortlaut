@@ -12,9 +12,12 @@ from starlette.concurrency import run_in_threadpool
 
 DEFAULT_MODEL_REPO = "Qwen/Qwen3-ASR-1.7B-hf"
 DEFAULT_MODEL_REVISION = "bcd2b5b7f32b480ab5790554cfa8347f246a14f3"
+DEFAULT_ASR_LANGUAGES = "German,English"
 MODEL_REPO = os.environ.get("WORTLAUT_ASR_MODEL_REPO", "").strip() or DEFAULT_MODEL_REPO
 MODEL_REVISION = os.environ.get("WORTLAUT_ASR_MODEL_REVISION", "").strip() or DEFAULT_MODEL_REVISION
 RATE = 16000
+PAD_SAMPLES = int(0.3 * RATE)
+MIN_SPEECH_LANG_PROB = 0.10
 MAX_BYTES = RATE * 2 * 32
 # Generation budget: the language prefix plus a generous speech rate. A
 # transcript that reaches the budget without an end token is reported as
@@ -27,6 +30,53 @@ SPACE_MARKER = "Ġ"  # Byte-level BPE marker for a leading space.
 lock = threading.Lock()
 model = None
 accelerator_failed = threading.Event()
+
+
+def parse_allowed_languages(raw: str | None) -> tuple[str, ...] | None:
+    value = DEFAULT_ASR_LANGUAGES if raw is None else raw.strip()
+    if not value or value.lower() in ("*", "all", "auto"):
+        return None
+    langs = tuple(dict.fromkeys(part.strip() for part in value.split(",") if part.strip()))
+    return langs or None
+
+
+def apply_language_step_gate(
+    scores,
+    allowed_lang_ids: dict[str, int],
+    none_token_id: int | None,
+    germanic_kin_ids: tuple[int, ...] = (),
+):
+    """Gate and constrain Qwen3-ASR's step-1 language token distribution.
+
+    At step 1 (after `language`), Qwen3-ASR predicts the spoken language or
+    `None`. Breaths, coughs, and mic clicks place >85% probability on CJK
+    tokens and emit filler hallucinations (`嗯。`, `はい。`). When the acoustic
+    probability mass on allowed languages (plus continental West-Germanic
+    neighbors for short German interjections) is below `MIN_SPEECH_LANG_PROB`,
+    selecting `None` suppresses the non-speech hallucination cleanly.
+    """
+    import torch
+
+    probs = torch.softmax(scores.float(), dim=-1)
+    p_allowed = sum(float(probs[0, tid]) for tid in allowed_lang_ids.values())
+    p_kin = sum(float(probs[0, tid]) for tid in germanic_kin_ids)
+    if p_allowed + p_kin < MIN_SPEECH_LANG_PROB and none_token_id is not None:
+        masked = torch.full_like(scores, float("-inf"))
+        masked[:, none_token_id] = scores[:, none_token_id]
+        return masked
+
+    adjusted = scores.clone()
+    german_id = allowed_lang_ids.get("German")
+    if german_id is not None and p_kin > 0.0:
+        p_de = max(float(probs[0, german_id]), 1e-12)
+        adjusted[0, german_id] = scores[0, german_id] + math.log(1.0 + p_kin / p_de)
+
+    masked = torch.full_like(adjusted, float("-inf"))
+    keep = list(allowed_lang_ids.values())
+    if none_token_id is not None:
+        keep.append(none_token_id)
+    masked[:, keep] = adjusted[:, keep]
+    return masked
 
 
 def _clamp_confidence(value) -> float | None:
@@ -68,19 +118,105 @@ def assemble_words(tokens: list[str], probs: list[float], to_text) -> list[dict]
 
 
 class QwenASR:
-    def __init__(self, processor, network):
+    def __init__(self, processor, network, allowed_languages=...):
         self.processor = processor
         self.network = network
         self.tokenizer = processor.tokenizer
+        raw_langs = (
+            os.environ.get("WORTLAUT_ASR_LANGUAGES")
+            if allowed_languages is ...
+            else allowed_languages
+        )
+        self.allowed_languages = parse_allowed_languages(raw_langs)
+        self.language_token_id = self._language_marker_token_id()
+        self.none_token_id = self._first_lang_token_id("None")
+        self.allowed_lang_ids = (
+            {
+                lang: tid
+                for lang in self.allowed_languages
+                if (tid := self._first_lang_token_id(lang)) is not None
+            }
+            if self.allowed_languages
+            else {}
+        )
+        self.germanic_kin_ids = (
+            tuple(
+                tid
+                for kin in ("Dutch", "Danish")
+                if kin not in self.allowed_lang_ids
+                and (tid := self._first_lang_token_id(kin)) is not None
+            )
+            if "German" in self.allowed_lang_ids
+            else ()
+        )
+
+    def _first_lang_token_id(self, lang: str) -> int | None:
+        if hasattr(self.tokenizer, "encode"):
+            ids = self.tokenizer.encode(" " + lang, add_special_tokens=False)
+            return ids[0] if ids else None
+        if hasattr(self.tokenizer, "convert_tokens_to_ids"):
+            tid = self.tokenizer.convert_tokens_to_ids(SPACE_MARKER + lang)
+            return tid if isinstance(tid, int) and tid >= 0 else None
+        return None
+
+    def _language_marker_token_id(self) -> int | None:
+        if hasattr(self.tokenizer, "encode"):
+            ids = self.tokenizer.encode("language", add_special_tokens=False)
+            return ids[0] if ids else None
+        if hasattr(self.tokenizer, "convert_tokens_to_ids"):
+            tid = self.tokenizer.convert_tokens_to_ids("language")
+            return tid if isinstance(tid, int) and tid >= 0 else None
+        return None
 
     def transcribe(self, audio) -> dict:
+        import numpy as np
         import torch
 
         duration = len(audio) / RATE
         budget = PREFIX_TOKENS + math.ceil(duration * TOKENS_PER_SECOND)
-        # The Qwen3-ASR processor defaults to 16 kHz audio, the rate we send.
-        inputs = self.processor.apply_transcription_request(audio=audio)
-        inputs = inputs.to(self.network.device, self.network.dtype)
+        # 0.3 s of silence on each boundary prevents Qwen3-ASR's Conv2d audio
+        # frontend from clipping segment-initial or segment-final words.
+        padded = np.pad(audio, (PAD_SAMPLES, PAD_SAMPLES)) if len(audio) else audio
+        if hasattr(self.processor, "apply_chat_template") and callable(self.processor):
+            conversations = [[{"role": "user", "content": [{"type": "audio", "audio": padded}]}]]
+            prompt = self.processor.apply_chat_template(
+                conversations, tokenize=False, add_generation_prompt=True
+            )
+            inputs = self.processor(text=prompt, audio=[padded], return_tensors="pt")
+        else:
+            inputs = self.processor.apply_transcription_request(audio=padded)
+        if hasattr(inputs, "items") and any(
+            hasattr(v, "is_floating_point") for v in inputs.values()
+        ):
+            inputs = {
+                k: v.to(
+                    device=self.network.device,
+                    dtype=self.network.dtype if v.is_floating_point() else None,
+                )
+                if hasattr(v, "to")
+                else v
+                for k, v in inputs.items()
+            }
+        else:
+            inputs = inputs.to(self.network.device, self.network.dtype)
+
+        prompt_len = inputs["input_ids"].shape[1]
+        gen_kwargs = {}
+        if self.allowed_lang_ids:
+            lang_marker_id = self.language_token_id
+            allowed_ids = self.allowed_lang_ids
+            none_id = self.none_token_id
+            kin_ids = self.germanic_kin_ids
+
+            def gate_step(input_ids, scores):
+                if input_ids.shape[1] == prompt_len + 1 and (
+                    lang_marker_id is None or int(input_ids[0, -1]) == lang_marker_id
+                ):
+                    return apply_language_step_gate(scores, allowed_ids, none_id, kin_ids)
+                return scores
+
+            gen_kwargs["logits_processor"] = [gate_step]
+
         with torch.inference_mode():
             out = self.network.generate(
                 **inputs,
@@ -88,6 +224,7 @@ class QwenASR:
                 do_sample=False,
                 output_scores=True,
                 return_dict_in_generate=True,
+                **gen_kwargs,
             )
             probs = (
                 self.network.compute_transition_scores(

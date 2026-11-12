@@ -46,7 +46,8 @@ window.admit = async () => {
   const producer = new AudioContext({sampleRate: 48000});
   const sender = new RTCPeerConnection({iceServers: []});
   const receiver = new RTCPeerConnection({iceServers: [],
-    ...(window.encodedFixtureMode === 'reserved' ? {encodedInsertableStreams: true} : {})});
+    ...(window.encodedFixtureMode === 'reserved' ? {encodedInsertableStreams: true}
+      : window.encodedFixtureMode === 'wasm_sink' ? {forceEncodedAudioInsertableStreams: true} : {})});
   const pcs = [sender, receiver];
   window.fixtureReceiver = receiver;
   const providerUrl = URL.createObjectURL(new Blob([
@@ -73,13 +74,28 @@ window.admit = async () => {
       streams.readable.pipeTo(streams.writable);
     }
   }
+  const sinkWorkers = [];
+  if (window.encodedFixtureMode === 'wasm_sink') {
+    const sinkWorkerUrl = URL.createObjectURL(new Blob([
+      'self.onmessage = async (ev) => { const r = ev.data.readable.getReader(); while (!(await r.read()).done) {} };'
+    ], {type: 'application/javascript'}));
+    for (let i = 0; i < 2; i++) {
+      const {receiver: reserved} = receiver.addTransceiver('audio', {direction: 'recvonly'});
+      const streams = reserved.createEncodedStreams();
+      const sinkWorker = new Worker(sinkWorkerUrl);
+      sinkWorkers.push(sinkWorker);
+      sinkWorker.postMessage({readable: streams.readable, writable: streams.writable}, [streams.readable, streams.writable]);
+    }
+  }
   sender.onicecandidate = e => { if (e.candidate) receiver.addIceCandidate(e.candidate); };
   receiver.onicecandidate = e => { if (e.candidate) sender.addIceCandidate(e.candidate); };
   receiver.ontrack = e => {
     // Prove native events and prototypes still work after installing the hook.
     if (!(e.receiver instanceof RTCRtpReceiver) || !(receiver instanceof RTCPeerConnection)) throw Error('Native RTC changed');
-    const audio = document.createElement('audio'); audio.autoplay = true;
-    audio.srcObject = new MediaStream([e.track]); document.body.append(audio);
+    if (window.encodedFixtureMode !== 'wasm_sink') {
+      const audio = document.createElement('audio'); audio.autoplay = true;
+      audio.srcObject = new MediaStream([e.track]); document.body.append(audio);
+    }
   };
   const nodes = [], tracks = [];
   for (const frequency of [440, 880]) {
@@ -88,14 +104,17 @@ window.admit = async () => {
     tracks.push(destination.stream);
     tone.start(); nodes.push(tone);
   }
-  if (['provider', 'reserved'].includes(window.encodedFixtureMode)) {
+  if (['provider', 'reserved', 'wasm_sink'].includes(window.encodedFixtureMode)) {
     // Offer the preconfigured receive transceivers so the test really uses
     // those transforms, rather than creating additional unassociated slots.
     await receiver.setLocalDescription(await receiver.createOffer());
     await sender.setRemoteDescription(receiver.localDescription);
     tracks.forEach(stream => sender.addTrack(stream.getAudioTracks()[0], stream));
-    await sender.setLocalDescription(await sender.createAnswer());
-    await receiver.setRemoteDescription(sender.localDescription);
+    const answer = await sender.createAnswer();
+    await sender.setLocalDescription(answer);
+    await receiver.setRemoteDescription(window.encodedFixtureMode === 'wasm_sink'
+      ? {type: 'answer', sdp: answer.sdp.replace(/a=fmtp:111 (.*)/g, 'a=fmtp:111 extensions=120;$1')}
+      : sender.localDescription);
   } else {
     tracks.forEach(stream => sender.addTrack(stream.getAudioTracks()[0], stream));
     await sender.setLocalDescription(await sender.createOffer());
@@ -106,12 +125,12 @@ window.admit = async () => {
   await producer.resume();
   window.finishProducer = async () => {
     nodes.forEach(n => n.stop()); pcs.forEach(pc => pc.close()); await producer.close();
-    providerWorker?.terminate(); URL.revokeObjectURL(providerUrl);
+    providerWorker?.terminate(); sinkWorkers.forEach(w => w.terminate()); URL.revokeObjectURL(providerUrl);
   };
 };`;
 type CaptureLinks = {links: {source: MediaStreamAudioSourceNode; node: AudioNode}[]};
 async function preparePage(auth: 'guest' | 'account' = 'guest', german = false, missingInput = false,
-  encoded: 'native' | 'provider' | 'reserved' | 'unsupported' | 'failed' = 'native') {
+  encoded: 'native' | 'provider' | 'reserved' | 'wasm_sink' | 'unsupported' | 'failed' = 'native') {
   const context = await browser.newContext({viewport: null, locale: german ? 'de-DE' : 'en-US', permissions: []});
   await context.addInitScript((mode) => {
     (window as any).encodedFixtureMode = mode;
@@ -242,12 +261,12 @@ try {
   await page.evaluate('window.finishProducer()'); await context.close();
 
   for (const [mode, expected] of [
-    ['provider', 'provider_transform'], ['reserved', 'provider_reserved'],
+    ['provider', 'provider_transform'], ['reserved', 'provider_reserved'], ['wasm_sink', 'provider_reserved'],
     ['unsupported', 'unsupported'], ['failed', 'failed'], ['native', 'replaced'],
   ] as const) {
     const guarded = await preparePage('guest', false, false, mode);
     await guarded.meet.join(); await guarded.page.evaluate('window.admit()');
-    await guarded.page.waitForFunction(() => window.wortlautMeet.inspect().audio_samples > 16000,
+    await guarded.page.waitForFunction(() => window.wortlautMeet.inspect().active_audio_samples > 16000,
       undefined, {timeout: 15000});
     if (expected === 'replaced') await guarded.page.evaluate('window.installProviderTransforms()');
     await guarded.page.waitForFunction((state) => window.wortlautMeet.inspect().receiver_sources.length === 2 &&
@@ -502,13 +521,47 @@ try {
   assert.equal((await blockedGuest.meet.inspect()).reason, 'prejoin_denied');
   await blockedGuest.meet.stop('prejoin_denied'); await blockedGuest.context.close();
 
+  const coldEmptyPrejoin = await preparePage('guest', true);
+  await coldEmptyPrejoin.page.evaluate(() => {
+    (window as any).coldJoinClicks = 0;
+    const join = document.querySelector('#join') as HTMLButtonElement;
+    join.textContent = 'Teilnahme erbitten';
+    join.setAttribute('aria-label', 'Lautsprecher nicht gefunden');
+    join.onclick = () => {
+      (window as any).coldJoinClicks++;
+      join.remove();
+      document.querySelector('#waiting')!.textContent =
+        'Bitte warten Sie, bis Sie vom Organisator der Besprechung in den Anruf eingeladen werden';
+    };
+    const emptyBanner = document.createElement('div');
+    emptyBanner.id = 'empty-prejoin';
+    emptyBanner.textContent = 'Außer Ihnen ist niemand da';
+    document.body.append(emptyBanner);
+  });
+  const coldJoinPromise = coldEmptyPrejoin.meet.join();
+  await coldEmptyPrejoin.page.waitForFunction(() => true);
+  for (let i = 0; i < 40 && (await coldEmptyPrejoin.meet.inspect()).participation !== 'waiting_admission'; i++) {
+    await coldEmptyPrejoin.page.waitForTimeout(50);
+  }
+  assert.equal((await coldEmptyPrejoin.meet.inspect()).participation, 'waiting_admission');
+  assert.equal(await coldEmptyPrejoin.page.evaluate(() => (window as any).coldJoinClicks), 0,
+    'Cold empty Google Meet prejoin must hold before clicking Ask to join until a participant arrives');
+  await coldEmptyPrejoin.page.evaluate(() => {
+    document.querySelector('#empty-prejoin')!.textContent = '1 Teilnehmer im Anruf';
+  });
+  await coldJoinPromise;
+  assert.equal(await coldEmptyPrejoin.page.evaluate(() => (window as any).coldJoinClicks), 1);
+  assert.equal((await coldEmptyPrejoin.meet.inspect()).participation, 'waiting_admission');
+  await coldEmptyPrejoin.meet.stop('cancelled'); await coldEmptyPrejoin.context.close();
+
   for (const localeCase of [
     {
       german: true,
       joinLabel: 'Teilnahme erbitten',
-      waitingText: 'Sie können teilnehmen, sobald jemand Ihre Anfrage annimmt',
+      waitingText: 'Bitte warten Sie, bis Sie vom Organisator der Besprechung in den Anruf eingeladen werden',
+      organizerChatLabel: 'Nachrichten vom Organisator',
       unknownWaitingText: 'Unbekannter Warteraumhinweis',
-      peopleLabel: 'Alle anzeigen',
+      peopleLabel: 'Personen2',
       chatToggleLabel: 'Mit allen chatten',
       chatInputLabel: 'Nachricht an alle senden',
       chatSendLabel: 'Nachricht senden',
@@ -518,8 +571,9 @@ try {
       german: false,
       joinLabel: 'Ask to join',
       waitingText: 'Someone in the call will let you in soon',
+      organizerChatLabel: 'Messages from the organizer',
       unknownWaitingText: 'Custom waiting room banner',
-      peopleLabel: 'People',
+      peopleLabel: 'People2',
       chatToggleLabel: 'Chat with everyone',
       chatInputLabel: 'Send a message to everyone',
       chatSendLabel: 'Send a message',
@@ -531,7 +585,7 @@ try {
     const framesBeforeLobby = frames.length;
     await lobbyPrewarmed.page.locator('#join').evaluate((el, text) => { el.textContent = text; }, localeCase.joinLabel);
     await lobbyPrewarmed.meet.join();
-    await lobbyPrewarmed.page.evaluate(async (waitingText) => {
+    await lobbyPrewarmed.page.evaluate(async ({waitingText, organizerChatLabel}) => {
       document.querySelector('#waiting')!.textContent = waitingText;
       const selfOuter = document.createElement('div');
       selfOuter.dataset.participantId = 'spaces/testroom/devices/self';
@@ -541,7 +595,11 @@ try {
       const effectsBtn = document.createElement('button');
       effectsBtn.setAttribute('data-panel-id', '3');
       effectsBtn.setAttribute('aria-label', 'Visual effects');
-      document.body.append(selfOuter, effectsBtn);
+      const organizerChatBtn = document.createElement('button');
+      organizerChatBtn.id = 'organizer-chat-btn';
+      organizerChatBtn.setAttribute('data-panel-id', '2');
+      organizerChatBtn.setAttribute('aria-label', organizerChatLabel);
+      document.body.append(selfOuter, effectsBtn, organizerChatBtn);
       const offerer = new RTCPeerConnection({iceServers: []});
       const answerer = new RTCPeerConnection({iceServers: []});
       const dc = offerer.createDataChannel('collections');
@@ -609,15 +667,16 @@ try {
         peopleLabel: string; chatToggleLabel: string; chatInputLabel: string; chatSendLabel: string;
       }) => {
         document.querySelector('#waiting')!.textContent = '';
+        document.querySelector('#organizer-chat-btn')?.remove();
         const uiEvents: string[] = [];
         (window as any).admittedUiEvents = uiEvents;
         const chatToggle = document.createElement('button');
         chatToggle.setAttribute('aria-label', cfg.chatToggleLabel);
         chatToggle.setAttribute('data-panel-id', '2');
         chatToggle.setAttribute('aria-expanded', 'false');
-        const peopleBtn = document.createElement('button');
-        peopleBtn.setAttribute('aria-label', cfg.peopleLabel);
-        peopleBtn.setAttribute('data-panel-id', '1');
+        const peopleBtn = document.createElement('div');
+        peopleBtn.setAttribute('role', 'button');
+        peopleBtn.textContent = cfg.peopleLabel;
         peopleBtn.setAttribute('aria-expanded', 'false');
         peopleBtn.onclick = () => {
           // Real Meet shares a single side panel: opening People collapses Chat!
@@ -657,7 +716,7 @@ try {
         await oscCtx?.close().catch(() => {});
         dc.close(); offerer.close(); answerer.close();
       };
-    }, localeCase.waitingText);
+    }, localeCase);
     await lobbyPrewarmed.page.waitForFunction(() =>
       window.wortlautMeet.inspect().participant_sources.total === 35, undefined, {timeout: 10000});
     await lobbyPrewarmed.page.waitForTimeout(400);
@@ -921,7 +980,7 @@ try {
   await assert.rejects(account.meet.join(), (error: unknown) => error instanceof MeetError && error.reason === 'auth_session_missing');
   assert.equal(await account.page.locator('#join').count(), 1);
   await account.meet.stop('auth_session_missing'); await account.context.close();
-  assert.equal(authenticated, 25);
+  assert.equal(authenticated, 27);
   const webexContext = await browser.newContext();
   const webexPage = await webexContext.newPage();
   const webexUrl = 'https://example.webex.com/meet/fixture';

@@ -51,6 +51,7 @@ services:
       WORTLAUT_ASR_TOKEN: ${WORTLAUT_ASR_TOKEN:-wortlaut-local-asr-token}
       WORTLAUT_ASR_ALLOW_CPU: ${WORTLAUT_ASR_ALLOW_CPU:-true}
       WORTLAUT_ASR_MODEL_REPO: ${WORTLAUT_ASR_MODEL_REPO:-Qwen/Qwen3-ASR-1.7B-hf}
+      WORTLAUT_ASR_LANGUAGES: ${WORTLAUT_ASR_LANGUAGES:-German,English}
     volumes:
       - model-cache:/model-cache
 

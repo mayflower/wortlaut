@@ -40,6 +40,9 @@ spec:
           image: wortlaut-asr:dev
           ports:
             - containerPort: 8000
+          env:
+            - name: WORTLAUT_ASR_LANGUAGES
+              value: German,English
           envFrom:
             - secretRef:
                 name: wortlaut-asr

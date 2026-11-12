@@ -18,6 +18,8 @@ declare global {
     wortlautMeetReceivers: {connections: Set<RTCPeerConnection>; received: WeakSet<RTCRtpReceiver>;
       encodedReserved: WeakSet<RTCPeerConnection>;
       receiverStreams?: WeakMap<RTCRtpReceiver, string[]>;
+      receiverMediaStreams?: WeakMap<RTCRtpReceiver, MediaStream>;
+      encodedFrameMeta?: WeakMap<RTCRtpReceiver, {ssrc: number | null; csrcs: number[]}>;
       dataChannels?: Set<RTCDataChannel>;
       dataMessages?: unknown[];
       dataSends?: {channel: RTCDataChannel; data: unknown}[];
@@ -184,7 +186,7 @@ function install(config: MeetCaptureConfig) {
       return new Worker(toWorkerScriptUrl(blobUrl));
     },
   });
-  const {connections, received, encodedReserved, receiverStreams} = window.wortlautMeetReceivers;
+  const {connections, received, encodedReserved, receiverStreams, receiverMediaStreams, encodedFrameMeta} = window.wortlautMeetReceivers;
   const participants = new Map<string, {
     participant_id: string; participant_name: string | null;
     audio_csis: Set<number>; share_audio_csis: Set<number>;
@@ -1473,7 +1475,7 @@ function install(config: MeetCaptureConfig) {
     .then(() => { window.wortlautMeetReceivers.observe = observe; state.capture_ready = true; })
     .catch(() => { state.reason = 'capture_modules_failed'; })
     .finally(() => { modules.forEach((url) => URL.revokeObjectURL(url)); });
-  const sources = new Map<RTCRtpReceiver, {id: string; track?: MediaStreamTrack; recovered?: boolean}>();
+  const sources = new Map<RTCRtpReceiver, {id: string; track?: MediaStreamTrack; recovered?: boolean; silentSamples?: number}>();
   const keepaliveAudios = new Map<RTCRtpReceiver, {el: HTMLAudioElement; track: MediaStreamTrack}>();
   const receiverStats = new Map<RTCRtpReceiver, InboundAudioStats>();
   let peerStats: MediaState['peer_connections'] = [];
@@ -1603,13 +1605,21 @@ function install(config: MeetCaptureConfig) {
       const encoded = btoa(raw);
       send({attempt_id: config.attempt_id, type: 'chunk', metadata, pcm: encoded}, encoded.length + 8192);
       state.audio_samples += metadata.sample_count;
+      let chunkActive = false;
       if (!optedOut) {
         const view = new DataView(pcm.buffer, pcm.byteOffset, pcm.byteLength);
         for (let i = 0; i + 1 < pcm.byteLength; i += 2) {
           if (Math.abs(view.getInt16(i, true)) >= 200) {
             state.active_audio_samples += metadata.sample_count;
+            chunkActive = true;
             break;
           }
+        }
+      }
+      for (const source of sources.values()) {
+        if (source.id === metadata.provider_source_id) {
+          source.silentSamples = chunkActive || optedOut ? 0 : (source.silentSamples ?? 0) + metadata.sample_count;
+          break;
         }
       }
     }, error: (reason) => { state.reason = reason; }};
@@ -1642,17 +1652,24 @@ function install(config: MeetCaptureConfig) {
       return {csi: null, signaled_participant_id: null, participant_name: null, source_kind: 'speaker', bound: false};
     }
     const lastFrame = observations.get(receiver)?.evidence.last_frame;
+    const hookedMeta = encodedFrameMeta?.get(receiver);
     const recentCsrcs = recentRtpSources(receiver.getContributingSources()).filter(validCsi);
     const csrcs = [...new Set(
       recentCsrcs.length > 0
         ? recentCsrcs
-        : (Array.isArray(lastFrame?.contributing_sources) ? (lastFrame.contributing_sources as number[]) : []).filter(validCsi),
+        : (Array.isArray(lastFrame?.contributing_sources)
+            ? (lastFrame.contributing_sources as number[])
+            : (hookedMeta?.csrcs ?? [])
+          ).filter(validCsi),
     )];
     const recentSsrcs = recentRtpSources(receiver.getSynchronizationSources()).filter(validCsi);
     const ssrcs = [...new Set(
       recentSsrcs.length > 0
         ? recentSsrcs
-        : (validCsi(lastFrame?.synchronization_source) ? [lastFrame.synchronization_source] : []).filter(validCsi),
+        : (validCsi(lastFrame?.synchronization_source)
+            ? [lastFrame.synchronization_source]
+            : validCsi(hookedMeta?.ssrc) ? [hookedMeta.ssrc] : []
+          ).filter(validCsi),
     )];
 
     const matchByCsi = (candidates: number[]) => {
@@ -1783,11 +1800,7 @@ function install(config: MeetCaptureConfig) {
           }
         }
         for (const receiver of live) {
-          const receiverStarted =
-            !receiver.track.muted ||
-            receiver.getSynchronizationSources().length > 0 ||
-            receiver.getContributingSources().length > 0;
-          if (receiverStarted && !domAudioTracks.has(receiver.track) && !keepaliveAudios.has(receiver)) {
+          if (!domAudioTracks.has(receiver.track) && !keepaliveAudios.has(receiver)) {
             try {
               const el = document.createElement('audio');
               el.dataset.wortlautKeepalive = '1';
@@ -1795,7 +1808,7 @@ function install(config: MeetCaptureConfig) {
               el.muted = false;
               el.volume = 1;
               el.style.display = 'none';
-              el.srcObject = new MediaStream([receiver.track]);
+              el.srcObject = receiverMediaStreams?.get(receiver) ?? new MediaStream([receiver.track]);
               document.body?.append(el);
               void el.play().catch(() => {});
               keepaliveAudios.set(receiver, {el, track: receiver.track});
@@ -1804,9 +1817,9 @@ function install(config: MeetCaptureConfig) {
         }
         const hasSignaledOrDomParticipants = participants.size > 0 || liveDomCount > 0;
         const silentCaptureWithParticipants =
-          state.active_audio_samples === 0 &&
-          state.audio_samples >= 16000 * 10 &&
-          hasSignaledOrDomParticipants;
+          hasSignaledOrDomParticipants &&
+          ((state.active_audio_samples === 0 && state.audio_samples >= 16000 * 10) ||
+            [...sources.values()].some((s) => (s.silentSamples ?? 0) >= 16000 * 10));
         for (const [receiver, entry] of observations) {
           if (!live.has(receiver)) { detachObservation(receiver); continue; }
           if (!entry.transform) continue;
@@ -1847,13 +1860,20 @@ function install(config: MeetCaptureConfig) {
           }
         }
         for (const [receiver, source] of sources) {
-          const forceReattach = silentCaptureWithParticipants && !source.recovered && source.track === receiver.track;
+          const forceReattach =
+            hasSignaledOrDomParticipants &&
+            (source.silentSamples ?? 0) >= 16000 * 10 &&
+            !source.recovered &&
+            source.track === receiver.track;
           if (!live.has(receiver) || receiver.track !== source.track || forceReattach) {
             if (source.track && ![...sources].some(([other, entry]) => other !== receiver &&
                 live.has(other) && entry.track === source.track)) await capture.detach(source.track);
             if (!live.has(receiver)) sources.delete(receiver);
             else {
-              if (forceReattach) source.recovered = true;
+              if (forceReattach) {
+                source.recovered = true;
+                source.silentSamples = 0;
+              }
               source.track = undefined;
             }
           }
@@ -1868,7 +1888,8 @@ function install(config: MeetCaptureConfig) {
             const hasRtp = !receiver.track.muted ||
               receiver.getSynchronizationSources().length > 0 ||
               receiver.getContributingSources().length > 0 ||
-              (obs?.evidence.frame_count ?? 0) > 0;
+              (obs?.evidence.frame_count ?? 0) > 0 ||
+              Boolean(encodedFrameMeta?.get(receiver));
             if (!hasRtp) continue;
             source = {id: `${config.provider ?? 'google_meet'}:${config.meeting_id}:receiver:${++nextSource}`};
             sources.set(receiver, source);

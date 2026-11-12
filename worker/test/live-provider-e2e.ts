@@ -669,24 +669,31 @@ async function clickIfVisible(locator: Locator): Promise<boolean> {
  * Joins a real Google Meet, Webex, or Microsoft Teams room as an active speaker
  * with microphone ON and camera OFF.
  */
-async function joinRoomAsSpeaker(page: Page, provider: Provider, meetingUrl: string, displayName: string, timeoutSec: number): Promise<void> {
+async function joinRoomAsSpeaker(
+  page: Page,
+  provider: Provider,
+  meetingUrl: string,
+  displayName: string,
+  timeoutSec: number,
+  evictExistingSession = false,
+): Promise<void> {
   await page.goto(meetingUrl, {waitUntil: 'domcontentloaded', timeout: 45000});
   const deadline = Date.now() + timeoutSec * 1000;
 
     if (provider === 'google_meet') {
     const enterMillis = Date.now();
     const meetWaitingRe =
-      /Please wait until a meeting host brings you into the call|Asking to be let in|You[’']ll join the call when someone lets you|Someone in the call (?:will|can) let you in|Waiting (?:for the host|to be let in)|Host hasn[’']t joined yet|Um Teilnahme (?:gebeten|bitten)|Teilnahme wird angefragt|(?:Sie|Du)\s+(?:können|kannst|nehmen|nimmst)\s+teil(?:nehmen)?,\s*sobald|Jemand.*(?:(?:lässt|lassen)\s+(?:Sie|dich).*(?:ein|teilnehmen)|kann\s+(?:Sie|dich).*einlassen)|Bitte warten(?:\s+Sie)?,\s*bis.*einlässt|noch nicht eingelassen/i;
+      /Please wait until a meeting host brings you into the call|invited to the call by the (?:meeting )?organizer|Asking to be let in|You[’']ll join the call when someone lets you|Someone in the call (?:will|can) let you in|Waiting (?:for the host|to be let in)|Host hasn[’']t joined yet|Messages from the organizer|Chat is unavailable|Um Teilnahme (?:gebeten|bitten)|Teilnahme wird angefragt|(?:Sie|Du)\s+(?:können|kannst|nehmen|nimmst)\s+teil(?:nehmen)?,\s*sobald|Jemand.*(?:(?:lässt|lassen)\s+(?:Sie|dich).*(?:ein|teilnehmen)|kann\s+(?:Sie|dich).*einlassen)|Bitte warten(?:\s+Sie)?,\s*bis.*(?:einlässt|eingeladen)|vom Organisator.*eingeladen|Nachrichten vom Organisator|Chat nicht verfügbar|noch nicht eingelassen/i;
     while (Date.now() < deadline) {
       // Check if already in call (NOT in knocking lobby, which also renders a Leave button!)
       const leaveCss = page.locator(
         'button[aria-label*="Anruf verlassen" i], button[aria-label*="Leave call" i], button[aria-label*="Besprechung verlassen" i], button[aria-label*="Leave meeting" i]',
       );
       const inCallToolbar = page
-        .locator('button[data-panel-id="1"], button[data-panel-id="2"]')
+        .locator('button[data-panel-id="1"], button[data-panel-id="2"]:not([aria-label*="Organisator" i]):not([aria-label*="organizer" i]):not([aria-label*="Host" i]):not([aria-label*="Gastgeber" i])')
         .or(
           page.getByRole('button', {
-            name: /^(?:People|Participants|Show everyone|Alle anzeigen|Teilnehmer|Personen|Chat with everyone|Mit allen chatten|In-call messages|Nachrichten im Anruf|Raise hand|Hand heben)(?:\b|\s|$)/i,
+            name: /^(?:People|Participants|Show everyone|Alle anzeigen|Teilnehmer|Personen|Chat with everyone|Mit allen chatten|In-call messages|Nachrichten im Anruf|Raise hand|Hand heben)(?:\b|\s|\d|$)/i,
           }),
         );
       const waitingVisible = await page.getByText(meetWaitingRe).first().isVisible().catch(() => false);
@@ -773,6 +780,11 @@ async function joinRoomAsSpeaker(page: Page, provider: Provider, meetingUrl: str
         .locator('button, [role="button"]')
         .filter({hasText: /(Switch here|Auf dieses Gerät wechseln)/i});
       if (await switchHereBtn.first().isVisible().catch(() => false)) {
+        if (evictExistingSession) {
+          await switchHereBtn.first().click({timeout: 5000}).catch(() => {});
+          await delay(3000);
+          continue;
+        }
         const otherWaysBtn = page.getByRole('button', {
           name: /(Weitere Möglichkeiten zur Teilnahme|Other ways to join)/i,
         });
@@ -1050,7 +1062,8 @@ async function joinRoomAsSpeaker(page: Page, provider: Provider, meetingUrl: str
  * waiting-room admission prompt without clicking Admit.
  */
 async function hasPendingLobbyPrompt(page: Page, provider: Provider): Promise<boolean> {
-  const admitRe = /\b(Admit|Admit all|Let in|Zulassen|Alle zulassen|Einlassen|Hereinlassen|Alle hereinlassen|View lobby|Wartebereich anzeigen)\b/i;
+  const admitRe =
+    /\b(Admit|Admit all|Let in|Zulassen|Alle zulassen|Einlassen|Hereinlassen|Alle hereinlassen|View lobby|Wartebereich anzeigen|Gast\s+wartet|Gäste\s+warten|guests?\s+waiting)\b/i;
   const denyRe = /\b(Deny|Reject|Ablehnen|Nicht zulassen|Ignorieren|Untertitel|caption)\b/i;
   try {
     if (provider === 'teams') {
@@ -1223,18 +1236,35 @@ function startLobbyAdmitWatcher(page: Page, provider?: Provider): () => void {
           }
         }
         if (!clickedAdmit && provider === 'google_meet') {
+          const dialogOk = page
+            .locator('[role="dialog"] button, [role="dialog"] [role="button"]')
+            .filter({hasText: /^(OK|Got it|Verstanden)$/i})
+            .first();
+          if (await dialogOk.isVisible().catch(() => false)) {
+            await dialogOk.click({timeout: 1500, force: true}).catch(() => {});
+          }
+          const waitingPill = page
+            .locator('button, [role="button"]')
+            .filter({hasText: /\b(?:Gast\s+wartet|Gäste\s+warten|guests?\s+waiting|person_add)\b/i})
+            .first();
+          if (await waitingPill.isVisible().catch(() => false)) {
+            console.log(`      [Lobby-Watcher] Öffne Google-Meet-Warteraum über Gast-wartet-Pill...`);
+            await waitingPill.click({timeout: 2000, force: true}).catch(() => {});
+            await delay(500);
+            continue;
+          }
           const peopleToggle = page
             .locator('button[data-panel-id="1"]')
             .or(
               page.getByRole('button', {
-                name: /^(?:People|Participants|Show everyone|Alle anzeigen|Teilnehmer|Personen)(?:\b|\s|$)/i,
+                name: /^(?:People|Participants|Show everyone|Alle anzeigen|Teilnehmer|Personen)(?:\b|\s|\d|$)/i,
               }),
             )
             .and(page.locator(':not([aria-expanded="true"]):not([aria-pressed="true"])'))
             .first();
           if (await peopleToggle.isVisible().catch(() => false)) {
             console.log(`      [Lobby-Watcher] Öffne Google-Meet-Teilnehmerleiste für Warteraum-Einlass...`);
-            await peopleToggle.click({timeout: 2000}).catch(() => {});
+            await peopleToggle.click({timeout: 2000, force: true}).catch(() => {});
           }
         }
       } catch {
@@ -1560,7 +1590,7 @@ async function runProviderLiveTest(provider: Provider, config: LiveConfig) {
       console.log(`      Teilnehmer sind im Raum aktiv.`);
     } else {
       console.log(`      "${config.speakerAName}" tritt dem Raum bei...`);
-      await joinRoomAsSpeaker(pageA, provider, meetingUrl, config.speakerAName, config.joinTimeoutSeconds);
+      await joinRoomAsSpeaker(pageA, provider, meetingUrl, config.speakerAName, config.joinTimeoutSeconds, true);
       if (hasHostState) {
         // Persist rotated session cookies / OAuth refresh tokens (sliding expiration)
         await ctxA.storageState({path: hostStatePath});
@@ -2030,6 +2060,9 @@ async function runProviderLiveTest(provider: Provider, config: LiveConfig) {
     return report;
   } finally {
     stopLobbyWatcher?.();
+    if (recordingId) {
+      await apiRequest(config, 'POST', `/v1/recordings/${recordingId}/cancel`).catch(() => {});
+    }
     await Promise.all([
       leaveAndCloseBrowser(browserHost),
       leaveAndCloseBrowser(browserA),

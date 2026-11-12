@@ -331,3 +331,161 @@ def test_transcribe_parses_language_words_and_truncation(monkeypatch):
         {"word": "dem"},
         {"word": "Zug"},
     ]
+
+
+def test_padding_chat_template_dtype_and_step1_language_gate(monkeypatch):
+    service = load_service("gate_fixture")
+
+    class FakeTensor:
+        def __init__(self, arr, floating=True):
+            self.arr = np.array(arr, dtype=np.float64 if floating else np.int64)
+            self._floating = floating
+            self.moves = []
+
+        @property
+        def shape(self):
+            return self.arr.shape
+
+        def is_floating_point(self):
+            return self._floating
+
+        def to(self, device=None, dtype=None):
+            self.moves.append((device, dtype))
+            return self
+
+        def float(self):
+            return self
+
+        def clone(self):
+            return FakeTensor(self.arr.copy(), self._floating)
+
+        def __getitem__(self, idx):
+            val = self.arr[idx]
+            if np.ndim(val) == 0:
+                return float(val) if self._floating else int(val)
+            return FakeTensor(val, self._floating)
+
+        def __setitem__(self, idx, value):
+            self.arr[idx] = value.arr if isinstance(value, FakeTensor) else value
+
+    def fake_softmax(tensor, dim=-1):
+        shifted = tensor.arr - np.max(tensor.arr, axis=dim, keepdims=True)
+        exps = np.exp(shifted)
+        return FakeTensor(exps / np.sum(exps, axis=dim, keepdims=True))
+
+    def fake_full_like(tensor, fill_value):
+        return FakeTensor(np.full_like(tensor.arr, fill_value, dtype=np.float64))
+
+    monkeypatch.setitem(
+        sys.modules,
+        "torch",
+        SimpleNamespace(
+            inference_mode=nullcontext,
+            softmax=fake_softmax,
+            full_like=fake_full_like,
+        ),
+    )
+
+    vocab = {
+        "language": 10,
+        " None": 11,
+        " German": 12,
+        " English": 13,
+        " Dutch": 14,
+        " Danish": 15,
+        " Chinese": 16,
+        " Japanese": 17,
+    }
+    allowed_ids = {"German": 12, "English": 13}
+
+    # 1. CJK breath hallucination (P(de+en+kin) = 0.004 < 0.10) -> forces None (11).
+    breath_probs = np.full((1, 20), 1e-6)
+    breath_probs[0, 16] = 0.92
+    breath_probs[0, 17] = 0.07
+    breath_probs[0, 12] = 0.002
+    breath_probs[0, 13] = 0.002
+    breath_probs[0, 11] = 0.006
+    gated_breath = service.apply_language_step_gate(
+        FakeTensor(np.log(breath_probs)), allowed_ids, 11, (14, 15)
+    )
+    assert int(np.argmax(gated_breath.arr[0])) == 11
+
+    # 2. Short German phrase misclassified as Dutch -> transfers kinship mass to German (12).
+    dutch_german_probs = np.full((1, 20), 1e-6)
+    dutch_german_probs[0, 14] = 0.98
+    dutch_german_probs[0, 13] = 0.003
+    dutch_german_probs[0, 12] = 0.001
+    dutch_german_probs[0, 11] = 0.001
+    gated_de = service.apply_language_step_gate(
+        FakeTensor(np.log(dutch_german_probs)), allowed_ids, 11, (14, 15)
+    )
+    assert int(np.argmax(gated_de.arr[0])) == 12
+
+    # 3. Genuine English clip -> keeps English (13).
+    en_probs = np.full((1, 20), 1e-6)
+    en_probs[0, 13] = 0.94
+    en_probs[0, 14] = 0.02
+    en_probs[0, 12] = 0.01
+    en_probs[0, 11] = 0.01
+    gated_en = service.apply_language_step_gate(
+        FakeTensor(np.log(en_probs)), allowed_ids, 11, (14, 15)
+    )
+    assert int(np.argmax(gated_en.arr[0])) == 13
+
+    # 4. End-to-end QwenASR check: 0.3s padding, unpadded budget, chat template, dtype-safe .to().
+    seen = {}
+    input_ids_tensor = FakeTensor([[1, 2, 3]], floating=False)
+    features_tensor = FakeTensor([[0.1, 0.2]], floating=True)
+
+    class Tokenizer:
+        def encode(self, text, add_special_tokens=False):
+            return [vocab[text]] if text in vocab else []
+
+        def convert_ids_to_tokens(self, generated):
+            return ["language", "ĠNone", "<asr_text>", "<|im_end|>"]
+
+        def convert_tokens_to_string(self, group):
+            return "".join(group).replace("Ġ", " ")
+
+    class Processor:
+        tokenizer = Tokenizer()
+
+        def apply_chat_template(self, conversations, tokenize, add_generation_prompt):
+            seen["padded_len"] = len(conversations[0][0]["content"][0]["audio"])
+            return "<prompt>"
+
+        def __call__(self, text, audio, return_tensors):
+            seen["call"] = (text, len(audio[0]), return_tensors)
+            return {"input_ids": input_ids_tensor, "input_features": features_tensor}
+
+        def decode(self, generated, return_format):
+            return [{"language": "None", "transcription": ""}]
+
+    class Network:
+        device, dtype = "cuda", "bf16"
+
+        def generate(self, **kwargs):
+            seen["budget"] = kwargs["max_new_tokens"]
+            gate = kwargs["logits_processor"][0]
+            step1 = gate(
+                FakeTensor([[1, 2, 3, 10]], floating=False),
+                FakeTensor(np.log(breath_probs)),
+            )
+            seen["step1_choice"] = int(np.argmax(step1.arr[0]))
+            seq = np.array([[1, 2, 3, 10, 11, 18, 19]])
+            return SimpleNamespace(sequences=seq, scores=None)
+
+        def compute_transition_scores(self, sequences, scores, normalize_logits):
+            ones = [1.0, 1.0, 1.0, 1.0]
+            return [SimpleNamespace(exp=lambda: SimpleNamespace(tolist=lambda: ones))]
+
+    asr = service.QwenASR(Processor(), Network(), allowed_languages="German,English")
+    out = asr.transcribe(np.ones(32000, np.float32) * 0.25)
+    assert seen["padded_len"] == 32000 + 2 * 4800
+    assert seen["call"] == ("<prompt>", 41600, "pt")
+    assert seen["budget"] == 44
+    assert seen["step1_choice"] == 11
+    assert input_ids_tensor.moves == [("cuda", None)]
+    assert features_tensor.moves == [("cuda", "bf16")]
+    assert out == {"text": "", "language": None, "words": [], "truncated": False}
+    assert service.parse_allowed_languages("*") is None

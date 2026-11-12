@@ -128,6 +128,8 @@ export async function installMeetCapture(page: Page, bootstrap: Pick<MeetBootstr
     const connections = new Set<RTCPeerConnection>(), received = new WeakSet<RTCRtpReceiver>();
     const encodedReserved = new WeakSet<RTCPeerConnection>();
     const receiverStreams = new WeakMap<RTCRtpReceiver, string[]>();
+    const receiverMediaStreams = new WeakMap<RTCRtpReceiver, MediaStream>();
+    const encodedFrameMeta = new WeakMap<RTCRtpReceiver, {ssrc: number | null; csrcs: number[]}>();
     const dataChannels = new Set<RTCDataChannel>();
     const hookedChannels = new WeakSet<RTCDataChannel>();
     const dataMessages: unknown[] = [];
@@ -161,12 +163,161 @@ export async function installMeetCapture(page: Page, bootstrap: Pick<MeetBootstr
       }
     };
     window.wortlautMeetReceivers = {connections, received, encodedReserved, receiverStreams,
-      dataChannels, dataMessages, dataSends, remoteDescriptions};
+      receiverMediaStreams, encodedFrameMeta, dataChannels, dataMessages, dataSends, remoteDescriptions};
+    if (config.provider === 'google_meet') {
+      // Unbranded Chromium lacks Google Chrome's Finch trial for Opus DRED/LACE
+      // (`extensions=120` blocks carried inside RFC 2198 `audio/red` PT 63):
+      // advertising Opus without `audio/red` keeps Meet on standard RFC 7587 Opus.
+      for (const RtpEndpoint of [window.RTCRtpReceiver, window.RTCRtpSender]) {
+        if (typeof RtpEndpoint?.getCapabilities === 'function') {
+          RtpEndpoint.getCapabilities = new Proxy(RtpEndpoint.getCapabilities, {
+            apply(fn, thisArg, capArgs) {
+              const caps = Reflect.apply(fn, thisArg, capArgs) as RTCRtpCapabilities | null;
+              if (caps && String(capArgs[0]).toLowerCase() === 'audio' && Array.isArray(caps.codecs)) {
+                const filtered = caps.codecs.filter((c) => c.mimeType.toLowerCase() !== 'audio/red');
+                if (filtered.length > 0) return {...caps, codecs: filtered};
+              }
+              return caps;
+            },
+          });
+        }
+      }
+      if (typeof window.RTCRtpTransceiver?.prototype?.setCodecPreferences === 'function') {
+        window.RTCRtpTransceiver.prototype.setCodecPreferences = new Proxy(
+          window.RTCRtpTransceiver.prototype.setCodecPreferences,
+          {
+            apply(fn, thisArg: RTCRtpTransceiver, prefArgs) {
+              if (Array.isArray(prefArgs[0])) {
+                const filtered = prefArgs[0].filter(
+                  (c: {mimeType?: string}) => c?.mimeType?.toLowerCase() !== 'audio/red',
+                );
+                if (filtered.length > 0) return Reflect.apply(fn, thisArg, [filtered]);
+              }
+              return Reflect.apply(fn, thisArg, prefArgs);
+            },
+          },
+        );
+      }
+      // In Google Meet's WASM audio rollout (`forceEncodedAudioInsertableStreams: true`),
+      // Meet consumes `receiver.createEncodedStreams().readable` in a Worker and plays
+      // mixed audio via WebAudio without writing frames back to `writable`, starving
+      // Chromium's per-receiver NetEq (`codecId: null`, `jitterBufferEmittedCount: 0`).
+      // Tee cloned encoded frames into `writable` unless the caller writes back itself.
+      const recvProto = window.RTCRtpReceiver?.prototype as (RTCRtpReceiver & {
+        createEncodedStreams?: () => {readable: ReadableStream; writable: WritableStream};
+      }) | undefined;
+      const AudioFrameCtor = (window as unknown as {
+        RTCEncodedAudioFrame?: new (frame: unknown) => unknown;
+      }).RTCEncodedAudioFrame;
+      if (typeof recvProto?.createEncodedStreams === 'function' && typeof AudioFrameCtor === 'function') {
+        recvProto.createEncodedStreams = new Proxy(recvProto.createEncodedStreams, {
+          apply(fn, thisArg: RTCRtpReceiver, streamArgs) {
+            const orig = Reflect.apply(fn, thisArg, streamArgs) as {
+              readable: ReadableStream;
+              writable: WritableStream;
+            };
+            if (thisArg?.track?.kind !== 'audio') return orig;
+            const netEqWriter = orig.writable.getWriter();
+            let providerWritesBack = false;
+            let passthroughConfirmed = false;
+            let seenFrames = 0;
+            let providerCancelled = false;
+            let providerCtrl = null as ReadableStreamDefaultController | null;
+            const providerReadable = new ReadableStream(
+              {
+                start(c) { providerCtrl = c; },
+                cancel() { providerCancelled = true; },
+              },
+              {highWaterMark: 256},
+            );
+            const providerWritable = new WritableStream({
+              async write(frame) {
+                providerWritesBack = true;
+                await netEqWriter.write(frame);
+              },
+              close() { return netEqWriter.close().catch(() => {}); },
+              abort(reason) { return netEqWriter.abort(reason).catch(() => {}); },
+            });
+            void (async () => {
+              const reader = orig.readable.getReader();
+              try {
+                while (true) {
+                  const {value: frame, done} = await reader.read();
+                  if (done) break;
+                  seenFrames += 1;
+                  try {
+                    const meta = (frame as {
+                      getMetadata?: () => {synchronizationSource?: number; contributingSources?: number[]};
+                    })?.getMetadata?.();
+                    if (meta) {
+                      encodedFrameMeta.set(thisArg, {
+                        ssrc: typeof meta.synchronizationSource === 'number' ? meta.synchronizationSource : null,
+                        csrcs: Array.isArray(meta.contributingSources) ? meta.contributingSources.slice(0, 64) : [],
+                      });
+                    }
+                  } catch { /* metadata optional */ }
+                  let clone: unknown = null;
+                  if (!providerWritesBack) {
+                    try { clone = new AudioFrameCtor(frame); } catch { clone = null; }
+                  }
+                  if (!providerCancelled && providerCtrl &&
+                      (providerCtrl.desiredSize === null || providerCtrl.desiredSize > -256)) {
+                    try { providerCtrl.enqueue(frame); } catch { providerCancelled = true; }
+                  }
+                  if (clone && !providerWritesBack) {
+                    if (passthroughConfirmed) {
+                      await netEqWriter.write(clone).catch(() => {});
+                    } else {
+                      const idx = seenFrames;
+                      setTimeout(() => {
+                        if (!providerWritesBack) {
+                          if (idx >= 5) passthroughConfirmed = true;
+                          void netEqWriter.write(clone).catch(() => {});
+                        }
+                      }, 15);
+                    }
+                  }
+                }
+                if (!providerCancelled) {
+                  try { providerCtrl?.close(); } catch { /* already closed */ }
+                }
+              } catch { /* stream closed on peer teardown */ }
+              finally {
+                try { reader.releaseLock(); } catch { /* ignore */ }
+              }
+            })();
+            return {readable: providerReadable, writable: providerWritable};
+          },
+        });
+      }
+    }
     const Native = window.RTCPeerConnection;
     window.RTCPeerConnection = new Proxy(Native, {construct(target, args, newTarget) {
       const pc = Reflect.construct(target, args, newTarget) as RTCPeerConnection;
       connections.add(pc);
-      if (args[0]?.encodedInsertableStreams === true) encodedReserved.add(pc);
+      const pcCfg = args[0] as (RTCConfiguration & {
+        encodedInsertableStreams?: boolean;
+        forceEncodedAudioInsertableStreams?: boolean;
+      }) | undefined;
+      if (pcCfg?.encodedInsertableStreams === true || pcCfg?.forceEncodedAudioInsertableStreams === true) {
+        encodedReserved.add(pc);
+      }
+      if (config.provider === 'google_meet' && typeof pc.createOffer === 'function') {
+        pc.createOffer = new Proxy(pc.createOffer, {apply(fn, thisArg: RTCPeerConnection, offerArgs) {
+          try {
+            const caps = window.RTCRtpReceiver?.getCapabilities?.('audio')?.codecs ?? [];
+            const noRed = caps.filter((c) => c.mimeType.toLowerCase() !== 'audio/red');
+            if (noRed.length > 0 && typeof thisArg.getTransceivers === 'function') {
+              for (const tr of thisArg.getTransceivers()) {
+                if (tr.receiver?.track?.kind === 'audio' && typeof tr.setCodecPreferences === 'function') {
+                  tr.setCodecPreferences(noRed);
+                }
+              }
+            }
+          } catch { /* preserve default offer if transceiver rejects codec preferences */ }
+          return Reflect.apply(fn, thisArg, offerArgs);
+        }});
+      }
       let lastRemoteSdp = '';
       const recordRemoteSdp = (sdp: unknown) => {
         if (typeof sdp === 'string' && sdp.length > 0 && sdp.length <= 524288 && sdp !== lastRemoteSdp) {
@@ -193,6 +344,7 @@ export async function installMeetCapture(page: Page, bootstrap: Pick<MeetBootstr
       pc.addEventListener('track', (event) => {
         received.add(event.receiver);
         receiverStreams.set(event.receiver, event.streams.map((stream) => stream.id));
+        if (event.streams[0]) receiverMediaStreams.set(event.receiver, event.streams[0]);
         window.wortlautMeetReceivers.observe?.(event.receiver, pc);
       });
       pc.addEventListener('connectionstatechange', () => {
@@ -322,7 +474,9 @@ const actions = {
   cameraOff: /^(Turn off camera|Kamera ausschalten|Kamera deaktivieren)(?: \(.*\))?$/i,
   cameraOn: /^(Turn on camera|Show more info(?: about the camera problem)?|Kamera einschalten|Kamera aktivieren|Weitere Informationen(?: zum Kameraproblem)? anzeigen)(?: \(.*\))?$/i,
 };
-const waiting = /Please wait until a meeting host brings you into the call|Asking to be let in|You[’']ll join the call when someone lets you|Someone in the call (?:will|can) let you in|Waiting (?:for the host|to be let in)|Host hasn[’']t joined yet|waiting room|Um Teilnahme (?:gebeten|bitten)|Teilnahme wird angefragt|Anfrage.*Teilnahme|(?:Sie|Du)\s+(?:können|kannst|nehmen|nimmst)\s+teil(?:nehmen)?,\s*sobald|Jemand.*(?:(?:lässt|lassen)\s+(?:Sie|dich).*(?:ein|teilnehmen)|kann\s+(?:Sie|dich).*einlassen)|Bitte warten(?:\s+Sie)?,\s*bis.*einlässt|Warten.*(?:Zulassung|Gastgeber|Host|einlässt|eingelassen)|Sobald.*(?:zugelassen|teilnehmen|einlässt)|noch nicht eingelassen/i;
+const knockJoin = /^(?:Ask to join|Teilnahme erbitten|Um Teilnahme bitten)$/i;
+const emptyPrejoin = /Andere Anrufteilnehmer werden gesucht|Looking for others|Außer (?:Ihnen|dir) ist niemand (?:da|hier)|Noch ist niemand (?:sonst )?(?:da|hier)|Niemand sonst ist (?:da|hier)|No one else is here|You[’']re the first one here/i;
+const waiting = /Please wait until a meeting host brings you into the call|invited to the call by the (?:meeting )?organizer|Asking to be let in|You[’']ll join the call when someone lets you|Someone in the call (?:will|can) let you in|Waiting (?:for the host|to be let in)|Host hasn[’']t joined yet|Messages from the organizer|Chat is unavailable|waiting room|Um Teilnahme (?:gebeten|bitten)|Teilnahme wird angefragt|Anfrage.*Teilnahme|(?:Sie|Du)\s+(?:können|kannst|nehmen|nimmst)\s+teil(?:nehmen)?,\s*sobald|Jemand.*(?:(?:lässt|lassen)\s+(?:Sie|dich).*(?:ein|teilnehmen)|kann\s+(?:Sie|dich).*einlassen)|Bitte warten(?:\s+Sie)?,\s*bis.*(?:einlässt|eingeladen)|vom Organisator.*eingeladen|Nachrichten vom Organisator|Chat nicht verfügbar|Warten.*(?:Zulassung|Gastgeber|Host|Organisator|einlässt|eingelassen|eingeladen)|Sobald.*(?:zugelassen|teilnehmen|einlässt)|noch nicht eingelassen/i;
 const denied = /You (?:can[’']t|cannot) join this video call|denied your request|request to join was denied|not allowed to join|weren[’']t allowed|Anfrage.*abgelehnt|Teilnahme.*(?:abgelehnt|nicht gestattet)|Sie können nicht an diesem Videoanruf teilnehmen/i;
 const removed = /removed from (?:the )?(?:call|meeting)|aus.*(?:Besprechung|Anruf).*entfernt/i;
 const ended = /^(?:This )?(?:meeting|call) (?:has )?ended\.?$|Besprechung.*beendet|Anruf.*beendet/i;
@@ -481,6 +635,27 @@ export class MeetBrowser {
       }
     }
     if (await button.count() !== 1) throw new MeetError('join_control_ambiguous');
+    const buttonText = (await button.first().innerText().catch(() => '')).trim();
+    const buttonAria = ((await button.first().getAttribute('aria-label').catch(() => '')) ?? '').trim();
+    if ((knockJoin.test(buttonText) || knockJoin.test(buttonAria)) && await visible(this.page.getByText(emptyPrejoin))) {
+      // Knocking into a cold, completely empty Google Meet space leaves Meet with zero
+      // DOM <audio> sinks and stalled Opus header-extension negotiation even after host
+      // admission. Stay on prejoin in waiting_admission until a participant enters.
+      this.participation = 'waiting_admission';
+      while (!this.stopping && !this.reason && await visible(this.page.getByText(emptyPrejoin))) {
+        if (await visible(this.page.getByText(denied))) throw new MeetError('prejoin_denied');
+        if (await visible(this.page.getByText(ended))) throw new MeetError('meeting_ended');
+        if (await humanVerificationVisible(this.page)) throw new MeetError('human_verification_required');
+        await this.dismissWithoutMedia().catch(() => {});
+        await this.page.waitForTimeout(500);
+      }
+      if (this.stopping || this.reason) return;
+      await this.page.waitForTimeout(500);
+      if (this.stopping || this.reason) return;
+      await this.dismissWithoutMedia().catch(() => {});
+      await button.first().waitFor({state: 'visible', timeout: 10000}).catch(() => {});
+      if (await button.count() !== 1) throw new MeetError('join_control_ambiguous');
+    }
     await this.input.click(button).catch(() => { throw new MeetError('join_click_failed'); });
     this.joinSent = true;
   }
@@ -501,8 +676,8 @@ export class MeetBrowser {
       ));
       if (!await visible(chatBox)) {
         const chatToggle = this.page.getByRole('button', {
-          name: /^(?:Chat with everyone|Mit allen chatten|Chat|Nachricht an alle|In-call messages|Nachrichten im Anruf)(?:\b|\s|$)/i,
-        }).or(this.page.locator('button[data-panel-id="2"]'))
+          name: /^(?:Chat with everyone|Mit allen chatten|Chat|Nachricht an alle|In-call messages|Nachrichten im Anruf)(?:\b|\s|\d|$)/i,
+        }).or(this.page.locator('button[data-panel-id="2"]:not([aria-label*="Organisator" i]):not([aria-label*="organizer" i]):not([aria-label*="Host" i]):not([aria-label*="Gastgeber" i])'))
           .and(this.page.locator(':not([aria-expanded="true"]):not([aria-pressed="true"])')).first();
         if (!await visible(chatToggle)) return;
         await chatToggle.click({timeout: 2500}).catch(async () => {
@@ -563,9 +738,9 @@ export class MeetBrowser {
             (collectionsChannel.json_frames ?? 0) === 0 &&
           !hasRtp;
         const hasInCallControls = hasLeave && await visible(
-          this.page.locator('button[data-panel-id="1"], button[data-panel-id="2"]').or(
+          this.page.locator('button[data-panel-id="1"], button[data-panel-id="2"]:not([aria-label*="Organisator" i]):not([aria-label*="organizer" i]):not([aria-label*="Host" i]):not([aria-label*="Gastgeber" i])').or(
             this.page.getByRole('button', {
-              name: /^(?:People|Participants|Show everyone|Alle anzeigen|Teilnehmer|Personen|Chat with everyone|Mit allen chatten|In-call messages|Nachrichten im Anruf|Raise hand|Hand heben)(?:\b|\s|$)/i,
+              name: /^(?:People|Participants|Show everyone|Alle anzeigen|Teilnehmer|Personen|Chat with everyone|Mit allen chatten|In-call messages|Nachrichten im Anruf|Raise hand|Hand heben)(?:\b|\s|\d|$)/i,
             }),
           ),
         );
@@ -580,7 +755,7 @@ export class MeetBrowser {
           if (!this.rosterOpened && (this.chatSent || !this.bootstrap.chat_intro?.trim() || this.chatAttempts >= 3)) {
             this.rosterOpened = true;
             const toggle = this.page.getByRole('button', {
-              name: /^(?:People|Participants|Show everyone|Alle anzeigen|Teilnehmer|Personen)(?:\b|\s|$)/i,
+              name: /^(?:People|Participants|Show everyone|Alle anzeigen|Teilnehmer|Personen)(?:\b|\s|\d|$)/i,
             }).or(this.page.locator('button[data-panel-id="1"]'))
               .and(this.page.locator(':not([aria-expanded="true"]):not([aria-pressed="true"])')).first();
             if (await visible(toggle)) {
@@ -589,8 +764,8 @@ export class MeetBrowser {
           } else if (this.rosterOpened && this.chatSent && Boolean(this.bootstrap.chat_intro?.trim()) && !this.chatRestored) {
             this.chatRestored = true;
             const chatToggle = this.page.getByRole('button', {
-              name: /^(?:Chat with everyone|Mit allen chatten|Chat|Nachricht an alle|In-call messages|Nachrichten im Anruf)(?:\b|\s|$)/i,
-            }).or(this.page.locator('button[data-panel-id="2"]'))
+              name: /^(?:Chat with everyone|Mit allen chatten|Chat|Nachricht an alle|In-call messages|Nachrichten im Anruf)(?:\b|\s|\d|$)/i,
+            }).or(this.page.locator('button[data-panel-id="2"]:not([aria-label*="Organisator" i]):not([aria-label*="organizer" i]):not([aria-label*="Host" i]):not([aria-label*="Gastgeber" i])'))
               .and(this.page.locator(':not([aria-expanded="true"]):not([aria-pressed="true"])')).first();
             if (await visible(chatToggle)) {
               await this.input.click(chatToggle).catch(() => {});
