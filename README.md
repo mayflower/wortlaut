@@ -23,7 +23,7 @@ Commercial meeting bots (*Fireflies, Otter, Fathom, Read.ai*) route confidential
 
 | What teams actually need | How `wortlaut` solves it |
 | :--- | :--- |
-| **Zero third-party cloud leakage** | Speech-to-text (**NVIDIA Parakeet TDT** — **25 European languages** via Parakeet v3 or `2.95%` German WER) and optional summaries (**Ollama**) run 100% inside your own cluster or server. |
+| **Zero third-party cloud leakage** | Speech-to-text (**Qwen3-ASR 1.7B** — **30 languages** with automatic language detection, `3.88%` German WER on the Open ASR Leaderboard) and optional summaries (**Ollama**) run 100% inside your own cluster or server. |
 | **True speaker attribution — no guessing** | Instead of recording mixed audio and guessing speakers with brittle voice diarization, `wortlaut` taps isolated per-participant WebRTC receiver tracks (`RTCRtpReceiver`) before mixing. |
 | **Individual opt-out right in the call** | Any participant who prefers not to be quoted simply types **`opt out`** or **`no`** (`nein`) in the meeting chat. The call continues seamlessly for everyone else while their track and prior statements are purged immediately. |
 | **Protocols right where people look** | As soon as transcription finishes, `wortlaut` writes a read-only transcript link directly back into the **Google Calendar** or **Microsoft 365 / Outlook** event, emails the protocol, and offers `.md`, `.txt`, `.vtt`, and `.json` downloads. |
@@ -85,7 +85,7 @@ cp .env.example .env
 # Set WORTLAUT_API_TOKEN and passwords in .env, then launch:
 docker compose up -d
 
-# Recommended when an NVIDIA GPU is available (real-time Parakeet ASR):
+# Recommended when an NVIDIA GPU is available (real-time Qwen3-ASR):
 docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
 # Open Web-UI: http://127.0.0.1:34601/ui
 ```
@@ -119,14 +119,11 @@ helm upgrade --install wortlaut oci://ghcr.io/mayflower/charts/wortlaut \
 
 ---
 
-## Speech-to-Text Models (25 European Languages & German Fine-Tune)
+## Speech-to-Text Model (Qwen3-ASR, 30 Languages)
 
-The `wortlaut-asr` service ([services/asr/app.py](services/asr/app.py)) loads any compatible NeMo Parakeet checkpoint from Hugging Face via `WORTLAUT_ASR_MODEL_REPO`:
+The `wortlaut-asr` service ([services/asr/app.py](services/asr/app.py)) loads [`Qwen/Qwen3-ASR-1.7B-hf`](https://huggingface.co/Qwen/Qwen3-ASR-1.7B-hf) at a pinned revision through Hugging Face Transformers (`WORTLAUT_ASR_MODEL_REPO` and `WORTLAUT_ASR_MODEL_REVISION` override both). The language is detected per segment; supported languages: Chinese, English, Cantonese, Arabic, German, French, Spanish, Portuguese, Indonesian, Italian, Korean, Russian, Thai, Vietnamese, Japanese, Turkish, Hindi, Malay, Dutch, Swedish, Danish, Finnish, Polish, Czech, Filipino, Persian, Greek, Hungarian, Macedonian, Romanian.
 
-| Use Case | `WORTLAUT_ASR_MODEL_REPO` | Supported Languages |
-| :--- | :--- | :--- |
-| **Multilingual (25 European languages, Default)** | `nvidia/parakeet-tdt-0.6b-v3` | Automatic language detection across English, German, French, Spanish, Italian, Dutch, Polish, Portuguese, Swedish, Czech, Danish, Finnish, Greek, Ukrainian, and 11 more European languages |
-| **German Domain Specialist (Optional)** | `primeline/parakeet-primeline` | Fine-tuned for German-only technical & business speech (`2_95_WER.nemo`, `2.95%` WER) |
+The model returns no word timestamps, so each ASR job receives only its own disjoint audio span and transcript segments carry segment-level times. Word confidence is the mean probability of the generated tokens. Silence and noise produce an empty transcript; output that reaches the generation budget without an end marker is discarded as a decoder loop.
 
 Set `WORTLAUT_DEFAULT_LOCALE=en` (already enabled in [`.env.example`](.env.example) and [`docker-compose.yml`](docker-compose.yml)) to default the Web-UI, `/privacy` page, and in-call chat announcements to English.
 
@@ -179,7 +176,7 @@ WORTLAUT_SMTP_FROM=bot@example.org
 
 * **Meeting Service** ([services/meeting](services/meeting), [app.py](services/meeting/src/wortlaut/app.py), [settings.py](services/meeting/src/wortlaut/settings.py)) — Multi-arch (`linux/amd64`, `linux/arm64`) Python/FastAPI service hosting the REST API, embedded Web-UI ([ui.py](services/meeting/src/wortlaut/ui.py)), OIDC PKCE auth ([oidc.py](services/meeting/src/wortlaut/oidc.py)), Google/M365 Calendar OAuth2 sync ([calendar_oauth.py](services/meeting/src/wortlaut/calendar_oauth.py)), scheduler, Kubernetes/Docker worker controller ([controller.py](services/meeting/src/wortlaut/controller.py)), audio ingest, exports ([exports.py](services/meeting/src/wortlaut/exports.py)), and IMAP/SMTP mail ([mail.py](services/meeting/src/wortlaut/mail.py)).
 * **Browser Worker** ([worker](worker)) — Ephemeral TypeScript + Playwright + sandboxed Chromium job/container spawned per meeting to capture isolated pre-mix WebRTC receiver tracks.
-* **ASR Service** ([services/asr](services/asr), [services/asr/app.py](services/asr/app.py)) — Shared local **NVIDIA Parakeet** speech recognition service (`WORTLAUT_ASR_MODEL_REPO`, `WORTLAUT_ASR_MODEL_FILENAME`, `WORTLAUT_ASR_MODEL_REVISION`, `WORTLAUT_ASR_ALLOW_CPU`).
+* **ASR Service** ([services/asr](services/asr), [services/asr/app.py](services/asr/app.py)) — Shared local **Qwen3-ASR** speech recognition service (`WORTLAUT_ASR_MODEL_REPO`, `WORTLAUT_ASR_MODEL_REVISION`, `WORTLAUT_ASR_ALLOW_CPU`).
 
 ### Key REST Endpoints (Interactive OpenAPI Docs at `/docs`)
 

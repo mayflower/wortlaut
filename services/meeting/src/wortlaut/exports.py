@@ -538,6 +538,8 @@ def export_data(db: Session, recording: Recording):
         segment["end"] += delta
         segment["words"] = [
             {**word, "start": word["start"] + delta, "end": word["end"] + delta}
+            if "start" in word and "end" in word
+            else word
             for word in segment["words"]
         ]
         stream_key = (segment.get("stream_id"), segment.get("epoch"))

@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Speech-to-text model:** `wortlaut-asr` now runs **Qwen3-ASR 1.7B** (`Qwen/Qwen3-ASR-1.7B-hf`, Transformers) instead of NVIDIA Parakeet TDT. Supported languages change from Parakeet v3's 25 European languages to Qwen3-ASR's 30 languages; Bulgarian, Croatian, Estonian, Latvian, Lithuanian, Maltese, Slovak, Slovenian, and Ukrainian are no longer transcribed. Transcripts have segment-level times only, and each segment records the detected language.
+
 ## [0.1.0] - 2026-11-10
 
 ### Added

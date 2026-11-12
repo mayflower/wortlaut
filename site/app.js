@@ -41,7 +41,7 @@
       ui_turn1_text_html:
         'Finished protocols are now written straight back into the <mark>Google Calendar and Outlook invite</mark> so every attendee finds the read-only link right where they look.',
       ui_turn2_text_html:
-        'And because each participant’s WebRTC track is captured before mixing, <mark>speaker attribution</mark> stays accurate even when two people overlap — across 25 European languages.',
+        'And because each participant’s WebRTC track is captured before mixing, <mark>speaker attribution</mark> stays accurate even when two people overlap — across 30 languages.',
       ui_turn3_text_html:
         'Our DPO especially liked the <mark>in-call chat opt-out</mark>: anyone can type <code>opt out</code> or <code>nein</code> in chat to exclude their voice immediately without stopping the call for everyone else.',
 
@@ -67,7 +67,7 @@
       ftab1_title: "Calendar & Writeback",
       ftab1_sub: "Google & Microsoft 365",
       ftab2_title: "Ad-hoc & 25 Languages",
-      ftab2_sub: "Join in ~15s · Local Parakeet ASR",
+      ftab2_sub: "Join in ~15s · Local Qwen3-ASR",
       ftab3_title: "Verify, Edit & Summarize",
       ftab3_sub: "Snippets, Ollama AI & Exports",
       ftab4_title: "True Speaker Separation",
@@ -95,13 +95,13 @@
       toggle_off: "○ Record: Off",
 
       f2_title:
-        "Join unplanned calls in ~15 seconds — and transcribe locally across 25 European languages",
+        "Join unplanned calls in ~15 seconds — and transcribe locally across 30 languages",
       f2_lead:
         "Paste any meeting URL when a spontaneous call turns important, and run state-of-the-art speech recognition entirely on your own GPU or CPU:",
       f2_li1:
         "Paste a Google Meet, Teams, Webex, or Zoom link — wortlaut spawns an isolated browser worker and joins within ~15 seconds.",
       f2_li2:
-        "Multilingual NVIDIA Parakeet TDT v3 supports automatic language detection across 25 European languages alongside a 2.95% WER German specialist checkpoint.",
+        "Qwen3-ASR 1.7B detects the language of every segment automatically across 30 languages (3.88% German WER on the Open ASR Leaderboard).",
       f2_li3:
         "Bilingual EN / DE Web-UI with live lobby/capture stepper and real-time full-text search while the call is still running.",
       f2_demo_title: "Start Ad-hoc Recording",
@@ -109,7 +109,7 @@
       f2_dur_60: "60 min",
       f2_dur_90: "90 min",
       f2_demo_btn: "Record Now",
-      f2_demo_status: "LIVE · Capturing 3 isolated tracks · Parakeet TDT (25 langs)",
+      f2_demo_status: "LIVE · Capturing 3 isolated tracks · Qwen3-ASR (30 langs)",
 
       f3_title:
         "Verify quotes by ear, polish domain terms, summarize with local Ollama, and export anywhere",
@@ -145,7 +145,7 @@
         "Why engineering organizations, consultancies, legal teams, and public-sector agencies run wortlaut instead of commercial cloud bots.",
       trust1_title: "100% Self-Hosted (Zero Cloud Leakage)",
       trust1_desc:
-        "Sandboxed browser workers, NVIDIA Parakeet speech recognition, and optional Ollama summaries all run inside your own cluster or server. Not a single second of audio leaves your infrastructure.",
+        "Sandboxed browser workers, Qwen3-ASR speech recognition, and optional Ollama summaries all run inside your own cluster or server. Not a single second of audio leaves your infrastructure.",
       trust2_title: "Live In-Call Chat Opt-Out",
       trust2_desc:
         "wortlaut joins as “wortlaut (Inviter Name)”, never records video or screen shares, and lets any participant type “opt out”, “no”, or “nein” in chat to immediately discard their stream and purge prior quotes.",
@@ -161,7 +161,7 @@
       comp_th_wortlaut: "wortlaut (Open Source & Self-Hosted)",
       comp_r1_c: "Where are calls & summaries processed?",
       comp_r1_cloud: "External vendor clouds & third-party LLM APIs",
-      comp_r1_w: "100% on your own infrastructure (Parakeet ASR + optional Ollama)",
+      comp_r1_w: "100% on your own infrastructure (Qwen3-ASR + optional Ollama)",
       comp_r2_c: "How are speakers identified?",
       comp_r2_cloud: "Mixed audio + biometric voice profiles (voiceprints)",
       comp_r2_w: "Isolated pre-mix WebRTC tracks bound to session — zero voiceprints",
@@ -193,7 +193,7 @@ cp .env.example .env
 # 2. Launch stack (non-root meeting, docker-socket-proxy, Postgres 17 & RustFS S3)
 docker compose up -d
 
-# Recommended with NVIDIA GPU (real-time Parakeet ASR):
+# Recommended with NVIDIA GPU (real-time Qwen3-ASR):
 docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
 # Web-UI: http://127.0.0.1:34601/ui · API Docs: http://127.0.0.1:34601/docs`,
       qs_code_helm: `# Zero-dependency evaluation (embedded PostgreSQL 17 + RustFS S3):
@@ -218,7 +218,7 @@ make test-local`,
       qs_req_1:
         "Hardened Docker Compose (isolated socket proxy, non-root) & OCI Helm Chart with zero-dependency bundled mode (amd64 & arm64)",
       qs_req_2:
-        "NVIDIA Parakeet ASR: 25 European languages (parakeet-tdt-0.6b-v3) or 2.95% WER German specialist — GPU recommended, CPU fallback built in",
+        "Qwen3-ASR 1.7B: 30 languages (Qwen/Qwen3-ASR-1.7B-hf) — GPU recommended, CPU fallback built in",
       qs_req_3:
         "PostgreSQL 17 & RustFS S3 object storage pre-wired in both Docker Compose and Helm bundled mode",
       qs_req_4:
@@ -247,7 +247,7 @@ make test-local`,
       cta_github: "GitHub",
       cta_install: "Jetzt starten",
 
-      hero_badge: "Open Source (AGPL-3.0) · 100 % Self-Hosted · 25 Sprachen · DSGVO-konform",
+      hero_badge: "Open Source (AGPL-3.0) · 100 % Self-Hosted · 30 Sprachen · DSGVO-konform",
       hero_title_html:
         'Sprechergenaue Wortprotokolle für deine Meetings.<br><span class="highlight">100 % auf deiner eigenen Infrastruktur.</span>',
       hero_subtitle:
@@ -276,7 +276,7 @@ make test-local`,
       ui_turn1_text_html:
         'Fertige Protokolle werden jetzt automatisch direkt in die <mark>Google-Calendar- und Outlook-Einladung</mark> zurückgeschrieben, sodass alle Eingeladenen den Lese-Link sofort im Termin finden.',
       ui_turn2_text_html:
-        'Und weil jede WebRTC-Empfangsspur vor dem Mischen separat erfasst wird, bleibt die <mark>Sprecherzuordnung</mark> auch bei gleichzeitigem Sprechen sauber – in 25 europäischen Sprachen.',
+        'Und weil jede WebRTC-Empfangsspur vor dem Mischen separat erfasst wird, bleibt die <mark>Sprecherzuordnung</mark> auch bei gleichzeitigem Sprechen sauber – in 30 Sprachen.',
       ui_turn3_text_html:
         'Unser Datenschutzbeauftragter hat besonders den <mark>Live-Opt-Out im Chat</mark> gelobt: Wer <code>nein</code> oder <code>opt out</code> in den Chat schreibt, wird sofort ausgeschlossen, während das Meeting für alle anderen weiterläuft.',
 
@@ -301,8 +301,8 @@ make test-local`,
 
       ftab1_title: "Kalender & Rückschreiben",
       ftab1_sub: "Google & Microsoft 365",
-      ftab2_title: "Ad-hoc & 25 Sprachen",
-      ftab2_sub: "In ~15 s im Call · Lokales Parakeet",
+      ftab2_title: "Ad-hoc & 30 Sprachen",
+      ftab2_sub: "In ~15 s im Call · Lokales Qwen3-ASR",
       ftab3_title: "Prüfen, Editieren & KI",
       ftab3_sub: "Audio-Snippets, Ollama & Exporte",
       ftab4_title: "Echte Sprechertrennung",
@@ -330,13 +330,13 @@ make test-local`,
       toggle_off: "○ Aufzeichnen: Aus",
 
       f2_title:
-        "Spontan in ~15 Sekunden im laufenden Call – lokal transkribiert in 25 europäischen Sprachen",
+        "Spontan in ~15 Sekunden im laufenden Call – lokal transkribiert in 30 Sprachen",
       f2_lead:
         "Füge jederzeit einen Meeting-Link ein, wenn ein Gespräch wichtig wird, und transkribiere komplett lokal auf deiner eigenen GPU oder CPU:",
       f2_li1:
         "Link für Google Meet, Teams, Webex oder Zoom einfügen – wortlaut startet einen isolierten Browser-Worker und tritt in rund 15 Sekunden bei.",
       f2_li2:
-        "Mehrsprachiges NVIDIA Parakeet TDT v3 erkennt automatisch 25 europäische Sprachen; alternativ steht das deutsche Spezialmodell mit 2,95 % WER bereit.",
+        "Qwen3-ASR 1.7B erkennt die Sprache jedes Segments automatisch in 30 Sprachen (3,88 % deutsche WER im Open ASR Leaderboard).",
       f2_li3:
         "Zweisprachige Oberfläche (DE / EN) mit Live-Status-Anzeige (Warteraum → Aufnahme) und Echtzeit-Volltextsuche noch während des Gesprächs.",
       f2_demo_title: "Spontane Aufzeichnung starten",
@@ -344,7 +344,7 @@ make test-local`,
       f2_dur_60: "60 Min.",
       f2_dur_90: "90 Min.",
       f2_demo_btn: "Jetzt aufzeichnen",
-      f2_demo_status: "LIVE · 3 isolierte Tonspuren · Parakeet TDT (25 Sprachen)",
+      f2_demo_status: "LIVE · 3 isolierte Tonspuren · Qwen3-ASR (30 Sprachen)",
 
       f3_title:
         "Aussagen per Klick anhören, Fachbegriffe korrigieren, lokal per Ollama zusammenfassen & überallhin exportieren",
@@ -380,7 +380,7 @@ make test-local`,
         "Warum Engineering-Teams, Beratungen, Kanzleien und öffentliche Auftraggeber wortlaut statt kommerzieller US-Cloud-Bots betreiben.",
       trust1_title: "100 % Self-Hosted (Kein Cloud-Abfluss)",
       trust1_desc:
-        "Isolierte Browser-Worker, NVIDIA-Parakeet-Spracherkennung und optionale Ollama-Zusammenfassungen laufen komplett auf euren eigenen Servern. Keine Sekunde Audio verlässt eure Infrastruktur.",
+        "Isolierte Browser-Worker, Qwen3-ASR-Spracherkennung und optionale Ollama-Zusammenfassungen laufen komplett auf euren eigenen Servern. Keine Sekunde Audio verlässt eure Infrastruktur.",
       trust2_title: "Individueller Live-Opt-Out im Chat",
       trust2_desc:
         "wortlaut tritt als „wortlaut (Name der einladenden Person)“ bei, zeichnet niemals Video auf und erlaubt jeder Person im Call, per „nein“ oder „opt out“ im Chat ihre Spur und bisherige Zitate sofort zu löschen.",
@@ -396,7 +396,7 @@ make test-local`,
       comp_th_wortlaut: "wortlaut (Open Source & Self-Hosted)",
       comp_r1_c: "Wo werden Audio & Zusammenfassungen verarbeitet?",
       comp_r1_cloud: "Fremde Hersteller-Clouds & externe LLM-APIs",
-      comp_r1_w: "100 % auf eigener Infrastruktur (Parakeet ASR + optional Ollama)",
+      comp_r1_w: "100 % auf eigener Infrastruktur (Qwen3-ASR + optional Ollama)",
       comp_r2_c: "Wie werden Sprecher erkannt?",
       comp_r2_cloud: "Misch-Audio + biometrische Stimmprofile (Voiceprints)",
       comp_r2_w: "Isolierte WebRTC-Spuren vor dem Mix – keinerlei Stimmprofile",
@@ -428,7 +428,7 @@ cp .env.example .env
 # 2. Stack starten (non-root meeting, docker-socket-proxy, Postgres 17 & RustFS S3)
 docker compose up -d
 
-# Empfohlen mit NVIDIA-GPU (Echtzeit-Parakeet-ASR):
+# Empfohlen mit NVIDIA-GPU (Echtzeit-ASR mit Qwen3-ASR):
 docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
 # Web-UI: http://127.0.0.1:34601/ui · API-Docs: http://127.0.0.1:34601/docs`,
       qs_code_helm: `# Schnelltest ohne Vorarbeiten (integriertes PostgreSQL 17 + RustFS S3):
@@ -453,7 +453,7 @@ make test-local`,
       qs_req_1:
         "Gehärtetes Docker Compose (isolierter Socket-Proxy, non-root) & OCI-Helm-Chart inkl. Zero-Dependency-Bundled-Modus (amd64 & arm64)",
       qs_req_2:
-        "NVIDIA Parakeet ASR: 25 europäische Sprachen (parakeet-tdt-0.6b-v3) oder deutsches Spezialmodell (2,95 % WER) – GPU empfohlen, CPU-Fallback integriert",
+        "Qwen3-ASR 1.7B: 30 Sprachen (Qwen/Qwen3-ASR-1.7B-hf) – GPU empfohlen, CPU-Fallback integriert",
       qs_req_3:
         "PostgreSQL 17 & RustFS S3-Objektspeicher sowohl in Docker Compose als auch im Helm-Bundled-Modus fertig vorkonfiguriert",
       qs_req_4:

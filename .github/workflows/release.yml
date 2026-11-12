@@ -38,7 +38,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Reclaim runner disk space for CUDA/NeMo build
+      - name: Reclaim runner disk space for CUDA/PyTorch build
         if: matrix.free_disk
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL

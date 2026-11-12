@@ -23,7 +23,7 @@ Kommerzielle Meeting-Bots (*Fireflies, Otter, Fathom, Read.ai*) leiten Gespräch
 
 | Was Teams im Alltag brauchen | Wie `wortlaut` es löst |
 | :--- | :--- |
-| **Kein Datenabfluss in Dritt-Clouds** | Spracherkennung (**NVIDIA Parakeet**, `2,95 %` deutsche WER bzw. **25 europäische Sprachen** über Parakeet v3) und optionale Zusammenfassungen (**Ollama**) laufen komplett auf eigener Hardware. |
+| **Kein Datenabfluss in Dritt-Clouds** | Spracherkennung (**Qwen3-ASR 1.7B**, **30 Sprachen** mit automatischer Spracherkennung, `3,88 %` deutsche WER im Open ASR Leaderboard) und optionale Zusammenfassungen (**Ollama**) laufen komplett auf eigener Hardware. |
 | **Wer hat was gesagt – ohne Raten** | Statt eines gemischten Audiostroms mit fehleranfälliger Stimm-Diarisierung greift `wortlaut` die getrennten WebRTC-Empfangsspuren (`RTCRtpReceiver`) jedes Teilnehmers vor dem Konferenz-Mix ab. |
 | **Individueller Opt-out mitten im Call** | Wer nicht protokolliert werden möchte, schreibt im Meeting-Chat einfach **`nein`** oder **`opt out`**. Das Gespräch läuft für alle anderen weiter – die Aussagen dieser Person werden sofort verworfen und rückstandslos gelöscht. |
 | **Protokoll direkt dort, wo man sucht** | Nach dem Gespräch trägt `wortlaut` den schreibgeschützten Protokoll-Link automatisch in den **Google-Calendar-** oder **Outlook/M365-Termin** ein, verschickt das Ergebnis per E-Mail und stellt `.md`, `.txt`, `.vtt` und `.json` bereit. |
@@ -85,7 +85,7 @@ cp .env.example .env
 # WORTLAUT_API_TOKEN und Passwörter in .env setzen, dann starten:
 docker compose up -d
 
-# Empfohlen bei vorhandener NVIDIA-GPU (Echtzeit-Parakeet-ASR):
+# Empfohlen bei vorhandener NVIDIA-GPU (Echtzeit-ASR mit Qwen3-ASR):
 docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
 # Web-UI öffnen: http://127.0.0.1:34601/ui
 ```
@@ -119,14 +119,11 @@ helm upgrade --install wortlaut oci://ghcr.io/mayflower/charts/wortlaut \
 
 ---
 
-## Spracherkennungs-Modelle (Deutsch & 25 europäische Sprachen)
+## Spracherkennungsmodell (Qwen3-ASR, 30 Sprachen)
 
-Der `wortlaut-asr`-Dienst ([services/asr/app.py](services/asr/app.py)) unterstützt jedes kompatible NeMo-Parakeet-Modell von Hugging Face über `WORTLAUT_ASR_MODEL_REPO`:
+Der `wortlaut-asr`-Dienst ([services/asr/app.py](services/asr/app.py)) lädt [`Qwen/Qwen3-ASR-1.7B-hf`](https://huggingface.co/Qwen/Qwen3-ASR-1.7B-hf) in einer festen Revision über Hugging Face Transformers (`WORTLAUT_ASR_MODEL_REPO` und `WORTLAUT_ASR_MODEL_REVISION` überschreiben beides). Die Sprache wird pro Segment erkannt; unterstützt: Chinesisch, Englisch, Kantonesisch, Arabisch, Deutsch, Französisch, Spanisch, Portugiesisch, Indonesisch, Italienisch, Koreanisch, Russisch, Thai, Vietnamesisch, Japanisch, Türkisch, Hindi, Malaiisch, Niederländisch, Schwedisch, Dänisch, Finnisch, Polnisch, Tschechisch, Filipino, Persisch, Griechisch, Ungarisch, Mazedonisch, Rumänisch.
 
-| Einsatzszenario | `WORTLAUT_ASR_MODEL_REPO` | Unterstützte Sprachen |
-| :--- | :--- | :--- |
-| **Mehrsprachig (25 Sprachen, Default)** | `nvidia/parakeet-tdt-0.6b-v3` | Englisch, Deutsch, Französisch, Spanisch, Italienisch, Niederländisch, Polnisch, Portugiesisch, Schwedisch u. a. (automatische Spracherkennung) |
-| **Deutsch-Spezialmodell (Optional)** | `primeline/parakeet-primeline` | Optimiert auf rein deutsche Fachsprache (`2_95_WER.nemo`, `2,95 %` WER) |
+Das Modell liefert keine Wort-Zeitstempel. Jeder ASR-Job bekommt deshalb nur seinen eigenen, überlappungsfreien Audioabschnitt, und Transkriptsegmente tragen Zeiten auf Segmentebene. Die Wortkonfidenz ist die mittlere Wahrscheinlichkeit der erzeugten Tokens. Stille und Rauschen ergeben ein leeres Transkript; eine Ausgabe, die das Generierungsbudget ohne Endmarker erreicht, wird als Decoder-Schleife verworfen.
 
 Für eine komplett englischsprachige Standard-Oberfläche samt englischem Bot-Chathinweis genügt zusätzlich `WORTLAUT_DEFAULT_LOCALE=en`.
 
@@ -173,7 +170,7 @@ WORTLAUT_SMTP_FROM=bot@example.org
 
 * **Meeting-Dienst** ([services/meeting](services/meeting), [app.py](services/meeting/src/wortlaut/app.py), [settings.py](services/meeting/src/wortlaut/settings.py)) — Python/FastAPI (`linux/amd64` & `linux/arm64`), integrierte Web-UI ([ui.py](services/meeting/src/wortlaut/ui.py)), OIDC-PKCE ([oidc.py](services/meeting/src/wortlaut/oidc.py)), Kalender- & OAuth2-Sync ([calendar.py](services/meeting/src/wortlaut/calendar.py), [calendar_oauth.py](services/meeting/src/wortlaut/calendar_oauth.py)), Scheduler, Worker-Reconciliation ([controller.py](services/meeting/src/wortlaut/controller.py)), Audio-Ingest, Exporte ([exports.py](services/meeting/src/wortlaut/exports.py)) und Mail ([mail.py](services/meeting/src/wortlaut/mail.py)).
 * **Browser-Worker** ([worker](worker)) — TypeScript, Playwright und gesandboxtes Chromium; ein kurzlebiger Job/Container pro Besprechung.
-* **ASR-Dienst** ([services/asr](services/asr), [services/asr/app.py](services/asr/app.py)) — Gemeinsam genutztes lokales **Parakeet**-Spracherkennungsmodell (`WORTLAUT_ASR_MODEL_REPO`, `WORTLAUT_ASR_MODEL_FILENAME`, `WORTLAUT_ASR_MODEL_REVISION`, `WORTLAUT_ASR_ALLOW_CPU`).
+* **ASR-Dienst** ([services/asr](services/asr), [services/asr/app.py](services/asr/app.py)) — Gemeinsam genutztes lokales **Qwen3-ASR**-Spracherkennungsmodell (`WORTLAUT_ASR_MODEL_REPO`, `WORTLAUT_ASR_MODEL_REVISION`, `WORTLAUT_ASR_ALLOW_CPU`).
 
 Vollständige interaktive OpenAPI-Dokumentation unter `/docs`.
 

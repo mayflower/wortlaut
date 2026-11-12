@@ -549,7 +549,7 @@ PRIVACY_HTML_EN = """<!DOCTYPE html>
         <h3>No External Cloud AI</h3>
         <p>
           Audio capture and speech-to-text run exclusively on self-hosted infrastructure
-          using a local Parakeet ASR model. Zero audio or transcript data is sent to
+          using a local Qwen3-ASR model. Zero audio or transcript data is sent to
           third-party clouds.
         </p>
       </div>

@@ -43,52 +43,59 @@ def _is_low_confidence_hallucination(word_confidences: list[float], word_count: 
     return mean_conf < MIN_SEGMENT_CONFIDENCE and peak_conf < MIN_PEAK_WORD_CONFIDENCE
 
 
+def asr_span(job: AsrJob) -> tuple[int, int]:
+    """Samples sent to the ASR: the job's audio window clipped to its disjoint core.
+
+    Neighbouring jobs never share audio, so a transcript without word
+    timestamps cannot duplicate words across a long-speech cut.
+    """
+    return max(job.start_sample, job.core_start), min(job.end_sample, job.core_end)
+
+
+def _is_number(value) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
 def segment_result(job: AsrJob, stream: AudioStream, response: dict):
     words = response.get("words")
     if not isinstance(words, list) or (response.get("text") and not words):
-        raise InvalidResult("word_timestamps_unavailable")
-    duration = (job.end_sample - job.start_sample) / RATE
+        raise InvalidResult("words_unavailable")
+    span_start, span_end = asr_span(job)
+    duration = (span_end - span_start) / RATE
     offset = (
         stream.contract["monotonic_origin_ms"] - stream.contract["session_monotonic_origin_ms"]
     ) / 1000
+    base = offset + span_start / RATE
+    # Word timestamps are optional; a response either times every word or none.
+    timed = any("start" in word or "end" in word for word in words)
     accepted = []
     for word in words:
-        start, end = word.get("start"), word.get("end")
+        if not isinstance(word, dict) or not isinstance(word.get("word"), str):
+            raise InvalidResult("invalid_word")
         raw_conf = word.get("confidence")
-        if (
-            not isinstance(start, (int, float))
-            or isinstance(start, bool)
-            or not isinstance(end, (int, float))
-            or isinstance(end, bool)
-            or not math.isfinite(start)
-            or not math.isfinite(end)
-            or start < 0
-            or end < start
-            or end > duration + 0.1
-            or not isinstance(word.get("word"), str)
-        ):
-            raise InvalidResult("invalid_word_timestamps")
-        if raw_conf is not None and (
-            not isinstance(raw_conf, (int, float))
-            or isinstance(raw_conf, bool)
-            or not math.isfinite(raw_conf)
-            or raw_conf < 0.0
-            or raw_conf > 1.0
-        ):
+        if raw_conf is not None and (not _is_number(raw_conf) or not 0.0 <= raw_conf <= 1.0):
             raise InvalidResult("invalid_word_confidence")
-        midpoint = job.start_sample + (start + end) / 2 * RATE
-        if job.core_start <= midpoint < job.core_end:
-            item = {
-                "word": word["word"],
-                "start": offset + job.start_sample / RATE + start,
-                "end": offset + job.start_sample / RATE + min(end, duration),
-            }
-            if raw_conf is not None:
-                item["confidence"] = round(float(raw_conf), 4)
-            accepted.append(item)
+        item = {"word": word["word"]}
+        if timed:
+            start, end = word.get("start"), word.get("end")
+            if (
+                not _is_number(start)
+                or not _is_number(end)
+                or start < 0
+                or end < start
+                or end > duration + 0.1
+            ):
+                raise InvalidResult("invalid_word_timestamps")
+            item["start"], item["end"] = base + start, base + min(end, duration)
+        if raw_conf is not None:
+            item["confidence"] = round(float(raw_conf), 4)
+        accepted.append(item)
 
+    # A transcript that hit the generation budget without an end marker is a
+    # decoder loop, not speech.
+    truncated = response.get("truncated") is True
     word_confs = [w["confidence"] for w in accepted if "confidence" in w]
-    if _is_low_confidence_hallucination(word_confs, len(accepted)):
+    if truncated or _is_low_confidence_hallucination(word_confs, len(accepted)):
         accepted = []
         word_confs = []
 
@@ -99,13 +106,18 @@ def segment_result(job: AsrJob, stream: AudioStream, response: dict):
         "epoch": str(stream.epoch),
         **job.binding,
         "session_utc_origin": stream.contract["session_utc_origin"],
-        "start": accepted[0]["start"] if accepted else offset + job.core_start / RATE,
-        "end": accepted[-1]["end"] if accepted else offset + job.core_end / RATE,
+        "start": accepted[0]["start"] if timed and accepted else base,
+        "end": accepted[-1]["end"] if timed and accepted else offset + span_end / RATE,
         "text": " ".join(word["word"] for word in accepted),
         "words": accepted,
     }
     if seg_confidence is not None:
         result["confidence"] = seg_confidence
+    language = response.get("language")
+    if isinstance(language, str) and language:
+        result["language"] = language
+    if truncated:
+        result["asr_truncated"] = True
     return result
 
 
@@ -184,7 +196,7 @@ def inference_pass(engine):
         inference_start, request_seconds, outcome = None, None, "storage_read"
         created_at = job.created_at
         try:
-            pcm = read_pcm(chunks, job.start_sample, job.end_sample)
+            pcm = read_pcm(chunks, *asr_span(job))
             with httpx.Client(
                 timeout=settings.asr_timeout_seconds, follow_redirects=False
             ) as client:

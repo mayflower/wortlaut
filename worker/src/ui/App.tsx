@@ -434,7 +434,7 @@ export function App() {
         ),
         auxiliaryData: {
           group: 'Navigation',
-          keywords: ['system', 'diagnose', 'status', 'gpu', 'parakeet'],
+          keywords: ['system', 'diagnose', 'status', 'gpu', 'asr', 'qwen'],
           action: () => {
             setSelectedId(null);
             setActiveNav('system');

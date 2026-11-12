@@ -347,8 +347,8 @@ export function WelcomeLandingView({
               <HStack justify="between" vAlign="center" wrap="wrap" gap={2}>
                 <Text type="supporting" color="secondary">
                   {tr(
-                    'Lokale Spracherkennung (Parakeet-GPU) · Keine Cloud-Weitergabe',
-                    'Local speech recognition (Parakeet GPU) · Zero cloud sharing'
+                    'Lokale Spracherkennung (Qwen3-ASR, GPU) · Keine Cloud-Weitergabe',
+                    'Local speech recognition (Qwen3-ASR, GPU) · Zero cloud sharing'
                   )}
                 </Text>
                 <Text type="supporting" color="secondary">

@@ -52,7 +52,7 @@ helm upgrade --install wortlaut ./charts/wortlaut \
   --namespace wortlaut \
   --set host=wortlaut.example.org \
   --set oidc.issuer=https://auth.example.org \
-  --set asr.modelRepo=nvidia/parakeet-tdt-0.6b-v3
+  --set asr.modelRepo=Qwen/Qwen3-ASR-1.7B-hf
 ```
 
 ### Optional Secret Keys (`wortlaut-runtime`)

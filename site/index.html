@@ -8,7 +8,7 @@
   <meta property="og:type" content="website" />
   <meta property="og:site_name" content="wortlaut.cloud" />
   <meta property="og:title" content="wortlaut — Speaker-Accurate Meeting Transcripts. 100% Self-Hosted." />
-  <meta property="og:description" content="Isolated pre-mix WebRTC speaker capture, local NVIDIA Parakeet speech-to-text (25 languages), live chat opt-out, and automatic Google/M365 calendar writeback under AGPL-3.0." />
+  <meta property="og:description" content="Isolated pre-mix WebRTC speaker capture, local Qwen3-ASR speech-to-text (30 languages), live chat opt-out, and automatic Google/M365 calendar writeback under AGPL-3.0." />
   <meta property="og:image" content="https://raw.githubusercontent.com/mayflower/wortlaut/main/docs/assets/social-preview.png" />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="wortlaut — Speaker-Accurate Meeting Transcripts. 100% Self-Hosted." />
@@ -279,7 +279,7 @@
                     <span class="turn-snippet-pill" title="24h audio snippet verification">▶ 14:05</span>
                   </div>
                   <p class="turn-body" data-i18n-html="ui_turn2_text_html">
-                    And because each participant’s WebRTC track is captured before mixing, <mark>speaker attribution</mark> stays accurate even when two people overlap — across 25 European languages.
+                    And because each participant’s WebRTC track is captured before mixing, <mark>speaker attribution</mark> stays accurate even when two people overlap — across 30 languages.
                   </p>
                 </div>
 
@@ -360,7 +360,7 @@
           </button>
           <button type="button" class="feature-tab-btn" data-ftab="adhoc">
             <span data-i18n="ftab2_title">Ad-hoc &amp; 25 Languages</span>
-            <span class="sub" data-i18n="ftab2_sub">Join in ~15s · Local Parakeet ASR</span>
+            <span class="sub" data-i18n="ftab2_sub">Join in ~15s · Local Qwen3-ASR</span>
           </button>
           <button type="button" class="feature-tab-btn" data-ftab="share">
             <span data-i18n="ftab3_title">Verify, Edit &amp; Summarize</span>
@@ -432,13 +432,13 @@
         <!-- Feature Panel 2: Ad-hoc & Multilingual ASR -->
         <div class="feature-panel" data-fpanel="adhoc">
           <div>
-            <h3 data-i18n="f2_title">Join unplanned calls in ~15 seconds — and transcribe locally across 25 European languages</h3>
+            <h3 data-i18n="f2_title">Join unplanned calls in ~15 seconds — and transcribe locally across 30 languages</h3>
             <p class="lead" data-i18n="f2_lead">
               Paste any meeting URL when a spontaneous call turns important, and run state-of-the-art speech recognition entirely on your own GPU or CPU:
             </p>
             <ul class="check-list">
               <li><span class="check-icon">✓</span><span data-i18n="f2_li1">Paste a Google Meet, Teams, Webex, or Zoom link — wortlaut spawns an isolated browser worker and joins within ~15 seconds.</span></li>
-              <li><span class="check-icon">✓</span><span data-i18n="f2_li2">Multilingual NVIDIA Parakeet TDT v3 supports automatic language detection across 25 European languages alongside a 2.95% WER German specialist checkpoint.</span></li>
+              <li><span class="check-icon">✓</span><span data-i18n="f2_li2">Qwen3-ASR 1.7B detects the language of every segment automatically across 30 languages (3.88% German WER on the Open ASR Leaderboard).</span></li>
               <li><span class="check-icon">✓</span><span data-i18n="f2_li3">Bilingual EN / DE Web-UI with live lobby/capture stepper and real-time full-text search while the call is still running.</span></li>
             </ul>
           </div>
@@ -458,7 +458,7 @@
             </div>
             <div style="background:var(--emerald-50);border:1px solid var(--emerald-100);color:var(--emerald-800);border-radius:var(--radius-sm);padding:10px 12px;font-size:13px;font-weight:600;display:flex;align-items:center;gap:10px;">
               <span class="site-waveform" aria-hidden="true"><span></span><span></span><span></span><span></span></span>
-              <span data-i18n="f2_demo_status">LIVE · Capturing 3 isolated tracks · Parakeet TDT (25 langs)</span>
+              <span data-i18n="f2_demo_status">LIVE · Capturing 3 isolated tracks · Qwen3-ASR (30 langs)</span>
             </div>
           </div>
         </div>
@@ -552,7 +552,7 @@
           <div class="trust-card">
             <h3 data-i18n="trust1_title">100% Self-Hosted (Zero Cloud Leakage)</h3>
             <p data-i18n="trust1_desc">
-              Sandboxed browser workers, NVIDIA Parakeet speech recognition, and optional Ollama summaries all run inside your own cluster or server. Not a single second of audio leaves your infrastructure.
+              Sandboxed browser workers, Qwen3-ASR speech recognition, and optional Ollama summaries all run inside your own cluster or server. Not a single second of audio leaves your infrastructure.
             </p>
           </div>
 
@@ -591,7 +591,7 @@
               <tr>
                 <td data-i18n="comp_r1_c">Where are calls &amp; summaries processed?</td>
                 <td data-i18n="comp_r1_cloud">External vendor clouds &amp; third-party LLM APIs</td>
-                <td class="highlight-col" data-i18n="comp_r1_w">100% on your own infrastructure (Parakeet ASR + optional Ollama)</td>
+                <td class="highlight-col" data-i18n="comp_r1_w">100% on your own infrastructure (Qwen3-ASR + optional Ollama)</td>
               </tr>
               <tr>
                 <td data-i18n="comp_r2_c">How are speakers identified?</td>
@@ -662,7 +662,7 @@ cp .env.example .env
 # 2. Launch stack (non-root meeting, docker-socket-proxy, Postgres 17 &amp; RustFS S3)
 docker compose up -d
 
-# Recommended with NVIDIA GPU (real-time Parakeet ASR):
+# Recommended with NVIDIA GPU (real-time Qwen3-ASR):
 docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
 # Web-UI: http://127.0.0.1:34601/ui · API Docs: http://127.0.0.1:34601/docs</code></pre>
 
@@ -692,7 +692,7 @@ make test-local</code></pre>
               <h3 data-i18n="qs_req_title">What’s included out of the box</h3>
               <ul class="check-list">
                 <li style="color:var(--stone-200);"><span class="check-icon">✓</span><span data-i18n="qs_req_1">Hardened Docker Compose (isolated socket proxy, non-root) &amp; OCI Helm Chart with zero-dependency bundled mode (amd64 &amp; arm64)</span></li>
-                <li style="color:var(--stone-200);"><span class="check-icon">✓</span><span data-i18n="qs_req_2">NVIDIA Parakeet ASR: 25 European languages (parakeet-tdt-0.6b-v3) or 2.95% WER German specialist — GPU recommended, CPU fallback built in</span></li>
+                <li style="color:var(--stone-200);"><span class="check-icon">✓</span><span data-i18n="qs_req_2">Qwen3-ASR 1.7B: 30 languages (Qwen/Qwen3-ASR-1.7B-hf) — GPU recommended, CPU fallback built in</span></li>
                 <li style="color:var(--stone-200);"><span class="check-icon">✓</span><span data-i18n="qs_req_3">PostgreSQL 17 &amp; RustFS S3 object storage pre-wired in both Docker Compose and Helm bundled mode</span></li>
                 <li style="color:var(--stone-200);"><span class="check-icon">✓</span><span data-i18n="qs_req_4">Optional: OIDC SSO, Google/M365 Calendar OAuth2 writeback, local Ollama summaries, and DKIM-verified IMAP/SMTP mail</span></li>
               </ul>

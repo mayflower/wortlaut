@@ -19,6 +19,7 @@ from test_processing import audio, send_pcm
 from test_recordings import API
 
 from wortlaut.asr import (
+    asr_span,
     claim_job,
     commit_result,
     finalize_processing,
@@ -301,7 +302,9 @@ def test_gpu_timeout_reclaim_and_duplicate_result_commit(client, database, stora
         with Session(database) as db:
             job = db.get(AsrJob, request.headers["X-Job-ID"])
             assert job.start_sample > 18 * 16000
-            assert request.content == pcm[job.start_sample * 2 : job.end_sample * 2]
+            # Only the job's disjoint core reaches the ASR.
+            span_start, span_end = asr_span(job)
+            assert request.content == pcm[span_start * 2 : span_end * 2]
         if not responses:
             responses.append("timeout")
             raise httpx.ReadTimeout("simulated disconnect", request=request)
@@ -376,7 +379,7 @@ def test_gpu_timeout_reclaim_and_duplicate_result_commit(client, database, stora
         get_settings.cache_clear()
 
 
-def test_word_midpoint_has_one_owner_at_long_section_boundary():
+def test_long_section_cut_sends_disjoint_audio_and_offsets_words_from_the_core():
     stream = AudioStream(
         stream_id=uuid.uuid4(),
         epoch=uuid.uuid4(),
@@ -397,16 +400,62 @@ def test_word_midpoint_has_one_owner_at_long_section_boundary():
         core_end=320000,
         binding={},
     )
-    # The same word straddles the ten-second cut. Its midpoint equals the boundary.
-    a = segment_result(
-        left, stream, {"text": "Grenze", "words": [{"word": "Grenze", "start": 9.9, "end": 10.1}]}
+    # The 200 ms segmentation overlap around a hard cut never reaches the ASR,
+    # so a transcript without word timestamps cannot repeat the boundary word.
+    assert asr_span(left) == (0, 160000)
+    assert asr_span(right) == (160000, 320000)
+    untimed = segment_result(
+        right, stream, {"text": "Grenze", "language": "German", "words": [{"word": "Grenze"}]}
     )
-    b = segment_result(
+    assert untimed["text"] == "Grenze"
+    assert untimed["words"] == [{"word": "Grenze"}]
+    assert (untimed["start"], untimed["end"]) == (10.5, 20.5)
+    assert untimed["language"] == "German"
+    # Timestamped responses still work and are offset from the core start.
+    timed = segment_result(
         right, stream, {"text": "Grenze", "words": [{"word": "Grenze", "start": 0.1, "end": 0.3}]}
     )
-    assert a["words"] == []
-    assert b["text"] == "Grenze"
-    assert b["words"][0]["start"] == 10.4
+    assert timed["words"][0]["start"] == 10.6
+    assert (timed["start"], timed["end"]) == (10.6, 10.8)
+
+
+def test_segment_result_drops_truncated_decoder_output_and_rejects_mixed_timing():
+    import pytest
+
+    from wortlaut.asr import InvalidResult
+
+    stream = AudioStream(
+        stream_id=uuid.uuid4(),
+        epoch=uuid.uuid4(),
+        contract={
+            "monotonic_origin_ms": 1000,
+            "session_monotonic_origin_ms": 1000,
+            "session_utc_origin": "2026-10-06T09:00:00Z",
+        },
+    )
+    job = AsrJob(
+        id="loop", start_sample=0, end_sample=32000, core_start=0, core_end=32000, binding={}
+    )
+    looped = segment_result(
+        job,
+        stream,
+        {
+            "text": "ja ja ja ja",
+            "truncated": True,
+            "words": [{"word": "ja", "confidence": 0.99}] * 4,
+        },
+    )
+    assert looped["text"] == "" and looped["words"] == []
+    assert looped["asr_truncated"] is True
+    assert "confidence" not in looped
+    with pytest.raises(InvalidResult, match="invalid_word_timestamps"):
+        segment_result(
+            job,
+            stream,
+            {"text": "a b", "words": [{"word": "a", "start": 0.1, "end": 0.2}, {"word": "b"}]},
+        )
+    with pytest.raises(InvalidResult, match="words_unavailable"):
+        segment_result(job, stream, {"text": "a", "words": []})
 
 
 def test_segment_result_preserves_word_confidence_and_rejects_low_confidence_hallucinations():

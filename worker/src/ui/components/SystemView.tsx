@@ -258,8 +258,8 @@ export function SystemView({
                     )}
                   >
                     {tr(
-                      `Die Spracherkennung (lokales NVIDIA-Parakeet-Modell) läuft im eigenen Cluster. Roh-Audio wird nach ${instance.retention.audioHours}h, Protokolle nach ${instance.retention.transcriptDays}d gelöscht.`,
-                      `Speech recognition (local NVIDIA Parakeet GPU model) runs on your infrastructure. Raw audio is purged after ${instance.retention.audioHours}h, transcripts after ${instance.retention.transcriptDays}d.`
+                      `Die Spracherkennung (lokales Qwen3-ASR-Modell) läuft im eigenen Cluster. Roh-Audio wird nach ${instance.retention.audioHours}h, Protokolle nach ${instance.retention.transcriptDays}d gelöscht.`,
+                      `Speech recognition (local Qwen3-ASR GPU model) runs on your infrastructure. Raw audio is purged after ${instance.retention.audioHours}h, transcripts after ${instance.retention.transcriptDays}d.`
                     )}
                   </MetadataListItem>
                 </MetadataList>
@@ -292,7 +292,7 @@ export function SystemView({
                     {activeJobs.length} / {instance.limits.maxActiveMeetings}{' '}
                     max.
                   </MetadataListItem>
-                  <MetadataListItem label="Parakeet ASR Queue">
+                  <MetadataListItem label="ASR Queue">
                     {tr(
                       `${asrJobs.length} Aufnahmen in GPU-Erkennung`,
                       `${asrJobs.length} recordings in GPU queue`

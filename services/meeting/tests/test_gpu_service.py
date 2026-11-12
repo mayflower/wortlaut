@@ -1,4 +1,8 @@
-"""GPU HTTP admission with a controlled model; does not test NeMo or CUDA."""
+"""GPU HTTP admission and Qwen3-ASR output parsing with controlled models.
+
+These tests do not load Qwen3-ASR or CUDA; the real-model path is checked
+separately against downloaded checkpoints.
+"""
 
 import hashlib
 import importlib.util
@@ -9,34 +13,45 @@ from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 
+import numpy as np
 from fastapi.testclient import TestClient
+
+SERVICE = Path(__file__).resolve().parents[2] / "asr/app.py"
+
+
+def load_service(name):
+    spec = importlib.util.spec_from_file_location(name, SERVICE)
+    service = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(service)
+    return service
+
+
+def result(text="Wortlaut", language="German"):
+    return {
+        "text": text,
+        "language": language,
+        "words": [{"word": w, "confidence": 0.9} for w in text.split()],
+        "truncated": False,
+    }
 
 
 def test_busy_inference_is_rejected_without_running_a_second_model_call(monkeypatch):
-    file = Path(__file__).resolve().parents[2] / "asr/app.py"
-    spec = importlib.util.spec_from_file_location("fixture_gpu_service", file)
-    service = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(service)
+    service = load_service("fixture_gpu_service")
     entered, release = threading.Event(), threading.Event()
     calls = []
 
     class FixtureModel:
-        def transcribe(self, filenames, **kwargs):
-            calls.append(filenames)
+        def transcribe(self, audio):
+            calls.append(audio)
             entered.set()
             assert release.wait(5)
-            return [
-                SimpleNamespace(
-                    text="Wortlaut",
-                    timestamp={"word": [{"word": "Wortlaut", "start": 0.1, "end": 0.2}]},
-                )
-            ]
+            return result()
 
     monkeypatch.setenv("WORTLAUT_ASR_TOKEN", "fixture-token")
     monkeypatch.setattr(service, "load_model", lambda: FixtureModel())
     monkeypatch.setitem(sys.modules, "torch", SimpleNamespace(inference_mode=nullcontext))
     headers = {"Authorization": "Bearer fixture-token", "X-Job-ID": "a" * 64}
-    pcm = b"\x00\x01" * 16000
+    pcm = np.array([0, 16384, -32768], dtype="<i2").tobytes() * 1000
     with TestClient(service.app) as client, ThreadPoolExecutor(1) as pool:
         first = pool.submit(client.post, "/v1/transcribe", headers=headers, content=pcm)
         assert entered.wait(3)
@@ -46,10 +61,16 @@ def test_busy_inference_is_rejected_without_running_a_second_model_call(monkeypa
             assert len(calls) == 1
         finally:
             release.set()
-        result = first.result(timeout=5)
-        assert result.status_code == 200
-        assert result.json()["pcm_sha256"] == hashlib.sha256(pcm).hexdigest()
-        assert result.json()["words"][0]["word"] == "Wortlaut"
+        response = first.result(timeout=5)
+        assert response.status_code == 200
+        body = response.json()
+        assert body["pcm_sha256"] == hashlib.sha256(pcm).hexdigest()
+        assert body["words"] == [{"word": "Wortlaut", "confidence": 0.9}]
+        assert body["language"] == "German"
+        assert body["truncated"] is False
+        # PCM16 is handed to the model as float32 in [-1, 1).
+        assert calls[0].dtype == np.float32
+        assert calls[0][:3].tolist() == [0.0, 0.5, -1.0]
         assert client.post("/v1/transcribe", headers=headers, content=b"x").status_code == 400
         assert (
             client.post(
@@ -60,17 +81,14 @@ def test_busy_inference_is_rejected_without_running_a_second_model_call(monkeypa
 
 
 def test_accelerator_failure_rejects_jobs_and_marks_gpu_process_unhealthy(monkeypatch):
-    path = Path(__file__).resolve().parents[2] / "asr/app.py"
-    spec = importlib.util.spec_from_file_location("gpu_failure_fixture", path)
-    gpu = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(gpu)
+    gpu = load_service("gpu_failure_fixture")
 
     class AcceleratorFailure(Exception):
         pass
 
     calls = []
 
-    def fail(*args, **kwargs):
+    def fail(audio):
         calls.append(True)
         raise AcceleratorFailure("fixture CUDA client failure")
 
@@ -95,10 +113,7 @@ def test_accelerator_failure_rejects_jobs_and_marks_gpu_process_unhealthy(monkey
 
 
 def test_shared_gpu_out_of_memory_is_retryable_and_keeps_process_healthy(monkeypatch):
-    path = Path(__file__).resolve().parents[2] / "asr/app.py"
-    spec = importlib.util.spec_from_file_location("gpu_oom_fixture", path)
-    gpu = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(gpu)
+    gpu = load_service("gpu_oom_fixture")
 
     class AcceleratorFailure(Exception):
         pass
@@ -108,16 +123,11 @@ def test_shared_gpu_out_of_memory_is_retryable_and_keeps_process_healthy(monkeyp
 
     emptied, calls = [], []
 
-    def transcribe(*args, **kwargs):
+    def transcribe(audio):
         calls.append(True)
         if len(calls) == 1:
             raise OutOfMemory("fixture shared GPU allocation failure")
-        return [
-            SimpleNamespace(
-                text="Wortlaut",
-                timestamp={"word": [{"word": "Wortlaut", "start": 0.1, "end": 0.2}]},
-            )
-        ]
+        return result()
 
     monkeypatch.setitem(
         sys.modules,
@@ -144,210 +154,180 @@ def test_shared_gpu_out_of_memory_is_retryable_and_keeps_process_healthy(monkeyp
     assert retried.json()["words"][0]["word"] == "Wortlaut"
 
 
-def test_cpu_fallback_loads_model_on_cpu_when_enabled(monkeypatch):
-    path = Path(__file__).resolve().parents[2] / "asr/app.py"
-    spec = importlib.util.spec_from_file_location("cpu_fallback_fixture", path)
-    asr_service = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(asr_service)
+def test_model_loads_pinned_checkpoint_on_cpu_only_when_enabled(monkeypatch):
+    service = load_service("cpu_fallback_fixture")
+    loaded = {}
 
-    restored = {}
-
-    class DummyModel:
-        def freeze(self):
-            restored["frozen"] = True
+    class Network:
+        def to(self, device):
+            loaded["device"] = device
+            return self
 
         def eval(self):
-            restored["eval"] = True
+            loaded["eval"] = True
+            return self
 
-    class DummyASRModel:
+    class AutoProcessor:
         @staticmethod
-        def restore_from(filename, map_location):
-            restored["filename"] = filename
-            restored["map_location"] = map_location
-            return DummyModel()
+        def from_pretrained(repo, revision):
+            loaded["processor"] = (repo, revision)
+            return SimpleNamespace(tokenizer=object())
 
+    class AutoModelForMultimodalLM:
         @staticmethod
-        def from_pretrained(model_name, map_location):
-            restored["pretrained"] = model_name
-            restored["map_location"] = map_location
-            return DummyModel()
+        def from_pretrained(repo, revision, dtype):
+            loaded["model"] = (repo, revision, dtype)
+            return Network()
 
-    asr_models = SimpleNamespace(ASRModel=DummyASRModel)
-    nemo_pkg = SimpleNamespace(
-        collections=SimpleNamespace(asr=SimpleNamespace(models=asr_models))
-    )
-    monkeypatch.setitem(sys.modules, "nemo", nemo_pkg)
-    monkeypatch.setitem(sys.modules, "nemo.collections", nemo_pkg.collections)
-    monkeypatch.setitem(sys.modules, "nemo.collections.asr", nemo_pkg.collections.asr)
     monkeypatch.setitem(
         sys.modules,
-        "torch",
-        SimpleNamespace(cuda=SimpleNamespace(is_available=lambda: False)),
-    )
-    monkeypatch.setitem(
-        sys.modules,
-        "huggingface_hub",
+        "transformers",
         SimpleNamespace(
-            hf_hub_download=lambda repo, name, revision: f"/tmp/{repo}:{name}@{revision}"
+            AutoProcessor=AutoProcessor, AutoModelForMultimodalLM=AutoModelForMultimodalLM
         ),
     )
-    monkeypatch.setattr(asr_service, "MODEL_REVISION", asr_service.DEFAULT_MODEL_REVISION)
-    monkeypatch.setenv("WORTLAUT_ASR_ALLOW_CPU", "true")
-    loaded = asr_service.load_model()
-    assert isinstance(loaded, DummyModel)
-    assert asr_service.MODEL_REVISION == "541d1f99c6b0c3cd0b11a95167540bb8edefd82b"
-    assert restored == {
-        "filename": (
-            "/tmp/nvidia/parakeet-tdt-0.6b-v3:"
-            "parakeet-tdt-0.6b-v3.nemo@541d1f99c6b0c3cd0b11a95167540bb8edefd82b"
-        ),
-        "map_location": "cpu",
-        "frozen": True,
-        "eval": True,
-    }
-
-    restored.clear()
-    monkeypatch.setenv("WORTLAUT_ASR_MODEL_REPO", "primeline/parakeet-primeline")
-    loaded_primeline = asr_service.load_model()
-    assert isinstance(loaded_primeline, DummyModel)
-    assert asr_service.MODEL_REVISION == "3f1a9bcb611dfeda53fe74fe5f1a3d5701e8023e"
-    assert restored == {
-        "filename": (
-            "/tmp/primeline/parakeet-primeline:"
-            "2_95_WER.nemo@3f1a9bcb611dfeda53fe74fe5f1a3d5701e8023e"
-        ),
-        "map_location": "cpu",
-        "frozen": True,
-        "eval": True,
-    }
-
-    restored.clear()
-    monkeypatch.setenv("WORTLAUT_ASR_MODEL_REPO", "custom-org/parakeet-custom")
-    loaded_custom = asr_service.load_model()
-    assert isinstance(loaded_custom, DummyModel)
-    assert asr_service.MODEL_REVISION == "custom-org/parakeet-custom"
-    assert restored == {
-        "pretrained": "custom-org/parakeet-custom",
-        "map_location": "cpu",
-        "frozen": True,
-        "eval": True,
-    }
-
-
-def test_decoding_confidence_config_and_subword_token_confidence_alignment(monkeypatch):
-    path = Path(__file__).resolve().parents[2] / "asr/app.py"
-    spec = importlib.util.spec_from_file_location("gpu_confidence_fixture", path)
-    service = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(service)
-
-    applied = {}
-
-    class AttrDict(dict):
-        def __getattr__(self, key):
-            try:
-                return self[key]
-            except KeyError as exc:
-                raise AttributeError(key) from exc
-
-        def __setattr__(self, key, value):
-            self[key] = value
-
-    decoding_cfg = AttrDict(confidence_cfg=AttrDict())
-
-    class ConfigurableModel:
-        cfg = SimpleNamespace(decoding=decoding_cfg)
-
-        def change_decoding_strategy(self, cfg, verbose=False):
-            applied["cfg"] = cfg
-            applied["verbose"] = verbose
-
-        def transcribe(self, filenames, **kwargs):
-            return [
-                SimpleNamespace(
-                    text="Mit dem Zug?",
-                    token_confidence=[0.92, 0.88, 0.96, 0.90],
-                    timestamp={
-                        "char": [
-                            {
-                                "char": "Mit",
-                                "start_offset": 2,
-                                "end_offset": 4,
-                                "start": 0.16,
-                                "end": 0.32,
-                            },
-                            {
-                                "char": "dem",
-                                "start_offset": 5,
-                                "end_offset": 7,
-                                "start": 0.40,
-                                "end": 0.56,
-                            },
-                            {
-                                "char": "Zug",
-                                "start_offset": 8,
-                                "end_offset": 10,
-                                "start": 0.64,
-                                "end": 0.80,
-                            },
-                            {
-                                "char": "?",
-                                "start_offset": 10,
-                                "end_offset": 11,
-                                "start": 0.80,
-                                "end": 0.88,
-                            },
-                        ],
-                        "word": [
-                            {
-                                "word": "Mit",
-                                "start_offset": 2,
-                                "end_offset": 4,
-                                "start": 0.16,
-                                "end": 0.32,
-                            },
-                            {
-                                "word": "dem",
-                                "start_offset": 5,
-                                "end_offset": 7,
-                                "start": 0.40,
-                                "end": 0.56,
-                            },
-                            {
-                                "word": "Zug?",
-                                "start_offset": 8,
-                                "end_offset": 11,
-                                "start": 0.64,
-                                "end": 0.88,
-                            },
-                        ],
-                    },
-                )
-            ]
-
-    monkeypatch.setitem(sys.modules, "omegaconf", SimpleNamespace(open_dict=nullcontext))
     monkeypatch.setitem(
         sys.modules,
         "torch",
-        SimpleNamespace(AcceleratorError=RuntimeError, inference_mode=nullcontext),
+        SimpleNamespace(
+            cuda=SimpleNamespace(is_available=lambda: False), float32="f32", bfloat16="bf16"
+        ),
     )
-    monkeypatch.setenv("WORTLAUT_ASR_TOKEN", "fixture-conf-token")
+    monkeypatch.delenv("WORTLAUT_ASR_ALLOW_CPU", raising=False)
+    try:
+        service.load_model()
+        raise AssertionError("CPU inference must be opt-in")
+    except RuntimeError as error:
+        assert "requires an NVIDIA GPU" in str(error)
 
-    m = ConfigurableModel()
-    service._configure_decoding_confidence(m)
-    assert applied["verbose"] is False
-    assert decoding_cfg.preserve_alignments is True
-    assert decoding_cfg.compute_timestamps is True
-    assert decoding_cfg.confidence_cfg.preserve_frame_confidence is True
-    assert decoding_cfg.confidence_cfg.preserve_token_confidence is True
-    assert decoding_cfg.confidence_cfg.preserve_word_confidence is False
-    assert decoding_cfg.confidence_cfg.method_cfg == {"name": "max_prob", "alpha": 1.0}
+    monkeypatch.setenv("WORTLAUT_ASR_ALLOW_CPU", "true")
+    asr = service.load_model()
+    assert isinstance(asr, service.QwenASR)
+    pinned = ("Qwen/Qwen3-ASR-1.7B-hf", "bcd2b5b7f32b480ab5790554cfa8347f246a14f3")
+    assert loaded == {
+        "processor": pinned,
+        "model": (*pinned, "f32"),
+        "device": "cpu",
+        "eval": True,
+    }
 
-    monkeypatch.setattr(service, "load_model", lambda: m)
-    headers = {"Authorization": "Bearer fixture-conf-token", "X-Job-ID": "b" * 64}
-    pcm = b"\x00\x01" * 16000
-    with TestClient(service.app) as client:
-        resp = client.post("/v1/transcribe", headers=headers, content=pcm)
-        assert resp.status_code == 200
-        words = resp.json()["words"]
-        assert [w["word"] for w in words] == ["Mit", "dem", "Zug?"]
-        assert [w["confidence"] for w in words] == [0.92, 0.88, 0.93]
+
+def test_words_group_byte_level_tokens_with_mean_probability():
+    service = load_service("assemble_fixture")
+    # Raw byte-level BPE tokens after "<asr_text>", as convert_ids_to_tokens
+    # returns them; "Ġ" marks a leading space.
+    tokens = ["L", "Ã¶", "wen", "Ġunter", "Ġdem", "ĠZug", "?", "<|im_end|>", "Ġignored"]
+    probs = [0.9, 1.0, 0.8, 1.0, 0.5, 0.6, 1.0, 1.0, 0.1]
+
+    def to_text(group):
+        return "".join(group).replace("Ġ", " ").replace("Ã¶", "ö")
+
+    words = service.assemble_words(tokens, probs, to_text)
+    assert words == [
+        {"word": "Löwen", "confidence": 0.9},
+        {"word": "unter", "confidence": 1.0},
+        {"word": "dem", "confidence": 0.5},
+        {"word": "Zug?", "confidence": 0.8},
+    ]
+    assert service.assemble_words(["<|im_end|>"], [1.0], to_text) == []
+
+
+def fixture_asr(service, generated_tokens, generated_probs, transcription, language):
+    vocab = {token: index for index, token in enumerate(sorted(set(generated_tokens)), 100)}
+    names = {index: token for token, index in vocab.items()}
+    prompt = [1, 2, 3]
+    ids = [vocab[t] for t in generated_tokens]
+    sequences = np.array([prompt + ids])
+    logprobs = np.log(np.array([generated_probs]))
+
+    class Inputs(dict):
+        def to(self, device, dtype):
+            return self
+
+    class Probs:
+        def __getitem__(self, index):
+            row = np.exp(logprobs[index]).tolist()
+            return SimpleNamespace(exp=lambda: SimpleNamespace(tolist=lambda: row))
+
+    budgets = []
+
+    class Network:
+        device, dtype = "cpu", "f32"
+
+        def generate(self, **kwargs):
+            budgets.append(kwargs["max_new_tokens"])
+            return SimpleNamespace(sequences=Seq(sequences), scores=None)
+
+        def compute_transition_scores(self, sequences, scores, normalize_logits):
+            assert normalize_logits is True
+            return Probs()
+
+    class Seq:
+        def __init__(self, values):
+            self.values = values
+
+        def __getitem__(self, index):
+            return SimpleNamespace(tolist=lambda: self.values[index].tolist())
+
+    class Tokenizer:
+        def convert_ids_to_tokens(self, generated):
+            return [names[i] for i in generated]
+
+        def convert_tokens_to_string(self, group):
+            return "".join(group).replace("Ġ", " ")
+
+    class Processor:
+        tokenizer = Tokenizer()
+
+        def apply_transcription_request(self, audio):
+            return Inputs(input_ids=SimpleNamespace(shape=(1, len(prompt))))
+
+        def decode(self, generated, return_format):
+            assert return_format == "parsed"
+            return [{"language": language, "transcription": transcription}]
+
+    return service.QwenASR(Processor(), Network()), budgets
+
+
+def test_transcribe_parses_language_words_and_truncation(monkeypatch):
+    service = load_service("transcribe_fixture")
+    monkeypatch.setitem(sys.modules, "torch", SimpleNamespace(inference_mode=nullcontext))
+    tokens = ["language", "ĠGerman", "<asr_text>", "Mit", "Ġdem", "ĠZug", "?", "<|im_end|>"]
+    probs = [1.0, 1.0, 1.0, 0.92, 0.88, 0.96, 0.90, 1.0]
+    asr, budgets = fixture_asr(service, tokens, probs, "Mit dem Zug?", "German")
+    out = asr.transcribe(np.zeros(32000, np.float32))
+    assert out["text"] == "Mit dem Zug?"
+    assert out["language"] == "German"
+    assert out["truncated"] is False
+    assert out["words"] == [
+        {"word": "Mit", "confidence": 0.92},
+        {"word": "dem", "confidence": 0.88},
+        {"word": "Zug?", "confidence": 0.93},
+    ]
+    # 2 s of audio: 24 prefix tokens plus 10 tokens per second.
+    assert budgets == [44]
+
+    # Non-speech: the model reports no language and an empty transcript.
+    tokens = ["language", "ĠNone", "<asr_text>", "<|im_end|>"]
+    asr, _ = fixture_asr(service, tokens, [1.0] * 4, "", None)
+    assert asr.transcribe(np.zeros(16000, np.float32)) == {
+        "text": "",
+        "language": None,
+        "words": [],
+        "truncated": False,
+    }
+
+    # Budget exhausted without an end marker: reported as truncated.
+    tokens = ["language", "ĠGerman", "<asr_text>", "ja", "Ġja", "Ġja"]
+    asr, _ = fixture_asr(service, tokens, [1.0] * 6, "ja ja ja", "German")
+    assert asr.transcribe(np.zeros(16000, np.float32))["truncated"] is True
+
+    # Token grouping that does not reproduce the parsed transcript keeps the
+    # transcript words but no confidence rather than misaligned scores.
+    tokens = ["language", "ĠGerman", "<asr_text>", "Mit", "Ġdem", "<|im_end|>"]
+    asr, _ = fixture_asr(service, tokens, [1.0, 1.0, 1.0, 0.5, 0.5, 1.0], "Mit dem Zug", "German")
+    assert asr.transcribe(np.zeros(16000, np.float32))["words"] == [
+        {"word": "Mit"},
+        {"word": "dem"},
+        {"word": "Zug"},
+    ]
