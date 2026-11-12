@@ -256,7 +256,8 @@ async function run(api: string, credential: string) {
         participant_sources: state.participant_sources,
         data_channels: state.data_channels ?? [],
         sdp: state.sdp ?? {descriptions: 0, audio_sections: 0, video_sections: 0, ssrc_count: 0, cname_count: 0, msid_count: 0},
-        audio_clock: state.audio_clock, drained: state.drained};
+        audio_clock: state.audio_clock, drained: state.drained,
+        ...((state.media ?? diagnostics.media) ? {media: state.media ?? diagnostics.media} : {})};
     } catch { /* preserve last known diagnostics */ }
     // An SDK event alone is not proof of process termination. Report ended only
     // after Chromium has closed; lost status ACKs can replay the same final report.

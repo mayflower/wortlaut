@@ -299,12 +299,17 @@ class PeerConnectionEvidence(BaseModel):
     dtls_state: str | None = Field(default=None, max_length=32)
     selected_pair_state: str | None = Field(default=None, max_length=32)
     selected_pair_bytes_received: int | None = Field(default=None, ge=0)
+    in_frame: bool = False
+    audio_receivers: int = Field(default=0, ge=0)
+    inbound_audio_packets: int = Field(default=0, ge=0)
 
 
 class AudioElementEvidence(BaseModel):
     meet_total: int = Field(default=0, ge=0)
     meet_playing: int = Field(default=0, ge=0)
     meet_muted: int = Field(default=0, ge=0)
+    # Live audio tracks Meet plays that no captured peer connection receives.
+    meet_foreign_tracks: int = Field(default=0, ge=0)
     keepalive_total: int = Field(default=0, ge=0)
     keepalive_playing: int = Field(default=0, ge=0)
 
@@ -314,6 +319,7 @@ class MediaEvidence(BaseModel):
 
     peer_connections: list[PeerConnectionEvidence] = Field(default_factory=list, max_length=16)
     audio_elements: AudioElementEvidence = Field(default_factory=AudioElementEvidence)
+    frames: int = Field(default=0, ge=0)
     stats_age_ms: int | None = Field(default=None, ge=0)
 
 

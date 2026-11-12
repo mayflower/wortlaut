@@ -105,7 +105,25 @@ export async function installMeetCapture(page: Page, bootstrap: Pick<MeetBootstr
       : config.provider === 'teams' ? window !== window.top || !config.teams_origins?.includes(location.origin)
       : config.provider === 'zoom' ? window !== window.top || !isZoomHost
       : window !== window.top || location.origin !== 'https://meet.google.com' ||
-        location.pathname.replace(/^\/meet\//, '/') !== new URL(config.meeting_url).pathname.replace(/^\/meet\//, '/')) return;
+        location.pathname.replace(/^\/meet\//, '/') !== new URL(config.meeting_url).pathname.replace(/^\/meet\//, '/')) {
+      // Diagnostics only: count peer connections that Meet creates in a
+      // same-origin child frame, which the top-window capture never sees.
+      if (config.provider === 'google_meet' && window !== window.top) {
+        try {
+          const top = window.top as unknown as {wortlautMeetReceivers?: {frameConnections?: Set<RTCPeerConnection>}};
+          const Native = window.RTCPeerConnection;
+          if (top.wortlautMeetReceivers && typeof Native === 'function') {
+            top.wortlautMeetReceivers.frameConnections ??= new Set();
+            window.RTCPeerConnection = new Proxy(Native, {construct(target, args, newTarget) {
+              const pc = Reflect.construct(target, args, newTarget) as RTCPeerConnection;
+              top.wortlautMeetReceivers?.frameConnections?.add(pc);
+              return pc;
+            }});
+          }
+        } catch { /* cross-origin frame */ }
+      }
+      return;
+    }
     window.wortlautMeetConfig = config;
     const connections = new Set<RTCPeerConnection>(), received = new WeakSet<RTCRtpReceiver>();
     const encodedReserved = new WeakSet<RTCPeerConnection>();

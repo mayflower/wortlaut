@@ -1709,6 +1709,19 @@ async function runProviderLiveTest(provider: Provider, config: LiveConfig) {
       }
     }
     if (!activeRecording) {
+      // Evidence for a failed admission: what the host actually sees.
+      const artifact = resolve(ROOT_DIR, `.dev/live-e2e-${provider}-admit-timeout`);
+      await admitPage.screenshot({path: `${artifact}.png`, fullPage: true}).catch(() => {});
+      const buttons: string[] = [];
+      for (const target of [admitPage, ...admitPage.frames()]) {
+        const labels = await target.locator('button, [role="button"]').evaluateAll((els) => els
+          .filter((el) => (el as HTMLElement).offsetParent !== null)
+          .map((el) => `${el.getAttribute('aria-label') ?? ''} | ${(el as HTMLElement).innerText ?? ''}`
+            .replace(/\s+/g, ' ').trim().slice(0, 120))).catch(() => [] as string[]);
+        buttons.push(...labels);
+      }
+      await writeFile(`${artifact}.json`, JSON.stringify({buttons}, null, 2), 'utf8').catch(() => {});
+      console.log(`      Host-Ansicht beim Einlass-Timeout gespeichert: ${artifact}.png/.json`);
       throw new Error(`Timeout: wortlaut-Bot hat nach ${config.joinTimeoutSeconds}s nicht den Status 'active' erreicht.`);
     }
     console.log(`      wortlaut-Bot ist im Meeting aktiv (participation=active).`);

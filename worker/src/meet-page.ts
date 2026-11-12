@@ -24,6 +24,7 @@ declare global {
       onDataMessage?: (data: unknown) => void;
       transformDataSend?: (channel: RTCDataChannel, data: unknown) => unknown;
       remoteDescriptions?: string[];
+      frameConnections?: Set<RTCPeerConnection>;
       onRemoteDescription?: (sdp: string) => void;
       observe?: (receiver: RTCRtpReceiver, pc: RTCPeerConnection) => void};
     wortlautMeet: {stop: () => Promise<boolean>; inspect: () => MeetCaptureState & {audio_clock: AudioClock}};
@@ -69,9 +70,13 @@ export type InboundAudioStats = {packets_received: number; bytes_received: numbe
 
 export type MediaState = {
   peer_connections: {connection_state: string; ice_connection_state: string; dtls_state: string | null;
-    selected_pair_state: string | null; selected_pair_bytes_received: number | null}[];
+    selected_pair_state: string | null; selected_pair_bytes_received: number | null;
+    in_frame: boolean; audio_receivers: number; inbound_audio_packets: number}[];
+  // meet_foreign_tracks: live audio tracks Meet plays that no captured
+  // (top-window) peer connection receives.
   audio_elements: {meet_total: number; meet_playing: number; meet_muted: number;
-    keepalive_total: number; keepalive_playing: number};
+    meet_foreign_tracks: number; keepalive_total: number; keepalive_playing: number};
+  frames: number;
   stats_age_ms: number | null;
 };
 
@@ -1505,20 +1510,26 @@ function install(config: MeetCaptureConfig) {
     }
     for (const receiver of receiverStats.keys()) if (!sources.has(receiver)) receiverStats.delete(receiver);
     const next: MediaState['peer_connections'] = [];
-    for (const pc of connections) {
+    const frameConnections = window.wortlautMeetReceivers.frameConnections ?? new Set<RTCPeerConnection>();
+    for (const [pc, inFrame] of [...[...connections].map((c) => [c, false] as const),
+      ...[...frameConnections].map((c) => [c, true] as const)]) {
       if (next.length >= 16) break;
+      if (pc.connectionState === 'closed') { if (inFrame) frameConnections.delete(pc); continue; }
       const report = await pc.getStats();
-      let dtls: string | null = null, pairId: string | undefined;
+      let dtls: string | null = null, pairId: string | undefined, inboundPackets = 0;
       report.forEach((stat: Record<string, unknown>) => {
         if (stat.type === 'transport') {
           if (typeof stat.dtlsState === 'string') dtls = stat.dtlsState;
           if (typeof stat.selectedCandidatePairId === 'string') pairId = stat.selectedCandidatePairId;
         }
+        if (stat.type === 'inbound-rtp' && stat.kind === 'audio') inboundPackets += finite(stat.packetsReceived);
       });
       const pair = pairId ? report.get(pairId) as Record<string, unknown> | undefined : undefined;
       next.push({connection_state: pc.connectionState, ice_connection_state: pc.iceConnectionState,
         dtls_state: dtls, selected_pair_state: typeof pair?.state === 'string' ? pair.state : null,
-        selected_pair_bytes_received: pair ? finite(pair.bytesReceived) : null});
+        selected_pair_bytes_received: pair ? finite(pair.bytesReceived) : null, in_frame: inFrame,
+        audio_receivers: pc.getReceivers().filter((r) => r.track?.kind === 'audio').length,
+        inbound_audio_packets: inboundPackets});
     }
     peerStats = next;
     statsAt = performance.now();
@@ -1533,11 +1544,22 @@ function install(config: MeetCaptureConfig) {
     const meet = [...document.querySelectorAll<HTMLAudioElement>('audio:not([data-wortlaut-keepalive])')]
       .filter((el) => el.srcObject instanceof MediaStream);
     const keepalive = [...keepaliveAudios.values()].map((entry) => entry.el);
+    const capturedTracks = new Set<string>();
+    for (const pc of connections) {
+      for (const receiver of pc.getReceivers()) if (receiver.track) capturedTracks.add(receiver.track.id);
+    }
+    const foreign = new Set<string>();
+    for (const el of meet) {
+      for (const track of (el.srcObject as MediaStream).getAudioTracks()) {
+        if (track.readyState === 'live' && !capturedTracks.has(track.id)) foreign.add(track.id);
+      }
+    }
     return {
       peer_connections: peerStats,
       audio_elements: {meet_total: meet.length, meet_playing: meet.filter((el) => !el.paused).length,
-        meet_muted: meet.filter((el) => el.muted).length, keepalive_total: keepalive.length,
-        keepalive_playing: keepalive.filter((el) => !el.paused).length},
+        meet_muted: meet.filter((el) => el.muted).length, meet_foreign_tracks: foreign.size,
+        keepalive_total: keepalive.length, keepalive_playing: keepalive.filter((el) => !el.paused).length},
+      frames: window.frames.length,
       stats_age_ms: statsAt === undefined ? null : Math.round(performance.now() - statsAt),
     };
   }

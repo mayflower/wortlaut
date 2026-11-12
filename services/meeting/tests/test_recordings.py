@@ -191,15 +191,20 @@ def test_bootstrap_requires_owner_and_claim_retry_preserves_capture(client):
                 "dtls_state": "connected",
                 "selected_pair_state": "succeeded",
                 "selected_pair_bytes_received": 81234,
+                "in_frame": False,
+                "audio_receivers": 3,
+                "inbound_audio_packets": 0,
             }
         ],
         "audio_elements": {
             "meet_total": 0,
             "meet_playing": 0,
             "meet_muted": 0,
+            "meet_foreign_tracks": 3,
             "keepalive_total": 3,
             "keepalive_playing": 3,
         },
+        "frames": 2,
         "stats_age_ms": 812,
     }
     response = client.post(
