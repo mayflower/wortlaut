@@ -167,6 +167,54 @@ def test_bootstrap_requires_owner_and_claim_retry_preserves_capture(client):
     diagnostic = client.get(f"/v1/recordings/{recording}", headers=API).json()["attempts"][0]
     assert diagnostic["diagnostics"]["receiver_sources"][0]["encoded_transform"] == encoded
     assert diagnostic["diagnostics"]["capability"] == "unverified"
+    assert "media" not in diagnostic["diagnostics"]
+    # Receive counters and the playout snapshot are stored for silent-capture
+    # analysis; a receiver with zero packets records the SFU sending nothing.
+    rtp_stats = {
+        "packets_received": 0,
+        "bytes_received": 0,
+        "packets_lost": 0,
+        "jitter_buffer_emitted_count": 0,
+        "total_samples_received": 0,
+        "concealed_samples": 0,
+        "silent_concealed_samples": 0,
+        "total_audio_energy": 0.0,
+        "audio_level": None,
+        "last_packet_ms_ago": None,
+        "codec": None,
+    }
+    media = {
+        "peer_connections": [
+            {
+                "connection_state": "connected",
+                "ice_connection_state": "connected",
+                "dtls_state": "connected",
+                "selected_pair_state": "succeeded",
+                "selected_pair_bytes_received": 81234,
+            }
+        ],
+        "audio_elements": {
+            "meet_total": 0,
+            "meet_playing": 0,
+            "meet_muted": 0,
+            "keepalive_total": 3,
+            "keepalive_playing": 3,
+        },
+        "stats_age_ms": 812,
+    }
+    response = client.post(
+        f"/v1/attempts/{attempt}/status",
+        headers=owner,
+        json={
+            "participation": "capturing",
+            "receiver_sources": [{**evidence, "rtp_stats": rtp_stats}],
+            "media": media,
+        },
+    )
+    assert response.status_code == 200
+    stored = client.get(f"/v1/recordings/{recording}", headers=API).json()["attempts"][0]
+    assert stored["diagnostics"]["receiver_sources"][0]["rtp_stats"] == rtp_stats
+    assert stored["diagnostics"]["media"] == media
     assert (
         client.post(
             f"/v1/attempts/{attempt}/claim", headers=headers, json={"worker_id": "owner"}

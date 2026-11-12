@@ -59,12 +59,29 @@ type SdpState = {
   msid_count: number;
 };
 
+// Cumulative WebRTC receive counters, read from getStats(). They separate
+// "the SFU sent no audio" from "audio arrived but was not decoded" and from
+// "decoded audio never reached the capture worklet".
+export type InboundAudioStats = {packets_received: number; bytes_received: number; packets_lost: number;
+  jitter_buffer_emitted_count: number; total_samples_received: number; concealed_samples: number;
+  silent_concealed_samples: number; total_audio_energy: number; audio_level: number | null;
+  last_packet_ms_ago: number | null; codec: string | null};
+
+export type MediaState = {
+  peer_connections: {connection_state: string; ice_connection_state: string; dtls_state: string | null;
+    selected_pair_state: string | null; selected_pair_bytes_received: number | null}[];
+  audio_elements: {meet_total: number; meet_playing: number; meet_muted: number;
+    keepalive_total: number; keepalive_playing: number};
+  stats_age_ms: number | null;
+};
+
 type MeetCaptureState = {streams: number; audio_samples: number; active_audio_samples: number;
   reason: string; capture_ready: boolean; stopped: boolean; drained: boolean;
   receiver_sources: Record<string, unknown>[];
   participant_sources: ParticipantSourcesState;
   data_channels: DataChannelState[];
-  sdp: SdpState};
+  sdp: SdpState;
+  media?: MediaState};
 
 type EncodedEvidence = {state: 'unsupported' | 'failed' | 'waiting_frames' | 'observing' |
   'metadata_unavailable' | 'provider_transform' | 'provider_reserved' | 'replaced' | 'stopped';
@@ -1453,6 +1470,77 @@ function install(config: MeetCaptureConfig) {
     .finally(() => { modules.forEach((url) => URL.revokeObjectURL(url)); });
   const sources = new Map<RTCRtpReceiver, {id: string; track?: MediaStreamTrack; recovered?: boolean}>();
   const keepaliveAudios = new Map<RTCRtpReceiver, {el: HTMLAudioElement; track: MediaStreamTrack}>();
+  const receiverStats = new Map<RTCRtpReceiver, InboundAudioStats>();
+  let peerStats: MediaState['peer_connections'] = [];
+  let statsAt: number | undefined;
+  const finite = (value: unknown) => (typeof value === 'number' && Number.isFinite(value) ? value : 0);
+  async function refreshMediaStats() {
+    for (const receiver of sources.keys()) {
+      const report = await receiver.getStats();
+      let best: Record<string, unknown> | undefined;
+      let codec: string | null = null;
+      report.forEach((stat: Record<string, unknown>) => {
+        if (stat.type === 'inbound-rtp' && stat.kind === 'audio' &&
+            finite(stat.packetsReceived) >= finite(best?.packetsReceived)) best = stat;
+      });
+      if (best && typeof best.codecId === 'string') {
+        const entry = report.get(best.codecId) as Record<string, unknown> | undefined;
+        codec = typeof entry?.mimeType === 'string' ? entry.mimeType : null;
+      }
+      const lastPacket = best?.lastPacketReceivedTimestamp;
+      receiverStats.set(receiver, {
+        packets_received: finite(best?.packetsReceived),
+        bytes_received: finite(best?.bytesReceived),
+        packets_lost: Math.max(0, finite(best?.packetsLost)),
+        jitter_buffer_emitted_count: finite(best?.jitterBufferEmittedCount),
+        total_samples_received: finite(best?.totalSamplesReceived),
+        concealed_samples: finite(best?.concealedSamples),
+        silent_concealed_samples: finite(best?.silentConcealedSamples),
+        total_audio_energy: finite(best?.totalAudioEnergy),
+        audio_level: typeof best?.audioLevel === 'number' ? best.audioLevel : null,
+        last_packet_ms_ago: typeof lastPacket === 'number' && typeof best?.timestamp === 'number'
+          ? Math.max(0, Math.round(best.timestamp - lastPacket)) : null,
+        codec,
+      });
+    }
+    for (const receiver of receiverStats.keys()) if (!sources.has(receiver)) receiverStats.delete(receiver);
+    const next: MediaState['peer_connections'] = [];
+    for (const pc of connections) {
+      if (next.length >= 16) break;
+      const report = await pc.getStats();
+      let dtls: string | null = null, pairId: string | undefined;
+      report.forEach((stat: Record<string, unknown>) => {
+        if (stat.type === 'transport') {
+          if (typeof stat.dtlsState === 'string') dtls = stat.dtlsState;
+          if (typeof stat.selectedCandidatePairId === 'string') pairId = stat.selectedCandidatePairId;
+        }
+      });
+      const pair = pairId ? report.get(pairId) as Record<string, unknown> | undefined : undefined;
+      next.push({connection_state: pc.connectionState, ice_connection_state: pc.iceConnectionState,
+        dtls_state: dtls, selected_pair_state: typeof pair?.state === 'string' ? pair.state : null,
+        selected_pair_bytes_received: pair ? finite(pair.bytesReceived) : null});
+    }
+    peerStats = next;
+    statsAt = performance.now();
+  }
+  let refreshingStats = false;
+  const statsInterval = setInterval(() => {
+    if (refreshingStats) return;
+    refreshingStats = true;
+    void refreshMediaStats().catch(() => {}).finally(() => { refreshingStats = false; });
+  }, 2000);
+  function mediaState(): MediaState {
+    const meet = [...document.querySelectorAll<HTMLAudioElement>('audio:not([data-wortlaut-keepalive])')]
+      .filter((el) => el.srcObject instanceof MediaStream);
+    const keepalive = [...keepaliveAudios.values()].map((entry) => entry.el);
+    return {
+      peer_connections: peerStats,
+      audio_elements: {meet_total: meet.length, meet_playing: meet.filter((el) => !el.paused).length,
+        meet_muted: meet.filter((el) => el.muted).length, keepalive_total: keepalive.length,
+        keepalive_playing: keepalive.filter((el) => !el.paused).length},
+      stats_age_ms: statsAt === undefined ? null : Math.round(performance.now() - statsAt),
+    };
+  }
   let nextSource = 0;
   let pendingBytes = 0, pendingMessages = 0;
   let bridge: Promise<void> = Promise.resolve();
@@ -1809,7 +1897,8 @@ function install(config: MeetCaptureConfig) {
       source_state: receiver.track.readyState,
       encoded_transform: observations.get(receiver)?.evidence,
       ssrc: receiver.getSynchronizationSources().slice(0, 64).map(source),
-      csrc: receiver.getContributingSources().slice(0, 64).map(source)};
+      csrc: receiver.getContributingSources().slice(0, 64).map(source),
+      ...(receiverStats.has(receiver) ? {rtp_stats: receiverStats.get(receiver)} : {})};
   };
   window.wortlautMeet = {
     inspect: () => {
@@ -1849,10 +1938,13 @@ function install(config: MeetCaptureConfig) {
         cname_count: sdpStats.cnames.size,
         msid_count: sdpStats.msids.size,
       };
+      // Media evidence stays the pre-stop snapshot: stopping closes receivers.
+      if (!stopping) state.media = mediaState();
       return {...state, audio_clock: capture.inspectClock()};
     },
     stop: () => stopping ??= (async () => {
       clearInterval(interval);
+      clearInterval(statsInterval);
       await initialized;
       await inspecting;
       await capture.stop();

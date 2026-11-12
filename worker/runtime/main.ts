@@ -119,6 +119,7 @@ async function run(api: string, credential: string) {
     guestExpiryTimer = setTimeout(() => { void stop('guest_token_expired'); },
       Math.max(0, guestStopAt - Date.now()));
   }
+  let lastMediaLogAt = -Infinity;
   async function monitor() {
     while (!stopping) {
       const state = meet ? await meet.inspect() : await page.evaluate(() => (window as any).wortlaut.inspectReceivers());
@@ -130,7 +131,23 @@ async function run(api: string, credential: string) {
         data_channels: state.data_channels ?? [],
         sdp: state.sdp ?? {descriptions: 0, audio_sections: 0, video_sections: 0, ssrc_count: 0, cname_count: 0, msid_count: 0},
         audio_clock: state.audio_clock,
+        ...(state.media ? {media: state.media} : {}),
         drained: state.stopped ? state.drained : null};
+      if (performance.now() - lastMediaLogAt >= 10_000) {
+        lastMediaLogAt = performance.now();
+        // One line per 10 s: the time series of receive counters that the
+        // single stored status snapshot cannot provide. No names or tokens.
+        console.log('[wortlaut-media] ' + JSON.stringify({
+          participation: state.participation, streams: state.streams,
+          audio_samples: state.audio_samples, active_audio_samples: state.active_audio_samples ?? 0,
+          clock: state.audio_clock?.state, dom: state.participant_sources?.dom_participants ?? null,
+          participants: state.participant_sources?.total ?? null,
+          receivers: ((state.receiver_sources ?? []) as Array<{track_id?: string; source_state?: string;
+            rtp_stats?: Record<string, unknown>}>).map((r) => ({track: r.track_id?.slice(0, 8),
+            state: r.source_state, ...(r.rtp_stats ?? {})})),
+          media: state.media ?? null,
+        }));
+      }
       if (state.stopped || state.participation === 'ended') {
         await stop(state.reason || 'normal');
         return;

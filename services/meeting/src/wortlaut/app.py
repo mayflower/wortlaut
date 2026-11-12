@@ -277,6 +277,46 @@ class EncodedTransformEvidence(BaseModel):
     last_frame: EncodedFrameEvidence | None = None
 
 
+class InboundAudioStatsEvidence(BaseModel):
+    """Cumulative WebRTC receive counters of one audio receiver (getStats)."""
+
+    packets_received: int = Field(default=0, ge=0)
+    bytes_received: int = Field(default=0, ge=0)
+    packets_lost: int = Field(default=0, ge=0)
+    jitter_buffer_emitted_count: int = Field(default=0, ge=0)
+    total_samples_received: int = Field(default=0, ge=0)
+    concealed_samples: int = Field(default=0, ge=0)
+    silent_concealed_samples: int = Field(default=0, ge=0)
+    total_audio_energy: float = Field(default=0.0, ge=0.0)
+    audio_level: float | None = Field(default=None, ge=0.0, le=1.0)
+    last_packet_ms_ago: int | None = Field(default=None, ge=0)
+    codec: str | None = Field(default=None, max_length=64)
+
+
+class PeerConnectionEvidence(BaseModel):
+    connection_state: str = Field(default="unknown", max_length=32)
+    ice_connection_state: str = Field(default="unknown", max_length=32)
+    dtls_state: str | None = Field(default=None, max_length=32)
+    selected_pair_state: str | None = Field(default=None, max_length=32)
+    selected_pair_bytes_received: int | None = Field(default=None, ge=0)
+
+
+class AudioElementEvidence(BaseModel):
+    meet_total: int = Field(default=0, ge=0)
+    meet_playing: int = Field(default=0, ge=0)
+    meet_muted: int = Field(default=0, ge=0)
+    keepalive_total: int = Field(default=0, ge=0)
+    keepalive_playing: int = Field(default=0, ge=0)
+
+
+class MediaEvidence(BaseModel):
+    """Last pre-stop snapshot of the worker's WebRTC and playout state."""
+
+    peer_connections: list[PeerConnectionEvidence] = Field(default_factory=list, max_length=16)
+    audio_elements: AudioElementEvidence = Field(default_factory=AudioElementEvidence)
+    stats_age_ms: int | None = Field(default=None, ge=0)
+
+
 class ReceiverEvidence(BaseModel):
     provider_source_id: str = Field(max_length=256)
     source_kind: Literal["speaker", "share_audio", "unknown"]
@@ -289,12 +329,15 @@ class ReceiverEvidence(BaseModel):
     ssrc: list[RtpSourceEvidence] = Field(default_factory=list, max_length=64)
     csrc: list[RtpSourceEvidence] = Field(default_factory=list, max_length=64)
     encoded_transform: EncodedTransformEvidence | None = None
+    rtp_stats: InboundAudioStatsEvidence | None = None
 
     @model_serializer(mode="wrap")
     def _serialize(self, handler):
         data = handler(self)
         if data.get("participant_name") is None:
             data.pop("participant_name", None)
+        if data.get("rtp_stats") is None:
+            data.pop("rtp_stats", None)
         return data
 
 
@@ -397,6 +440,14 @@ class WorkerStatus(BaseModel):
     data_channels: list[DataChannelEvidence] = Field(default_factory=list, max_length=32)
     sdp: SdpEvidence = Field(default_factory=SdpEvidence)
     audio_clock: AudioClockEvidence = Field(default_factory=AudioClockEvidence)
+    media: MediaEvidence | None = None
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler):
+        data = handler(self)
+        if data.get("media") is None:
+            data.pop("media", None)
+        return data
 
 
 def recording_json(recording: Recording) -> dict:
