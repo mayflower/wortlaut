@@ -76,6 +76,79 @@ async function fileExists(path: string): Promise<boolean> {
   }
 }
 
+/**
+ * Webex stores its OAuth supertoken in `https://web.webex.com` localStorage under two separate
+ * Redux-persist keys (`webex-web-meeting-bounded` for embedded `/meeting` iframes and
+ * `webex-web-client-bounded` for the `https://web.webex.com/meetings` host dashboard), while
+ * `meet*.webex.com` site cookies (`wbx`) expire after ~24h. Syncing the fresher `Credentials`
+ * between both keys lets the test host start its Personal Room via `https://web.webex.com/meetings`
+ * without requiring daily cookie refreshes.
+ */
+async function syncWebexHostStateFile(statePath: string): Promise<boolean> {
+  if (!(await fileExists(statePath))) return false;
+  try {
+    const raw = JSON.parse(await readFile(statePath, 'utf8'));
+    const origins: Array<{origin: string; localStorage?: Array<{name: string; value: string}>}> = Array.isArray(
+      raw?.origins,
+    )
+      ? raw.origins
+      : [];
+    const webexOrigin = origins.find(o => o?.origin === 'https://web.webex.com');
+    if (!webexOrigin || !Array.isArray(webexOrigin.localStorage)) return false;
+
+    const parseStore = (key: string): Record<string, any> | null => {
+      const entry = webexOrigin.localStorage?.find(item => item?.name === key);
+      if (!entry?.value) return null;
+      try {
+        const parsed = JSON.parse(entry.value);
+        return parsed && typeof parsed === 'object' ? parsed : null;
+      } catch {
+        return null;
+      }
+    };
+    const tokenExpiry = (store: Record<string, any> | null): number => {
+      const st = store?.Credentials?.['@']?.supertoken;
+      if (!st || typeof st !== 'object' || !st.access_token) return 0;
+      const exp = Number(st.refresh_token_expires || st.expires || 0);
+      return Number.isFinite(exp) ? exp : 0;
+    };
+
+    const meetingStore = parseStore('webex-web-meeting-bounded');
+    const clientStore = parseStore('webex-web-client-bounded');
+    const meetingExp = tokenExpiry(meetingStore);
+    const clientExp = tokenExpiry(clientStore);
+    const bestExp = Math.max(meetingExp, clientExp);
+    if (bestExp <= Date.now()) return false;
+
+    const bestCreds = (meetingExp >= clientExp ? meetingStore : clientStore)?.Credentials;
+    if (!bestCreds) return false;
+
+    let changed = false;
+    for (const key of ['webex-web-meeting-bounded', 'webex-web-client-bounded']) {
+      const existing = webexOrigin.localStorage.find(item => item?.name === key);
+      const parsed = parseStore(key) ?? {};
+      if (tokenExpiry(parsed) < bestExp) {
+        parsed.Credentials = bestCreds;
+        const serialized = JSON.stringify(parsed);
+        if (existing) {
+          existing.value = serialized;
+        } else {
+          webexOrigin.localStorage.push({name: key, value: serialized});
+        }
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      await writeFile(statePath, JSON.stringify(raw, null, 2), 'utf8');
+      await chmod(statePath, 0o600).catch(() => {});
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function loadEnvFiles(): Promise<Record<string, string>> {
   const merged: Record<string, string> = {};
   for (const rel of ['.env.live', '.dev/live-test.env']) {
@@ -518,7 +591,7 @@ async function setSpeakerTransmitting(page: Page, open: boolean): Promise<void> 
         const fn = (window as unknown as {__wortlautSetMicGate?: (o: boolean) => number}).__wortlautSetMicGate;
         if (fn) fn(isOpen);
       }, open);
-      if (open && /^https:\/\/web\.webex\.com\/(?:meeting|guest-join-meeting)(?:[?#]|$)/.test(target.url())) {
+      if (open && /^https:\/\/web\.webex\.com\/(?:meetings?|guest-join-meeting)(?:[?#]|$)/.test(target.url())) {
         const unmuteInCall = target.getByRole('button', {
           name: /^Unmute|^(?:Your )?microphone is currently muted|^(?:Ihr )?Mikrofon.*stummgeschaltet|^Stummschaltung aufheben/i,
         });
@@ -633,7 +706,7 @@ async function leaveAndCloseBrowser(browser?: Browser): Promise<void> {
               'button.leave-meeting-options__btn--danger, button.leave-meeting-options__btn',
             ).or(
               frame.getByRole('button', {
-                name: /^(Leave Meeting|Leave meeting|Meeting verlassen)$/i,
+                name: /^(End meeting for all|End meeting|Meeting für alle beenden|Meeting beenden|Leave Meeting|Leave meeting|Meeting verlassen)$/i,
               }),
             );
             if (await confirmBtn.first().isVisible().catch(() => false)) {
@@ -676,8 +749,13 @@ async function joinRoomAsSpeaker(
   displayName: string,
   timeoutSec: number,
   evictExistingSession = false,
+  useWebexHostDashboard = false,
 ): Promise<void> {
-  await page.goto(meetingUrl, {waitUntil: 'domcontentloaded', timeout: 45000});
+  const initialUrl =
+    provider === 'webex' && useWebexHostDashboard && /^https:\/\/[^/]+\.webex\.com\/meet\//i.test(meetingUrl)
+      ? 'https://web.webex.com/meetings'
+      : meetingUrl;
+  await page.goto(initialUrl, {waitUntil: 'domcontentloaded', timeout: 45000});
   const deadline = Date.now() + timeoutSec * 1000;
 
     if (provider === 'google_meet') {
@@ -882,7 +960,7 @@ async function joinRoomAsSpeaker(
     while (Date.now() < deadline) {
       const matchingFrames = page
         .frames()
-        .filter(f => /^https:\/\/web\.webex\.com\/(?:meeting|guest-join-meeting)(?:[?#]|$)/.test(f.url()));
+        .filter(f => /^https:\/\/web\.webex\.com\/(?:meetings?|guest-join-meeting)(?:[?#]|$)/.test(f.url()));
       const frame = matchingFrames[matchingFrames.length - 1] || page.mainFrame();
 
       const snap = await frame.locator('body').ariaSnapshot().catch(() => '');
@@ -892,10 +970,24 @@ async function joinRoomAsSpeaker(
         sawWaitingInLobby = true;
       }
 
+      const joinBtn = frame
+        .locator('#join-button')
+        .or(
+          frame.getByRole('button', {
+            name: /^(?:Join meeting(?:\s|$)|Meeting\b.*beitreten|Start meeting(?:\s|$)|Meeting\b.*starten)/i,
+          }),
+        );
+      const joinVisible = await joinBtn.first().isVisible().catch(() => false);
+
       const inCallControls = frame.getByRole('button', {
         name: /^(Leave meeting|Leave|End meeting|Meeting verlassen|Meeting beenden|Meeting verlassen oder Meeting für alle beenden|Verlassen|Teilnehmerbereich.*|Participants.*|Chat anzeigen|Show chat)(?:\s|$)/i,
       });
-      if (!waitingInLobby && !stillConnecting && (await inCallControls.first().isVisible().catch(() => false))) {
+      if (
+        !joinVisible &&
+        !waitingInLobby &&
+        !stillConnecting &&
+        (await inCallControls.first().isVisible().catch(() => false))
+      ) {
         if (sawWaitingInLobby) {
           await delay(4000);
         }
@@ -913,20 +1005,22 @@ async function joinRoomAsSpeaker(
         continue;
       }
 
-      const startHostBtn = page
-        .locator('#broadcom-center-right, #push_download_join_by_browser')
-        .or(
-          page.getByRole('button', {
-            name: /^(Start meeting|Meeting starten|Join from (?:this|your) browser|Join from browser|Über diesen Browser beitreten|Im Browser beitreten)$/i,
-          }),
-        );
-      if (await startHostBtn.first().isVisible().catch(() => false)) {
-        await startHostBtn.first().evaluate(el => (el as HTMLElement).click()).catch(() => {});
-        await delay(1500);
-        continue;
+      if (!page.url().startsWith('https://web.webex.com/')) {
+        const startHostBtn = page
+          .locator('#broadcom-center-right, #push_download_join_by_browser')
+          .or(
+            page.getByRole('button', {
+              name: /^(Start meeting|Meeting starten|Join from (?:this|your) browser|Join from browser|Über diesen Browser beitreten|Im Browser beitreten)$/i,
+            }),
+          );
+        if (await startHostBtn.first().isVisible().catch(() => false)) {
+          await startHostBtn.first().evaluate(el => (el as HTMLElement).click()).catch(() => {});
+          await delay(1500);
+          continue;
+        }
       }
 
-      if (frame !== page.mainFrame()) {
+      if (frame !== page.mainFrame() || page.url().startsWith('https://web.webex.com/meetings')) {
         for (const cookieLabel of [
           /^(Reject|Ablehnen|Alles klar|OK)$/i,
           /^(Continue without camera|Ohne Kamera fortfahren)$/i,
@@ -939,21 +1033,28 @@ async function joinRoomAsSpeaker(
         }
       }
 
-      const joinBtn = frame
-        .locator('#join-button')
-        .or(
-          frame.getByRole('button', {
-            name: /^(?:Join meeting(?:\s|$)|Meeting\b.*beitreten|Start meeting(?:\s|$)|Meeting\b.*starten)/i,
-          }),
-        );
-      if (await joinBtn.first().isVisible().catch(() => false)) {
+      if (!joinVisible && page.url().startsWith('https://web.webex.com/meetings')) {
+        const dashboardStartBtn = page.getByRole('button', {
+          name: /^(Starten|Start|Start a meeting)$/i,
+        });
+        if (await dashboardStartBtn.first().isVisible().catch(() => false)) {
+          await dashboardStartBtn
+            .first()
+            .click({timeout: 3000})
+            .catch(() => dashboardStartBtn.first().evaluate(el => (el as HTMLElement).click()).catch(() => {}));
+          await delay(2500);
+          continue;
+        }
+      }
+
+      if (joinVisible) {
         const nameInput = frame.getByRole('textbox', {name: /^(Name|Your name|Ihr Name)$/i});
         if (await nameInput.first().isVisible().catch(() => false)) {
           await nameInput.first().fill(displayName, {timeout: 2000}).catch(() => {});
           await delay(300);
         }
         const stopVideo = frame.getByRole('button', {
-          name: /^Stop video|^Sending video is currently enabled|^(?:Senden von )?Video.*aktiviert/i,
+          name: /^Stop video|^Video beenden|^Sending video is currently enabled|^(?:Senden von )?Video.*aktiviert/i,
         });
         if (await stopVideo.first().isVisible().catch(() => false)) {
           await stopVideo.first().evaluate(el => (el as HTMLElement).click()).catch(() => {});
@@ -1075,11 +1176,11 @@ async function hasPendingLobbyPrompt(page: Page, provider: Provider): Promise<bo
     if (provider === 'webex') {
       const matchingFrames = page
         .frames()
-        .filter(f => /^https:\/\/web\.webex\.com\/(?:meeting|guest-join-meeting)(?:[?#]|$)/.test(f.url()));
+        .filter(f => /^https:\/\/web\.webex\.com\/(?:meetings?|guest-join-meeting)(?:[?#]|$)/.test(f.url()));
       const frame = matchingFrames[matchingFrames.length - 1];
       if (!frame) return false;
       return await frame
-        .getByRole('button', {name: /^(Admit|Admit all|Hereinlassen|Alle hereinlassen|Einlassen|Zulassen)$/i})
+        .getByRole('button', {name: /^(Admit|Admit all|Hereinlassen|Alle hereinlassen|Einlassen|Zulassen|Einblenden|Show)$/i})
         .first()
         .isVisible()
         .catch(() => false);
@@ -1119,7 +1220,7 @@ function startLobbyAdmitWatcher(page: Page, provider?: Provider): () => void {
         if (provider === 'webex') {
           const matchingFrames = page
             .frames()
-            .filter(f => /^https:\/\/web\.webex\.com\/(?:meeting|guest-join-meeting)(?:[?#]|$)/.test(f.url()));
+            .filter(f => /^https:\/\/web\.webex\.com\/(?:meetings?|guest-join-meeting)(?:[?#]|$)/.test(f.url()));
           const frame = matchingFrames[matchingFrames.length - 1];
           if (frame) {
             const admitBtn = frame.getByRole('button', {
@@ -1138,8 +1239,8 @@ function startLobbyAdmitWatcher(page: Page, provider?: Provider): () => void {
               continue;
             }
             const openParticipantsBtn = frame.getByRole('button', {
-              name: /^(Teilnehmerbereich öffnen|Teilnehmer anzeigen|Open participants|Show participants)$/i,
-            });
+              name: /^(?:Teilnehmerbereich öffnen|Teilnehmer anzeigen|Open participants|Show participants)(?:\b|\s|$)/i,
+            }).and(frame.locator(':not([aria-expanded="true"]):not([aria-pressed="true"])'));
             if (await openParticipantsBtn.first().isVisible().catch(() => false)) {
               await openParticipantsBtn.first().evaluate(el => (el as HTMLElement).click()).catch(() => {});
               await delay(500);
@@ -1285,7 +1386,7 @@ function startLobbyAdmitWatcher(page: Page, provider?: Provider): () => void {
 async function saveHostSessionInteractive(provider: Provider, config: LiveConfig): Promise<void> {
   const defaultLoginUrls: Record<Provider, string> = {
     google_meet: config.urls.google_meet || 'https://meet.google.com/',
-    webex: config.urls.webex || 'https://web.webex.com/',
+    webex: 'https://web.webex.com/meetings',
     teams: config.urls.teams || 'https://teams.microsoft.com/',
     zoom: config.urls.zoom || 'https://zoom.us/signin',
   };
@@ -1306,6 +1407,9 @@ async function saveHostSessionInteractive(provider: Provider, config: LiveConfig
     );
     rl.close();
     await context.storageState({path: outPath});
+    if (provider === 'webex') {
+      await syncWebexHostStateFile(outPath);
+    }
     await chmod(outPath, 0o600);
     console.log(`[Host-Login] Gespeichert unter: ${outPath} (chmod 600)\n`);
   } finally {
@@ -1421,18 +1525,20 @@ async function sendMeetingChatMessage(page: Page, provider: Provider, message: s
     if (provider === 'webex') {
       const matchingFrames = page
         .frames()
-        .filter(f => /^https:\/\/web\.webex\.com\/(?:meeting|guest-join-meeting)(?:[?#]|$)/.test(f.url()));
+        .filter(f => /^https:\/\/web\.webex\.com\/(?:meetings?|guest-join-meeting)(?:[?#]|$)/.test(f.url()));
       const frame = matchingFrames[matchingFrames.length - 1] || page.mainFrame();
       const chatInput = frame
         .getByRole('textbox', {name: /message|Nachricht|Chat/i})
         .or(frame.locator('textarea, div[role="textbox"][contenteditable="true"]'));
       if (!(await chatInput.first().isVisible().catch(() => false))) {
-        const toggle = frame.getByRole('button', {
-          name: /^(Chat|Show chat|Open chat|Chat anzeigen|Chatbereich öffnen)$/i,
-        });
+        const toggle = frame
+          .getByRole('button', {
+            name: /^(?:Chat|Show chat|Open chat|Chat öffnen|Chat anzeigen|Chatbereich öffnen)(?:\b|\s|$)/i,
+          })
+          .and(frame.locator(':not([aria-expanded="true"]):not([aria-pressed="true"])'));
         if (await toggle.first().isVisible().catch(() => false)) {
           await toggle.first().evaluate(el => (el as HTMLElement).click()).catch(() => {});
-          await delay(1000);
+          await chatInput.first().waitFor({state: 'visible', timeout: 2500}).catch(() => {});
         }
       }
       if (await chatInput.first().isVisible().catch(() => false)) {
@@ -1520,6 +1626,8 @@ async function runProviderLiveTest(provider: Provider, config: LiveConfig) {
     const guestStatePath = config.guestStorageState[provider];
     const hasHostState = await fileExists(hostStatePath);
     const hasGuestState = await fileExists(guestStatePath);
+    const hasValidWebexSupertoken =
+      provider === 'webex' && hasHostState ? await syncWebexHostStateFile(hostStatePath) : false;
 
     if (hasHostState) {
       console.log(`      Nutze gespeicherte Host-Session: ${hostStatePath}`);
@@ -1609,10 +1717,21 @@ async function runProviderLiveTest(provider: Provider, config: LiveConfig) {
       console.log(`      Teilnehmer sind im Raum aktiv.`);
     } else {
       console.log(`      "${config.speakerAName}" tritt dem Raum bei...`);
-      await joinRoomAsSpeaker(pageA, provider, meetingUrl, config.speakerAName, config.joinTimeoutSeconds, true);
+      await joinRoomAsSpeaker(
+        pageA,
+        provider,
+        meetingUrl,
+        config.speakerAName,
+        config.joinTimeoutSeconds,
+        true,
+        hasValidWebexSupertoken,
+      );
       if (hasHostState) {
         // Persist rotated session cookies / OAuth refresh tokens (sliding expiration)
         await ctxA.storageState({path: hostStatePath});
+        if (provider === 'webex') {
+          await syncWebexHostStateFile(hostStatePath);
+        }
         await chmod(hostStatePath, 0o600).catch(() => {});
       }
       stopLobbyWatcher = startLobbyAdmitWatcher(pageA, provider);
