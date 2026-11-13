@@ -1064,7 +1064,7 @@ try {
   await assert.rejects(account.meet.join(), (error: unknown) => error instanceof MeetError && error.reason === 'auth_session_missing');
   assert.equal(await account.page.locator('#join').count(), 1);
   await account.meet.stop('auth_session_missing'); await account.context.close();
-  assert.equal(authenticated, 27);
+  assert.equal(authenticated, 28);
   const webexContext = await browser.newContext();
   const webexPage = await webexContext.newPage();
   const webexUrl = 'https://example.webex.com/meet/fixture';
