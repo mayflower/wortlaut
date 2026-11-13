@@ -12,10 +12,10 @@ from wortlaut.models import AsrJob, Attempt, AudioChunk, AudioControl, AudioStre
 from wortlaut.settings import get_settings
 from wortlaut.storage import ObjectConflict, canonical, get_storage
 
-INGEST_BURST = 1024  # Twice the worker's maximum queued chunks plus controls.
+INGEST_BURST = 4096  # Twice the worker's maximum queued chunks plus controls.
 INGEST_FRAMES_PER_SECOND = 64
 AUDIO_WINDOW_SAMPLES = 16000 * 60
-MAX_WINDOW_RECORDS = 512
+MAX_WINDOW_RECORDS = 1024
 
 
 def admit_frame(attempt: Attempt):

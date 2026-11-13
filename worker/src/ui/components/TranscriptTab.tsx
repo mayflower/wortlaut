@@ -7,9 +7,11 @@ import {
   FileText,
   Pause,
   Play,
+  Plus,
   Replace,
   Search,
   Sparkles,
+  Trash2,
   X,
 } from 'lucide-react';
 import { HStack } from '@astryxdesign/core/HStack';
@@ -120,9 +122,18 @@ export function TranscriptTab({
   const [searchQuery, setSearchQuery] = useState('');
   const [copiedTurnId, setCopiedTurnId] = useState<string | null>(null);
 
-  // AI Summary state
+  // AI Summary & manual To-Do editor state
   const [generatingSummary, setGeneratingSummary] = useState(false);
   const [summaryError, setSummaryError] = useState<string | null>(null);
+  const [editingSummary, setEditingSummary] = useState(false);
+  const [summaryDraft, setSummaryDraft] = useState('');
+  const [topicsDraft, setTopicsDraft] = useState<
+    Array<{ title: string; details: string }>
+  >([]);
+  const [actionItemsDraft, setActionItemsDraft] = useState<
+    Array<{ owner: string; task: string; due: string }>
+  >([]);
+  const [savingSummary, setSavingSummary] = useState(false);
 
   // Audio snippet playback state
   const [playingTurnId, setPlayingTurnId] = useState<string | null>(null);
@@ -143,6 +154,12 @@ export function TranscriptTab({
   const [termFrom, setTermFrom] = useState('');
   const [termTo, setTermTo] = useState('');
   const [savingTerm, setSavingTerm] = useState(false);
+
+  useEffect(() => {
+    setEditingSummary(false);
+    setSummaryError(null);
+    setEditingTurnId(null);
+  }, [recordingId]);
 
   useEffect(() => {
     return () => {
@@ -244,9 +261,13 @@ export function TranscriptTab({
   const handleCopyTurn = async (turn: GroupedTurn) => {
     if (!navigator.clipboard) return;
     const text = `[${formatWallClockTime(turn.start, timeOriginUtc)}] ${turn.speakerLabel}: ${turn.paragraphs.map((p) => p.text).join('\n')}`;
-    await navigator.clipboard.writeText(text).catch(() => {});
-    setCopiedTurnId(turn.id);
-    setTimeout(() => setCopiedTurnId(null), 1600);
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedTurnId(turn.id);
+      setTimeout(() => setCopiedTurnId(null), 1600);
+    } catch (err) {
+      setSummaryError(err instanceof Error ? err.message : String(err));
+    }
   };
 
   const handlePlaySnippet = async (turn: GroupedTurn) => {
@@ -293,11 +314,70 @@ export function TranscriptTab({
     setGeneratingSummary(true);
     try {
       await generateRecordingSummary(token, recordingId);
+      setEditingSummary(false);
       onProtocolUpdated?.();
     } catch (err) {
       setSummaryError(err instanceof Error ? err.message : String(err));
     } finally {
       setGeneratingSummary(false);
+    }
+  };
+
+  const handleStartEditSummary = () => {
+    setSummaryError(null);
+    setSummaryDraft(summary?.summary || '');
+    setTopicsDraft(
+      (summary?.topics || []).map((t) => ({
+        title: t.title || '',
+        details: t.details || '',
+      }))
+    );
+    const existingItems = (summary?.action_items || []).map((item) => ({
+      owner: item.owner || 'Team',
+      task: item.task || '',
+      due: item.due || '',
+    }));
+    setActionItemsDraft(
+      existingItems.length > 0
+        ? existingItems
+        : [{ owner: 'Team', task: '', due: '' }]
+    );
+    setEditingSummary(true);
+  };
+
+  const handleSaveSummaryDraft = async () => {
+    if (!token) return;
+    setSummaryError(null);
+    setSavingSummary(true);
+    try {
+      const cleanedTopics = topicsDraft
+        .map((t) => ({
+          title: t.title.replace(/\s+/g, ' ').trim(),
+          details: t.details.replace(/\s+/g, ' ').trim(),
+        }))
+        .filter((t) => t.title.length > 0 || t.details.length > 0);
+      const cleanedActions = actionItemsDraft
+        .filter((a) => a.task.trim().length > 0)
+        .map((a) => ({
+          owner: a.owner.replace(/\s+/g, ' ').trim() || 'Team',
+          task: a.task.replace(/\s+/g, ' ').trim(),
+          ...(a.due.replace(/\s+/g, ' ').trim()
+            ? { due: a.due.replace(/\s+/g, ' ').trim() }
+            : {}),
+        }));
+      await updateRecordingProtocol(token, recordingId, {
+        summary: {
+          summary: summaryDraft.trim(),
+          topics: cleanedTopics,
+          action_items: cleanedActions,
+        },
+      });
+      setEditingSummary(false);
+      onProtocolUpdated?.();
+    } catch (err) {
+      setSummaryError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSavingSummary(false);
     }
   };
 
@@ -387,7 +467,7 @@ export function TranscriptTab({
   return (
     <VStack gap={3}>
       {/* 1. Structured AI Protocol Summary & Action Items */}
-      {(summary || (llmSummaryEnabled && isOperator && segments.length > 0)) && (
+      {(summary || (isOperator && segments.length > 0)) && (
         <Card>
           <VStack gap={3}>
             <HStack justify="between" vAlign="center" wrap="wrap" gap={2}>
@@ -395,8 +475,8 @@ export function TranscriptTab({
                 <Sparkles className="h-4 w-4 text-[var(--color-text-accent)]" />
                 <Heading level={4}>
                   {tr(
-                    'Ergebnisprotokoll & Aufgaben',
-                    'Executive Summary & Action Items'
+                    'Zusammenfassung & To-Do-Liste',
+                    'Executive Summary & To-Do List'
                   )}
                 </Heading>
                 {(summary?.model || instance.llmModel) && (
@@ -408,25 +488,40 @@ export function TranscriptTab({
                 )}
               </HStack>
 
-              {llmSummaryEnabled && isOperator && segments.length > 0 && (
-                <Button
-                  variant={summary ? 'ghost' : 'secondary'}
-                  size="sm"
-                  isLoading={generatingSummary}
-                  icon={<Sparkles className="h-3.5 w-3.5" />}
-                  label={
-                    summary
-                      ? tr(
-                          'Zusammenfassung aktualisieren',
-                          'Regenerate summary'
-                        )
-                      : tr(
-                          'KI-Zusammenfassung erstellen',
-                          'Generate AI summary'
-                        )
-                  }
-                  onClick={handleGenerateSummary}
-                />
+              {isOperator && !editingSummary && (
+                <HStack gap={1.5} vAlign="center" wrap="wrap">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    icon={<Edit3 className="h-3.5 w-3.5" />}
+                    label={
+                      summary
+                        ? tr('Bearbeiten', 'Edit')
+                        : tr('Manuell anlegen', 'Add manually')
+                    }
+                    onClick={handleStartEditSummary}
+                  />
+                  {llmSummaryEnabled && segments.length > 0 && (
+                    <Button
+                      variant={summary ? 'ghost' : 'primary'}
+                      size="sm"
+                      isLoading={generatingSummary}
+                      icon={<Sparkles className="h-3.5 w-3.5" />}
+                      label={
+                        summary
+                          ? tr(
+                              'KI-Zusammenfassung aktualisieren',
+                              'Regenerate AI summary'
+                            )
+                          : tr(
+                              'KI-Zusammenfassung erstellen',
+                              'Generate AI summary'
+                            )
+                      }
+                      onClick={handleGenerateSummary}
+                    />
+                  )}
+                </HStack>
               )}
             </HStack>
 
@@ -434,7 +529,217 @@ export function TranscriptTab({
               <Banner status="error" container="card" title={summaryError} />
             )}
 
-            {summary ? (
+            {editingSummary ? (
+              <VStack gap={3}>
+                <VStack gap={1}>
+                  <Text type="supporting" weight="semibold" color="secondary">
+                    {tr('Zusammenfassung', 'Summary')}
+                  </Text>
+                  <textarea
+                    rows={3}
+                    value={summaryDraft}
+                    onChange={(e) => setSummaryDraft(e.target.value)}
+                    placeholder={tr(
+                      'Prägnante Zusammenfassung des Gesprächs (wird direkt im .md-Export hinterlegt)…',
+                      'Concise executive summary (included directly in .md export)…'
+                    )}
+                    className="w-full rounded-md border border-[var(--color-border)] bg-[var(--color-background-default)] px-3 py-2 text-sm text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-text-accent)]"
+                  />
+                </VStack>
+
+                <VStack gap={2}>
+                  <HStack justify="between" vAlign="center">
+                    <Text type="supporting" weight="semibold" color="secondary">
+                      {tr(
+                        'Besprochene Themen & Beschlüsse',
+                        'Key Topics & Decisions'
+                      )}
+                    </Text>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      icon={<Plus className="h-3.5 w-3.5" />}
+                      label={tr('Thema hinzufügen', 'Add topic')}
+                      onClick={() =>
+                        setTopicsDraft((prev) => [
+                          ...prev,
+                          { title: '', details: '' },
+                        ])
+                      }
+                    />
+                  </HStack>
+
+                  {topicsDraft.map((topic, idx) => (
+                    <div
+                      key={idx}
+                      className="grid grid-cols-1 gap-2 sm:grid-cols-12 items-center"
+                    >
+                      <div className="sm:col-span-4">
+                        <TextInput
+                          label={tr('Thema', 'Topic')}
+                          isLabelHidden
+                          size="sm"
+                          value={topic.title}
+                          onChange={(val) =>
+                            setTopicsDraft((prev) =>
+                              prev.map((row, i) =>
+                                i === idx ? { ...row, title: val } : row
+                              )
+                            )
+                          }
+                          placeholder={tr('Thementitel', 'Topic title')}
+                        />
+                      </div>
+                      <div className="sm:col-span-7">
+                        <TextInput
+                          label={tr('Ergebnis / Details', 'Details / Decision')}
+                          isLabelHidden
+                          size="sm"
+                          value={topic.details}
+                          onChange={(val) =>
+                            setTopicsDraft((prev) =>
+                              prev.map((row, i) =>
+                                i === idx ? { ...row, details: val } : row
+                              )
+                            )
+                          }
+                          placeholder={tr(
+                            'Besprochene Inhalte & Beschlüsse',
+                            'Discussed points & decisions'
+                          )}
+                        />
+                      </div>
+                      <div className="sm:col-span-1 flex justify-end">
+                        <IconButton
+                          variant="ghost"
+                          size="sm"
+                          label={tr('Thema entfernen', 'Remove topic')}
+                          icon={<Trash2 className="h-3.5 w-3.5" />}
+                          onClick={() =>
+                            setTopicsDraft((prev) =>
+                              prev.filter((_, i) => i !== idx)
+                            )
+                          }
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </VStack>
+
+                <VStack gap={2}>
+                  <HStack justify="between" vAlign="center">
+                    <Text type="supporting" weight="semibold" color="secondary">
+                      {tr(
+                        'To-Do-Liste (Aufgaben & nächste Schritte)',
+                        'To-Do List (Action Items)'
+                      )}
+                    </Text>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      icon={<Plus className="h-3.5 w-3.5" />}
+                      label={tr('Aufgabe hinzufügen', 'Add item')}
+                      onClick={() =>
+                        setActionItemsDraft((prev) => [
+                          ...prev,
+                          { owner: 'Team', task: '', due: '' },
+                        ])
+                      }
+                    />
+                  </HStack>
+
+                  {actionItemsDraft.map((item, idx) => (
+                    <div
+                      key={idx}
+                      className="grid grid-cols-1 gap-2 sm:grid-cols-12 items-center"
+                    >
+                      <div className="sm:col-span-3">
+                        <TextInput
+                          label={tr('Verantwortlich', 'Owner')}
+                          isLabelHidden
+                          size="sm"
+                          value={item.owner}
+                          onChange={(val) =>
+                            setActionItemsDraft((prev) =>
+                              prev.map((row, i) =>
+                                i === idx ? { ...row, owner: val } : row
+                              )
+                            )
+                          }
+                          placeholder={tr('Person / Team', 'Owner / Team')}
+                        />
+                      </div>
+                      <div className="sm:col-span-6">
+                        <TextInput
+                          label={tr('Aufgabe', 'Task')}
+                          isLabelHidden
+                          size="sm"
+                          value={item.task}
+                          onChange={(val) =>
+                            setActionItemsDraft((prev) =>
+                              prev.map((row, i) =>
+                                i === idx ? { ...row, task: val } : row
+                              )
+                            )
+                          }
+                          placeholder={tr(
+                            'Vereinbarte Aufgabe / nächster Schritt',
+                            'Agreed task / next step'
+                          )}
+                        />
+                      </div>
+                      <div className="sm:col-span-2">
+                        <TextInput
+                          label={tr('Fällig', 'Due')}
+                          isLabelHidden
+                          size="sm"
+                          value={item.due}
+                          onChange={(val) =>
+                            setActionItemsDraft((prev) =>
+                              prev.map((row, i) =>
+                                i === idx ? { ...row, due: val } : row
+                              )
+                            )
+                          }
+                          placeholder={tr('Frist (opt.)', 'Due (opt.)')}
+                        />
+                      </div>
+                      <div className="sm:col-span-1 flex justify-end">
+                        <IconButton
+                          variant="ghost"
+                          size="sm"
+                          label={tr('Aufgabe entfernen', 'Remove item')}
+                          icon={<Trash2 className="h-3.5 w-3.5" />}
+                          onClick={() =>
+                            setActionItemsDraft((prev) =>
+                              prev.filter((_, i) => i !== idx)
+                            )
+                          }
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </VStack>
+
+                <HStack gap={2} justify="end">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    icon={<X className="h-3.5 w-3.5" />}
+                    label={tr('Abbrechen', 'Cancel')}
+                    onClick={() => setEditingSummary(false)}
+                  />
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    isLoading={savingSummary}
+                    icon={<Check className="h-3.5 w-3.5" />}
+                    label={tr('Speichern (für .md Export)', 'Save (for .md export)')}
+                    onClick={handleSaveSummaryDraft}
+                  />
+                </HStack>
+              </VStack>
+            ) : summary ? (
               <VStack gap={3}>
                 {summary.summary && (
                   <Text type="body" color="primary">
@@ -470,14 +775,14 @@ export function TranscriptTab({
                   </VStack>
                 )}
 
-                {summary.action_items && summary.action_items.length > 0 && (
-                  <VStack gap={1.5}>
-                    <Text type="supporting" weight="semibold" color="secondary">
-                      {tr(
-                        `Aufgaben & nächste Schritte (${summary.action_items.length})`,
-                        `Action Items & Next Steps (${summary.action_items.length})`
-                      )}
-                    </Text>
+                <VStack gap={1.5}>
+                  <Text type="supporting" weight="semibold" color="secondary">
+                    {tr(
+                      `To-Do-Liste (${summary.action_items?.length || 0})`,
+                      `To-Do List (${summary.action_items?.length || 0})`
+                    )}
+                  </Text>
+                  {summary.action_items && summary.action_items.length > 0 ? (
                     <VStack gap={1}>
                       {summary.action_items.map((item, idx) => (
                         <HStack key={idx} gap={2} vAlign="start">
@@ -487,19 +792,37 @@ export function TranscriptTab({
                               {item.owner}:
                             </strong>{' '}
                             {item.task}
+                            {item.due ? (
+                              <span className="text-[var(--color-text-secondary)]">
+                                {' '}
+                                ({tr('Fällig', 'Due')}: {item.due})
+                              </span>
+                            ) : null}
                           </Text>
                         </HStack>
                       ))}
                     </VStack>
-                  </VStack>
-                )}
+                  ) : (
+                    <Text type="supporting" color="secondary">
+                      {tr(
+                        'Keine offenen Aufgaben vereinbart.',
+                        'No open action items recorded.'
+                      )}
+                    </Text>
+                  )}
+                </VStack>
               </VStack>
             ) : (
               <Text type="supporting" color="secondary">
-                {tr(
-                  'Erstellen Sie per Klick eine strukturierte Kurzfassung, Themenübersicht und Aufgabenliste auf dem lokalen Sprachmodell.',
-                  'Generate a structured executive summary, topic breakdown, and action items using your self-hosted LLM.'
-                )}
+                {llmSummaryEnabled
+                  ? tr(
+                      'Erstellen Sie eine KI-Zusammenfassung samt To-Do-Liste oder pflegen Sie Aufgaben manuell — beides wird direkt im Markdown-Export (.md) hinterlegt.',
+                      'Generate an AI summary and to-do list or add tasks manually — both are included directly in the Markdown (.md) export.'
+                    )
+                  : tr(
+                      'Hinterlegen Sie eine Zusammenfassung und To-Do-Liste, damit das Markdown-Protokoll (.md) direkt an Gesprächspartner weitergeleitet werden kann.',
+                      'Add a summary and to-do list so the Markdown (.md) protocol can be sent directly to meeting participants.'
+                    )}
               </Text>
             )}
           </VStack>

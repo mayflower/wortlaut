@@ -419,6 +419,23 @@ def reconcile_attempt(db, recording, attempt, batch, core, now):
                 },
                 _request_timeout=TIMEOUT,
             )
+    elif job.status.start_time and attempt.credential_expires_at > now:
+        target_deadline = max(
+            1, int((attempt.credential_expires_at - job.status.start_time).total_seconds())
+        )
+        if (
+            job.spec.active_deadline_seconds
+            and target_deadline > job.spec.active_deadline_seconds + 30
+        ):
+            batch.patch_namespaced_job(
+                attempt.job_name,
+                namespace,
+                {
+                    "metadata": {"resourceVersion": job.metadata.resource_version},
+                    "spec": {"activeDeadlineSeconds": target_deadline},
+                },
+                _request_timeout=TIMEOUT,
+            )
     if previous - current:
         recording.participation, recording.participation_reason = "unknown", "pod_missing"
     elif (

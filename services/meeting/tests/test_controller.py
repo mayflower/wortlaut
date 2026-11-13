@@ -789,3 +789,93 @@ def test_docker_runtime_reconciles_container_lifecycle_via_engine_api(
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_active_capturing_overtime_extends_deadline_and_k8s_job_up_to_cap(
+    client, database, cluster, monkeypatch
+):
+    monkeypatch.setenv("WORTLAUT_MAX_OVERTIME_SECONDS", "3600")
+    get_settings.cache_clear()
+    try:
+        now = datetime.now(UTC)
+        scheduled_end = (now + timedelta(seconds=90)).replace(microsecond=0)
+        res = client.post(
+            "/v1/recordings",
+            headers={**API, "Idempotency-Key": "overtime-test-rec"},
+            json={
+                "meeting_url": "https://fixture.webex.com/meet/overtime",
+                "starts_at": (now - timedelta(minutes=2)).isoformat(),
+                "ends_at": scheduled_end.isoformat(),
+            },
+        )
+        assert res.status_code == 200
+        recording_id = res.json()["id"]
+        identifier, name, headers = prepared(database, cluster)
+        client.post(
+            f"/v1/attempts/{identifier}/claim", headers=headers, json={"worker_id": "owner"}
+        )
+        running = pod(cluster.jobs[name])
+        cluster.pods.append(running)
+        controller_pass(database, cluster.apis)
+        initial_job_deadline = cluster.jobs[name].spec.active_deadline_seconds
+
+        # Active capturing near ends_at extends recording + credential + K8s Job by +15 min.
+        status_resp = client.post(
+            f"/v1/attempts/{identifier}/status",
+            headers={**headers, "X-Worker-ID": "owner"},
+            json={
+                "participation": "capturing",
+                "streams": 2,
+                "audio_samples": 160000,
+                "active_audio_samples": 80000,
+                "participant_sources": {
+                    "available": True,
+                    "total": 2,
+                    "dom_participants": 2,
+                    "sources": [],
+                },
+            },
+        )
+        assert status_resp.status_code == 200
+        new_deadline = datetime.fromisoformat(status_resp.json()["deadline"])
+        assert new_deadline >= scheduled_end + timedelta(minutes=14, seconds=30)
+
+        controller_pass(database, cluster.apis)
+        assert cluster.jobs[name].spec.active_deadline_seconds > initial_job_deadline + 800
+
+        # Push recording.ends_at to scheduled_end + 58 min; next tick caps at +60 min.
+        with Session(database) as db:
+            rec = db.get(Recording, uuid.UUID(recording_id))
+            assert rec.protocol_meta["scheduled_ends_at"] == scheduled_end.isoformat()
+            rec.ends_at = datetime.now(UTC) + timedelta(seconds=60)
+            rec.protocol_meta = {
+                **rec.protocol_meta,
+                "scheduled_ends_at": (datetime.now(UTC) - timedelta(minutes=58)).isoformat(),
+            }
+            expected_hard_cap = datetime.fromisoformat(
+                rec.protocol_meta["scheduled_ends_at"]
+            ) + timedelta(seconds=3600)
+            db.commit()
+
+        capped_resp = client.post(
+            f"/v1/attempts/{identifier}/status",
+            headers={**headers, "X-Worker-ID": "owner"},
+            json={
+                "participation": "capturing",
+                "streams": 2,
+                "audio_samples": 320000,
+                "active_audio_samples": 160000,
+                "participant_sources": {
+                    "available": True,
+                    "total": 2,
+                    "dom_participants": 2,
+                    "sources": [],
+                },
+            },
+        )
+        assert capped_resp.status_code == 200
+        with Session(database) as db:
+            rec = db.get(Recording, uuid.UUID(recording_id))
+            assert rec.ends_at == expected_hard_cap
+    finally:
+        get_settings.cache_clear()

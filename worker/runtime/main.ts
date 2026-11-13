@@ -37,7 +37,7 @@ async function run(api: string, credential: string) {
   if (isWebexBrowser && (!pageUrl.hostname.endsWith('.webex.com') || pageUrl.port)) {
     throw new Error('Invalid Webex URL');
   }
-  const deadline = Date.parse(bootstrap.deadline);
+  let deadline = Date.parse(bootstrap.deadline);
   sessionDeadline = deadline;
   if (pageUrl.protocol !== 'https:' || pageUrl.username || pageUrl.password || (!isTeams && !isZoom && pageUrl.search) ||
       !Number.isFinite(deadline)) {
@@ -103,7 +103,7 @@ async function run(api: string, credential: string) {
   process.on('SIGTERM', terminate);
   process.on('SIGINT', terminate);
   // Enforce the deadline during register/join/lobby too, not only after join resolves.
-  const deadlineTimer = setTimeout(() => { void stop('deadline'); }, Math.max(0, deadline - Date.now()));
+  let deadlineTimer = setTimeout(() => { void stop('deadline'); }, Math.max(0, deadline - Date.now()));
   let guestExpiryTimer: ReturnType<typeof setTimeout> | undefined;
   let renewAt = Infinity, guestStopAt = Infinity;
   function scheduleGuest(issued: typeof bootstrap) {
@@ -123,6 +123,7 @@ async function run(api: string, credential: string) {
   async function monitor() {
     while (!stopping) {
       const state = meet ? await meet.inspect() : await page.evaluate(() => (window as any).wortlaut.inspectReceivers());
+      await meet?.updateVideoTile({participation: state.participation});
       diagnostics = {capability: state.capability, streams: state.streams,
         configured_speaker_slots: state.configured_speaker_slots, configured_share_slots: state.configured_share_slots,
         audio_samples: state.audio_samples, active_audio_samples: state.active_audio_samples ?? 0,
@@ -210,12 +211,28 @@ async function run(api: string, credential: string) {
         ...diagnostics, participation: state.participation === 'preparing' ? 'joining' : state.participation,
         reason: state.reason,
       });
+      if (typeof reported.deadline === 'string') {
+        const nextDeadline = Date.parse(reported.deadline);
+        if (Number.isFinite(nextDeadline) && nextDeadline > deadline) {
+          deadline = nextDeadline;
+          sessionDeadline = nextDeadline;
+          clearTimeout(deadlineTimer);
+          deadlineTimer = setTimeout(() => { void stop('deadline'); }, Math.max(0, deadline - Date.now()));
+        }
+      }
+      if (Array.isArray(reported.live_transcript)) {
+        await meet?.updateVideoTile({
+          participation: state.participation,
+          segments: reported.live_transcript,
+        });
+      }
       if (reported.stop_requested) {
         await stop(reported.stop_reason);
         return;
       }
+      const pollMs = state.participation === 'capturing' ? 3000 : 5000;
       let timer: ReturnType<typeof setTimeout> | undefined;
-      await Promise.race([stopped, new Promise<void>((resolve) => { timer = setTimeout(resolve, 5000); })]);
+      await Promise.race([stopped, new Promise<void>((resolve) => { timer = setTimeout(resolve, pollMs); })]);
       clearTimeout(timer);
     }
   }

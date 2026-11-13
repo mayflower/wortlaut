@@ -719,22 +719,67 @@ def test_web_ui_live_status_and_browser_participant_names_in_exports(
                         '{"summary": "Kurzes Kickoff-Treffen zur Begrüßung.", '
                         '"topics": [{"title": "Begrüßung", "details": "Willkommen im Team."}], '
                         '"action_items": [{"owner": "Dr. Alice Beispiel", '
-                        '"task": "Agenda versenden"}]}'
+                        '"task": "Agenda versenden", "due": "Freitag"}]}'
                     )
                 }
             }
 
-    monkeypatch.setattr(exports_module.httpx, "post", lambda *a, **kw: FakeOllamaResponse())
+    def fake_ollama_post(*args, **kwargs):
+        # Concurrent PATCH while Ollama HTTP call is in flight: verifies no DB row lock is held
+        # and concurrent protocol_meta updates (e.g. notes) are preserved without lost updates.
+        concurrent_patch = client.patch(
+            f"/v1/recordings/{recording}",
+            headers=API,
+            json={"notes": "Wichtige Vorbemerkung (parallel aktualisiert)"},
+        )
+        assert concurrent_patch.status_code == 200
+        return FakeOllamaResponse()
+
+    monkeypatch.setattr(exports_module.httpx, "post", fake_ollama_post)
     sum_res = client.post(f"/v1/recordings/{recording}/summary", headers=API)
     assert sum_res.status_code == 200
     assert sum_res.json()["summary"]["summary"] == "Kurzes Kickoff-Treffen zur Begrüßung."
     assert sum_res.json()["summary"]["action_items"][0]["owner"] == "Dr. Alice Beispiel"
+    assert sum_res.json()["summary"]["action_items"][0]["due"] == "Freitag"
     md_after = client.get(f"/v1/recordings/{recording}/exports/md", headers=API).text
     assert "## Zusammenfassung" in md_after
     assert "Kurzes Kickoff-Treffen zur Begrüßung." in md_after
-    assert "**Dr. Alice Beispiel:** Agenda versenden" in md_after
+    assert "## To-Do-Liste" in md_after
+    assert "- [ ] **Dr. Alice Beispiel:** Agenda versenden _(Fällig: Freitag)_" in md_after
+    assert "## Notizen\n\nWichtige Vorbemerkung (parallel aktualisiert)" in md_after
+    txt_after = client.get(f"/v1/recordings/{recording}/exports/txt", headers=API).text
+    assert "ZUSAMMENFASSUNG" in txt_after
+    assert "TO-DO-LISTE" in txt_after
+    assert "[ ] Dr. Alice Beispiel: Agenda versenden (Fällig: Freitag)" in txt_after
 
-    # Opt-out suppresses and purges all statements and audio snippets of the speaker
+    # Manual editing of summary & To-Do list via PATCH (e.g. before forwarding .md to partners)
+    manual_patch = client.patch(
+        f"/v1/recordings/{recording}",
+        headers=API,
+        json={
+            "summary": {
+                "summary": "Abgestimmtes Ergebnisprotokoll für Kundenversand.",
+                "topics": [{"title": "Roadmap", "details": "Q4-Meilensteine bestätigt."}],
+                "action_items": [
+                    {
+                        "owner": "Alice Example",
+                        "task": "Guten Tag Protokoll schicken",
+                        "due": "Montag",
+                    }
+                ],
+            }
+        },
+    )
+    assert manual_patch.status_code == 200
+    md_edited = client.get(f"/v1/recordings/{recording}/exports/md", headers=API).text
+    # Speaker override (Alice Example -> Dr. Alice Beispiel) and term replacement
+    # (Guten Tag -> Willkommen) apply cleanly to summary & To-Do items as well:
+    assert "Abgestimmtes Ergebnisprotokoll für Kundenversand." in md_edited
+    assert "- [ ] **Dr. Alice Beispiel:** Willkommen Protokoll schicken _(Fällig: Montag)_" in (
+        md_edited
+    )
+
+    # Opt-out suppresses and purges all statements, summary/To-Dos, and audio snippets
     opt_out_res = client.patch(
         f"/v1/recordings/{recording}",
         headers=API,
@@ -744,6 +789,10 @@ def test_web_ui_live_status_and_browser_participant_names_in_exports(
     opt_out_tx = opt_out_res.json()
     assert opt_out_tx["opted_out_speakers"] == ["participant-alice"]
     assert opt_out_tx["segments"] == []
+    assert opt_out_tx["summary"] is None
+    md_opted_out = client.get(f"/v1/recordings/{recording}/exports/md", headers=API).text
+    assert "Abgestimmtes Ergebnisprotokoll" not in md_opted_out
+    assert "Protokoll schicken" not in md_opted_out
     assert opt_out_tx["sources_summary"][0]["opted_out"] is True
     assert opt_out_tx["sources_summary"][0]["segment_count"] == 0
     assert opt_out_tx["sources_summary"][0]["speech_seconds"] == 0.0
@@ -755,6 +804,25 @@ def test_web_ui_live_status_and_browser_participant_names_in_exports(
     )
     assert snippet_blocked.status_code == 404
     assert "speaker_opted_out" in snippet_blocked.text
+
+    # Rejoin clears any prior summary so post-rejoin completion summarizes all attempts cleanly
+    pre_rejoin_patch = client.patch(
+        f"/v1/recordings/{recording}",
+        headers=API,
+        json={
+            "summary": {
+                "summary": "Vorläufige Zusammenfassung vor Rejoin.",
+                "topics": [],
+                "action_items": [{"owner": "Team", "task": "Offener Punkt"}],
+            }
+        },
+    )
+    assert pre_rejoin_patch.status_code == 200
+    assert pre_rejoin_patch.json()["summary"] is not None
+    rejoin_res = client.post(f"/v1/recordings/{recording}/rejoin", headers=API)
+    assert rejoin_res.status_code == 200
+    after_rejoin_tx = client.get(f"/v1/recordings/{recording}/transcript", headers=API).json()
+    assert after_rejoin_tx["summary"] is None
 
 
 def test_recording_title_guest_name_empty_room_timeout_and_otlp_telemetry(
@@ -1011,7 +1079,7 @@ def test_bind_control_backfills_unattributed_prefix_on_single_speaker_stream(cli
         )
         db.commit()
 
-    client.post(
+    status_res = client.post(
         f"/v1/attempts/{attempt_id}/status",
         headers=owner,
         json={
@@ -1059,6 +1127,14 @@ def test_bind_control_backfills_unattributed_prefix_on_single_speaker_stream(cli
             ],
         },
     )
+    assert status_res.status_code == 200
+    assert status_res.json()["live_transcript"] == [
+        {
+            "speaker": "Alice Visual",
+            "text": "Hallo zusammen hier spricht Alice.",
+            "start": 0.0,
+        }
+    ]
 
     detail = client.get(f"/v1/recordings/{rec_id}", headers=API).json()
     assert detail["live_status"]["bound_named_receivers"] == 1
@@ -1074,6 +1150,242 @@ def test_bind_control_backfills_unattributed_prefix_on_single_speaker_stream(cli
     assert transcript["segments"][1]["speaker_label"] == "Alice Visual"
     assert transcript["sources_summary"][0]["participant_name"] == "Alice Visual"
     assert transcript["sources_summary"][0]["signaled_participant_id"] == "devices/alice-1"
+
+    # Unattributed stream segments must NOT leak onto live_transcript before bind arrives
+    with Session(database) as db:
+        unbound_stream = AudioStream(
+            attempt_id=uuid.UUID(attempt_id),
+            stream_id=uuid.uuid4(),
+            epoch=uuid.uuid4(),
+            final_sample=8000,
+            last_sequence=0,
+            scan_sample=8000,
+            scan_complete=True,
+            contract={
+                "type": "begin",
+                "id": f"{attempt_id}/begin-unbound",
+                "meeting_id": rec_id,
+                "attempt_id": attempt_id,
+                "stream_id": str(uuid.uuid4()),
+                "epoch": str(uuid.uuid4()),
+                "provider_source_id": f"google_meet:{rec_id}:receiver:2",
+                "source_kind": "speaker",
+                "speaker_id": None,
+                "attribution_unknown": True,
+                "sample_rate": 16000,
+                "channels": 1,
+                "format": "s16le",
+                "session_utc_origin": origin_iso,
+                "session_monotonic_origin_ms": 100.0,
+                "monotonic_origin_ms": 100.0,
+            },
+        )
+        db.add(unbound_stream)
+        db.flush()
+        unbound_job = AsrJob(
+            id=f"{attempt_id}-job-unbound",
+            stream_id=unbound_stream.id,
+            start_sample=0,
+            end_sample=8000,
+            core_start=0,
+            core_end=8000,
+            binding={
+                "provider_source_id": f"google_meet:{rec_id}:receiver:2",
+                "source_kind": "speaker",
+                "speaker_id": None,
+                "attribution_unknown": True,
+            },
+            status="completed",
+        )
+        db.add(unbound_job)
+        db.flush()
+        db.add(
+            TranscriptSegment(
+                id=unbound_job.id,
+                result={
+                    "id": unbound_job.id,
+                    "stream_id": str(unbound_stream.stream_id),
+                    "epoch": str(unbound_stream.epoch),
+                    "provider_source_id": f"google_meet:{rec_id}:receiver:2",
+                    "source_kind": "speaker",
+                    "speaker_id": None,
+                    "attribution_unknown": True,
+                    "session_utc_origin": origin_iso,
+                    "start": 3.0,
+                    "end": 4.0,
+                    "text": "Geheimer noch ungebundener Satz.",
+                    "words": [{"word": "Geheimer", "start": 3.0, "end": 4.0}],
+                },
+            )
+        )
+        db.commit()
+    status_after_unbound = client.post(
+        f"/v1/attempts/{attempt_id}/status",
+        headers=owner,
+        json={"participation": "capturing", "streams": 2, "audio_samples": 40000},
+    )
+    assert status_after_unbound.status_code == 200
+    assert status_after_unbound.json()["live_transcript"] == [
+        {
+            "speaker": "Alice Visual",
+            "text": "Hallo zusammen hier spricht Alice.",
+            "start": 0.0,
+        }
+    ]
+    lobby_status = client.post(
+        f"/v1/attempts/{attempt_id}/status",
+        headers=owner,
+        json={"participation": "waiting_admission", "streams": 0, "audio_samples": 0},
+    )
+    assert lobby_status.json()["live_transcript"] == []
+
+    # Late-joining speaker stream with start_sample=0 must still appear in live_transcript
+    # even after an earlier stream has >48 segments + empty noise segments.
+    late_origin_iso = (
+        datetime.fromisoformat(origin_iso) + timedelta(seconds=120)
+    ).isoformat()
+    with Session(database) as db:
+        early_stream = db.scalar(
+            select(AudioStream).where(
+                AudioStream.attempt_id == uuid.UUID(attempt_id),
+                AudioStream.stream_id == stream_uuid,
+            )
+        )
+        assert early_stream is not None
+        for idx in range(52):
+            s_start = 48000 + idx * 8000
+            s_end = s_start + 8000
+            job_extra = AsrJob(
+                id=f"{attempt_id}-early-{idx}",
+                stream_id=early_stream.id,
+                start_sample=s_start,
+                end_sample=s_end,
+                core_start=s_start,
+                core_end=s_end,
+                binding={
+                    "provider_source_id": source_id,
+                    "source_kind": "speaker",
+                    "speaker_id": "devices/alice-1",
+                    "participant_id": "devices/alice-1",
+                    "participant_name": "Alice Visual",
+                    "attribution_unknown": False,
+                },
+                status="completed",
+            )
+            db.add(job_extra)
+            db.flush()
+            seg_sec = 6.0 + idx * 0.6
+            is_noise = idx >= 44
+            db.add(
+                TranscriptSegment(
+                    id=job_extra.id,
+                    result={
+                        "id": job_extra.id,
+                        "stream_id": str(early_stream.stream_id),
+                        "epoch": str(early_stream.epoch),
+                        "provider_source_id": source_id,
+                        "source_kind": "speaker",
+                        "speaker_id": "devices/alice-1",
+                        "participant_id": "devices/alice-1",
+                        "participant_name": "Alice Visual",
+                        "attribution_unknown": False,
+                        "session_utc_origin": origin_iso,
+                        "start": seg_sec,
+                        "end": seg_sec + 0.4,
+                        "text": "" if is_noise else f"Beitrag Nummer {idx}.",
+                        "words": []
+                        if is_noise
+                        else [{"word": "Beitrag", "start": seg_sec, "end": seg_sec + 0.4}],
+                    },
+                )
+            )
+        late_stream_uuid = uuid.uuid4()
+        late_epoch_uuid = uuid.uuid4()
+        late_stream = AudioStream(
+            attempt_id=uuid.UUID(attempt_id),
+            stream_id=late_stream_uuid,
+            epoch=late_epoch_uuid,
+            final_sample=16000,
+            last_sequence=0,
+            scan_sample=16000,
+            scan_complete=True,
+            contract={
+                "type": "begin",
+                "id": f"{attempt_id}/begin-late-bob",
+                "meeting_id": rec_id,
+                "attempt_id": attempt_id,
+                "stream_id": str(late_stream_uuid),
+                "epoch": str(late_epoch_uuid),
+                "provider_source_id": f"google_meet:{rec_id}:receiver:3",
+                "source_kind": "speaker",
+                "speaker_id": "devices/bob-late",
+                "participant_id": "devices/bob-late",
+                "participant_name": "Bob Latejoin",
+                "attribution_unknown": False,
+                "sample_rate": 16000,
+                "channels": 1,
+                "format": "s16le",
+                "session_utc_origin": late_origin_iso,
+                "session_monotonic_origin_ms": 100.0,
+                "monotonic_origin_ms": 100.0,
+            },
+        )
+        db.add(late_stream)
+        db.flush()
+        late_job = AsrJob(
+            id=f"{attempt_id}-job-late-bob",
+            stream_id=late_stream.id,
+            start_sample=0,
+            end_sample=16000,
+            core_start=0,
+            core_end=16000,
+            binding={
+                "provider_source_id": f"google_meet:{rec_id}:receiver:3",
+                "source_kind": "speaker",
+                "speaker_id": "devices/bob-late",
+                "participant_id": "devices/bob-late",
+                "participant_name": "Bob Latejoin",
+                "attribution_unknown": False,
+            },
+            status="completed",
+        )
+        db.add(late_job)
+        db.flush()
+        db.add(
+            TranscriptSegment(
+                id=late_job.id,
+                result={
+                    "id": late_job.id,
+                    "stream_id": str(late_stream_uuid),
+                    "epoch": str(late_epoch_uuid),
+                    "provider_source_id": f"google_meet:{rec_id}:receiver:3",
+                    "source_kind": "speaker",
+                    "speaker_id": "devices/bob-late",
+                    "participant_id": "devices/bob-late",
+                    "participant_name": "Bob Latejoin",
+                    "attribution_unknown": False,
+                    "session_utc_origin": late_origin_iso,
+                    "start": 1.0,
+                    "end": 2.0,
+                    "text": "Ich bin gerade erst dazugekommen.",
+                    "words": [{"word": "Ich", "start": 1.0, "end": 2.0}],
+                },
+            )
+        )
+        db.commit()
+    late_status = client.post(
+        f"/v1/attempts/{attempt_id}/status",
+        headers=owner,
+        json={"participation": "capturing", "streams": 3, "audio_samples": 120000},
+    )
+    assert late_status.status_code == 200
+    late_turns = late_status.json()["live_transcript"]
+    assert len(late_turns) >= 2
+    assert late_turns[-1] == {
+        "speaker": "Bob Latejoin",
+        "text": "Ich bin gerade erst dazugekommen.",
+        "start": 121.0,
+    }
 
 
 def test_persona_workflows_rejoin_desc_filters_reader_token_and_metrics(client, database):
@@ -1369,6 +1681,8 @@ def test_oidc_dex_pkce_exchange_and_per_user_isolation(client, database, monkeyp
     assert boot.status_code == 200
     boot_data = boot.json()
     assert boot_data["invited_by"] == "mara.lindner@mayflower.de"
+    assert boot_data["invited_by_name"] == "Mara Lindner"
+    assert boot_data["default_locale"] == "de"
     assert boot_data["meet"]["display_name"] == "wortlaut (Mara Lindner)"
     assert "mara.lindner@mayflower.de" in boot_data["chat_intro"]
     assert f"/ui#view=meetings&id={rec_mara_id}&token=wortlaut-read-{rec_mara_id}." in boot_data[

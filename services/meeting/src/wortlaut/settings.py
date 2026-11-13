@@ -1,9 +1,11 @@
+import json
+import re
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import Field, SecretStr
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field, SecretStr, field_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -79,6 +81,7 @@ class Settings(BaseSettings):
     join_lead_seconds: int = Field(default=60, ge=0)
     lobby_timeout_seconds: int = Field(default=600, ge=1)
     empty_room_timeout_seconds: int = Field(default=300, ge=5, le=7200)
+    max_overtime_seconds: int = Field(default=3600, ge=0, le=14400)
     late_start_tolerance_seconds: int = Field(default=300, ge=0)
     heartbeat_timeout_seconds: int = Field(default=45, ge=10)
     otlp_endpoint: str | None = None
@@ -106,6 +109,7 @@ class Settings(BaseSettings):
     enable_processing: bool = True
     asr_url: str = "http://wortlaut-asr:8000"
     asr_token: SecretStr | None = None
+    asr_glossary: Annotated[list[str], NoDecode] = []
     asr_timeout_seconds: int = 120
     asr_lease_seconds: int = 180
     asr_max_permanent_failures: int = 3
@@ -113,6 +117,35 @@ class Settings(BaseSettings):
     ollama_url: str = "http://ollama.ollama.svc.cluster.local:11434"
     ollama_model: str = "qwen3.8:latest"
     ollama_timeout_seconds: int = 120
+
+    @field_validator("asr_glossary", mode="before")
+    @classmethod
+    def _parse_asr_glossary(cls, value):
+        if value is None or value == "":
+            return []
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                return []
+            if stripped.startswith("["):
+                parsed = json.loads(stripped)
+                if not isinstance(parsed, list):
+                    raise ValueError("WORTLAUT_ASR_GLOSSARY JSON value must be a list")
+                raw_items = parsed
+            else:
+                raw_items = re.split(r"[,;\n]+", stripped)
+        elif isinstance(value, (list, tuple, set)):
+            raw_items = list(value)
+        else:
+            raise ValueError("Invalid asr_glossary format")
+        cleaned: list[str] = []
+        seen: set[str] = set()
+        for item in raw_items:
+            term = " ".join(str(item).split())[:80]
+            if term and term.lower() not in seen and len(cleaned) < 128:
+                seen.add(term.lower())
+                cleaned.append(term)
+        return cleaned
 
 
 @lru_cache

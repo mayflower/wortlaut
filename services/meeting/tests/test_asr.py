@@ -481,8 +481,9 @@ def test_segment_result_preserves_word_confidence_and_rejects_low_confidence_hal
         binding={"speaker_id": "speaker-A"},
     )
 
-    # Word confidences below are parakeet-tdt-0.6b-v3 max_prob values measured
-    # on a real recording (e21ee66f), not invented posteriors.
+    # Word confidences below reflect Qwen3-ASR byte-level BPE subword posteriors:
+    # real German compounds and short confirmations score >= 0.35 mean / >= 0.55 peak,
+    # whereas unintelligible noise hallucinations stay uniformly low across pieces.
     def words(*pairs):
         return [
             {"word": w, "start": 0.3 * i, "end": 0.3 * i + 0.25, "confidence": c}
@@ -500,20 +501,26 @@ def test_segment_result_preserves_word_confidence_and_rejects_low_confidence_hal
     assert valid["confidence"] == round((0.923 + 1.0 + 0.895 + 0.999) / 4, 4)
     assert [w["confidence"] for w in valid["words"]] == [0.923, 1.0, 0.895, 0.999]
 
-    # Hard-to-recognise real speech has a low mean but keeps confident words.
+    # Real German speech with multi-subword compounds keeps moderate BPE posteriors.
     weak = (
-        ("Da", 0.333), ("hast", 0.831), ("du", 0.987), ("jetzt", 0.57), ("zum", 0.474),
-        ("Zeit,", 0.742), ("aber", 0.398), ("jetzt", 0.285), ("will", 0.425), ("ich.", 0.552),
+        ("Da", 0.333), ("hast", 0.631), ("du", 0.687), ("jetzt", 0.47), ("zum", 0.374),
+        ("Zeit,", 0.542), ("aber", 0.398), ("jetzt", 0.285), ("will", 0.425), ("ich.", 0.452),
     )
     assert result(*weak)["text"] == "Da hast du jetzt zum Zeit, aber jetzt will ich."
 
-    # Rustling noise decoded as foreign words: no word reaches a confident posterior.
-    hallucinated = result(("Small", 0.552), ("made", 0.516), ("a", 0.438), ("pistol.", 0.609))
+    # Rustling noise decoded as weak tokens: neither mean (0.29) nor peak (0.38) passes.
+    hallucinated = result(("Small", 0.31), ("made", 0.28), ("a", 0.22), ("pistol.", 0.38))
     assert hallucinated["text"] == ""
     assert hallucinated["words"] == []
     assert "confidence" not in hallucinated
-    assert result(("Jaknął", 0.42))["words"] == []
-    assert result(("Genau.", 0.65))["text"] == "Genau."
+    assert result(("Jaknął", 0.19))["words"] == []
+    assert result(("Genau.", 0.42))["text"] == "Genau."
+
+    # Consecutive n-gram decoder loop is suppressed even when truncated=False,
+    # while natural 4x agreement ("ja ja ja ja") is preserved.
+    assert result(*[("ja", 0.85)] * 4)["text"] == "ja ja ja ja"
+    assert result(*[("ja", 0.85)] * 6)["text"] == ""
+    assert result(*([("und", 0.8), ("dann", 0.8)] * 4))["text"] == ""
 
     with pytest.raises(InvalidResult, match="invalid_word_confidence"):
         segment_result(
@@ -524,3 +531,133 @@ def test_segment_result_preserves_word_confidence_and_rejects_low_confidence_hal
                 "words": [{"word": "Ungültig", "start": 0.1, "end": 0.5, "confidence": 1.5}],
             },
         )
+
+
+def test_asr_glossary_and_context_prompt_exclude_opted_out_speakers(
+    client, database, storage, monkeypatch
+):
+    import base64
+
+    from wortlaut.asr import build_asr_context_prompt
+    from wortlaut.models import Attempt, Recording, TranscriptSegment
+    from wortlaut.settings import Settings, get_settings
+
+    # Comma-separated and JSON list formats both parse cleanly in Settings.
+    s_csv = Settings(
+        database_url="postgresql://u:p@localhost/db",
+        api_token="tok",
+        asr_glossary="Mayflower, mAIstack; Astryx\nMayflower",
+    )
+    assert s_csv.asr_glossary == ["Mayflower", "mAIstack", "Astryx"]
+    s_json = Settings(
+        database_url="postgresql://u:p@localhost/db",
+        api_token="tok",
+        asr_glossary='["Qwen3-ASR", "Wortlaut"]',
+    )
+    assert s_json.asr_glossary == ["Qwen3-ASR", "Wortlaut"]
+
+    monkeypatch.setenv("WORTLAUT_ASR_GLOSSARY", "Mayflower, mAIstack, Astryx")
+    monkeypatch.setenv("WORTLAUT_ASR_TOKEN", "fixture-gpu-token")
+    get_settings.cache_clear()
+    try:
+        with Session(database) as db:
+            now = datetime.now(UTC)
+            rec = Recording(
+                idempotency_key="ctx-glossary-rec",
+                request_digest="d" * 64,
+                provider="google_meet",
+                meeting_url="https://meet.google.com/abc-defg-hij",
+                title="mAIstack Architektur Sync",
+                starts_at=now,
+                ends_at=now + timedelta(minutes=30),
+                protocol_meta={
+                    "opted_out_speakers": ["Geheimer Gast"],
+                    "term_replacements": {"meistack": "mAIstack"},
+                },
+            )
+            db.add(rec)
+            db.flush()
+            att = Attempt(
+                recording_id=rec.id,
+                credential_hash="x" * 64,
+                credential_expires_at=now + timedelta(minutes=32),
+                diagnostics={
+                    "participant_sources": {
+                        "sources": [
+                            {
+                                "participant_id": "spaces/r/devices/1",
+                                "participant_name": "Johann Peter Hartmann",
+                            },
+                            {
+                                "participant_id": "spaces/r/devices/2",
+                                "participant_name": "Geheimer Gast",
+                            },
+                        ]
+                    }
+                },
+            )
+            db.add(att)
+            db.flush()
+            st = AudioStream(
+                attempt_id=att.id,
+                stream_id=uuid.uuid4(),
+                epoch=uuid.uuid4(),
+                contract={
+                    "monotonic_origin_ms": 1000,
+                    "session_monotonic_origin_ms": 1000,
+                    "session_utc_origin": now.isoformat(),
+                    "participant_id": "spaces/r/devices/1",
+                    "speaker_id": "spaces/r/devices/1",
+                    "participant_name": "Johann Peter Hartmann",
+                },
+            )
+            db.add(st)
+            db.flush()
+            prior_job = AsrJob(
+                id="0" * 64,
+                stream_id=st.id,
+                start_sample=0,
+                end_sample=16000 * 3,
+                core_start=0,
+                core_end=16000 * 3,
+                binding={"speaker_id": "spaces/r/devices/1"},
+                status="completed",
+            )
+            db.add(prior_job)
+            db.add(
+                TranscriptSegment(
+                    id="0" * 64,
+                    result={
+                        "id": "0" * 64,
+                        "text": "Wir starten heute mit dem",
+                        "speaker_id": "spaces/r/devices/1",
+                    },
+                )
+            )
+            cur_job = AsrJob(
+                id="1" * 64,
+                stream_id=st.id,
+                start_sample=16000 * 3,
+                end_sample=16000 * 6,
+                core_start=16000 * 3,
+                core_end=16000 * 6,
+                binding={
+                    "speaker_id": "spaces/r/devices/1",
+                    "participant_id": "spaces/r/devices/1",
+                    "participant_name": "Johann Peter Hartmann",
+                },
+                status="pending",
+            )
+            db.add(cur_job)
+            db.flush()
+            prompt = build_asr_context_prompt(db, cur_job, st, get_settings())
+            assert prompt is not None
+            assert "mAIstack Architektur Sync" in prompt
+            assert "Johann Peter Hartmann" in prompt
+            assert "Geheimer Gast" not in prompt
+            assert "Mayflower" in prompt and "Astryx" in prompt
+            assert "Wir starten heute mit dem" in prompt
+            encoded = base64.b64encode(prompt.encode("utf-8")).decode("ascii")
+            assert base64.b64decode(encoded).decode("utf-8") == prompt
+    finally:
+        get_settings.cache_clear()

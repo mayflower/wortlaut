@@ -275,6 +275,7 @@ export class AudioCapture {
         if (chunker) sink.end({type: 'end', id: `${attemptId}/${streamId}/${epoch}/end`,
           stream_id: streamId, epoch, final_sample: chunker.finalSample,
           last_sequence: chunker.lastSequence});
+        ready();
         ended();
       }
     };
@@ -318,6 +319,9 @@ export class AudioCapture {
     })()};
     const onEnded = () => { void handle.stop(); };
     track.addEventListener('ended', onEnded, {once: true});
+    source.connect(audioNode);
+    // Output is silence. Capture input is this single track, never the common destination.
+    audioNode.connect(this.context.destination);
     const timer = setTimeout(() => {
       sink.error('capture_initialization_timeout');
       failed(new Error('Capture initialization timed out'));
@@ -328,9 +332,6 @@ export class AudioCapture {
       track.removeEventListener('ended', onEnded);
       throw error;
     } finally { clearTimeout(timer); }
-    source.connect(audioNode);
-    // Output is silence. Capture input is this single track, never the common destination.
-    audioNode.connect(this.context.destination);
     return handle;
   }
 

@@ -24,7 +24,7 @@ test('aggregate overflow across closed epochs retains bytes and sends exact gap 
   }));
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
   const transport = new AudioTransport(`ws://127.0.0.1:${(server.address() as any).port}`, 'credential', 'worker',
-    (reason) => errors.push(reason));
+    (reason) => errors.push(reason), {maxSamples: 16000 * 120, maxChunks: 256, maxControls: 256});
   const pcm = Uint8Array.from({length: 160000}, (_, i) => i % 251);
   try {
     for (let i = 0; i < 30; i++) {
@@ -70,7 +70,7 @@ test('lost ACK replays identical bytes after reconnect; control limit reports fa
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
   const errors: string[] = [];
   const transport = new AudioTransport(`ws://127.0.0.1:${(server.address() as any).port}`, 'credential', 'worker',
-    (reason) => errors.push(reason));
+    (reason) => errors.push(reason), {maxSamples: 16000 * 120, maxChunks: 256, maxControls: 256});
   try {
     transport.chunk(base, new Uint8Array(160000)); transport.connect();
     assert.equal(await transport.drain(4000), true);
@@ -78,9 +78,42 @@ test('lost ACK replays identical bytes after reconnect; control limit reports fa
     assert.deepEqual(replay[0], replay[1]); assert.deepEqual(errors, []);
     const overflows: string[] = [];
     const overflow = new AudioTransport('ws://127.0.0.1:1', 'credential', 'worker', (reason) => overflows.push(reason));
-    for (let i = 0; i < 257; i++) overflow.control({type: 'begin', id: String(i)});
+    for (let i = 0; i < 1025; i++) overflow.control({type: 'begin', id: String(i)});
     assert.deepEqual(overflows, ['control_buffer_limit']);
     assert.equal(await overflow.drain(0), false);
+  } finally {
+    await transport.drain(0);
+    for (const socket of ws.clients) socket.terminate();
+    await new Promise<void>((resolve) => ws.close(() => server.close(() => resolve())));
+  }
+});
+
+test('default multi-stream buffer headroom retains 150 source-seconds without worker_buffer_limit gaps', async () => {
+  const server = createServer(), ws = new WebSocketServer({server});
+  const received: {metadata: any; pcm?: Buffer}[] = [], errors: string[] = [];
+  ws.on('connection', (socket: any) => socket.on('message', (data: Buffer, binary: boolean) => {
+    const metadata = binary ? JSON.parse(data.subarray(4, 4 + data.readUInt32BE(0)).toString()) : JSON.parse(data.toString());
+    if (metadata.type === 'auth') { socket.send(JSON.stringify({type: 'ready'})); return; }
+    received.push({metadata, ...(binary ? {pcm: data.subarray(4 + data.readUInt32BE(0))} : {})});
+    socket.send(JSON.stringify({type: 'ack', id: metadata.id ?? chunkId(metadata)}));
+  }));
+  server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  const transport = new AudioTransport(`ws://127.0.0.1:${(server.address() as any).port}`, 'credential', 'worker',
+    (reason) => errors.push(reason));
+  const pcm = Uint8Array.from({length: 160000}, (_, i) => i % 251);
+  try {
+    for (let i = 0; i < 30; i++) {
+      const metadata = {...base, stream_id: `headroom-${i}`, epoch: `epoch-${i}`};
+      transport.control({...metadata, type: 'begin', id: `${chunkId(metadata)}/begin`});
+      transport.chunk(metadata, pcm);
+      transport.control({type: 'end', id: `${chunkId(metadata)}/end`, stream_id: metadata.stream_id,
+        epoch: metadata.epoch, final_sample: 80000, last_sequence: 0});
+    }
+    transport.connect();
+    assert.equal(await transport.drain(4000), true);
+    assert.equal(received.filter((item) => item.pcm).length, 30);
+    assert.equal(received.filter((item) => item.metadata.type === 'gap').length, 0);
+    assert.deepEqual(errors, []);
   } finally {
     await transport.drain(0);
     for (const socket of ws.clients) socket.terminate();
@@ -123,7 +156,8 @@ test('90-second ingest outage retains bounded PCM across source changes and repl
   });
   server.listen(0, '127.0.0.1'); await once(server, 'listening');
   const transport = new AudioTransport(`ws://127.0.0.1:${(server.address() as any).port}`,
-    'credential', 'worker', (reason) => errors.push(reason));
+    'credential', 'worker', (reason) => errors.push(reason),
+    {maxSamples: 16000 * 120, maxChunks: 256, maxControls: 256});
   const emit = (epoch: number) => {
     for (let slot = 0; slot < 3; slot++) {
       const metadata = {...base, stream_id: `slot-${slot}`, epoch: `epoch-${epoch}`,

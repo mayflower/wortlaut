@@ -917,6 +917,12 @@ def sync_connection(
 
     conn.last_synced_at = now
     conn.sync_error = None
+    synced.sort(
+        key=lambda e: (
+            e.ends_at < now,
+            e.starts_at.timestamp() if e.ends_at >= now else -e.starts_at.timestamp(),
+        )
+    )
     return synced
 
 

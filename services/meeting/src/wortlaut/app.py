@@ -610,17 +610,14 @@ async def import_calendar_message(request: Request, db: Db, principal: AuthPrinc
 
 @app.get("/v1/calendar")
 def calendar_status(db: Db, principal: AuthPrincipal):
+    now = datetime.now(UTC)
     cal_query = select(CalendarEntry).order_by(CalendarEntry.dtstamp.desc())
     conn_query = select(CalendarConnection).order_by(CalendarConnection.created_at.desc())
-    synced_query = (
-        select(CalendarSyncedEvent)
-        .where(CalendarSyncedEvent.ends_at >= datetime.now(UTC) - timedelta(days=7))
-        .order_by(CalendarSyncedEvent.starts_at.asc())
-    )
+    synced_base = select(CalendarSyncedEvent)
     user_email = (principal.email or "").lower()
     if principal.kind != "operator":
         conn_query = conn_query.where(func.lower(CalendarConnection.owner_email) == user_email)
-        synced_query = synced_query.where(
+        synced_base = synced_base.where(
             func.lower(CalendarSyncedEvent.owner_email) == user_email
         )
     if not principal.is_admin:
@@ -635,8 +632,32 @@ def calendar_status(db: Db, principal: AuthPrincipal):
         item["recording_ids"] = [str(r.id) for r in recordings]
         result.append(item)
 
+    def _ics_sort_key(item: dict) -> tuple[int, float]:
+        if item["starts_at"] is None or item["ends_at"] is None:
+            return (2, -datetime.fromisoformat(item["dtstamp"]).timestamp())
+        starts_dt = datetime.fromisoformat(item["starts_at"])
+        ends_dt = datetime.fromisoformat(item["ends_at"])
+        if ends_dt < now:
+            return (1, -starts_dt.timestamp())
+        return (0, starts_dt.timestamp())
+
+    result.sort(key=_ics_sort_key)
+
     connections = [connection_json(c) for c in db.scalars(conn_query).all()]
-    synced_rows = db.scalars(synced_query.limit(200)).all()
+    upcoming_synced_rows = db.scalars(
+        synced_base.where(CalendarSyncedEvent.ends_at >= now)
+        .order_by(CalendarSyncedEvent.starts_at.asc())
+        .limit(200)
+    ).all()
+    past_synced_rows = db.scalars(
+        synced_base.where(
+            CalendarSyncedEvent.ends_at >= now - timedelta(days=7),
+            CalendarSyncedEvent.ends_at < now,
+        )
+        .order_by(CalendarSyncedEvent.starts_at.desc())
+        .limit(50)
+    ).all()
+    synced_rows = [*upcoming_synced_rows, *past_synced_rows]
     rec_ids = [ev.recording_id for ev in synced_rows if ev.recording_id]
     rec_map = (
         {
@@ -1444,6 +1465,10 @@ def rejoin_recording(recording_id: uuid.UUID, db: Db, principal: AuthPrincipal):
     recording.processing = "pending"
     recording.processing_error = None
     recording.processing_finished_at = None
+    if isinstance(recording.protocol_meta, dict) and "summary" in recording.protocol_meta:
+        meta = dict(recording.protocol_meta)
+        meta.pop("summary", None)
+        recording.protocol_meta = meta
     existing_delivery = db.get(Delivery, recording.id)
     if existing_delivery is not None:
         db.delete(existing_delivery)
@@ -1463,9 +1488,27 @@ def get_transcript(
     return export_data(db, recording)
 
 
+class ProtocolTopicInput(BaseModel):
+    title: str = Field(default="", max_length=300)
+    details: str = Field(default="", max_length=2000)
+
+
+class ProtocolActionItemInput(BaseModel):
+    owner: str = Field(default="Team", max_length=200)
+    task: str = Field(default="", max_length=1000)
+    due: str | None = Field(default=None, max_length=200)
+
+
+class ProtocolSummaryInput(BaseModel):
+    summary: str = Field(default="", max_length=10000)
+    topics: list[ProtocolTopicInput] = Field(default_factory=list, max_length=64)
+    action_items: list[ProtocolActionItemInput] = Field(default_factory=list, max_length=128)
+
+
 class ProtocolUpdateRequest(BaseModel):
     title: str | None = Field(default=None, max_length=200)
     notes: str | None = Field(default=None, max_length=20000)
+    summary: ProtocolSummaryInput | None = None
     speaker_overrides: dict[str, str] | None = None
     term_replacements: dict[str, str] | None = None
     segment_edits: dict[str, str] | None = None
@@ -1490,6 +1533,42 @@ def update_recording_protocol(
     meta = dict(recording.protocol_meta or {})
     if body.notes is not None:
         meta["notes"] = body.notes[:20000]
+    if body.summary is not None:
+        cleaned_summary_text = body.summary.summary.strip()
+        cleaned_topics = [
+            {
+                "title": " ".join(t.title.split()),
+                "details": " ".join(t.details.split()),
+            }
+            for t in body.summary.topics
+            if " ".join(t.title.split()) or " ".join(t.details.split())
+        ]
+        cleaned_actions: list[dict[str, str]] = []
+        for a in body.summary.action_items:
+            task = " ".join(a.task.split())
+            if not task:
+                continue
+            item: dict[str, str] = {
+                "owner": " ".join(a.owner.split()) or "Team",
+                "task": task,
+            }
+            due = " ".join((a.due or "").split())
+            if due:
+                item["due"] = due
+            cleaned_actions.append(item)
+        if cleaned_summary_text or cleaned_topics or cleaned_actions:
+            prior_summary = meta.get("summary")
+            summary_payload: dict = {
+                "summary": cleaned_summary_text,
+                "topics": cleaned_topics,
+                "action_items": cleaned_actions,
+                "generated_at": datetime.now(UTC).isoformat(),
+            }
+            if isinstance(prior_summary, dict) and prior_summary.get("model"):
+                summary_payload["model"] = str(prior_summary["model"])
+            meta["summary"] = summary_payload
+        else:
+            meta.pop("summary", None)
     if body.speaker_overrides is not None:
         cur_speakers = dict(meta.get("speaker_overrides") or {})
         for k, v in body.speaker_overrides.items():
@@ -1544,6 +1623,8 @@ def update_recording_protocol(
                 seen_opt_out.add(val.lower())
                 cleaned_opt_out.append(val)
         meta["opted_out_speakers"] = cleaned_opt_out
+        if cleaned_opt_out and body.summary is None:
+            meta.pop("summary", None)
     recording.protocol_meta = meta
     if body.opted_out_speakers:
         purge_opted_out_transcript_segments(db, recording)
@@ -1561,22 +1642,28 @@ def create_recording_summary(
         raise HTTPException(
             503, "KI-Zusammenfassung ist deaktiviert (WORTLAUT_ENABLE_LLM_SUMMARY=false)"
         )
-    recording = db.scalar(select(Recording).where(Recording.id == recording_id).with_for_update())
+    recording = db.get(Recording, recording_id)
     if recording is None or not can_access_recording(db, principal, recording):
         raise HTTPException(404, "Recording not found")
     if recording.transcript_deleted_at:
         raise HTTPException(410, "Transcript retention expired")
     try:
-        summary = generate_protocol_summary(db, recording)
+        summary = generate_protocol_summary(db, recording_id)
+    except LookupError:
+        raise HTTPException(404, "Recording not found") from None
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from None
     except Exception as exc:
         raise HTTPException(502, f"KI-Zusammenfassung fehlgeschlagen: {exc}") from None
     try:
-        publish_protocol_link_to_calendar_events(db, recording)
-        db.commit()
+        locked_rec = db.scalar(
+            select(Recording).where(Recording.id == recording_id).with_for_update()
+        )
+        if locked_rec is not None:
+            publish_protocol_link_to_calendar_events(db, locked_rec)
+            db.commit()
     except Exception:
-        pass
+        db.rollback()
     return {"summary": summary}
 
 
@@ -1841,6 +1928,7 @@ def bootstrap(
     response.headers["Cache-Control"] = "no-store"
     display_name = recording_display_name(db, recording, settings)
     inviter = _recording_inviter(db, recording)
+    inviter_name = _recording_inviter_name(db, recording)
     chat_intro = build_chat_intro(display_name, inviter, recording, settings)
     common = {
         "provider": recording.provider,
@@ -1851,6 +1939,9 @@ def bootstrap(
         "lobby_timeout_seconds": settings.lobby_timeout_seconds,
         "empty_room_timeout_seconds": settings.empty_room_timeout_seconds,
         "invited_by": inviter,
+        "invited_by_name": inviter_name,
+        "meeting_title": recording.title,
+        "default_locale": settings.default_locale,
         "chat_intro": chat_intro,
     }
     if recording.provider == "google_meet":
@@ -1940,7 +2031,10 @@ def worker_status(
         ):
             return {"accepted": True}
         raise HTTPException(409, "Attempt has already ended")
-    attempt.last_heartbeat_at = datetime.now(UTC)
+    now = datetime.now(UTC)
+    prev_diag = attempt.diagnostics if isinstance(attempt.diagnostics, dict) else {}
+    prev_active_samples = int(prev_diag.get("active_audio_samples") or 0)
+    attempt.last_heartbeat_at = now
     # Status is evidence about the current worker, not a provider acceptance test.
     attempt.diagnostics = body.model_dump(mode="json", exclude={"participation"})
     if body.participant_sources.opted_out:
@@ -1956,11 +2050,46 @@ def worker_status(
                 changed_opted = True
         if changed_opted:
             meta["opted_out_speakers"] = cur_opted
+            meta.pop("summary", None)
             recording.protocol_meta = meta
         purge_opted_out_transcript_segments(db, recording, [attempt])
     recording.participation = body.participation
+    settings = get_settings()
+    if (
+        body.participation == "capturing"
+        and recording.cancelled_at is None
+        and recording.audio_closed_at is None
+        and settings.max_overtime_seconds > 0
+        and settings.bootstrap_lifetime_seconds == 0
+        and now >= recording.ends_at - timedelta(minutes=2)
+    ):
+        room_active = (
+            (body.active_audio_samples > prev_active_samples and body.streams > 0)
+            or (body.participant_sources.dom_participants or 0) >= 1
+            or body.participant_sources.total >= 1
+        )
+        if room_active:
+            meta = dict(recording.protocol_meta or {})
+            raw_sched = meta.get("scheduled_ends_at")
+            scheduled_ends_at = (
+                datetime.fromisoformat(raw_sched).astimezone(UTC)
+                if isinstance(raw_sched, str) and raw_sched
+                else recording.ends_at
+            )
+            hard_cap = scheduled_ends_at + timedelta(seconds=settings.max_overtime_seconds)
+            if recording.ends_at < hard_cap:
+                next_ends_at = min(hard_cap, max(recording.ends_at, now) + timedelta(minutes=15))
+                if next_ends_at > recording.ends_at:
+                    if "scheduled_ends_at" not in meta:
+                        meta["scheduled_ends_at"] = scheduled_ends_at.isoformat()
+                        recording.protocol_meta = meta
+                    recording.ends_at = next_ends_at
+                    attempt.credential_expires_at = max(
+                        attempt.credential_expires_at,
+                        recording.ends_at + timedelta(minutes=2),
+                    )
     if body.participation == "ended":
-        attempt.ended_at = datetime.now(UTC)
+        attempt.ended_at = now
         attempt.end_reason = body.reason or "normal"
         recording.participation_reason = attempt.end_reason
         if (
@@ -1975,13 +2104,61 @@ def worker_status(
             recording.processing_finished_at = attempt.ended_at
     elif not recording.cancelled_at:
         recording.participation_reason = body.reason or None
+    stop_requested = (
+        recording.cancelled_at is not None or recording.audio_closed_at is not None
+    )
+    stop_reason = "cancelled" if recording.cancelled_at else "audio_retention_expired"
+    effective_deadline = min(
+        recording.ends_at, attempt.credential_expires_at - timedelta(seconds=30)
+    )
+    transcript_deleted = recording.transcript_deleted_at is not None
     db.commit()
     record_worker_status_telemetry(recording, attempt, body)
+    live_transcript: list[dict] = []
+    if body.participation == "capturing" and not transcript_deleted:
+        is_en = settings.default_locale == "en"
+        exported = export_data(db, recording, tail_segments_limit=48)
+        last_spk_key: tuple[str, str] | None = None
+        for seg in exported["segments"][-24:]:
+            if seg.get("attribution_unknown") and seg.get("source_kind") != "share_audio":
+                continue
+            text_val = " ".join(str(seg.get("text") or "").split())
+            if not text_val:
+                continue
+            if seg.get("source_kind") == "share_audio":
+                spk = "Screen Share" if is_en else "Freigabe-Audio"
+                spk_identity = "share_audio"
+            else:
+                clean_name = " ".join(str(seg.get("participant_name") or "").split())
+                spk = (
+                    clean_name
+                    if clean_name
+                    else ("Participant" if is_en else "Teilnehmer")
+                )[:80]
+                spk_identity = str(seg.get("participant_id") or seg["speaker_id"])
+            cur_key = (spk_identity, spk)
+            if (
+                live_transcript
+                and last_spk_key == cur_key
+                and len(live_transcript[-1]["text"]) + 1 + len(text_val) <= 420
+            ):
+                live_transcript[-1]["text"] = f"{live_transcript[-1]['text']} {text_val}"
+            else:
+                live_transcript.append(
+                    {
+                        "speaker": spk,
+                        "text": text_val[:420],
+                        "start": round(float(seg["start"]), 2),
+                    }
+                )
+                last_spk_key = cur_key
+        live_transcript = live_transcript[-8:]
     return {
         "accepted": True,
-        "stop_requested": recording.cancelled_at is not None
-        or recording.audio_closed_at is not None,
-        "stop_reason": "cancelled" if recording.cancelled_at else "audio_retention_expired",
+        "stop_requested": stop_requested,
+        "stop_reason": stop_reason,
+        "deadline": effective_deadline,
+        "live_transcript": live_transcript,
     }
 
 

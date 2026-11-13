@@ -26,7 +26,10 @@ import {
   writeNavStateToHash,
 } from './api';
 import { AuthGateDialog } from './components/AuthGateDialog';
-import { CalendarWorkspace } from './components/CalendarWorkspace';
+import {
+  CalendarWorkspace,
+  isPastCalendarSlot,
+} from './components/CalendarWorkspace';
 import {
   HeaderBar,
   ReaderTopBar,
@@ -359,6 +362,18 @@ export function App() {
   const calendarEvents = calendarQuery.data?.events || [];
   const calendarConnections = calendarQuery.data?.connections || [];
   const calendarSyncedEvents = calendarQuery.data?.synced_events || [];
+  const nowMs = Date.now();
+  const upcomingSyncedCount = calendarSyncedEvents.filter(
+    (ev) =>
+      ev.status !== 'cancelled' &&
+      !isPastCalendarSlot(ev.ends_at, nowMs)
+  ).length;
+  const upcomingIcsCount = calendarEvents.filter(
+    (ev) =>
+      ev.status !== 'cancelled' &&
+      ev.status !== 'CANCELLED' &&
+      !isPastCalendarSlot(ev.ends_at, nowMs)
+  ).length;
 
   // CommandPalette search source
   const commandItems = useMemo<CommandItem[]>(() => {
@@ -548,9 +563,9 @@ export function App() {
           recordingsCount={rawRecordings.length}
           activeLiveCount={activeLiveCount}
           calendarCount={
-            calendarSyncedEvents.length > 0
-              ? calendarSyncedEvents.length
-              : calendarEvents.length
+            calendarSyncedEvents.length > 0 || calendarConnections.length > 0
+              ? upcomingSyncedCount
+              : upcomingIcsCount
           }
           calendarConnectedCount={calendarConnections.length}
           livePoll={livePoll}

@@ -815,6 +815,11 @@ export async function updateRecordingProtocol(
   payload: {
     title?: string | null;
     notes?: string | null;
+    summary?: {
+      summary: string;
+      topics: Array<{ title: string; details: string }>;
+      action_items: Array<{ owner: string; task: string; due?: string }>;
+    } | null;
     speaker_overrides?: Record<string, string>;
     term_replacements?: Record<string, string>;
     segment_edits?: Record<string, string>;
@@ -914,11 +919,11 @@ export async function importCalendarPayload(
   return (await res.json()) as { events: CalendarEvent[] };
 }
 
-export async function downloadExportFile(
+export async function fetchExportText(
   token: string,
   recordingId: string,
   format: 'txt' | 'vtt' | 'json' | 'md'
-): Promise<void> {
+): Promise<string> {
   const res = await fetch(
     `/v1/recordings/${encodeURIComponent(recordingId)}/exports/${format}`,
     {
@@ -935,7 +940,24 @@ export async function downloadExportFile(
     }
     throw new ApiError(res.status, detail);
   }
-  const blob = await res.blob();
+  return await res.text();
+}
+
+export async function downloadExportFile(
+  token: string,
+  recordingId: string,
+  format: 'txt' | 'vtt' | 'json' | 'md'
+): Promise<void> {
+  const content = await fetchExportText(token, recordingId, format);
+  const mime =
+    format === 'md'
+      ? 'text/markdown;charset=utf-8'
+      : format === 'json'
+        ? 'application/json;charset=utf-8'
+        : format === 'vtt'
+          ? 'text/vtt;charset=utf-8'
+          : 'text/plain;charset=utf-8';
+  const blob = new Blob([content], { type: mime });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;

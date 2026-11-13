@@ -31,7 +31,8 @@ const browser = await launchBrowser('google_meet');
 const assets = new URL('../dist/meet/', import.meta.url);
 const bootstrap: MeetBootstrap = {provider: 'google_meet', meeting_id: randomUUID(), attempt_id: randomUUID(),
   meeting_url: 'https://meet.google.com/abc-defg-hij', deadline: new Date(Date.now() + 60000).toISOString(),
-  lobby_timeout_seconds: 30, meet: {display_name: 'wortlaut fixture', locale: 'en-US', auth_mode: 'guest'}};
+  lobby_timeout_seconds: 30, invited_by: null, invited_by_name: null, meeting_title: null, default_locale: 'de',
+  meet: {display_name: 'wortlaut fixture', locale: 'en-US', auth_mode: 'guest'}};
 
 // The fixture serves its own DOM under the expected origin, with restrictive CSP.
 // It proves capture/bridge/lifecycle behavior, never Meet's signaling or identity.
@@ -376,10 +377,10 @@ try {
       join.textContent = labels.join;
       if (labels.join === 'Teilnahme erbitten') join.setAttribute('aria-label', 'Ohne Mikrofon und Kamera um Teilnahme bitten');
       mic.setAttribute('aria-label', labels.micOff);
-      camera.setAttribute('aria-label', labels.cameraOff);
+      camera.setAttribute('aria-label', labels.cameraOn);
       leave.setAttribute('aria-label', labels.leave);
       mic.onclick = () => { mic.setAttribute('aria-label', labels.micOn); events.push('mic-off'); };
-      camera.onclick = () => { camera.setAttribute('aria-label', labels.cameraOn); events.push('camera-off'); };
+      camera.onclick = () => { camera.setAttribute('aria-label', labels.cameraOff); events.push('camera-on'); };
       join.addEventListener('click', () => { events.push('join'); });
       leave.onclick = () => { events.push('leave'); };
       // Similar text on unrelated actions must not be selected.
@@ -418,15 +419,14 @@ try {
     await localized.meet.stop('cancelled');
     assert.deepEqual(await localized.page.evaluate(() => (window as any).labelEvents),
       labels.join === 'Jetzt teilnehmen'
-        ? ['mic-off', 'camera-off', 'join', 'chat-open', 'chat-send:Hallo aus wortlaut', 'leave']
-        : ['mic-off', 'camera-off', 'join', 'leave']);
+        ? ['mic-off', 'camera-on', 'join', 'chat-open', 'chat-send:Hallo aus wortlaut', 'leave']
+        : ['mic-off', 'camera-on', 'join', 'leave']);
     assert.deepEqual(localized.errors, []);
     await localized.context.close();
   }
 
   const noDevices = await preparePage();
   await noDevices.page.evaluate(() => {
-    navigator.mediaDevices.enumerateDevices = async () => [];
     (window as any).deviceClicks = 0;
     const buttons = [...document.querySelectorAll('button')];
     buttons[1].setAttribute('aria-label', 'Turn off microphone');
@@ -540,7 +540,7 @@ try {
   });
   const coldJoinPromise = coldEmptyPrejoin.meet.join();
   await coldEmptyPrejoin.page.waitForFunction(() => true);
-  for (let i = 0; i < 40 && (await coldEmptyPrejoin.meet.inspect()).participation !== 'waiting_admission'; i++) {
+  for (let i = 0; i < 160 && (await coldEmptyPrejoin.meet.inspect()).participation !== 'waiting_admission'; i++) {
     await coldEmptyPrejoin.page.waitForTimeout(50);
   }
   assert.equal((await coldEmptyPrejoin.meet.inspect()).participation, 'waiting_admission');
@@ -889,6 +889,32 @@ try {
         {id: 'spaces/testroom/devices/bob', name: 'Bob SFU', csi: 7002},
         {id: 'spaces/testroom/devices/clara', name: 'Clara SFU', csi: 7003},
       ]);
+      // Send a cross-referencing protobuf frame (2 device IDs + sibling name) and a mid-call
+      // caption/UI frame for alice; neither may poison Alice's verified participant_name!
+      {
+        const enc = new TextEncoder();
+        const pidA = encodeBytes(1, enc.encode('spaces/testroom/devices/alice'));
+        const pidB = encodeBytes(2, enc.encode('spaces/testroom/devices/bob'));
+        const crossName = encodeBytes(3, enc.encode('Bob SFU'));
+        const multiMsg = new Uint8Array(pidA.length + pidB.length + crossName.length);
+        multiMsg.set(pidA, 0);
+        multiMsg.set(pidB, pidA.length);
+        multiMsg.set(crossName, pidA.length + pidB.length);
+        const captionTxt = encodeBytes(2, enc.encode('Dr. Wrong Caption Name'));
+        const singleUpdate = new Uint8Array(pidA.length + captionTxt.length);
+        singleUpdate.set(pidA, 0);
+        singleUpdate.set(captionTxt, pidA.length);
+        const batch = new Uint8Array(encodeBytes(1, multiMsg).length + encodeBytes(2, singleUpdate).length);
+        const wrappedA = encodeBytes(1, multiMsg);
+        const wrappedB = encodeBytes(2, singleUpdate);
+        batch.set(wrappedA, 0);
+        batch.set(wrappedB, wrappedA.length);
+        const cs = new CompressionStream('gzip');
+        const writer = cs.writable.getWriter();
+        void writer.write(new Uint8Array(batch));
+        void writer.close();
+        dc.send(await new Response(cs.readable).arrayBuffer());
+      }
 
       (window as any).switchSfuToClara = () => {
         // Keep Alice in Chromium's 10s CSRC window with an older timestamp (400ms ago) while Clara is current!
@@ -992,7 +1018,7 @@ try {
     <button onclick="this.remove()">Continue without microphone and camera</button>
     <label>Name<input></label>
     <button>Microphone is currently muted - click to unmute</button>
-    <button>Sending video is currently disabled - click to enable</button>
+    <button id="webex-video-btn" onclick="this.textContent='Sending video is enabled - click to disable'">Sending video is currently disabled - click to enable</button>
     <button onclick="this.remove();document.querySelector('#webex-state').attachShadow({mode:'open'}).innerHTML='<p>Waiting for the host</p>'">Join meeting Fixture</button>
     <div id='webex-state'></div>`,
   }));
@@ -1004,6 +1030,14 @@ try {
   await webex.join();
   const webexFrame = webexPage.frames().find(frame => frame.url() === 'https://web.webex.com/meeting')!;
   assert.equal(await webexFrame.getByRole('textbox', {name: 'Name'}).inputValue(), 'wortlaut fixture');
+  assert.equal(await webexFrame.locator('#webex-video-btn').textContent(), 'Sending video is enabled - click to disable');
+  await webex.updateVideoTile({
+    participation: 'waiting_admission',
+    segments: [{speaker: 'Eva Webex', text: 'Test im Webex-Frame', start: 5}],
+  });
+  const webexTileSnap = await webexFrame.evaluate(() => window.wortlautVideoTile?.getSnapshot());
+  assert.equal(webexTileSnap?.segmentCount, 1);
+  assert.equal(webexTileSnap?.lastRenderedText, 'Eva Webex: Test im Webex-Frame');
   assert.equal((await webex.inspect()).participation, 'waiting_admission');
   assert.equal((await webex.inspect()).capability, 'unverified');
   await webexFrame.locator('p').evaluate(element => {
@@ -1232,6 +1266,81 @@ try {
     await context.close();
   }
 
+  // Regression: Teams cold-room prejoin banner ("Jemand wird Sie einlassen, wenn die Besprechung beginnt")
+  // + async FluentUI .fui-DialogSurface__backdrop covering #prejoin-join-button before join.click()
+  {
+    const coldTeamsCtx = await browser.newContext();
+    const coldTeamsPage = await coldTeamsCtx.newPage();
+    const coldTeamsUrl = 'https://teams.microsoft.com/meet/987654321?p=coldroom';
+    await coldTeamsPage.route('https://teams.microsoft.com/**', route => route.fulfill({
+      contentType: 'text/html',
+      body: `<p id="prejoin-banner">Hallo! Jemand wird Sie einlassen, wenn die Besprechung beginnt.</p>
+      <label>Ihr Name<input id="name-input" data-tid="prejoin-display-name-input"></label>
+      <button id="prejoin-join-button" data-tid="prejoin-join-button">Jetzt teilnehmen</button>
+      <p id="waiting"></p>
+      <script>
+      window.coldTeamsEvents = [];
+      let backdropShown = false;
+      document.querySelector('#name-input').addEventListener('input', () => {
+        if (backdropShown) return;
+        backdropShown = true;
+        // Simulate async FluentUI dialog backdrop covering the entire viewport right before join.click()
+        const backdrop = document.createElement('div');
+        backdrop.className = 'fui-DialogSurface__backdrop';
+        backdrop.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.5)';
+        const dialog = document.createElement('div');
+        dialog.setAttribute('role', 'dialog');
+        dialog.style.cssText = 'position:fixed;inset:20%;z-index:10000;background:#fff;padding:24px';
+        const continueBtn = document.createElement('button');
+        continueBtn.textContent = 'Ohne Audio oder Video fortfahren';
+        continueBtn.onclick = () => {
+          window.coldTeamsEvents.push('dismiss-backdrop');
+          dialog.remove();
+          setTimeout(() => backdrop.remove(), 80);
+        };
+        dialog.append(continueBtn);
+        document.body.append(backdrop, dialog);
+      });
+      document.querySelector('#prejoin-join-button').onclick = () => {
+        window.coldTeamsEvents.push('join-clicked:' + document.querySelector('#name-input').value);
+        document.querySelector('#prejoin-join-button').remove();
+        document.querySelector('#waiting').textContent = 'Sie befinden sich im Wartebereich';
+        const leave = document.createElement('button');
+        leave.textContent = 'Besprechung verlassen';
+        leave.onclick = () => leave.remove();
+        document.body.append(leave);
+      };
+      </script>`,
+    }));
+    const coldTeams = new TeamsBrowser(
+      coldTeamsPage,
+      {
+        ...bootstrap,
+        provider: 'teams',
+        attempt_id: randomUUID(),
+        meeting_url: coldTeamsUrl,
+        deadline: new Date(Date.now() + 30000).toISOString(),
+        teams: {display_name: 'wortlaut coldroom', locale: 'de-DE'},
+      },
+      `http://127.0.0.1:${address.port}`,
+      'fixture-node-secret',
+      randomUUID(),
+      assets,
+    );
+    await coldTeams.prepare();
+    await coldTeamsPage.goto(coldTeamsUrl);
+    assert.equal((await coldTeams.inspect()).participation, 'joining',
+      'Cold-room prejoin banner must not report waiting_admission before Join now is clicked');
+    await coldTeams.join();
+    assert.deepEqual(await coldTeamsPage.evaluate(() => (window as any).coldTeamsEvents), [
+      'dismiss-backdrop',
+      'join-clicked:wortlaut coldroom',
+    ]);
+    assert.equal((await coldTeams.inspect()).participation, 'waiting_admission');
+    await coldTeams.stop('cancelled');
+    await coldTeamsCtx.close();
+  }
+
   {
     const zoomContext = await browser.newContext();
     const zoomPage = await zoomContext.newPage();
@@ -1340,6 +1449,126 @@ try {
     assert.equal((await zoom.inspect()).participation, 'ended');
     assert.equal(await zoomPage.getByRole('button', {name: 'Leave', exact: true}).count(), 0);
     await zoomContext.close();
+  }
+
+  // Verify live transcript virtual camera tile (mediaDevices shim, audio rejection, prejoin/in-call stream isolation, immediate first frame, self-tile exclusion, and live segment rendering)
+  {
+    const tileFixture = await preparePage('guest', true);
+    await (tileFixture.meet as any).initialize?.();
+    const mediaCheck = await tileFixture.page.evaluate(async () => {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      let audioRejected = false;
+      try {
+        await navigator.mediaDevices.getUserMedia({audio: true});
+      } catch (err) {
+        audioRejected = (err as DOMException)?.name === 'NotFoundError';
+      }
+      const previewStream = await navigator.mediaDevices.getUserMedia({video: true});
+      const t0 = performance.now();
+      const callStream = await navigator.mediaDevices.getUserMedia({video: {width: 1280, height: 720}});
+      const previewTrack = previewStream.getVideoTracks()[0];
+      const callTrack = callStream.getVideoTracks()[0] as MediaStreamTrack & {__wortlautVirtualVideo?: boolean};
+      previewTrack.stop();
+
+      const selfTile = document.createElement('div');
+      selfTile.setAttribute('data-tid', 'video-tile');
+      selfTile.setAttribute('data-user-id', 'self-pip-1');
+      const vid = document.createElement('video');
+      vid.muted = true;
+      vid.playsInline = true;
+      vid.autoplay = true;
+      vid.srcObject = callStream;
+      selfTile.append(vid);
+
+      const remoteTile = document.createElement('div');
+      remoteTile.setAttribute('data-tid', 'video-tile');
+      remoteTile.setAttribute('data-user-id', 'remote-bob-1');
+      const remoteName = document.createElement('span');
+      remoteName.setAttribute('data-tid', 'video-tile-name');
+      remoteName.textContent = 'Bob Remote';
+      remoteTile.append(remoteName);
+      document.body.append(selfTile, remoteTile);
+
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('first_frame_timeout')), 1000);
+        if (vid.readyState >= 2 && vid.videoWidth === 1280) {
+          clearTimeout(timer);
+          resolve();
+          return;
+        }
+        vid.addEventListener(
+          'loadeddata',
+          () => {
+            clearTimeout(timer);
+            resolve();
+          },
+          {once: true},
+        );
+      });
+      const firstFrameMs = performance.now() - t0;
+      const inspected = window.wortlautMeet.inspect();
+      const settings = callTrack.getSettings();
+      return {
+        deviceKinds: devices.map((d) => d.kind),
+        deviceLabel: devices[0]?.label,
+        audioRejected,
+        previewStateAfterStop: previewTrack.readyState,
+        callStateAfterPreviewStop: callTrack.readyState,
+        isTaggedVirtual: callTrack.__wortlautVirtualVideo === true,
+        contentHint: callTrack.contentHint,
+        width: settings.width,
+        height: settings.height,
+        videoWidth: vid.videoWidth,
+        firstFrameMs,
+        domParticipants: inspected.participant_sources.dom_participants ?? 0,
+        hasSelfPipSource: inspected.participant_sources.sources.some(
+          (s) => s.participant_id === 'self-pip-1',
+        ),
+      };
+    });
+    assert.deepEqual(mediaCheck.deviceKinds, ['videoinput']);
+    assert.equal(mediaCheck.deviceLabel, 'wortlaut Live-Protokoll');
+    assert.equal(mediaCheck.audioRejected, true);
+    assert.equal(mediaCheck.previewStateAfterStop, 'ended');
+    assert.equal(mediaCheck.callStateAfterPreviewStop, 'live');
+    assert.equal(mediaCheck.isTaggedVirtual, true);
+    assert.equal(mediaCheck.contentHint, 'detail');
+    assert.equal(mediaCheck.width, 1280);
+    assert.equal(mediaCheck.height, 720);
+    assert.equal(mediaCheck.videoWidth, 1280);
+    assert.ok(mediaCheck.firstFrameMs < 1000, `Expected immediate first frame, got ${mediaCheck.firstFrameMs}ms`);
+    assert.equal(mediaCheck.domParticipants, 1);
+    assert.equal(mediaCheck.hasSelfPipSource, false);
+
+    await tileFixture.meet.updateVideoTile({
+      participation: 'capturing',
+      segments: [
+        {speaker: 'Alice Beispiel', text: 'Willkommen im Live-Wortprotokoll.', start: 4},
+        {speaker: 'Bob Beispiel', text: 'Die Kachel aktualisiert sich laufend.', start: 11},
+      ],
+    });
+    const rendered = await tileFixture.page.evaluate(() => {
+      const tile = window.wortlautVideoTile!;
+      const snap = tile.getSnapshot();
+      const ctx = tile.canvas.getContext('2d')!;
+      const sample = ctx.getImageData(100, 70, 200, 40).data;
+      let nonDarkPixels = 0;
+      for (let i = 0; i < sample.length; i += 4) {
+        if (sample[i] > 40 || sample[i + 1] > 40 || sample[i + 2] > 40) nonDarkPixels += 1;
+      }
+      return {snap, nonDarkPixels};
+    });
+    assert.equal(rendered.snap.participation, 'capturing');
+    assert.equal(rendered.snap.segmentCount, 2);
+    assert.equal(rendered.snap.lastRenderedText, 'Bob Beispiel: Die Kachel aktualisiert sich laufend.');
+    assert.equal(rendered.snap.activeTracks, 1);
+    assert.ok(rendered.nonDarkPixels > 50);
+
+    await tileFixture.meet.stop('cancelled');
+    const afterStopSnap = await tileFixture.page.evaluate(() => window.wortlautVideoTile?.getSnapshot());
+    assert.equal(afterStopSnap?.activeTracks, 0);
+    await tileFixture.page.evaluate('window.finishProducer?.()');
+    await tileFixture.context.close();
   }
 
   console.log(JSON.stringify({fixture: 'controlled Meet-origin DOM and native WebRTC; no provider identity proof',

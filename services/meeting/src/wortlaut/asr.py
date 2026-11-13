@@ -1,8 +1,10 @@
 """One durable PostgreSQL claim at a time; the GPU owns its inference lock."""
 
+import base64
 import hashlib
 import logging
 import math
+import re
 import time
 from datetime import UTC, datetime, timedelta
 
@@ -15,6 +17,8 @@ from wortlaut.processing import (
     MAX_CHUNK,
     RATE,
     AudioReadError,
+    collect_opted_out_speakers,
+    is_speaker_opted_out,
     read_pcm,
     stream_binding_opted_out,
 )
@@ -25,12 +29,12 @@ class InvalidResult(ValueError):
     pass
 
 
-# Calibrated on parakeet-tdt-0.6b-v3 max_prob word confidences: real German
-# sentences keep a word at >= 0.9 even when their mean is low, while noise
-# hallucinations stay below 0.75 for every word.
-MIN_SEGMENT_CONFIDENCE = 0.60
-MIN_PEAK_WORD_CONFIDENCE = 0.90
-MIN_SINGLE_WORD_CONFIDENCE = 0.60
+# Qwen3-ASR byte-level BPE word probabilities (mean softmax posterior across
+# subword pieces). Multi-piece German compounds and contextual phrases naturally
+# average 0.40-0.85, whereas unintelligible noise stays near uniform/low mass.
+MIN_SEGMENT_CONFIDENCE = 0.35
+MIN_PEAK_WORD_CONFIDENCE = 0.55
+MIN_SINGLE_WORD_CONFIDENCE = 0.28
 
 
 def _is_low_confidence_hallucination(word_confidences: list[float], word_count: int) -> bool:
@@ -41,6 +45,23 @@ def _is_low_confidence_hallucination(word_confidences: list[float], word_count: 
     if word_count == 1:
         return peak_conf < MIN_SINGLE_WORD_CONFIDENCE
     return mean_conf < MIN_SEGMENT_CONFIDENCE and peak_conf < MIN_PEAK_WORD_CONFIDENCE
+
+
+def _has_repetition_loop(words: list[dict]) -> bool:
+    tokens = [re.sub(r"[^\w]+", "", str(w.get("word") or "").lower()) for w in words]
+    if len(tokens) < 6:
+        return False
+    for n, min_repeats in ((1, 6), (2, 4), (3, 4)):
+        span = n * min_repeats
+        if len(tokens) < span:
+            continue
+        for idx in range(len(tokens) - span + 1):
+            unit = tokens[idx : idx + n]
+            if not any(unit):
+                continue
+            if all(tokens[idx + k * n : idx + (k + 1) * n] == unit for k in range(1, min_repeats)):
+                return True
+    return False
 
 
 def asr_span(job: AsrJob) -> tuple[int, int]:
@@ -91,11 +112,15 @@ def segment_result(job: AsrJob, stream: AudioStream, response: dict):
             item["confidence"] = round(float(raw_conf), 4)
         accepted.append(item)
 
-    # A transcript that hit the generation budget without an end marker is a
-    # decoder loop, not speech.
+    # A transcript that hit the generation budget without an end marker or
+    # repeats the same n-gram in a loop is a decoder loop, not speech.
     truncated = response.get("truncated") is True
     word_confs = [w["confidence"] for w in accepted if "confidence" in w]
-    if truncated or _is_low_confidence_hallucination(word_confs, len(accepted)):
+    if (
+        truncated
+        or _has_repetition_loop(accepted)
+        or _is_low_confidence_hallucination(word_confs, len(accepted))
+    ):
         accepted = []
         word_confs = []
 
@@ -173,6 +198,116 @@ def retry_job(engine, identifier: str, reason: str, permanent: bool):
         db.commit()
 
 
+def build_asr_context_prompt(
+    db: Session, job: AsrJob, stream: AudioStream, settings=None
+) -> str | None:
+    settings = settings or get_settings()
+    attempt = db.get(Attempt, stream.attempt_id) if stream.attempt_id else None
+    recording = db.get(Recording, attempt.recording_id) if attempt else None
+
+    attempts = (
+        db.scalars(select(Attempt).where(Attempt.recording_id == recording.id)).all()
+        if recording is not None
+        else ([attempt] if attempt is not None else [])
+    )
+    streams = (
+        db.scalars(
+            select(AudioStream).where(AudioStream.attempt_id.in_([a.id for a in attempts]))
+        ).all()
+        if attempts
+        else [stream]
+    )
+
+    raw_names: dict[str, str] = {}
+    for s in streams:
+        pid = s.contract.get("participant_id") or s.contract.get("speaker_id")
+        pname = s.contract.get("participant_name")
+        if pid and isinstance(pname, str) and pname.strip():
+            raw_names[str(pid)] = " ".join(pname.split())
+    for a in attempts:
+        diag = a.diagnostics if isinstance(a.diagnostics, dict) else {}
+        ps = diag.get("participant_sources")
+        for src in (ps.get("sources") or []) if isinstance(ps, dict) else []:
+            if isinstance(src, dict) and src.get("participant_id") and src.get("participant_name"):
+                raw_names[str(src["participant_id"])] = " ".join(
+                    str(src["participant_name"]).split()
+                )
+    if isinstance(job.binding, dict) and job.binding.get("participant_name"):
+        b_pid = str(
+            job.binding.get("participant_id") or job.binding.get("speaker_id") or "current"
+        )
+        raw_names[b_pid] = " ".join(str(job.binding["participant_name"]).split())
+
+    _, opted_out_norm = (
+        collect_opted_out_speakers(recording, attempts, raw_names)
+        if recording is not None
+        else ([], set())
+    )
+    participant_list: list[str] = []
+    seen_names: set[str] = set()
+    for pid, pname in raw_names.items():
+        if not pname or pname.lower() in seen_names:
+            continue
+        if is_speaker_opted_out(opted_out_norm, participant_id=pid, participant_name=pname):
+            continue
+        seen_names.add(pname.lower())
+        participant_list.append(pname[:60])
+        if len(participant_list) >= 16:
+            break
+
+    glossary_terms: list[str] = []
+    seen_terms: set[str] = set()
+    meta = (
+        recording.protocol_meta
+        if recording and isinstance(recording.protocol_meta, dict)
+        else {}
+    )
+    term_replacements = meta.get("term_replacements")
+    replacement_targets = (
+        list(term_replacements.values()) if isinstance(term_replacements, dict) else []
+    )
+    for raw_term in [*(settings.asr_glossary or []), *replacement_targets]:
+        term = " ".join(str(raw_term or "").split())[:60]
+        if term and term.lower() not in seen_terms and len(glossary_terms) < 40:
+            seen_terms.add(term.lower())
+            glossary_terms.append(term)
+
+    prior_text = ""
+    if stream.id is not None:
+        prior_seg = db.scalar(
+            select(TranscriptSegment)
+            .join(AsrJob, AsrJob.id == TranscriptSegment.id)
+            .where(
+                AsrJob.stream_id == stream.id,
+                AsrJob.id != job.id,
+                AsrJob.end_sample <= job.start_sample + RATE,
+                AsrJob.end_sample >= max(0, job.start_sample - 15 * RATE),
+            )
+            .order_by(AsrJob.end_sample.desc())
+            .limit(1)
+        )
+        if prior_seg is not None and isinstance(prior_seg.result, dict):
+            if not stream_binding_opted_out(db, stream, prior_seg.result):
+                candidate = " ".join(str(prior_seg.result.get("text") or "").split())
+                if candidate:
+                    prior_text = candidate[-120:]
+
+    parts: list[str] = []
+    if recording is not None and recording.title:
+        clean_title = " ".join(recording.title.split())[:120]
+        if clean_title:
+            parts.append(f"Thema: {clean_title}")
+    if participant_list:
+        parts.append(f"Teilnehmende: {', '.join(participant_list)}")
+    if glossary_terms:
+        parts.append(f"Glossar: {', '.join(glossary_terms)}")
+    if prior_text:
+        parts.append(f"Vorheriger Kontext: {prior_text}")
+    if not parts:
+        return None
+    return " | ".join(parts)[:500]
+
+
 def inference_pass(engine):
     settings = get_settings()
     if not settings.asr_token:
@@ -183,6 +318,8 @@ def inference_pass(engine):
             return False
         identifier = job.id
         stream = db.get(AudioStream, job.stream_id)
+        context_prompt = build_asr_context_prompt(db, job, stream, settings)
+        primary_language = "German" if settings.default_locale == "de" else "English"
         chunks = db.scalars(
             select(AudioChunk)
             .where(
@@ -197,6 +334,16 @@ def inference_pass(engine):
         created_at = job.created_at
         try:
             pcm = read_pcm(chunks, *asr_span(job))
+            req_headers = {
+                "Authorization": "Bearer " + settings.asr_token.get_secret_value(),
+                "Content-Type": "application/octet-stream",
+                "X-Job-ID": identifier,
+                "X-Primary-Language": primary_language,
+            }
+            if context_prompt:
+                req_headers["X-ASR-Context-B64"] = base64.b64encode(
+                    context_prompt.encode("utf-8")
+                ).decode("ascii")
             with httpx.Client(
                 timeout=settings.asr_timeout_seconds, follow_redirects=False
             ) as client:
@@ -204,11 +351,7 @@ def inference_pass(engine):
                 response = client.post(
                     settings.asr_url + "/v1/transcribe",
                     content=pcm,
-                    headers={
-                        "Authorization": "Bearer " + settings.asr_token.get_secret_value(),
-                        "Content-Type": "application/octet-stream",
-                        "X-Job-ID": identifier,
-                    },
+                    headers=req_headers,
                 )
                 request_seconds = time.perf_counter() - inference_start
             if response.status_code != 200:
@@ -257,8 +400,39 @@ def inference_pass(engine):
         return True
 
 
+def _streams_and_jobs_ready(db: Session, recording_id) -> tuple[bool, str | None, bool]:
+    streams = db.scalars(
+        select(AudioStream).join(Attempt).where(Attempt.recording_id == recording_id)
+    ).all()
+    if not all(stream.scan_complete for stream in streams):
+        return False, None, False
+    stream_ids = [s.id for s in streams]
+    jobs = (
+        db.scalars(select(AsrJob).where(AsrJob.stream_id.in_(stream_ids))).all()
+        if stream_ids
+        else []
+    )
+    if any(job.status in ("pending", "processing") for job in jobs):
+        return False, None, False
+    unreadable = (
+        db.scalar(
+            select(AudioChunk.processing_error)
+            .where(
+                AudioChunk.stream_id.in_(stream_ids),
+                AudioChunk.processing_error.is_not(None),
+            )
+            .limit(1)
+        )
+        if stream_ids
+        else None
+    )
+    has_failed_job = any(job.status == "failed" for job in jobs)
+    return True, unreadable, bool(unreadable or has_failed_job)
+
+
 def finalize_processing(engine):
-    completed_ids = []
+    ready_ids = []
+    failed_count = 0
     with Session(engine) as db:
         recordings = db.scalars(
             select(Recording)
@@ -269,50 +443,68 @@ def finalize_processing(engine):
             .with_for_update(skip_locked=True)
         ).all()
         for recording in recordings:
-            streams = db.scalars(
-                select(AudioStream).join(Attempt).where(Attempt.recording_id == recording.id)
-            ).all()
-            if not all(stream.scan_complete for stream in streams):
+            ready, unreadable, failed = _streams_and_jobs_ready(db, recording.id)
+            if not ready:
                 continue
-            jobs = db.scalars(
-                select(AsrJob).where(AsrJob.stream_id.in_([s.id for s in streams]))
-            ).all()
-            if any(job.status in ("pending", "processing") for job in jobs):
-                continue
-            unreadable = db.scalar(
-                select(AudioChunk.processing_error)
-                .where(
-                    AudioChunk.stream_id.in_([s.id for s in streams]),
-                    AudioChunk.processing_error.is_not(None),
-                )
-                .limit(1)
-            )
-            recording.processing = (
-                "failed"
-                if unreadable or any(job.status == "failed" for job in jobs)
-                else "completed"
-            )
-            if unreadable:
-                recording.processing_error = unreadable
-            recording.processing_finished_at = datetime.now(UTC)
-            recording.audio_closed_at = datetime.now(UTC)
-            if recording.processing == "completed":
-                completed_ids.append(recording.id)
+            if failed:
+                now = datetime.now(UTC)
+                recording.processing = "failed"
+                if unreadable:
+                    recording.processing_error = unreadable
+                recording.processing_finished_at = now
+                recording.audio_closed_at = now
+                failed_count += 1
+            else:
+                recording.processing = "processing"
+                ready_ids.append(recording.id)
         db.commit()
 
-    if completed_ids and get_settings().enable_llm_summary:
-        from wortlaut.exports import generate_protocol_summary
+    completed_ids = []
+    for rec_id in ready_ids:
+        if get_settings().enable_llm_summary:
+            from wortlaut.exports import generate_protocol_summary
 
-        for rec_id in completed_ids:
             try:
                 with Session(engine) as db:
                     rec = db.get(Recording, rec_id)
-                    if rec and not (rec.protocol_meta or {}).get("summary"):
-                        generate_protocol_summary(db, rec)
+                    has_summary = rec is not None and bool((rec.protocol_meta or {}).get("summary"))
+                    db.rollback()
+                    if rec is not None and not has_summary:
+                        generate_protocol_summary(db, rec_id)
+            except (ValueError, LookupError):
+                pass
             except Exception as exc:
                 logging.getLogger("wortlaut").warning(
                     "llm_summary_auto_failed recording=%s error=%s", rec_id, exc
                 )
+
+        with Session(engine) as db:
+            rec = db.scalar(
+                select(Recording)
+                .where(
+                    Recording.id == rec_id,
+                    Recording.participation == "ended",
+                    Recording.processing.in_(["pending", "processing"]),
+                )
+                .with_for_update()
+            )
+            if rec is None:
+                continue
+            ready, unreadable, failed = _streams_and_jobs_ready(db, rec.id)
+            if not ready:
+                continue
+            now = datetime.now(UTC)
+            if failed:
+                rec.processing = "failed"
+                if unreadable:
+                    rec.processing_error = unreadable
+                failed_count += 1
+            else:
+                rec.processing = "completed"
+                completed_ids.append(rec.id)
+            rec.processing_finished_at = now
+            rec.audio_closed_at = now
+            db.commit()
 
     if completed_ids:
         from wortlaut.calendar_oauth import publish_protocol_link_to_calendar_events
@@ -330,3 +522,5 @@ def finalize_processing(engine):
                 logging.getLogger("wortlaut").warning(
                     "calendar_link_auto_failed recording=%s error=%s", rec_id, exc
                 )
+
+    return bool(completed_ids or failed_count)

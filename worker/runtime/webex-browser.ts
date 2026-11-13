@@ -1,10 +1,13 @@
 import type {Frame, Locator, Page} from 'playwright';
 import {AudioTransport} from '../src/transport.js';
 import {installMeetCapture, MeetError} from './meet.js';
+import {installVideoTile, type VideoTilePatch} from './video-tile.js';
 
 export type WebexBrowserBootstrap = {provider: 'webex'; meeting_id: string; attempt_id: string;
   meeting_url: string; deadline: string; lobby_timeout_seconds: number;
   empty_room_timeout_seconds?: number; chat_intro?: string | null;
+  invited_by: string | null; invited_by_name: string | null; meeting_title: string | null;
+  default_locale: string;
   webex_browser: {display_name: string}};
 
 // Webex's join-service page embeds the web meeting client at this exact origin.
@@ -19,6 +22,7 @@ export class WebexBrowser {
   private chatAttempts = 0;
   private rosterOpened = false;
   private drained: boolean | null = null;
+  private pushVideoTile?: (patch: VideoTilePatch) => Promise<void>;
 
   constructor(private readonly page: Page, private readonly bootstrap: WebexBrowserBootstrap,
     api: string, credential: string, workerId: string, private readonly assets?: URL) {
@@ -43,6 +47,17 @@ export class WebexBrowser {
   }
 
   async prepare() {
+    this.pushVideoTile = await installVideoTile(
+      this.page,
+      'webex',
+      this.bootstrap.meeting_url,
+      {
+        locale: this.bootstrap.default_locale,
+        invitedBy: this.bootstrap.invited_by_name ?? this.bootstrap.invited_by,
+        meetingTitle: this.bootstrap.meeting_title,
+      },
+      () => this.frame(),
+    );
     this.initialize = await installMeetCapture(this.page, this.bootstrap, {
       begin: metadata => this.transport.control(metadata as Record<string, unknown> & {id: string}),
       bind: metadata => this.transport.control(metadata as Record<string, unknown> & {id: string}),
@@ -52,6 +67,10 @@ export class WebexBrowser {
       error: reason => { this.reason = reason; },
     }, this.assets, 'webex');
     this.transport.connect();
+  }
+
+  async updateVideoTile(patch: VideoTilePatch) {
+    await this.pushVideoTile?.(patch);
   }
 
   async join() {
@@ -88,11 +107,30 @@ export class WebexBrowser {
       }
     }
     await name.fill(this.bootstrap.webex_browser.display_name);
-    // Both send controls must visibly be off before requesting admission.
-    await frame.getByRole('button', {name: /^(?:Your )?microphone is currently muted|^(?:Ihr )?Mikrofon.*stummgeschaltet/i})
+    // Outbound microphone must visibly be muted before requesting admission.
+    const unmutedMic = frame.getByRole('button', {
+      name: /^(?:Your )?microphone is currently unmuted|^Mute microphone|^(?:Ihr )?Mikrofon.*nicht stummgeschaltet|^Mikrofon stummschalten/i,
+    });
+    if (await unmutedMic.first().isVisible().catch(() => false)) {
+      await this.click(unmutedMic.first()).catch(() => {});
+    }
+    await frame.getByRole('button', {name: /^(?:Your )?microphone is currently muted|^(?:Ihr )?Mikrofon(?!.*\bnicht\b).*stummgeschaltet/i})
       .waitFor({state: 'visible', timeout: 10000});
-    await frame.getByRole('button', {name: /^Sending video is currently disabled|^(?:Senden von )?Video.*deaktiviert/i})
-      .waitFor({state: 'visible', timeout: 10000});
+    // Enable virtual live-transcript camera if Webex started with video disabled (best-effort).
+    const enableVideo = frame.getByRole('button', {
+      name: /^Sending video is currently disabled|^(?:Senden von )?Video.*deaktiviert|^Start (?:my )?video|^(?:Eigenes )?Video starten/i,
+    });
+    if (await enableVideo.first().isVisible().catch(() => false)) {
+      await this.click(enableVideo.first()).catch(() => {});
+    }
+    if (await frame.evaluate(() => [...(window.wortlautMeetReceivers?.connections ?? [])]
+      .some(pc => pc.getSenders().some(sender => {
+        const track = sender.track as (MediaStreamTrack & {__wortlautVirtualVideo?: boolean}) | null;
+        if (!track || track.readyState !== 'live' || !track.enabled) return false;
+        return track.kind === 'audio' || !track.__wortlautVirtualVideo;
+      }))).catch(() => false)) {
+      throw new MeetError('webex_sending_device_active');
+    }
     if (this.stopping) return;
     const join = frame.getByRole('button', {name: /^(?:Join meeting(?:\s|$)|Meeting\b.*beitreten)/i});
     await this.click(join);
@@ -167,7 +205,10 @@ export class WebexBrowser {
     return this.stopping ??= (async () => {
       this.reason ||= reason === 'normal' ? '' : reason;
       const frame = this.frame();
-      const ended = await frame?.evaluate(() => window.wortlautMeet?.stop()).catch(() => false);
+      const ended = await frame?.evaluate(() => {
+        window.wortlautVideoTile?.stop();
+        return window.wortlautMeet?.stop();
+      }).catch(() => false);
       this.drained = await this.transport.drain() && ended === true;
       const leave = frame?.getByRole('button', {
         name: /^(Leave meeting|Leave|Meeting verlassen|Meeting verlassen oder Meeting für alle beenden|Verlassen)(?:\s|$)/i,

@@ -196,6 +196,7 @@ def _build_completed_bodies(
     human_provider: str,
     human_period: str,
     time_origin_utc: str | None = None,
+    summary: dict | None = None,
     speakers: list[dict],
     turns: list[dict],
     notices: list[str],
@@ -211,6 +212,18 @@ def _build_completed_bodies(
         else "Audio erfasst (keine Sprachsegmente erkannt)"
     )
     primary_link = reader_url or ui_url
+
+    summary_text = str(summary.get("summary") or "").strip() if isinstance(summary, dict) else ""
+    topics = [
+        t
+        for t in ((summary.get("topics") if isinstance(summary, dict) else None) or [])
+        if isinstance(t, dict) and (t.get("title") or t.get("details"))
+    ]
+    actions = [
+        a
+        for a in ((summary.get("action_items") if isinstance(summary, dict) else None) or [])
+        if isinstance(a, dict) and str(a.get("task") or "").strip()
+    ]
 
     plain_lines = [
         f"WORTPROTOKOLL · {title}",
@@ -228,6 +241,27 @@ def _build_completed_bodies(
         plain_lines.extend(["", "Hinweise zur Sitzung:"])
         for note in notices:
             plain_lines.append(f"• {note}")
+
+    if summary_text or topics:
+        plain_lines.extend(["", "ZUSAMMENFASSUNG", "-" * 68])
+        if summary_text:
+            plain_lines.append(summary_text)
+        if topics:
+            if summary_text:
+                plain_lines.append("")
+            for t in topics:
+                t_title = " ".join(str(t.get("title") or "Thema").split())
+                t_details = " ".join(str(t.get("details") or "").split())
+                plain_lines.append(f"• {t_title}: {t_details}" if t_details else f"• {t_title}")
+
+    if actions:
+        plain_lines.extend(["", "TO-DO-LISTE", "-" * 68])
+        for a in actions:
+            owner = " ".join(str(a.get("owner") or "Team").split()) or "Team"
+            task = " ".join(str(a["task"]).split())
+            due = " ".join(str(a.get("due") or "").split())
+            suffix = f" (Fällig: {due})" if due else ""
+            plain_lines.append(f"[ ] {owner}: {task}{suffix}")
 
     if speakers:
         plain_lines.extend(["", "SPRECHERANTEILE", "-" * 68])
@@ -289,6 +323,59 @@ def _build_completed_bodies(
             "padding:12px 16px;margin-bottom:20px;color:#92400e;font-size:13px;line-height:1.5;'>"
             "<strong style='display:block;margin-bottom:2px;'>Hinweis zur Sitzung</strong>"
             f"{items_html}</div>"
+        )
+
+    summary_html = ""
+    if summary_text or topics or actions:
+        summary_parts = []
+        if summary_text:
+            summary_parts.append(
+                "<div style='font-size:14px;line-height:1.6;color:#1e293b;margin-bottom:10px;'>"
+                f"{escape(summary_text)}</div>"
+            )
+        if topics:
+            topic_items = "".join(
+                "<li style='margin:4px 0;font-size:13px;line-height:1.5;color:#334155;'>"
+                f"<strong>{escape(str(t.get('title') or 'Thema').strip())}:</strong> "
+                f"{escape(str(t.get('details') or '').strip())}</li>"
+                for t in topics
+            )
+            summary_parts.append(
+                "<div style='margin-top:8px;'>"
+                "<div style='font-size:11px;font-weight:700;text-transform:uppercase;"
+                "letter-spacing:0.06em;color:#475569;margin-bottom:4px;'>"
+                "Besprochene Themen &amp; Ergebnisse</div>"
+                f"<ul style='margin:0;padding-left:18px;'>{topic_items}</ul></div>"
+            )
+        if actions:
+            action_items_html = "".join(
+                "<div style='margin:5px 0;font-size:13px;line-height:1.5;color:#0f172a;'>"
+                "☐ "
+                f"<strong>{escape(str(a.get('owner') or 'Team').strip())}:</strong> "
+                f"{escape(str(a['task']).strip())}"
+                + (
+                    " <span style='color:#64748b;'>"
+                    f"(Fällig: {escape(str(a['due']).strip())})</span>"
+                    if str(a.get("due") or "").strip()
+                    else ""
+                )
+                + "</div>"
+                for a in actions
+            )
+            summary_parts.append(
+                "<div style='margin-top:12px;padding-top:10px;border-top:1px solid #d1fae5;'>"
+                "<div style='font-size:11px;font-weight:700;text-transform:uppercase;"
+                "letter-spacing:0.06em;color:#047857;margin-bottom:6px;'>To-Do-Liste</div>"
+                f"{action_items_html}</div>"
+            )
+        summary_html = (
+            "<div style='background:#f0fdf4;border:1px solid #bbf7d0;border-radius:12px;"
+            "padding:16px 18px;margin-bottom:22px;'>"
+            "<div style='font-size:11px;font-weight:700;text-transform:uppercase;"
+            "letter-spacing:0.07em;color:#047857;margin-bottom:8px;'>"
+            "Zusammenfassung &amp; Aufgaben</div>"
+            + "".join(summary_parts)
+            + "</div>"
         )
 
     speakers_html = ""
@@ -383,6 +470,7 @@ def _build_completed_bodies(
         "padding:11px 20px;border-radius:10px;'>Protokoll im Browser öffnen →</a>"
         "</div>"
         f"{notice_html}"
+        f"{summary_html}"
         f"{speakers_html}"
         f"{transcript_html}"
         "<div style='margin-top:24px;padding-top:16px;border-top:1px solid #e2e8f0;"
@@ -460,6 +548,7 @@ def build_message(db, recording, delivery):
         notices.append("Einzelne Audioabschnitte konnten nicht vollständig transkribiert werden.")
 
     time_origin_utc = data.get("time_origin_utc") or period.get("start")
+    summary_data = data.get("summary")
     speakers = _speaker_breakdown(data)
     turns = group_transcript_turns(data.get("segments") or [])
     plain_body, html_body = _build_completed_bodies(
@@ -467,6 +556,7 @@ def build_message(db, recording, delivery):
         human_provider=human_provider,
         human_period=human_period,
         time_origin_utc=time_origin_utc,
+        summary=summary_data,
         speakers=speakers,
         turns=turns,
         notices=notices,
@@ -481,19 +571,29 @@ def build_message(db, recording, delivery):
     for format in ("md", "txt", "vtt", "json"):
         content, media_type = render_export(data, format)
         major, minor = media_type.split(";", 1)[0].split("/", 1)
-        exports[f"wortlaut-{recording.id}.{format}"] = content.encode()
-        message.add_attachment(
-            content.encode(),
-            maintype=major,
-            subtype=minor,
-            filename=f"wortlaut-{recording.id}.{format}",
-        )
+        filename = f"wortlaut-{recording.id}.{format}"
+        exports[filename] = content.encode("utf-8")
+        if major == "text":
+            message.add_attachment(
+                content,
+                subtype=minor,
+                charset="utf-8",
+                filename=filename,
+            )
+        else:
+            message.add_attachment(
+                exports[filename],
+                maintype=major,
+                subtype=minor,
+                filename=filename,
+            )
     if len(message.as_bytes()) > settings.mail_attachment_limit_bytes:
         compact_plain, _ = _build_completed_bodies(
             title=title,
             human_provider=human_provider,
             human_period=human_period,
             time_origin_utc=time_origin_utc,
+            summary=summary_data,
             speakers=speakers,
             turns=turns,
             notices=notices,

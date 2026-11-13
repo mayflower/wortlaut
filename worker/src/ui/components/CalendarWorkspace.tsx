@@ -1,8 +1,11 @@
 import React, { useState } from 'react';
 import {
   ArrowRight,
+  Calendar,
   CalendarPlus,
   Check,
+  ChevronDown,
+  ChevronUp,
   Copy,
   Link2,
   Mail,
@@ -79,6 +82,13 @@ const CALENDAR_STATUS_LABELS_EN: Record<string, string> = {
 type SyncedEventRow = CalendarSyncedEventInfo & Record<string, unknown>;
 type IcsEventRow = CalendarEvent & { _rowKey: string } & Record<string, unknown>;
 
+export function isPastCalendarSlot(
+  endsAt: string | null | undefined,
+  nowMs: number
+): boolean {
+  return endsAt != null && new Date(endsAt).getTime() < nowMs;
+}
+
 function formatCalendarSlot(
   startsAt: string | null,
   endsAt: string | null | undefined,
@@ -90,6 +100,7 @@ function formatCalendarSlot(
   const now = new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const tomorrow = new Date(today.getTime() + 86400000);
+  const yesterday = new Date(today.getTime() - 86400000);
   const targetDay = new Date(
     start.getFullYear(),
     start.getMonth(),
@@ -101,11 +112,14 @@ function formatCalendarSlot(
     dayPrefix = lang === 'en' ? 'Today' : 'Heute';
   } else if (targetDay.getTime() === tomorrow.getTime()) {
     dayPrefix = lang === 'en' ? 'Tomorrow' : 'Morgen';
+  } else if (targetDay.getTime() === yesterday.getTime()) {
+    dayPrefix = lang === 'en' ? 'Yesterday' : 'Gestern';
   } else {
     dayPrefix = start.toLocaleDateString(localeTag, {
       weekday: 'short',
       day: '2-digit',
       month: '2-digit',
+      ...(start.getFullYear() !== now.getFullYear() ? { year: 'numeric' } : {}),
     });
   }
 
@@ -143,6 +157,27 @@ export function CalendarWorkspace({
   const [copiedProtocolId, setCopiedProtocolId] = useState<string | null>(null);
   const [oauthBusy, setOauthBusy] = useState<string | null>(null);
   const [oauthError, setOauthError] = useState<string | null>(null);
+  const [showPastSynced, setShowPastSynced] = useState(false);
+  const [showPastIcs, setShowPastIcs] = useState(false);
+  const nowMs = Date.now();
+
+  const upcomingSyncedEvents = syncedEvents
+    .filter((ev) => !isPastCalendarSlot(ev.ends_at, nowMs))
+    .sort((a, b) => {
+      const aCancelled = a.status === 'cancelled' ? 1 : 0;
+      const bCancelled = b.status === 'cancelled' ? 1 : 0;
+      if (aCancelled !== bCancelled) return aCancelled - bCancelled;
+      return new Date(a.starts_at).getTime() - new Date(b.starts_at).getTime();
+    });
+  const activeUpcomingSyncedCount = upcomingSyncedEvents.filter(
+    (ev) => ev.status !== 'cancelled'
+  ).length;
+  const pastSyncedEvents = syncedEvents
+    .filter((ev) => isPastCalendarSlot(ev.ends_at, nowMs))
+    .sort(
+      (a, b) =>
+        new Date(b.starts_at).getTime() - new Date(a.starts_at).getTime()
+    );
 
   const calOAuth = instance.calendarOAuth;
   const googleConn = connections.find((c) => c.provider === 'google') || null;
@@ -215,7 +250,7 @@ export function CalendarWorkspace({
     {
       key: 'auto_record',
       header: tr('Aufzeichnen', 'Auto-record'),
-      width: pixel(120),
+      width: pixel(135),
       renderCell: (ev) => {
         if (ev.status === 'cancelled') {
           return (
@@ -223,6 +258,21 @@ export function CalendarWorkspace({
               variant="error"
               weight="medium"
               label={tr('Abgesagt', 'Cancelled')}
+            />
+          );
+        }
+        if (isPastCalendarSlot(ev.ends_at, nowMs)) {
+          return ev.recording_id ? (
+            <StatusIndicator
+              variant="success"
+              weight="medium"
+              label={tr('Aufgezeichnet', 'Recorded')}
+            />
+          ) : (
+            <StatusIndicator
+              variant="neutral"
+              weight="normal"
+              label={tr('Beendet', 'Ended')}
             />
           );
         }
@@ -283,7 +333,7 @@ export function CalendarWorkspace({
     {
       key: 'starts_at',
       header: tr('Zeitfenster', 'Time slot'),
-      width: pixel(160),
+      width: pixel(190),
       renderCell: (ev) => (
         <Text type="supporting" color="secondary" hasTabularNumbers>
           {formatCalendarSlot(ev.starts_at, ev.ends_at, lang)}
@@ -370,6 +420,32 @@ export function CalendarWorkspace({
     ...ev,
     _rowKey: `${ev.uid}-${ev.recurrence_id}-${idx}`,
   }));
+  const upcomingIcsRows = icsRows
+    .filter((ev) => !isPastCalendarSlot(ev.ends_at, nowMs))
+    .sort((a, b) => {
+      const aCancelled =
+        a.status === 'cancelled' || a.status === 'CANCELLED' ? 1 : 0;
+      const bCancelled =
+        b.status === 'cancelled' || b.status === 'CANCELLED' ? 1 : 0;
+      if (aCancelled !== bCancelled) return aCancelled - bCancelled;
+      const aMs = a.starts_at
+        ? new Date(a.starts_at).getTime()
+        : Number.MAX_SAFE_INTEGER;
+      const bMs = b.starts_at
+        ? new Date(b.starts_at).getTime()
+        : Number.MAX_SAFE_INTEGER;
+      return aMs - bMs;
+    });
+  const activeUpcomingIcsCount = upcomingIcsRows.filter(
+    (ev) => ev.status !== 'cancelled' && ev.status !== 'CANCELLED'
+  ).length;
+  const pastIcsRows = icsRows
+    .filter((ev) => isPastCalendarSlot(ev.ends_at, nowMs))
+    .sort((a, b) => {
+      const aMs = a.starts_at ? new Date(a.starts_at).getTime() : 0;
+      const bMs = b.starts_at ? new Date(b.starts_at).getTime() : 0;
+      return bMs - aMs;
+    });
 
   const icsColumns: TableColumn<IcsEventRow>[] = [
     {
@@ -780,15 +856,15 @@ export function CalendarWorkspace({
             </div>
 
             {/* Synced OAuth Events */}
-            {syncedEvents.length > 0 && (
+            {(syncedEvents.length > 0 || googleConn || microsoftConn) && (
               <div id="calendar-synced-events">
                 <Section variant="section">
-                  <VStack gap={2}>
+                  <VStack gap={3}>
                     <HStack justify="between" vAlign="center" wrap="wrap">
                       <Heading level={3}>
                         {tr(
-                          `Synchronisierte Termine mit Konferenz-Link (${syncedEvents.length})`,
-                          `Synced Calendar Meetings (${syncedEvents.length})`
+                          `Anstehende & laufende Termine (${activeUpcomingSyncedCount})`,
+                          `Upcoming & Active Meetings (${activeUpcomingSyncedCount})`
                         )}
                       </Heading>
                       <Text type="supporting" color="secondary">
@@ -799,14 +875,69 @@ export function CalendarWorkspace({
                       </Text>
                     </HStack>
 
-                    <Table<SyncedEventRow>
-                      idKey="id"
-                      density="balanced"
-                      dividers="rows"
-                      hasHover
-                      data={syncedEvents as SyncedEventRow[]}
-                      columns={syncedColumns}
-                    />
+                    {upcomingSyncedEvents.length > 0 ? (
+                      <Table<SyncedEventRow>
+                        idKey="id"
+                        density="balanced"
+                        dividers="rows"
+                        hasHover
+                        data={upcomingSyncedEvents as SyncedEventRow[]}
+                        columns={syncedColumns}
+                      />
+                    ) : (
+                      <EmptyState
+                        isCompact
+                        icon={<Calendar className="h-6 w-6" />}
+                        title={tr(
+                          'Keine anstehenden Termine mit Konferenz-Link',
+                          'No upcoming meetings with a conference link'
+                        )}
+                        description={tr(
+                          'Neue Termine mit Google Meet-, Teams-, Webex- oder Zoom-Link erscheinen automatisch nach der Synchronisation.',
+                          'Upcoming events with Google Meet, Teams, Webex, or Zoom links appear automatically when synced.'
+                        )}
+                      />
+                    )}
+
+                    {pastSyncedEvents.length > 0 && (
+                      <VStack gap={2} hAlign="stretch">
+                        <HStack justify="start">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            icon={
+                              showPastSynced ? (
+                                <ChevronUp className="h-3.5 w-3.5" />
+                              ) : (
+                                <ChevronDown className="h-3.5 w-3.5" />
+                              )
+                            }
+                            label={
+                              showPastSynced
+                                ? tr(
+                                    `Vergangene Termine ausblenden (${pastSyncedEvents.length})`,
+                                    `Hide past meetings (${pastSyncedEvents.length})`
+                                  )
+                                : tr(
+                                    `Vergangene Termine der letzten 7 Tage anzeigen (${pastSyncedEvents.length})`,
+                                    `Show past meetings from the last 7 days (${pastSyncedEvents.length})`
+                                  )
+                            }
+                            onClick={() => setShowPastSynced((prev) => !prev)}
+                          />
+                        </HStack>
+                        {showPastSynced && (
+                          <Table<SyncedEventRow>
+                            idKey="id"
+                            density="compact"
+                            dividers="rows"
+                            hasHover
+                            data={pastSyncedEvents as SyncedEventRow[]}
+                            columns={syncedColumns}
+                          />
+                        )}
+                      </VStack>
+                    )}
                   </VStack>
                 </Section>
               </div>
@@ -816,12 +947,12 @@ export function CalendarWorkspace({
             {(events.length > 0 || (!googleConn && !microsoftConn)) && (
               <div id="calendar-list">
                 <Section variant="section">
-                  <VStack gap={2}>
+                  <VStack gap={3}>
                     <HStack justify="between" vAlign="center" wrap="wrap">
                       <Heading level={3}>
                         {tr(
-                          `E-Mail- & .ics-Kalendereinladungen (${events.length})`,
-                          `Email & .ics Calendar Invites (${events.length})`
+                          `E-Mail- & .ics-Kalendereinladungen (${activeUpcomingIcsCount})`,
+                          `Email & .ics Calendar Invites (${activeUpcomingIcsCount})`
                         )}
                       </Heading>
                       {instance.botEmail && (
@@ -858,14 +989,64 @@ export function CalendarWorkspace({
                         }
                       />
                     ) : (
-                      <Table<IcsEventRow>
-                        idKey="_rowKey"
-                        density="balanced"
-                        dividers="rows"
-                        hasHover
-                        data={icsRows}
-                        columns={icsColumns}
-                      />
+                      <>
+                        {upcomingIcsRows.length > 0 ? (
+                          <Table<IcsEventRow>
+                            idKey="_rowKey"
+                            density="balanced"
+                            dividers="rows"
+                            hasHover
+                            data={upcomingIcsRows}
+                            columns={icsColumns}
+                          />
+                        ) : (
+                          <Text type="supporting" color="secondary">
+                            {tr(
+                              'Keine anstehenden E-Mail- oder .ics-Einladungen.',
+                              'No upcoming email or .ics invitations.'
+                            )}
+                          </Text>
+                        )}
+                        {pastIcsRows.length > 0 && (
+                          <VStack gap={2} hAlign="stretch">
+                            <HStack justify="start">
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                icon={
+                                  showPastIcs ? (
+                                    <ChevronUp className="h-3.5 w-3.5" />
+                                  ) : (
+                                    <ChevronDown className="h-3.5 w-3.5" />
+                                  )
+                                }
+                                label={
+                                  showPastIcs
+                                    ? tr(
+                                        `Vergangene Einladungen ausblenden (${pastIcsRows.length})`,
+                                        `Hide past invitations (${pastIcsRows.length})`
+                                      )
+                                    : tr(
+                                        `Vergangene Einladungen anzeigen (${pastIcsRows.length})`,
+                                        `Show past invitations (${pastIcsRows.length})`
+                                      )
+                                }
+                                onClick={() => setShowPastIcs((prev) => !prev)}
+                              />
+                            </HStack>
+                            {showPastIcs && (
+                              <Table<IcsEventRow>
+                                idKey="_rowKey"
+                                density="compact"
+                                dividers="rows"
+                                hasHover
+                                data={pastIcsRows}
+                                columns={icsColumns}
+                              />
+                            )}
+                          </VStack>
+                        )}
+                      </>
                     )}
                   </VStack>
                 </Section>

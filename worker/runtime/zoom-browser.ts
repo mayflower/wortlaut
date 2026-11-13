@@ -2,10 +2,13 @@ import type {Page} from 'playwright';
 import {AudioTransport} from '../src/transport.js';
 import {installMeetCapture, MeetError} from './meet.js';
 import {isZoomOrigin} from '../src/zoom-url.js';
+import {installVideoTile, type VideoTilePatch} from './video-tile.js';
 
 export type ZoomBootstrap = {provider: 'zoom'; meeting_id: string; attempt_id: string;
   meeting_url: string; deadline: string; lobby_timeout_seconds: number;
   empty_room_timeout_seconds?: number; chat_intro?: string | null;
+  invited_by: string | null; invited_by_name: string | null; meeting_title: string | null;
+  default_locale: string;
   zoom: {display_name: string; locale: string; auth_mode?: 'guest' | 'account'}};
 
 const joinLabel = /^(Join|Beitreten|Teilnehmen)$/i;
@@ -39,10 +42,13 @@ export class ZoomBrowser {
   private capturing = false;
   private initializedCapture = false;
   private audioJoined = false;
+  private videoStarted = false;
+  private videoStartAttempts = 0;
   private videoStopped = false;
   private chatSent = false;
   private rosterOpened = false;
   private drained: boolean | null = null;
+  private pushVideoTile?: (patch: VideoTilePatch) => Promise<void>;
 
   constructor(private readonly page: Page, private readonly bootstrap: ZoomBootstrap,
     api: string, credential: string, workerId: string, private readonly assets?: URL) {
@@ -53,6 +59,11 @@ export class ZoomBrowser {
   }
 
   async prepare() {
+    this.pushVideoTile = await installVideoTile(this.page, 'zoom', this.bootstrap.meeting_url, {
+      locale: this.bootstrap.default_locale,
+      invitedBy: this.bootstrap.invited_by_name ?? this.bootstrap.invited_by,
+      meetingTitle: this.bootstrap.meeting_title,
+    });
     this.initialize = await installMeetCapture(this.page, this.bootstrap, {
       begin: metadata => this.transport.control(metadata as Record<string, unknown> & {id: string}),
       bind: metadata => this.transport.control(metadata as Record<string, unknown> & {id: string}),
@@ -62,6 +73,10 @@ export class ZoomBrowser {
       error: reason => { this.reason = reason; },
     }, this.assets, 'zoom');
     this.transport.connect();
+  }
+
+  async updateVideoTile(patch: VideoTilePatch) {
+    await this.pushVideoTile?.(patch);
   }
 
   private async dismissBannersAndPopups() {
@@ -81,12 +96,63 @@ export class ZoomBrowser {
     }
   }
 
-  private async disablePreviewDevices() {
+  private async configurePreviewDevices() {
     await this.dismissBannersAndPopups();
-    // Check actual WebRTC senders to ensure no outbound media track is active.
+    // Ensure preview microphone is muted if any mute control is active.
+    const previewMute = this.page.locator(
+      '#preview-audio-control-button[aria-label*="Mute" i]:not([aria-label*="Unmute" i]), ' +
+      '#preview-audio-control-button[aria-label*="Stummschalten" i]:not([aria-label*="aufheben" i])'
+    );
+    if (await previewMute.first().isVisible().catch(() => false)) {
+      await previewMute.first().click({timeout: 2500}).catch(() => {});
+    }
+    // Enable virtual live-transcript camera in preview (best-effort).
+    const previewStartVideo = this.page.locator(
+      '#preview-video-control-button[aria-label*="Start Video" i], ' +
+      '#preview-video-control-button[aria-label*="Video starten" i]'
+    ).or(this.page.getByRole('button', {
+      name: /^(Start Video|Turn on video|Video starten|Video einschalten)$/i,
+    }));
+    if (await previewStartVideo.first().isVisible().catch(() => false)) {
+      await previewStartVideo.first().click({timeout: 2500}).catch(() => {});
+    }
+    // Forbid any live outbound audio sender or any non-virtual video sender.
     if (await this.page.evaluate(() => [...(window.wortlautMeetReceivers?.connections ?? [])]
-      .some(pc => pc.getSenders().some(sender => sender.track?.readyState === 'live' && sender.track.enabled)))) {
+      .some(pc => pc.getSenders().some(sender => {
+        const track = sender.track as (MediaStreamTrack & {__wortlautVirtualVideo?: boolean}) | null;
+        if (!track || track.readyState !== 'live' || !track.enabled) return false;
+        return track.kind === 'audio' || !track.__wortlautVirtualVideo;
+      })))) {
       throw new MeetError('zoom_sending_device_active');
+    }
+  }
+
+  private async ensureOutgoingVideoStarted() {
+    if (this.videoStarted || this.videoStartAttempts >= 6) return;
+    this.videoStartAttempts += 1;
+    try {
+      const stopVideoBtn = this.page.locator(
+        'button.send-video-container__btn[aria-label*="Stop Video" i], ' +
+        'button[aria-label^="Stop Video" i], button[aria-label^="Video beenden" i], button[aria-label^="Video stoppen" i]'
+      ).or(this.page.getByRole('button', {
+        name: /^(Stop Video|Video beenden|Video stoppen)(?: \(.*\))?$/i,
+      })).first();
+      if (await stopVideoBtn.isVisible().catch(() => false)) {
+        this.videoStarted = true;
+        return;
+      }
+      const startVideoBtn = this.page.locator(
+        'button.send-video-container__btn[aria-label*="Start Video" i], ' +
+        'button[aria-label^="Start Video" i], button[aria-label^="Video starten" i]'
+      ).or(this.page.getByRole('button', {
+        name: /^(Start Video|Video starten)(?: \(.*\))?$/i,
+      })).first();
+      if (await startVideoBtn.isVisible().catch(() => false)) {
+        await startVideoBtn.click({timeout: 2500});
+        this.videoStarted = true;
+      }
+    } catch {
+      // non-critical
     }
   }
 
@@ -210,7 +276,7 @@ export class ZoomBrowser {
           await this.initialize?.();
           this.initializedCapture = true;
         }
-        await this.disablePreviewDevices();
+        await this.configurePreviewDevices();
         if (nameVisible) {
           const existingVal = await nameInput.first().inputValue().catch(() => '');
           if (this.bootstrap.zoom.auth_mode !== 'account' || !existingVal.trim()) {
@@ -231,7 +297,7 @@ export class ZoomBrowser {
           zoomJoinButtonSelector,
           {timeout: 8000},
         ).catch(() => {});
-        await this.disablePreviewDevices();
+        await this.configurePreviewDevices();
         const clickedDom = await this.page.evaluate((sel: string) => {
           const btn = document.querySelector(sel) as HTMLButtonElement | null;
           if (!btn || btn.classList.contains('disabled') || btn.disabled) return false;
@@ -302,6 +368,7 @@ export class ZoomBrowser {
     if (inCall) {
       this.capturing = true;
       await this.ensureComputerAudioJoined();
+      if (!this.videoStarted) await this.ensureOutgoingVideoStarted();
       if (!this.videoStopped) await this.stopIncomingVideoIfPossible();
       if (!this.rosterOpened) await this.ensureRosterOpen();
       if (!this.chatSent) await this.sendChatIntro();
@@ -340,7 +407,10 @@ export class ZoomBrowser {
   async stop(reason: string) {
     return this.stopping ??= (async () => {
       this.reason ||= reason === 'normal' ? '' : reason;
-      const ended = await this.page.evaluate(() => window.wortlautMeet?.stop()).catch(() => false);
+      const ended = await this.page.evaluate(() => {
+        window.wortlautVideoTile?.stop();
+        return window.wortlautMeet?.stop();
+      }).catch(() => false);
       this.drained = await this.transport.drain() && ended === true;
       if (!isZoomOrigin(new URL(this.page.url()))) return;
       const leave = this.page.locator(

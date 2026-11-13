@@ -1106,4 +1106,67 @@ def test_speech_section_cuts_long_monologue_at_breath_pause_before_hard_limit():
     assert next_cursor == len(pcm) // 2
 
 
+def test_timeline_coalesces_same_speaker_chunks_when_participant_name_resolves(
+    client, database, storage
+):
+    from wortlaut.processing import timeline
+
+    attempt, credential, identity = source(client)
+    bound_id = {
+        **identity,
+        "provider_source_id": "google_meet:rec:receiver:1",
+        "source_kind": "speaker",
+        "speaker_id": "spaces/room/devices/192",
+        "participant_id": "spaces/room/devices/192",
+        "attribution_unknown": False,
+    }
+    pcm_chunk = audio("german-a.wav")[: 16000 * 2 * 2]  # 2.0 s PCM
+    with client.websocket_connect(f"/v1/attempts/{attempt}/audio") as socket:
+        authenticate(socket, credential)
+        socket.send_json(begin(bound_id))
+        assert socket.receive_json()["type"] == "ack"
+        # Chunk 0: speaker_id verified, participant_name not yet resolved.
+        send_pcm(socket, bound_id, pcm_chunk, 0, 0)
+        # Bind at sample 32000: same verified speaker_id, participant_name resolved!
+        named_id = {**bound_id, "participant_name": "Johann Peter Hartmann"}
+        socket.send_json(
+            {
+                "type": "bind",
+                "id": "bind-name",
+                "stream_id": identity["stream_id"],
+                "epoch": identity["epoch"],
+                "start_sample": 32000,
+                "provider_source_id": named_id["provider_source_id"],
+                "source_kind": "speaker",
+                "speaker_id": named_id["speaker_id"],
+                "participant_id": named_id["participant_id"],
+                "participant_name": "Johann Peter Hartmann",
+                "attribution_unknown": False,
+            }
+        )
+        assert socket.receive_json()["type"] == "ack"
+        send_pcm(socket, named_id, pcm_chunk, 1, 32000)
+        socket.send_json(
+            {
+                "type": "end",
+                "id": "e0",
+                "stream_id": identity["stream_id"],
+                "epoch": identity["epoch"],
+                "final_sample": 64000,
+                "last_sequence": 1,
+            }
+        )
+        assert socket.receive_json()["type"] == "ack"
+
+    with Session(database) as db:
+        stream = db.scalar(select(AudioStream).where(AudioStream.attempt_id == uuid.UUID(attempt)))
+        runs, terminal, _ = timeline(db, stream)
+        assert terminal is True
+        assert len(runs) == 1
+        assert runs[0].start == 0 and runs[0].end == 64000
+        assert runs[0].binding["speaker_id"] == "spaces/room/devices/192"
+        assert runs[0].binding["participant_name"] == "Johann Peter Hartmann"
+
+
+
 

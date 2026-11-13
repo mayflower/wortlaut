@@ -1,6 +1,12 @@
 import {audioFrame, chunkId, type Chunk} from './chunks.js';
 
 type Pending = {id: string; frame: ArrayBuffer | string; chunk?: Chunk};
+export type TransportLimits = {
+  maxSamples?: number;
+  maxChunks?: number;
+  maxControls?: number;
+};
+
 export class AudioTransport {
   private readonly pending = new Map<string, Pending>();
   private socket?: WebSocket;
@@ -11,8 +17,16 @@ export class AudioTransport {
   private controls = 0;
   private samples = 0;
   private chunks = 0;
+  private readonly maxSamples: number;
+  private readonly maxChunks: number;
+  private readonly maxControls: number;
   constructor(private readonly url: string, private readonly credential: string,
-              private readonly workerId: string, private readonly error: (reason: string) => void) {}
+              private readonly workerId: string, private readonly error: (reason: string) => void,
+              limits?: TransportLimits) {
+    this.maxSamples = limits?.maxSamples ?? 16000 * 360;
+    this.maxChunks = limits?.maxChunks ?? 1024;
+    this.maxControls = limits?.maxControls ?? 1024;
+  }
 
   connect() {
     if (this.stopped) return;
@@ -49,7 +63,7 @@ export class AudioTransport {
     if (this.stopped) return;
     if (this.pending.has(message.id)) return;
     const frame = JSON.stringify(message);
-    if (this.controls >= 256 || frame.length > 8192) { this.error('control_buffer_limit'); return; }
+    if (this.controls >= this.maxControls || frame.length > 8192) { this.error('control_buffer_limit'); return; }
     this.controls++;
     this.pending.set(message.id, {id: message.id, frame});
     this.send();
@@ -62,11 +76,11 @@ export class AudioTransport {
     this.pending.set(id, {id, frame: audioFrame(chunk, pcm), chunk: {...chunk}});
     this.samples += chunk.sample_count;
     this.chunks++;
-    // At most 120 source-seconds (3.84 MB PCM) across the entire worker.
+    // At most maxSamples (default 360 source-seconds = 11.52 MB PCM) across the worker.
     // Each discarded range is final: socket order plus the server's reconnect
     // fence settle earlier frames, and durable PCM wins over its lost ACK.
     for (const item of this.pending.values()) {
-      if (this.samples <= 16000 * 120 && this.chunks <= 256) break;
+      if (this.samples <= this.maxSamples && this.chunks <= this.maxChunks) break;
       if (!item.chunk) continue;
       const dropped = item.chunk!;
       this.pending.delete(item.id); this.sent.delete(item.id);

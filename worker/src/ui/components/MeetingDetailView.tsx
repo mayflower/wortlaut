@@ -36,6 +36,7 @@ import {
   cancelRecording,
   deleteRecording,
   downloadExportFile,
+  fetchExportText,
   formatDurationHuman,
   formatRecordingTitle,
   formatWallClockTime,
@@ -151,39 +152,105 @@ export function MeetingDetailView({
     transcript.time_origin_utc || transcript.scheduled_period?.start;
 
   const handleCopyTranscript = async () => {
-    const segs = transcript.segments || [];
-    const lines = segs.map(
-      (s) =>
-        `[${formatWallClockTime(s.start, timeOriginUtc)} - ${formatWallClockTime(s.end, timeOriginUtc)}] ${s.speaker_label}: ${s.text}`
-    );
-    const headerParts: string[] = [];
-    if (transcript.summary?.summary) {
-      headerParts.push(
-        `${tr('Kurzfassung', 'Summary')}:\n${transcript.summary.summary}`
-      );
-      if (transcript.summary.action_items?.length) {
-        headerParts.push(
-          `${tr('Aufgaben & Beschlüsse', 'Action items')}:\n${transcript.summary.action_items
-            .map(
-              (item) =>
-                `- [${item.owner || tr('Alle', 'All')}] ${item.task}${item.due ? ` (${item.due})` : ''}`
-            )
-            .join('\n')}`
-        );
+    if (!navigator.clipboard) return;
+    setActionError(null);
+    const singleLine = (val?: string | null) =>
+      (val || '').replace(/\s+/g, ' ').trim();
+    let body: string;
+    if (
+      token &&
+      (recording.processing === 'completed' ||
+        recording.processing === 'failed')
+    ) {
+      try {
+        body = await fetchExportText(token, recording.id, 'md');
+      } catch (err) {
+        setActionError(err instanceof Error ? err.message : String(err));
+        return;
       }
-      headerParts.push('---');
-    }
-    const body =
-      lines.length > 0
-        ? [...headerParts, ...lines].join('\n\n')
-        : tr(
-            'Noch keine transkribierten Segmente vorhanden.',
-            'No transcribed segments yet.'
+    } else {
+      const mdLines: string[] = [
+        `# ${singleLine(formatRecordingTitle(recording))}`,
+        '',
+      ];
+      const sum = transcript.summary;
+      const sumText = sum?.summary?.trim() || '';
+      const sumTopics = (sum?.topics || []).filter(
+        (t) => singleLine(t.title) || singleLine(t.details)
+      );
+      const sumActions = (sum?.action_items || []).filter((a) =>
+        singleLine(a.task)
+      );
+      if (sumText || sumTopics.length > 0) {
+        mdLines.push(`## ${tr('Zusammenfassung', 'Summary')}`, '');
+        if (sumText) {
+          mdLines.push(sumText, '');
+        }
+        if (sumTopics.length > 0) {
+          mdLines.push(
+            `### ${tr('Besprochene Themen & Ergebnisse', 'Key Topics & Decisions')}`,
+            ''
           );
-    if (navigator.clipboard) {
-      await navigator.clipboard.writeText(body).catch(() => {});
+          for (const t of sumTopics) {
+            const titlePart = singleLine(t.title) || tr('Thema', 'Topic');
+            const detailPart = singleLine(t.details);
+            mdLines.push(
+              detailPart
+                ? `- **${titlePart}:** ${detailPart}`
+                : `- **${titlePart}**`
+            );
+          }
+          mdLines.push('');
+        }
+      }
+      if (sumText || sumTopics.length > 0 || sumActions.length > 0) {
+        mdLines.push(`## ${tr('To-Do-Liste', 'To-Do List')}`, '');
+        if (sumActions.length > 0) {
+          for (const item of sumActions) {
+            const owner = singleLine(item.owner) || tr('Team', 'Team');
+            const dueVal = singleLine(item.due);
+            const dueSuffix = dueVal
+              ? ` _(${tr('Fällig', 'Due')}: ${dueVal})_`
+              : '';
+            mdLines.push(
+              `- [ ] **${owner}:** ${singleLine(item.task)}${dueSuffix}`
+            );
+          }
+        } else {
+          mdLines.push(
+            tr(
+              '_Keine offenen Aufgaben vereinbart._',
+              '_No open action items recorded._'
+            )
+          );
+        }
+        mdLines.push('');
+      }
+      mdLines.push(`## ${tr('Transkript', 'Transcript')}`, '');
+      const segs = transcript.segments || [];
+      if (segs.length === 0) {
+        mdLines.push(
+          tr(
+            '_Noch keine transkribierten Segmente vorhanden._',
+            '_No transcribed segments yet._'
+          )
+        );
+      } else {
+        for (const s of segs) {
+          mdLines.push(
+            `**${singleLine(s.speaker_label)}** (\`${formatWallClockTime(s.start, timeOriginUtc)} – ${formatWallClockTime(s.end, timeOriginUtc)}\`): ${singleLine(s.text)}`,
+            ''
+          );
+        }
+      }
+      body = mdLines.join('\n').trimEnd() + '\n';
+    }
+    try {
+      await navigator.clipboard.writeText(body);
       setCopiedTranscript(true);
       setTimeout(() => setCopiedTranscript(false), 1800);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
     }
   };
 
@@ -496,8 +563,8 @@ export function MeetingDetailView({
                       }
                       label={
                         copiedTranscript
-                          ? tr('Transkript kopiert!', 'Transcript copied!')
-                          : tr('Transkript kopieren', 'Copy transcript')
+                          ? tr('Markdown kopiert!', 'Markdown copied!')
+                          : tr('Markdown kopieren', 'Copy Markdown')
                       }
                       onClick={handleCopyTranscript}
                     />
@@ -538,8 +605,8 @@ export function MeetingDetailView({
                         id: 'md',
                         label: 'Markdown (.md)',
                         description: tr(
-                          'Für Notion, Confluence, GitHub',
-                          'For Notion, Confluence, GitHub'
+                          'Mit Zusammenfassung, To-Do-Liste & Transkript',
+                          'With summary, to-do list & transcript'
                         ),
                         onClick: () => handleDownload('md'),
                       },
@@ -547,8 +614,8 @@ export function MeetingDetailView({
                         id: 'txt',
                         label: tr('Klartext (.txt)', 'Plain text (.txt)'),
                         description: tr(
-                          'Lesbares Protokoll mit Zeitstempeln',
-                          'Readable protocol with timestamps'
+                          'Mit Zusammenfassung, To-Do-Liste & Zeitstempeln',
+                          'With summary, to-do list & timestamps'
                         ),
                         onClick: () => handleDownload('txt'),
                       },

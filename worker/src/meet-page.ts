@@ -193,6 +193,8 @@ function install(config: MeetCaptureConfig) {
     track_ids: Set<string>; stream_ids: Set<string>;
   }>();
   const domNames = new Map<string, string>();
+  const protoNames = new Map<string, string>();
+  const unmuteHookedTracks = new WeakSet<MediaStreamTrack>();
   const ignoredParticipantIds = new Set<string>();
   const optedOutParticipants = new Set<string>();
   let liveDomCount = 0;
@@ -245,7 +247,7 @@ function install(config: MeetCaptureConfig) {
         }
       }
     }
-    for (const [pid, dName] of domNames) {
+    for (const [pid, dName] of [...domNames, ...protoNames]) {
       const pidLow = pid.trim().toLowerCase();
       const nameLow = dName.trim().toLowerCase();
       if (lowerSet.has(pidLow) || (nameLow && lowerSet.has(nameLow))) {
@@ -295,7 +297,7 @@ function install(config: MeetCaptureConfig) {
       }
     }
     const effectiveName = participantName?.trim() ||
-      (cleanId ? (domNames.get(cleanId) ?? participants.get(cleanId)?.participant_name ?? '') : '');
+      (cleanId ? (domNames.get(cleanId) ?? protoNames.get(cleanId) ?? participants.get(cleanId)?.participant_name ?? '') : '');
     if (effectiveName) {
       const clean = effectiveName.trim();
       if (optedOutParticipants.has(clean)) return true;
@@ -498,22 +500,24 @@ function install(config: MeetCaptureConfig) {
     const id = rawId.trim();
     if (isWebexParticipant && id === webexSelfParticipantId) return false;
     if (ignoredParticipantIds.has(id)) return false;
-    const rawName = node.participant_name ?? node.participantName ?? node.displayName ??
+    const rawName = domNames.get(id) ??
+      node.participant_name ?? node.participantName ?? node.displayName ??
       node.userName ?? node.user_name ??
       details?.displayName ?? person?.name ?? person?.displayName ?? person?.primaryDisplayString ??
-      domNames.get(id);
+      protoNames.get(id);
     const cleanedName = typeof rawName === 'string' && rawName.trim() && rawName.trim().length <= 200
       ? rawName.trim() : null;
     if (isIgnoredParticipantName(cleanedName)) {
       ignoredParticipantIds.add(id);
       domNames.delete(id);
+      protoNames.delete(id);
       if (participants.delete(id)) {
         totalParticipants = Math.max(0, totalParticipants - 1);
       }
       return false;
     }
-    if (cleanedName && (domNames.size < 256 || domNames.has(id))) {
-      domNames.set(id, cleanedName);
+    if (cleanedName && !domNames.has(id) && (protoNames.size < 256 || protoNames.has(id))) {
+      protoNames.set(id, cleanedName);
     }
     const teamsAudioCsis: number[] = [];
     const teamsShareCsis: number[] = [];
@@ -861,9 +865,22 @@ function install(config: MeetCaptureConfig) {
       const zoomRowLabel = el.hasAttribute('data-participants-row')
         ? (el.getAttribute('aria-label') || el.textContent || '')
         : '';
+      const mediaElements = Array.from(el.querySelectorAll('audio, video')).slice(0, 8);
+      const hasVirtualSelfVideo = mediaElements.some((media) => {
+        const ownerTile = media.closest(
+          '[data-participant-id], [data-requested-participant-id], [data-member-id], ' +
+          '[data-endpoint-id], [data-user-id], [data-tid*="video-tile"]'
+        );
+        if (ownerTile && ownerTile !== el) return false;
+        const src = (media as HTMLMediaElement).srcObject;
+        return src instanceof MediaStream && src.getTracks().some(
+          (t) => Boolean((t as MediaStreamTrack & {__wortlautVirtualVideo?: boolean}).__wortlautVirtualVideo),
+        );
+      });
       const isSelfTile = el.hasAttribute('data-self-name') ||
         Boolean(el.querySelector('[data-self-name]')) ||
-        /\((?:Me|Ich)\)/i.test(zoomRowLabel);
+        /\((?:Me|Ich)\)/i.test(zoomRowLabel) ||
+        hasVirtualSelfVideo;
       const name = extractDomParticipantName(el);
       if (isSelfTile || isIgnoredParticipantName(name)) {
         if (rawId) {
@@ -907,9 +924,14 @@ function install(config: MeetCaptureConfig) {
           if (val && val.length <= 256) trackIds.push(val);
         }
       }
-      for (const media of Array.from(el.querySelectorAll('audio, video')).slice(0, 8)) {
+      for (const media of mediaElements) {
         const src = (media as HTMLMediaElement).srcObject;
         if (src instanceof MediaStream) {
+          if (src.getTracks().some(
+            (t) => Boolean((t as MediaStreamTrack & {__wortlautVirtualVideo?: boolean}).__wortlautVirtualVideo),
+          )) {
+            continue;
+          }
           if (src.id) streamIds.push(src.id);
           for (const t of src.getTracks()) if (t.id) trackIds.push(t.id);
           for (const group of sdpCnames.values()) {
@@ -1016,13 +1038,13 @@ function install(config: MeetCaptureConfig) {
     let updated = scanDomParticipants();
     for (const [cname, group] of sdpCnames) {
       if (!group.audio_ssrcs.size && !group.stream_ids.size && !group.track_ids.size) continue;
-      const matchedId = (domNames.has(cname) || participants.has(cname))
+      const matchedId = (domNames.has(cname) || protoNames.has(cname) || participants.has(cname))
         ? cname
-        : [...group.stream_ids].find((sid) => domNames.has(sid) || participants.has(sid));
+        : [...group.stream_ids].find((sid) => domNames.has(sid) || protoNames.has(sid) || participants.has(sid));
       if (matchedId) {
         if (ingestParticipantRecord({
           participant_id: matchedId,
-          participant_name: domNames.get(matchedId) ?? null,
+          participant_name: domNames.get(matchedId) ?? protoNames.get(matchedId) ?? null,
           audio_csis: [...group.audio_ssrcs],
           stream_ids: [...group.stream_ids],
           track_ids: [...group.track_ids],
@@ -1189,6 +1211,59 @@ function install(config: MeetCaptureConfig) {
     return updated;
   }
 
+  function isProtobufSubmessage(bytes: Uint8Array): boolean {
+    if (bytes.byteLength < 2) return false;
+    let offset = 0, tags = 0, hasControlByte = false;
+    for (let i = 0; i < bytes.byteLength; i++) {
+      const b = bytes[i];
+      if (b < 0x20 && b !== 0x09 && b !== 0x0a && b !== 0x0d) {
+        hasControlByte = true;
+        break;
+      }
+    }
+    const readVarint = (): number | null => {
+      let result = 0, shift = 0;
+      while (offset < bytes.byteLength && shift < 64) {
+        const b = bytes[offset++];
+        result += (b & 0x7f) * (2 ** shift);
+        if ((b & 0x80) === 0) return result;
+        shift += 7;
+      }
+      return null;
+    };
+    while (offset < bytes.byteLength && tags < 512) {
+      const tag = readVarint();
+      if (tag === null || tag <= 0) return false;
+      const fieldNo = Math.floor(tag / 8);
+      const wireType = tag & 7;
+      if (fieldNo < 1 || fieldNo > 16384) return false;
+      tags++;
+      if (wireType === 0) {
+        if (readVarint() === null) return false;
+      } else if (wireType === 1) {
+        if (offset + 8 > bytes.byteLength) return false;
+        offset += 8;
+      } else if (wireType === 5) {
+        if (offset + 4 > bytes.byteLength) return false;
+        offset += 4;
+      } else if (wireType === 2) {
+        const len = readVarint();
+        if (len === null || len < 0 || offset + len > bytes.byteLength) return false;
+        offset += len;
+      } else {
+        return false;
+      }
+    }
+    if (offset !== bytes.byteLength || tags === 0) return false;
+    if (hasControlByte) return true;
+    if (tags >= 2) {
+      if (bytes[0] < 0x20) return true;
+      const text = new TextDecoder('utf-8', {fatal: false}).decode(bytes);
+      if (/(?:spaces\/[^/\s]+\/)?devices\/[^/\s]+/.test(text)) return true;
+    }
+    return false;
+  }
+
   function parseProtobufPayload(bytes: Uint8Array, stat: ReturnType<typeof getChannelStat>, depth = 0): boolean {
     if (depth > 8 || bytes.byteLength < 2 || bytes.byteLength > 262144) return false;
     let offset = 0, tags = 0, updated = false;
@@ -1240,9 +1315,13 @@ function install(config: MeetCaptureConfig) {
             continue;
           }
         }
+        if (depth < 8 && len >= 2 && isProtobufSubmessage(slice)) {
+          if (parseProtobufPayload(slice, stat, depth + 1)) updated = true;
+          continue;
+        }
         if (len > 0 && len <= 200) {
           const decoded = new TextDecoder('utf-8', {fatal: false}).decode(slice);
-          if (/^[\x20-\x7e\u00a0-\uffff]+$/.test(decoded)) {
+          if (!decoded.includes('\ufffd') && /^[\x20-\x7e\u00a0-\ufffc]+$/.test(decoded)) {
             const trimmed = decoded.trim();
             if (/^\d{3,10}$/.test(trimmed)) {
               const num = Number(trimmed);
@@ -1251,8 +1330,7 @@ function install(config: MeetCaptureConfig) {
               strings.push(trimmed);
             }
           }
-        }
-        if (depth < 8 && len >= 2 && parseProtobufPayload(slice, stat, depth + 1)) {
+        } else if (depth < 8 && len > 200 && parseProtobufPayload(slice, stat, depth + 1)) {
           updated = true;
         }
       } else {
@@ -1261,48 +1339,56 @@ function install(config: MeetCaptureConfig) {
     }
     if (strings.length > 0) {
       scanDomParticipants();
-      const matchedId = strings.find((s) =>
-        domNames.has(s) || participants.has(s) || /^(?:spaces\/[^/\s]+\/)?devices\/[^/\s]+$/.test(s));
+      const isDeviceId = (s: string) =>
+        domNames.has(s) || protoNames.has(s) || participants.has(s) || /^(?:spaces\/[^/\s]+\/)?devices\/[^/\s]+$/.test(s);
+      const matchedIds = [...new Set(strings.filter(isDeviceId))];
+      const matchedId = matchedIds.length === 1 ? matchedIds[0] : null;
+      const isNameCandidate = (s: string, excludeA?: string | null, excludeB?: string | null) =>
+        s !== excludeA &&
+        s !== excludeB &&
+        !isDeviceId(s) &&
+        s.length >= 2 &&
+        s.length <= 120 &&
+        !/^\d+$/.test(s) &&
+        !/https?:\/\/|googleusercontent\.com/i.test(s) &&
+        !/^(?:spaces\/|devices\/|collections\/|conferenceRecords\/|users\/|FID$)/i.test(s) &&
+        !/^(?:audio|video|application|text|image)\/[a-z0-9.+-]+$/i.test(s) &&
+        !/^[a-z]{2}(?:-[A-Z]{2})?$/.test(s) &&
+        !/^[A-Za-z0-9+/=_-]{20,}$/.test(s);
       const optOutStr = strings.find((s) => isChatOptOutMessage(s, false));
-      if (optOutStr) {
-        const senderNameCandidate = (matchedId ? (domNames.get(matchedId) ?? participants.get(matchedId)?.participant_name) : null) ??
-          strings.find((s) =>
-            s !== optOutStr &&
-            s !== matchedId &&
-            s.length >= 2 &&
-            s.length <= 120 &&
-            !/^\d+$/.test(s) &&
-            !/https?:\/\/|googleusercontent\.com/i.test(s) &&
-            !/^(?:spaces\/|devices\/|FID$)/i.test(s) &&
-            !/^[A-Za-z0-9+/=_-]{24,}$/.test(s)) ?? null;
-        if (recordOptOutAuthor(matchedId ?? null, senderNameCandidate)) {
+      if (optOutStr && matchedIds.length <= 1) {
+        const senderNameCandidate = (matchedId
+          ? (domNames.get(matchedId) ?? protoNames.get(matchedId) ?? participants.get(matchedId)?.participant_name)
+          : null) ??
+          strings.find((s) => isNameCandidate(s, optOutStr, matchedId)) ?? null;
+        if (recordOptOutAuthor(matchedId, senderNameCandidate)) {
           updated = true;
         }
       }
-      if (matchedId) {
-        const protoName = strings.find((s) =>
-          s !== matchedId &&
-          s.length >= 2 &&
-          s.length <= 120 &&
-          !/^\d+$/.test(s) &&
-          !/https?:\/\/|googleusercontent\.com/i.test(s) &&
-          !/^(?:spaces\/|devices\/|FID$)/i.test(s) &&
-          !/^[A-Za-z0-9+/=_-]{24,}$/.test(s)) ?? null;
-        if (protoName) {
-          if (domNames.size < 256 || domNames.has(matchedId)) domNames.set(matchedId, protoName);
-          const existing = participants.get(matchedId);
-          if (existing && existing.participant_name !== protoName) {
-            existing.participant_name = protoName;
-            updated = true;
+      if (matchedId && !ignoredParticipantIds.has(matchedId)) {
+        const protoName = strings.find((s) => isNameCandidate(s, matchedId, optOutStr)) ?? null;
+        if (protoName && isIgnoredParticipantName(protoName)) {
+          if (!domNames.has(matchedId) && !protoNames.has(matchedId)) {
+            ignoredParticipantIds.add(matchedId);
+            participants.delete(matchedId);
           }
-        }
-        if (ints.length > 0) {
-          const candidateName = domNames.get(matchedId) ?? protoName;
-          if (ingestParticipantRecord({
-            participant_id: matchedId,
-            participant_name: candidateName,
-            audio_csis: ints,
-          })) updated = true;
+        } else {
+          if (protoName && !domNames.has(matchedId) && !protoNames.has(matchedId)) {
+            if (protoNames.size < 256) protoNames.set(matchedId, protoName);
+            const existing = participants.get(matchedId);
+            if (existing && !existing.participant_name) {
+              existing.participant_name = protoName;
+              updated = true;
+            }
+          }
+          if (ints.length > 0) {
+            const candidateName = domNames.get(matchedId) ?? protoNames.get(matchedId) ?? null;
+            if (ingestParticipantRecord({
+              participant_id: matchedId,
+              participant_name: candidateName,
+              audio_csis: ints,
+            })) updated = true;
+          }
         }
       }
     }
@@ -1575,7 +1661,7 @@ function install(config: MeetCaptureConfig) {
 
   function send(message: MeetBridgeMessage, bytes: number) {
     if (bridgeFailed) return;
-    if (pendingMessages >= 64 || pendingBytes + bytes > 4 * 1024 * 1024) {
+    if (pendingMessages >= 256 || pendingBytes + bytes > 12 * 1024 * 1024) {
       bridgeFailed = true; state.reason = 'browser_bridge_limit'; return;
     }
     pendingMessages++; pendingBytes += bytes;
@@ -1765,6 +1851,10 @@ function install(config: MeetCaptureConfig) {
           for (const receiver of pc.getReceivers()) {
             if ((received.has(receiver) || recvTransceivers.has(receiver)) &&
                 receiver.track?.kind === 'audio' && receiver.track.readyState === 'live') {
+              if (!unmuteHookedTracks.has(receiver.track)) {
+                unmuteHookedTracks.add(receiver.track);
+                receiver.track.addEventListener('unmute', () => { void inspectReceivers(); });
+              }
               const receiverActive =
                 !receiver.track.muted ||
                 receiver.getSynchronizationSources().length > 0 ||
@@ -1818,8 +1908,8 @@ function install(config: MeetCaptureConfig) {
         const hasSignaledOrDomParticipants = participants.size > 0 || liveDomCount > 0;
         const silentCaptureWithParticipants =
           hasSignaledOrDomParticipants &&
-          ((state.active_audio_samples === 0 && state.audio_samples >= 16000 * 10) ||
-            [...sources.values()].some((s) => (s.silentSamples ?? 0) >= 16000 * 10));
+          state.active_audio_samples === 0 &&
+          state.audio_samples >= 16000 * 10;
         for (const [receiver, entry] of observations) {
           if (!live.has(receiver)) { detachObservation(receiver); continue; }
           if (!entry.transform) continue;
@@ -1860,8 +1950,14 @@ function install(config: MeetCaptureConfig) {
           }
         }
         for (const [receiver, source] of sources) {
+          const rtpStat = receiverStats.get(receiver);
+          const rtpHasDecodedEnergy =
+            (rtpStat?.jitter_buffer_emitted_count ?? 0) >= 48000 &&
+            (rtpStat?.total_audio_energy ?? 0) > 0.001;
           const forceReattach =
             hasSignaledOrDomParticipants &&
+            state.active_audio_samples === 0 &&
+            rtpHasDecodedEnergy &&
             (source.silentSamples ?? 0) >= 16000 * 10 &&
             !source.recovered &&
             source.track === receiver.track;

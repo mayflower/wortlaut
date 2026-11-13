@@ -311,7 +311,33 @@ def timeline(db: Session, stream: AudioStream, *, incremental: bool = False):
             runs.append(Run(start, end, None, failure=record.processing_error))
         elif isinstance(record, AudioChunk):
             binding = {key: data.get(key) for key in SourceBinding.model_fields}
-            if runs and runs[-1].end == start and runs[-1].binding == binding:
+            prev_binding = runs[-1].binding if runs else None
+            same_verified_speaker = (
+                prev_binding is not None
+                and not prev_binding.get("attribution_unknown")
+                and not binding.get("attribution_unknown")
+                and bool(prev_binding.get("participant_id") or prev_binding.get("speaker_id"))
+                and all(
+                    prev_binding.get(k) == binding.get(k)
+                    for k in ("provider_source_id", "source_kind", "speaker_id", "participant_id")
+                )
+                and (
+                    prev_binding.get("participant_name") is None
+                    or binding.get("participant_name") is None
+                    or prev_binding.get("participant_name") == binding.get("participant_name")
+                )
+            )
+            if (
+                runs
+                and runs[-1].end == start
+                and (prev_binding == binding or same_verified_speaker)
+            ):
+                if (
+                    prev_binding is not None
+                    and not prev_binding.get("participant_name")
+                    and binding.get("participant_name")
+                ):
+                    runs[-1].binding = dict(binding)
                 runs[-1].end = end
                 runs[-1].chunks.append(record)
             else:

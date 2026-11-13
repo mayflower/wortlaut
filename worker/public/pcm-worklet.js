@@ -11,12 +11,32 @@ class PcmCapture extends AudioWorkletProcessor {
     this.outputCount = 0;
     this.firstFrame = null;
     this.missing = [];
+    this.pending = [];
     this.stopped = false;
     globalThis.LibSampleRate.create(1, sampleRate, 16000, {
       converterType: globalThis.LibSampleRate.ConverterType.SRC_SINC_FASTEST,
     }).then((converter) => {
+      if (this.stopped) {
+        converter.destroy();
+        return;
+      }
       this.converter = converter;
       this.port.postMessage({type: 'ready'});
+      for (const entry of this.pending.splice(0)) {
+        if (this.stopped) break;
+        if (entry.frames) {
+          const start = Math.floor(this.inputCount * 16000 / sampleRate);
+          this.inputCount += entry.frames;
+          const end = Math.floor(this.inputCount * 16000 / sampleRate);
+          const previous = this.missing.at(-1);
+          if (previous && previous.end === start) previous.end = end;
+          else this.missing.push({start, end});
+          this.emit(this.converter.full(new Float32Array(entry.frames)));
+        } else if (entry.mono) {
+          this.inputCount += entry.mono.length;
+          this.emit(this.converter.full(entry.mono));
+        }
+      }
     }).catch(() => this.port.postMessage({type: 'error', reason: 'resampler_initialization'}));
     this.port.onmessage = ({data}) => {
       if (data.type !== 'stop' || this.stopped) return;
@@ -64,8 +84,32 @@ class PcmCapture extends AudioWorkletProcessor {
     if (this.stopped) return false;
     if (parameters.capturing[0] === 0) return true;
     const channels = inputs[0];
-    if (!this.converter) return true;
     const length = channels?.[0]?.length;
+    if (!this.converter) {
+      if (!length) {
+        if (this.firstFrame === null) return true;
+        const frames = outputs[0]?.[0]?.length;
+        if (frames) {
+          const prev = this.pending.at(-1);
+          if (prev?.frames) prev.frames += frames;
+          else this.pending.push({frames});
+        }
+        return true;
+      }
+      if (this.firstFrame === null) this.firstFrame = currentFrame;
+      if (this.pending.length < 2048) {
+        const mono = new Float32Array(length);
+        for (const channel of channels) {
+          for (let i = 0; i < mono.length; i++) mono[i] += channel[i] / channels.length;
+        }
+        this.pending.push({mono});
+      } else {
+        const prev = this.pending.at(-1);
+        if (prev?.frames) prev.frames += length;
+        else this.pending.push({frames: length});
+      }
+      return true;
+    }
     if (!length) {
       if (this.firstFrame === null) return true;
       const frames = outputs[0]?.[0]?.length;

@@ -515,10 +515,19 @@ def test_oauth_calendar_to_asr_summary_mail_and_writeback_end_to_end(
                     },
                 )
             if self.path == "/api/chat":
+                # Simulate background smtp_pass firing while Ollama is still generating summary:
+                # active speech recordings must NOT be marked completed or emailed prematurely!
+                smtp_pass(database)
                 summary_payload = {
                     "summary": "Das Team hat das Release verbindlich für Freitag beschlossen.",
                     "topics": [{"title": "Release-Planung", "details": "Go-Live am Freitag."}],
-                    "action_items": [{"owner": "Alice", "task": "Deployment vorbereiten"}],
+                    "action_items": [
+                        {
+                            "owner": "Alice",
+                            "task": "Deployment vorbereiten",
+                            "due": "Donnerstag",
+                        }
+                    ],
                 }
                 return self._json(
                     200, {"message": {"content": json.dumps(summary_payload)}}
@@ -758,18 +767,146 @@ def test_oauth_calendar_to_asr_summary_mail_and_writeback_end_to_end(
             for m in smtp_receiver.messages
         ]
         assert any(
-            "Architektur-Sync Google" in subj and "Alice Example" in body and "Freitag" in body
+            "Architektur-Sync Google" in subj
+            and "Alice Example" in body
+            and "ZUSAMMENFASSUNG" in body
+            and "TO-DO-LISTE" in body
+            and "[ ] Alice: Deployment vorbereiten (Fällig: Donnerstag)" in body
             for subj, body in subjects_and_bodies
         )
         assert any(
-            "Teams Sprint Review" in subj and "Alice Example" in body
+            "Teams Sprint Review" in subj
+            and "Alice Example" in body
+            and "TO-DO-LISTE" in body
             for subj, body in subjects_and_bodies
         )
         assert any(
             "Skills und Kollegen Negativfall" in subj and "mögliche Erfassungsstörung" in body
             for subj, body in subjects_and_bodies
         )
+        # Verify speech meetings' .md email attachments contain summary & To-Do list,
+        # while the zero-segment capture_anomaly attachment omits a fabricated summary.
+        md_by_subject = [
+            (m["Subject"], part.get_content())
+            for m in smtp_receiver.messages
+            for part in m.iter_attachments()
+            if (part.get_filename() or "").endswith(".md")
+        ]
+        assert len(md_by_subject) == 3
+        speech_mds = [
+            doc
+            for subj, doc in md_by_subject
+            if "Architektur-Sync Google" in subj or "Teams Sprint Review" in subj
+        ]
+        anomaly_mds = [
+            doc for subj, doc in md_by_subject if "Skills und Kollegen Negativfall" in subj
+        ]
+        assert len(speech_mds) == 2
+        assert len(anomaly_mds) == 1
+        for md_doc in speech_mds:
+            assert "## Zusammenfassung" in md_doc
+            assert "Das Team hat das Release verbindlich für Freitag beschlossen." in md_doc
+            assert "## To-Do-Liste" in md_doc
+            assert "- [ ] **Alice:** Deployment vorbereiten _(Fällig: Donnerstag)_" in md_doc
+        assert "## Zusammenfassung" not in anomaly_mds[0]
     finally:
         smtp_server.stop()
         http_server.shutdown()
         get_settings.cache_clear()
+
+
+def test_calendar_status_orders_upcoming_first_and_prevents_past_crowding(
+    client, database, monkeypatch
+):
+    from datetime import timedelta
+
+    import wortlaut.calendar_oauth as cal_oauth
+    from wortlaut.models import CalendarConnection, CalendarSyncedEvent
+
+    configure(monkeypatch)
+    now = datetime.now(UTC).replace(microsecond=0)
+
+    past_end = now - timedelta(days=2) + timedelta(minutes=30)
+    past_ics = mail(
+        uid="ics-past",
+        starts=f"DTSTART:{(now - timedelta(days=2)).strftime('%Y%m%dT%H%M%SZ')}",
+        ends=f"DTEND:{past_end.strftime('%Y%m%dT%H%M%SZ')}",
+    )
+    upcoming_ics = mail(
+        uid="ics-upcoming",
+        starts=f"DTSTART:{(now + timedelta(hours=2)).strftime('%Y%m%dT%H%M%SZ')}",
+        ends=f"DTEND:{(now + timedelta(hours=2, minutes=30)).strftime('%Y%m%dT%H%M%SZ')}",
+    )
+    assert imported(client, past_ics)["status"] == "accepted"
+    assert imported(client, upcoming_ics)["status"] == "accepted"
+
+    with Session(database) as db:
+        conn = CalendarConnection(
+            owner_sub="sub-owner",
+            owner_email="owner@example.org",
+            provider="google",
+            account_email="owner@example.org",
+            encrypted_access_token=cal_oauth.encrypt_secret("g-tok"),
+            encrypted_refresh_token=cal_oauth.encrypt_secret("g-ref"),
+            token_expires_at=now + timedelta(hours=1),
+        )
+        db.add(conn)
+        db.flush()
+
+        def _make_ev(ext_id: str, start: datetime, end: datetime) -> CalendarSyncedEvent:
+            return CalendarSyncedEvent(
+                connection_id=conn.id,
+                owner_sub="sub-owner",
+                owner_email="owner@example.org",
+                calendar_provider="google",
+                external_event_id=ext_id,
+                ical_uid=f"{ext_id}@example.org",
+                title=ext_id,
+                starts_at=start,
+                ends_at=end,
+                organizer_email="owner@example.org",
+                is_self_organized=True,
+                meeting_provider="google_meet",
+                meeting_url="https://meet.google.com/abc-defg-hij",
+                status="confirmed",
+                auto_record=False,
+                updated_at=now,
+            )
+
+        # 60 finished events over the last 5 days + 1 expired (>7 days) + 3 active/upcoming
+        rows = [
+            _make_ev(
+                "expired-old",
+                now - timedelta(days=9),
+                now - timedelta(days=9) + timedelta(minutes=30),
+            )
+        ]
+        for idx in range(60):
+            s = now - timedelta(hours=120 - idx)
+            rows.append(_make_ev(f"past-{idx:02d}", s, s + timedelta(minutes=30)))
+        rows.extend(
+            [
+                _make_ev(
+                    "upcoming-later",
+                    now + timedelta(days=2),
+                    now + timedelta(days=2, hours=1),
+                ),
+                _make_ev("running-now", now - timedelta(minutes=10), now + timedelta(minutes=20)),
+                _make_ev("upcoming-soon", now + timedelta(hours=1), now + timedelta(hours=2)),
+            ]
+        )
+        db.add_all(rows)
+        db.commit()
+
+    cal = client.get("/v1/calendar", headers=API).json()
+    ics_uids = [ev["uid"] for ev in cal["events"]]
+    assert ics_uids == ["ics-upcoming", "ics-past"]
+
+    ext_ids = [ev["external_event_id"] for ev in cal["synced_events"]]
+    assert ext_ids[:3] == ["running-now", "upcoming-soon", "upcoming-later"]
+    assert "expired-old" not in ext_ids
+    # Past events follow upcoming ones, newest first, capped at 50
+    assert len(ext_ids) == 3 + 50
+    assert ext_ids[3] == "past-59"
+    assert ext_ids[-1] == "past-10"
+

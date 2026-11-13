@@ -52,6 +52,7 @@ import {
   startCalendarOAuthConnect,
   toggleCalendarSyncedEvent,
 } from '../api';
+import { isPastCalendarSlot } from './CalendarWorkspace';
 import { useI18n, type UiLang } from '../i18n';
 import {
   formatBotDisplayName,
@@ -232,17 +233,18 @@ export function RecordingSidebar({
       r.participation === 'joining'
   );
 
-  const upcomingSyncedEvents = calendarSyncedEvents
-    .filter((ev) => {
-      if (ev.status === 'cancelled') return false;
-      const endMs = ev.ends_at
-        ? new Date(ev.ends_at).getTime()
-        : ev.starts_at
-          ? new Date(ev.starts_at).getTime() + 3600000
-          : Date.now() + 3600000;
-      return endMs >= Date.now() - 15 * 60000;
-    })
-    .slice(0, 3);
+  const nowMs = Date.now();
+  const allUpcomingSyncedEvents = calendarSyncedEvents
+    .filter(
+      (ev) =>
+        ev.status !== 'cancelled' &&
+        !isPastCalendarSlot(ev.ends_at, nowMs)
+    )
+    .sort(
+      (a, b) =>
+        new Date(a.starts_at).getTime() - new Date(b.starts_at).getTime()
+    );
+  const upcomingSyncedEvents = allUpcomingSyncedEvents.slice(0, 3);
 
   const handleToggleGuide = (dismissed: boolean) => {
     setGuideOpenManual(!dismissed);
@@ -1134,8 +1136,8 @@ export function RecordingSidebar({
                             variant="ghost"
                             size="sm"
                             label={tr(
-                              `Alle Kalendertermine (${calendarSyncedEvents.length})`,
-                              `All calendar events (${calendarSyncedEvents.length})`
+                              `Alle anstehenden Termine (${allUpcomingSyncedEvents.length})`,
+                              `All upcoming events (${allUpcomingSyncedEvents.length})`
                             )}
                             endContent={<ArrowRight className="h-3.5 w-3.5" />}
                             onClick={onNavigateCalendar}

@@ -2,13 +2,14 @@ import hmac
 import io
 import json
 import secrets
+import uuid
 import wave
 from datetime import UTC, datetime, timedelta
 from html import escape
 from zoneinfo import ZoneInfo
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import DateTime, func, or_, select
 from sqlalchemy.orm import Session
 
 from wortlaut.models import (
@@ -114,10 +115,10 @@ def wall_clock_time_de(origin_iso: str | None, offset_seconds: float) -> str:
         return short_timestamp(offset_seconds)
 
 
-# max_prob scale (see wortlaut.asr): a safety net below the ASR hallucination
-# rule, and a stricter bar for sub-300 ms fragments on ambiguous streams.
-MIN_EXPORT_SEGMENT_CONFIDENCE = 0.45
-MIN_SHORT_FRAGMENT_CONFIDENCE = 0.80
+# Qwen3-ASR BPE token-probability floor (see wortlaut.asr) and a stricter bar
+# for sub-300 ms fragments on shared SFU streams.
+MIN_EXPORT_SEGMENT_CONFIDENCE = 0.25
+MIN_SHORT_FRAGMENT_CONFIDENCE = 0.55
 _MAX_ADJACENT_TURN_GAP_SECONDS = 4.5
 _MAX_COALESCED_TURN_DURATION_SECONDS = 45.0
 
@@ -385,11 +386,18 @@ def speaker_label(segment, participant_names: dict[str, str] | None = None):
     return resolved_name or f"Sprecher {segment['speaker_id']}"
 
 
-def export_data(db: Session, recording: Recording):
+def export_data(
+    db: Session,
+    recording: Recording,
+    *,
+    tail_segments_limit: int | None = None,
+):
     attempts = db.scalars(select(Attempt).where(Attempt.recording_id == recording.id)).all()
     streams = db.scalars(
         select(AudioStream).where(AudioStream.attempt_id.in_([a.id for a in attempts]))
     ).all()
+    if tail_segments_limit is not None and not streams:
+        return {"segments": [], "opted_out_speakers": []}
     participant_names: dict[str, str] = {}
     for attempt in attempts:
         for p in attempt.diagnostics.get("participant_sources", {}).get("sources", []):
@@ -418,14 +426,57 @@ def export_data(db: Session, recording: Recording):
         pid = ctrl.contract.get("participant_id") or ctrl.contract.get("speaker_id")
         if pid and ctrl.contract.get("participant_name"):
             participant_names[pid] = ctrl.contract["participant_name"]
-    segments = [
-        dict(s.result)
-        for s in db.scalars(
-            select(TranscriptSegment)
-            .join(AsrJob)
-            .where(AsrJob.stream_id.in_([s.id for s in streams]))
-        ).all()
-    ]
+    meta = dict(recording.protocol_meta or {})
+    speaker_overrides: dict[str, str] = dict(meta.get("speaker_overrides") or {})
+    term_replacements: dict[str, str] = dict(meta.get("term_replacements") or {})
+    segment_edits: dict[str, str] = dict(meta.get("segment_edits") or {})
+    raw_edit_bounds = meta.get("segment_edit_bounds") or {}
+    segment_edit_bounds: dict[str, float] = {
+        str(k): float(v)
+        for k, v in raw_edit_bounds.items()
+        if isinstance(v, (int, float)) and not isinstance(v, bool)
+    }
+    protected_segment_ids = {
+        str(k) for k, v in segment_edits.items() if isinstance(v, str) and v.strip()
+    }
+    seg_query = (
+        select(TranscriptSegment)
+        .join(AsrJob)
+        .where(AsrJob.stream_id.in_([s.id for s in streams]))
+    )
+    if tail_segments_limit is not None:
+        non_empty_text = (
+            func.trim(func.coalesce(TranscriptSegment.result["text"].as_string(), "")) != ""
+        )
+        tail_filter = (
+            or_(non_empty_text, TranscriptSegment.id.in_(protected_segment_ids))
+            if protected_segment_ids
+            else non_empty_text
+        )
+        seg_utc_epoch = (
+            func.extract(
+                "epoch",
+                func.cast(
+                    TranscriptSegment.result["session_utc_origin"].as_string(),
+                    DateTime(timezone=True),
+                ),
+            )
+            + func.coalesce(TranscriptSegment.result["start"].as_float(), 0.0)
+        )
+        seg_rows = list(
+            reversed(
+                db.scalars(
+                    seg_query.where(tail_filter)
+                    .order_by(seg_utc_epoch.desc(), TranscriptSegment.id.desc())
+                    .limit(tail_segments_limit)
+                ).all()
+            )
+        )
+        if not seg_rows:
+            return {"segments": [], "opted_out_speakers": []}
+    else:
+        seg_rows = db.scalars(seg_query).all()
+    segments = [dict(s.result) for s in seg_rows]
     for seg in segments:
         pid = seg.get("participant_id") or seg.get("speaker_id")
         if pid and seg.get("participant_name"):
@@ -509,20 +560,6 @@ def export_data(db: Session, recording: Recording):
         if timeline:
             timeline.sort(key=lambda x: x[0])
             stream_bind_timeline[key] = timeline
-
-    meta = dict(recording.protocol_meta or {})
-    speaker_overrides: dict[str, str] = dict(meta.get("speaker_overrides") or {})
-    term_replacements: dict[str, str] = dict(meta.get("term_replacements") or {})
-    segment_edits: dict[str, str] = dict(meta.get("segment_edits") or {})
-    raw_edit_bounds = meta.get("segment_edit_bounds") or {}
-    segment_edit_bounds: dict[str, float] = {
-        str(k): float(v)
-        for k, v in raw_edit_bounds.items()
-        if isinstance(v, (int, float)) and not isinstance(v, bool)
-    }
-    protected_segment_ids = {
-        str(k) for k, v in segment_edits.items() if isinstance(v, str) and v.strip()
-    }
 
     apply_protocol_cleanup = len(segments) > 3
     resolved_segments: list[dict] = []
@@ -629,10 +666,15 @@ def export_data(db: Session, recording: Recording):
         else resolved_segments
     )
     segments.sort(key=lambda s: (s["start"], s["stream_id"], s["id"]))
+    resolved_speaker_overrides: dict[str, str] = {}
     if speaker_overrides:
         for k, v in speaker_overrides.items():
             if v and v.strip():
-                participant_names[k] = v.strip()
+                clean_v = v.strip()
+                resolved_speaker_overrides[k] = clean_v
+                if k in participant_names and participant_names[k]:
+                    resolved_speaker_overrides.setdefault(participant_names[k], clean_v)
+                participant_names[k] = clean_v
         opted_out_list, opted_out_norm = collect_opted_out_speakers(
             recording, attempts, participant_names
         )
@@ -658,6 +700,8 @@ def export_data(db: Session, recording: Recording):
             )
             if override and override.strip():
                 clean_override = override.strip()
+                if orig_label:
+                    resolved_speaker_overrides.setdefault(orig_label, clean_override)
                 seg["participant_name"] = clean_override
                 seg["speaker_name"] = clean_override
                 seg["speaker_label"] = clean_override
@@ -672,6 +716,11 @@ def export_data(db: Session, recording: Recording):
             continue
         filtered_segments.append(seg)
     segments = filtered_segments
+    if tail_segments_limit is not None:
+        return {
+            "segments": segments,
+            "opted_out_speakers": opted_out_list,
+        }
     qualities = [
         {
             "stream_id": str(s.stream_id),
@@ -706,12 +755,18 @@ def export_data(db: Session, recording: Recording):
         "participation_reason": recording.participation_reason,
         "scheduled_period": {
             "start": recording.starts_at.isoformat(),
-            "end": recording.ends_at.isoformat(),
+            "end": (
+                str(meta["scheduled_ends_at"])
+                if isinstance(meta.get("scheduled_ends_at"), str) and meta.get("scheduled_ends_at")
+                else recording.ends_at.isoformat()
+            ),
         },
         "time_origin_utc": origin.astimezone(UTC).isoformat(),
         "last_known_audio_utc": max(ends).isoformat() if ends else None,
         "audio_available": audio_available,
-        "summary": meta.get("summary"),
+        "summary": _resolve_summary(
+            meta.get("summary"), resolved_speaker_overrides, term_replacements
+        ),
         "notes": meta.get("notes") or "",
         "speaker_overrides": speaker_overrides,
         "term_replacements": term_replacements,
@@ -991,6 +1046,71 @@ def _build_sources_summary(
     return merged
 
 
+def _apply_text_replacements(value: str, term_replacements: dict[str, str]) -> str:
+    out = value
+    for old_t, new_t in term_replacements.items():
+        if old_t:
+            out = out.replace(old_t, new_t)
+    return out
+
+
+def _single_line(value: object) -> str:
+    return " ".join(str(value or "").split())
+
+
+def _resolve_summary(
+    raw_summary: object,
+    speaker_overrides: dict[str, str],
+    term_replacements: dict[str, str],
+) -> dict | None:
+    if not isinstance(raw_summary, dict):
+        return None
+    summary_text = _apply_text_replacements(
+        str(raw_summary.get("summary") or "").strip(), term_replacements
+    )
+    topics: list[dict[str, str]] = []
+    for t in raw_summary.get("topics") or []:
+        if not isinstance(t, dict):
+            continue
+        t_title = _single_line(
+            _apply_text_replacements(str(t.get("title") or ""), term_replacements)
+        )
+        t_details = _single_line(
+            _apply_text_replacements(str(t.get("details") or ""), term_replacements)
+        )
+        if t_title or t_details:
+            topics.append({"title": t_title, "details": t_details})
+    action_items: list[dict[str, str]] = []
+    for a in raw_summary.get("action_items") or []:
+        if not isinstance(a, dict):
+            continue
+        task = _single_line(_apply_text_replacements(str(a.get("task") or ""), term_replacements))
+        if not task:
+            continue
+        raw_owner = _single_line(a.get("owner")) or "Team"
+        override = speaker_overrides.get(raw_owner)
+        owner = (
+            _single_line(override)
+            if override and _single_line(override)
+            else _single_line(_apply_text_replacements(raw_owner, term_replacements))
+        )
+        due = _single_line(_apply_text_replacements(str(a.get("due") or ""), term_replacements))
+        item: dict[str, str] = {"owner": owner, "task": task}
+        if due:
+            item["due"] = due
+        action_items.append(item)
+    resolved: dict = {
+        "summary": summary_text,
+        "topics": topics,
+        "action_items": action_items,
+    }
+    if raw_summary.get("model"):
+        resolved["model"] = str(raw_summary["model"])
+    if raw_summary.get("generated_at"):
+        resolved["generated_at"] = str(raw_summary["generated_at"])
+    return resolved
+
+
 def render_export(data, format):
     if format == "json":
         return json.dumps(data, ensure_ascii=False, indent=2), "application/json"
@@ -1018,9 +1138,23 @@ def render_export(data, format):
     period = data["scheduled_period"]
     human_period = format_period_de(period.get("start"), period.get("end"))
     human_provider = provider_label(data.get("provider"))
-    title = data.get("title") or f"Wortprotokoll ({human_provider})"
+    title = _single_line(data.get("title")) or f"Wortprotokoll ({human_provider})"
     sources = data.get("sources_summary") or []
     total_speech = sum(float(s.get("speech_seconds") or 0.0) for s in sources)
+    notes_text = str(data.get("notes") or "").strip()
+    summary_data = data.get("summary") if isinstance(data.get("summary"), dict) else None
+    summary_text = str(summary_data.get("summary") or "").strip() if summary_data else ""
+    topics = [
+        t
+        for t in ((summary_data.get("topics") if summary_data else None) or [])
+        if isinstance(t, dict) and (_single_line(t.get("title")) or _single_line(t.get("details")))
+    ]
+    actions = [
+        a
+        for a in ((summary_data.get("action_items") if summary_data else None) or [])
+        if isinstance(a, dict) and _single_line(a.get("task"))
+    ]
+    has_summary_content = bool(summary_text or topics or actions)
     if format == "md":
         lines = [
             f"# {title}",
@@ -1031,26 +1165,33 @@ def render_export(data, format):
         if total_speech > 0:
             lines.append(f"- **Erfasste Sprechzeit:** {format_duration_de(total_speech)}")
         lines.append("")
-        summary_data = data.get("summary")
-        if isinstance(summary_data, dict) and summary_data.get("summary"):
-            lines.extend(["## Zusammenfassung", "", str(summary_data["summary"]).strip(), ""])
-            topics = summary_data.get("topics") or []
+        if summary_text or topics:
+            lines.extend(["## Zusammenfassung", ""])
+            if summary_text:
+                lines.extend([summary_text, ""])
             if topics:
                 lines.extend(["### Besprochene Themen & Ergebnisse", ""])
                 for t in topics:
-                    if isinstance(t, dict) and (t.get("title") or t.get("details")):
-                        lines.append(
-                            f"- **{t.get('title') or 'Thema'}:** {t.get('details') or ''}".strip()
-                        )
+                    t_title = _single_line(t.get("title")) or "Thema"
+                    t_details = _single_line(t.get("details"))
+                    lines.append(
+                        f"- **{t_title}:** {t_details}" if t_details else f"- **{t_title}**"
+                    )
                 lines.append("")
-            actions = summary_data.get("action_items") or []
+        if has_summary_content:
+            lines.extend(["## To-Do-Liste", ""])
             if actions:
-                lines.extend(["### Aufgaben & nächste Schritte", ""])
                 for a in actions:
-                    if isinstance(a, dict) and a.get("task"):
-                        owner = a.get("owner") or "Team"
-                        lines.append(f"- [ ] **{owner}:** {a['task']}")
-                lines.append("")
+                    owner = _single_line(a.get("owner")) or "Team"
+                    task = _single_line(a["task"])
+                    due = _single_line(a.get("due"))
+                    suffix = f" _(Fällig: {due})_" if due else ""
+                    lines.append(f"- [ ] **{owner}:** {task}{suffix}")
+            else:
+                lines.append("_Keine offenen Aufgaben vereinbart._")
+            lines.append("")
+        if notes_text:
+            lines.extend(["## Notizen", "", notes_text, ""])
         if sources:
             lines.extend(
                 [
@@ -1089,6 +1230,33 @@ def render_export(data, format):
             "-" * 72,
             "",
         ]
+        if summary_text or topics:
+            lines.extend(["ZUSAMMENFASSUNG", "-" * 72])
+            if summary_text:
+                lines.extend([summary_text, ""])
+            if topics:
+                lines.append("Besprochene Themen & Ergebnisse:")
+                for t in topics:
+                    t_title = _single_line(t.get("title")) or "Thema"
+                    t_details = _single_line(t.get("details"))
+                    lines.append(
+                        f"• {t_title}: {t_details}" if t_details else f"• {t_title}"
+                    )
+                lines.append("")
+        if has_summary_content:
+            lines.extend(["TO-DO-LISTE", "-" * 72])
+            if actions:
+                for a in actions:
+                    owner = _single_line(a.get("owner")) or "Team"
+                    task = _single_line(a["task"])
+                    due = _single_line(a.get("due"))
+                    suffix = f" (Fällig: {due})" if due else ""
+                    lines.append(f"[ ] {owner}: {task}{suffix}")
+            else:
+                lines.append("Keine offenen Aufgaben vereinbart.")
+            lines.append("")
+        if notes_text:
+            lines.extend(["NOTIZEN", "-" * 72, notes_text, ""])
         for segment in data["segments"]:
             text = " ".join(segment["text"].split())
             label = " ".join(segment["speaker_label"].split())
@@ -1114,32 +1282,65 @@ def render_export(data, format):
     return "\n".join(lines), "text/vtt; charset=utf-8"
 
 
-def generate_protocol_summary(db: Session, recording: Recording) -> dict:
-    settings = get_settings()
-    data = export_data(db, recording)
-    segments = data.get("segments") or []
-    if not segments:
-        raise ValueError("Kein Transkript für die KI-Zusammenfassung vorhanden.")
+def _opted_out_set(meta: object) -> set[str]:
+    if not isinstance(meta, dict):
+        return set()
+    return {
+        str(x).strip().lower()
+        for x in (meta.get("opted_out_speakers") or [])
+        if str(x).strip()
+    }
 
+
+def generate_protocol_summary(db: Session, recording_id: uuid.UUID) -> dict:
+    settings = get_settings()
+    recording = db.get(Recording, recording_id)
+    if recording is None or recording.transcript_deleted_at is not None:
+        db.rollback()
+        raise LookupError("recording_not_found")
+    prior_opted_out = _opted_out_set(recording.protocol_meta)
+    prior_participation = recording.participation
+    data = export_data(db, recording)
+    title = _single_line(recording.title) or f"Besprechung ({provider_label(recording.provider)})"
+    # End the read transaction before calling Ollama so no DB snapshot or row lock is held.
+    db.rollback()
+
+    segments = data.get("segments") or []
     origin_utc = data.get("time_origin_utc")
     transcript_lines: list[str] = []
+    known_speakers: list[str] = []
+    seen_speakers: set[str] = set()
     for seg in segments:
-        txt = " ".join((seg.get("text") or "").split())
+        txt = _single_line(seg.get("text"))
         if not txt:
             continue
         t0 = wall_clock_time_de(origin_utc, float(seg.get("start") or 0.0))
-        spk = seg.get("speaker_label") or "Sprecher"
+        spk = _single_line(seg.get("speaker_label")) or "Sprecher"
+        if (
+            spk
+            and spk.lower() not in seen_speakers
+            and not spk.lower().startswith(
+                ("sprecher", "teilnehmer", "freigabe-audio", "screen share")
+            )
+        ):
+            seen_speakers.add(spk.lower())
+            known_speakers.append(spk)
         transcript_lines.append(f"[{t0}] {spk}: {txt}")
+    if not transcript_lines:
+        raise ValueError("Kein Transkript für die KI-Zusammenfassung vorhanden.")
 
     transcript_text = "\n".join(transcript_lines)
-    if len(transcript_text) > 36000:
-        transcript_text = transcript_text[:36000] + "\n...[gekürzt]"
+    if len(transcript_text) > 64000:
+        transcript_text = (
+            transcript_text[:40000]
+            + "\n...[Mittelteil gekürzt]...\n"
+            + transcript_text[-24000:]
+        )
 
-    title = recording.title or f"Besprechung ({provider_label(recording.provider)})"
     system_prompt = (
         "Du bist ein präziser deutschsprachiger Protokollführer für Geschäftstreffen. "
         "Erstelle aus dem folgenden Wortprotokoll eine sachliche, strukturierte "
-        "Zusammenfassung auf Deutsch. "
+        "Zusammenfassung und To-Do-Liste auf Deutsch. "
         "Antworte ausschließlich als valides JSON-Objekt mit genau diesem Schema:\n"
         "{\n"
         '  "summary": "Prägnante Management-Zusammenfassung des Gesprächs (2-4 Sätze).",\n'
@@ -1149,12 +1350,22 @@ def generate_protocol_summary(db: Session, recording: Recording) -> dict:
         "  ],\n"
         '  "action_items": [\n'
         '    {"owner": "Name der Person (oder \'Team\')", '
-        '"task": "Konkrete vereinbarte Aufgabe oder nächster Schritt."}\n'
+        '"task": "Konkrete vereinbarte Aufgabe oder nächster Schritt.", '
+        '"due": "Im Gespräch genannter Termin/Zeitraum oder leerer String \\"\\""}\n'
         "  ]\n"
         "}\n"
-        "Erfinde keine Fakten oder Namen, die nicht im Transkript vorkommen."
+        "Wichtige Regeln:\n"
+        "- Erfinde keine Fakten, Fristen oder Namen, die nicht im Transkript vorkommen.\n"
+        "- Wenn keine konkreten Aufgaben oder nächsten Schritte vereinbart wurden, "
+        'gib ein leeres Array `"action_items": []` zurück.\n'
+        "- Übernimm die exakte Schreibweise der Teilnehmendennamen und Fachbegriffe."
     )
-    user_prompt = f"Titel der Besprechung: {title}\n\nWortprotokoll:\n{transcript_text}"
+    meta_lines = [f"Titel der Besprechung: {title}"]
+    if known_speakers:
+        meta_lines.append(f"Bekannte Teilnehmende: {', '.join(known_speakers)}")
+    if settings.asr_glossary:
+        meta_lines.append(f"Fachbegriffe / Glossar: {', '.join(settings.asr_glossary[:40])}")
+    user_prompt = "\n".join(meta_lines) + f"\n\nWortprotokoll:\n{transcript_text}"
 
     url = settings.ollama_url.rstrip("/") + "/api/chat"
     resp = httpx.post(
@@ -1164,7 +1375,7 @@ def generate_protocol_summary(db: Session, recording: Recording) -> dict:
             "think": False,
             "stream": False,
             "format": "json",
-            "options": {"num_ctx": 16384, "temperature": 0.2},
+            "options": {"num_ctx": 32768, "temperature": 0.2},
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
@@ -1172,35 +1383,54 @@ def generate_protocol_summary(db: Session, recording: Recording) -> dict:
         },
         timeout=float(settings.ollama_timeout_seconds),
     )
-    if getattr(resp, "status_code", 200) != 200:
+    if resp.status_code != 200:
         raise RuntimeError(f"ollama_http_{resp.status_code}")
 
     raw_content = (resp.json().get("message") or {}).get("content") or "{}"
     parsed = json.loads(raw_content)
+    action_items: list[dict[str, str]] = []
+    for a in parsed.get("action_items") or []:
+        if not isinstance(a, dict) or not _single_line(a.get("task")):
+            continue
+        item: dict[str, str] = {
+            "owner": _single_line(a.get("owner")) or "Team",
+            "task": _single_line(a.get("task")),
+        }
+        due = _single_line(a.get("due"))
+        if due:
+            item["due"] = due
+        action_items.append(item)
     summary_obj = {
         "summary": str(parsed.get("summary") or "").strip(),
         "topics": [
             {
-                "title": str(t.get("title") or "").strip(),
-                "details": str(t.get("details") or "").strip(),
+                "title": _single_line(t.get("title")),
+                "details": _single_line(t.get("details")),
             }
             for t in (parsed.get("topics") or [])
-            if isinstance(t, dict) and (t.get("title") or t.get("details"))
+            if isinstance(t, dict)
+            and (_single_line(t.get("title")) or _single_line(t.get("details")))
         ],
-        "action_items": [
-            {
-                "owner": str(a.get("owner") or "Team").strip(),
-                "task": str(a.get("task") or "").strip(),
-            }
-            for a in (parsed.get("action_items") or [])
-            if isinstance(a, dict) and a.get("task")
-        ],
+        "action_items": action_items,
         "model": settings.ollama_model,
         "generated_at": datetime.now(UTC).isoformat(),
     }
-    meta = dict(recording.protocol_meta or {})
+
+    locked_rec = db.scalar(
+        select(Recording).where(Recording.id == recording_id).with_for_update()
+    )
+    if locked_rec is None or locked_rec.transcript_deleted_at is not None:
+        db.rollback()
+        raise LookupError("recording_not_found")
+    if prior_participation == "ended" and locked_rec.participation != "ended":
+        db.rollback()
+        raise ValueError("Aufnahme wurde während der Zusammenfassung neu gestartet.")
+    if _opted_out_set(locked_rec.protocol_meta) != prior_opted_out:
+        db.rollback()
+        raise ValueError("Teilnehmer-Opt-out während der Zusammenfassung erkannt.")
+    meta = dict(locked_rec.protocol_meta or {})
     meta["summary"] = summary_obj
-    recording.protocol_meta = meta
+    locked_rec.protocol_meta = meta
     db.commit()
     return summary_obj
 

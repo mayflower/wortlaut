@@ -41,7 +41,7 @@ def test_busy_inference_is_rejected_without_running_a_second_model_call(monkeypa
     calls = []
 
     class FixtureModel:
-        def transcribe(self, audio):
+        def transcribe(self, audio, **_):
             calls.append(audio)
             entered.set()
             assert release.wait(5)
@@ -88,7 +88,7 @@ def test_accelerator_failure_rejects_jobs_and_marks_gpu_process_unhealthy(monkey
 
     calls = []
 
-    def fail(audio):
+    def fail(audio, **_):
         calls.append(True)
         raise AcceleratorFailure("fixture CUDA client failure")
 
@@ -123,7 +123,7 @@ def test_shared_gpu_out_of_memory_is_retryable_and_keeps_process_healthy(monkeyp
 
     emptied, calls = [], []
 
-    def transcribe(audio):
+    def transcribe(audio, **_):
         calls.append(True)
         if len(calls) == 1:
             raise OutOfMemory("fixture shared GPU allocation failure")
@@ -489,3 +489,201 @@ def test_padding_chat_template_dtype_and_step1_language_gate(monkeypatch):
     assert features_tensor.moves == [("cuda", "bf16")]
     assert out == {"text": "", "language": None, "words": [], "truncated": False}
     assert service.parse_allowed_languages("*") is None
+
+    # 5. Short German utterance with low speech mass (0.05 >= 0.02) stays German,
+    #    primary_language="German" short-clip prior wins over ambiguous English,
+    #    and mass preservation ensures true short non-speech (`None` = 0.70) stays `None`.
+    short_de_probs = np.full((1, 20), 1e-6)
+    short_de_probs[0, 16] = 0.85
+    short_de_probs[0, 13] = 0.03
+    short_de_probs[0, 12] = 0.02
+    short_de_probs[0, 11] = 0.03
+    gated_short_de = service.apply_language_step_gate(
+        FakeTensor(np.log(short_de_probs)),
+        allowed_ids,
+        11,
+        (14, 15),
+        duration=1.2,
+        primary_language="German",
+    )
+    assert int(np.argmax(gated_short_de.arr[0])) == 12
+    short_nonspeech_probs = np.full((1, 20), 1e-6)
+    short_nonspeech_probs[0, 11] = 0.70
+    short_nonspeech_probs[0, 12] = 0.20
+    short_nonspeech_probs[0, 13] = 0.05
+    gated_short_nonspeech = service.apply_language_step_gate(
+        FakeTensor(np.log(short_nonspeech_probs)),
+        allowed_ids,
+        11,
+        (14, 15),
+        duration=1.2,
+        primary_language="German",
+    )
+    assert int(np.argmax(gated_short_nonspeech.arr[0])) == 11
+    # Genuine strong English (0.94) on a short clip still wins over German prior.
+    gated_short_en = service.apply_language_step_gate(
+        FakeTensor(np.log(en_probs)),
+        allowed_ids,
+        11,
+        (14, 15),
+        duration=1.2,
+        primary_language="German",
+    )
+    assert int(np.argmax(gated_short_en.arr[0])) == 13
+
+
+def test_cjk_token_masking_none_suppression_and_context_prompt_header(monkeypatch):
+    import base64
+
+    service = load_service("cjk_context_fixture")
+
+    class FakeTensor:
+        def __init__(self, arr, floating=True):
+            self.arr = np.array(arr, dtype=np.float64 if floating else np.int64)
+            self._floating = floating
+
+        @property
+        def shape(self):
+            return self.arr.shape
+
+        def is_floating_point(self):
+            return self._floating
+
+        def to(self, device=None, dtype=None):
+            return self
+
+        def float(self):
+            return self
+
+        def clone(self):
+            return FakeTensor(self.arr.copy(), self._floating)
+
+        def __getitem__(self, idx):
+            val = self.arr[idx]
+            if np.ndim(val) == 0:
+                return float(val) if self._floating else int(val)
+            return FakeTensor(val, self._floating)
+
+        def __setitem__(self, idx, value):
+            self.arr[idx] = value.arr if isinstance(value, FakeTensor) else value
+
+    monkeypatch.setitem(
+        sys.modules,
+        "torch",
+        SimpleNamespace(
+            AcceleratorError=RuntimeError,
+            OutOfMemoryError=MemoryError,
+            inference_mode=nullcontext,
+            softmax=lambda t, dim=-1: FakeTensor(
+                np.exp(t.arr) / np.sum(np.exp(t.arr), axis=dim, keepdims=True)
+            ),
+            full_like=lambda t, v: FakeTensor(np.full_like(t.arr, v, dtype=np.float64)),
+        ),
+    )
+
+    vocab = {
+        "language": 10,
+        " None": 11,
+        " German": 12,
+        " English": 13,
+        "<asr_text>": 14,
+        "<|im_end|>": 15,
+        "ĠMayflower": 16,
+        "啊": 18,
+        "叫": 19,
+    }
+    captured = {}
+
+    class Tokenizer:
+        def get_vocab(self):
+            return vocab
+
+        def encode(self, text, add_special_tokens=False):
+            return [vocab[text]] if text in vocab else []
+
+        def convert_tokens_to_ids(self, tok):
+            return vocab.get(tok, -1)
+
+        def convert_ids_to_tokens(self, generated):
+            rev = {v: k for k, v in vocab.items()}
+            return [rev.get(i, "?") for i in generated]
+
+        def convert_tokens_to_string(self, group):
+            return "".join(group).replace("Ġ", " ")
+
+    class Processor:
+        tokenizer = Tokenizer()
+        mode = "german"
+
+        def apply_chat_template(self, conversations, tokenize, add_generation_prompt):
+            captured["messages"] = conversations[0]
+            return "<prompt-with-context>"
+
+        def __call__(self, text, audio, return_tensors):
+            return {
+                "input_ids": FakeTensor([[1, 2, 3]], floating=False),
+                "input_features": FakeTensor([[0.1, 0.2]], floating=True),
+            }
+
+        def decode(self, generated, return_format):
+            if self.mode == "none_with_cjk":
+                return [{"language": "None", "transcription": "啊，所以啊。"}]
+            return [{"language": "German", "transcription": "Mayflower"}]
+
+    class Network:
+        device, dtype = "cpu", "fp32"
+
+        def generate(self, **kwargs):
+            gate = kwargs["logits_processor"][0]
+            step2_scores = FakeTensor(np.zeros((1, 20)))
+            masked_step2 = gate(
+                FakeTensor([[1, 2, 3, 10, 12, 14]], floating=False), step2_scores
+            )
+            captured["cjk_masked"] = (
+                masked_step2.arr[0, 18] == float("-inf")
+                and masked_step2.arr[0, 19] == float("-inf")
+                and masked_step2.arr[0, 16] == 0.0
+            )
+            if Processor.mode == "none_with_cjk":
+                seq = np.array([[1, 2, 3, 10, 11, 14, 18, 15]])
+            else:
+                seq = np.array([[1, 2, 3, 10, 12, 14, 16, 15]])
+            return SimpleNamespace(sequences=seq, scores=None)
+
+        def compute_transition_scores(self, sequences, scores, normalize_logits):
+            vals = [0.95] * (sequences.shape[1] - 3)
+            return [SimpleNamespace(exp=lambda: SimpleNamespace(tolist=lambda: vals))]
+
+    proc = Processor()
+    asr = service.QwenASR(proc, Network(), allowed_languages="German,English")
+    assert asr.forbidden_script_token_ids == [18, 19]
+
+    # Even if Qwen3-ASR emitted CJK tokens after `language None`, output MUST be empty.
+    proc.mode = "none_with_cjk"
+    none_res = asr.transcribe(np.zeros(16000, np.float32))
+    assert none_res == {"text": "", "language": None, "words": [], "truncated": False}
+    assert bool(captured["cjk_masked"]) is True
+
+    # HTTP /v1/transcribe forwards UTF-8 base64 context glossary + primary language.
+    proc.mode = "german"
+    monkeypatch.setenv("WORTLAUT_ASR_TOKEN", "ctx-token")
+    service.model = asr
+    client = TestClient(service.app)
+    ctx_str = "Thema: mAIstack Sync | Teilnehmende: Björn Müller | Glossar: Mayflower, Astryx"
+    ctx_b64 = base64.b64encode(ctx_str.encode("utf-8")).decode("ascii")
+    resp = client.post(
+        "/v1/transcribe",
+        content=np.zeros(8000, dtype="<i2").tobytes(),
+        headers={
+            "Authorization": "Bearer ctx-token",
+            "X-Job-ID": "b" * 64,
+            "X-ASR-Context-B64": ctx_b64,
+            "X-Primary-Language": "German",
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json()["text"] == "Mayflower"
+    assert captured["messages"][0] == {
+        "role": "system",
+        "content": [{"type": "text", "text": ctx_str}],
+    }

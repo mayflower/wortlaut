@@ -7,10 +7,13 @@ import type {MeetInput} from './browser.js';
 import {AudioTransport} from '../src/transport.js';
 import {isTeamsOrigin, teamsOrigins} from '../src/teams-url.js';
 import {isZoomOrigin} from '../src/zoom-url.js';
+import {installVideoTile, type VideoTilePatch} from './video-tile.js';
 
 export type MeetBootstrap = {provider: 'google_meet'; meeting_id: string; attempt_id: string;
   meeting_url: string; deadline: string; lobby_timeout_seconds: number;
   empty_room_timeout_seconds?: number; chat_intro?: string | null;
+  invited_by: string | null; invited_by_name: string | null; meeting_title: string | null;
+  default_locale: string;
   meet: {display_name: string; locale: string; auth_mode: 'guest' | 'account'}};
 
 export class MeetError extends Error {
@@ -514,6 +517,7 @@ export class MeetBrowser {
   private rosterOpened = false;
   private chatRestored = false;
   private initialize?: () => Promise<void>;
+  private pushVideoTile?: (patch: VideoTilePatch) => Promise<void>;
 
   constructor(private readonly page: Page, private readonly bootstrap: MeetBootstrap,
     api: string, credential: string, workerId: string,
@@ -528,6 +532,11 @@ export class MeetBrowser {
   }
 
   async prepare() {
+    this.pushVideoTile = await installVideoTile(this.page, 'google_meet', this.bootstrap.meeting_url, {
+      locale: this.bootstrap.default_locale,
+      invitedBy: this.bootstrap.invited_by_name ?? this.bootstrap.invited_by,
+      meetingTitle: this.bootstrap.meeting_title,
+    });
     this.initialize = await installMeetCapture(this.page, this.bootstrap, {
       begin: (metadata) => this.transport.control(metadata as Record<string, unknown> & {id: string}),
       bind: (metadata) => this.transport.control(metadata as Record<string, unknown> & {id: string}),
@@ -537,6 +546,10 @@ export class MeetBrowser {
       error: (reason) => { this.reason = reason; },
     }, this.assets);
     this.transport.connect();
+  }
+
+  async updateVideoTile(patch: VideoTilePatch) {
+    await this.pushVideoTile?.(patch);
   }
 
   private async dismissSigninTip() {
@@ -598,31 +611,49 @@ export class MeetBrowser {
     } else if (this.bootstrap.meet.auth_mode === 'guest') {
       throw new MeetError('guest_name_missing');
     }
-    for (const [off, on, reason, permission, kind] of [
-      [actions.micOff, actions.micOn, 'microphone_state_unconfirmed', 'microphone', 'audioinput'],
-      [actions.cameraOff, actions.cameraOn, 'camera_state_unconfirmed', 'camera', 'videoinput'],
-    ] as const) {
+    // Microphone must strictly be confirmed OFF; virtual live-transcript camera stays ON when available.
+    {
       await this.dismissWithoutMedia()
         .catch(() => { throw new MeetError('join_click_failed'); });
-      const turnOff = this.page.getByRole('button', {name: off});
-      if (await visible(turnOff)) {
-        // With no device, Meet can show an off action that only opens a missing-
-        // device warning. Confirm Chromium denies capture before skipping it.
-        const unavailable = await this.page.evaluate(async ({permission, kind}) => {
-          const status = await navigator.permissions.query({name: permission as PermissionName});
+      let skipMicOnWait = false;
+      const turnOffMic = this.page.getByRole('button', {name: actions.micOff});
+      if (await visible(turnOffMic)) {
+        const micUnavailable = await this.page.evaluate(async () => {
+          const status = await navigator.permissions.query({name: 'microphone' as PermissionName});
           return status.state === 'denied' &&
-            !(await navigator.mediaDevices.enumerateDevices()).some(device => device.kind === kind);
-        }, {permission, kind}).catch(() => false);
-        if (unavailable) continue;
-        await this.input.click(turnOff)
-          .catch(() => { throw new MeetError(reason); });
+            !(await navigator.mediaDevices.enumerateDevices()).some(device => device.kind === 'audioinput');
+        }).catch(() => false);
+        if (micUnavailable) {
+          skipMicOnWait = true;
+        } else {
+          await this.input.click(turnOffMic)
+            .catch(() => { throw new MeetError('microphone_state_unconfirmed'); });
+        }
       }
-      await this.dismissWithoutMedia()
-        .catch(() => { throw new MeetError('join_click_failed'); });
-      // Refuse to join with an unconfirmed sending state. Browser permissions
-      // are empty as well; no fake microphone/camera is supplied in production.
-      await this.page.getByRole('button', {name: on}).first().waitFor({state: 'visible', timeout: 10000})
-        .catch(() => { throw new MeetError(reason); });
+      if (!skipMicOnWait) {
+        await this.dismissWithoutMedia()
+          .catch(() => { throw new MeetError('join_click_failed'); });
+        await this.page.getByRole('button', {name: actions.micOn}).first().waitFor({state: 'visible', timeout: 10000})
+          .catch(() => { throw new MeetError('microphone_state_unconfirmed'); });
+      }
+
+      if (!await visible(this.page.getByRole('button', {name: actions.cameraOff}))) {
+        const enableCamera = this.page.getByRole('button', {
+          name: /^(Turn on camera|Kamera einschalten|Kamera aktivieren)(?: \(.*\))?$/i,
+        });
+        if (await visible(enableCamera)) {
+          await this.input.click(enableCamera.first()).catch(() => {});
+          await this.dismissWithoutMedia().catch(() => {});
+        }
+      }
+      if (await this.page.evaluate(() => [...(window.wortlautMeetReceivers?.connections ?? [])]
+        .some(pc => pc.getSenders().some(sender => {
+          const track = sender.track as (MediaStreamTrack & {__wortlautVirtualVideo?: boolean}) | null;
+          if (!track || track.readyState !== 'live' || !track.enabled) return false;
+          return track.kind === 'audio' || !track.__wortlautVirtualVideo;
+        }))).catch(() => false)) {
+        throw new MeetError('meet_sending_device_active');
+      }
     }
     if (this.stopping) return;
     await this.dismissWithoutMedia()
@@ -793,7 +824,10 @@ export class MeetBrowser {
 
   stop(reason: string) {
     return this.stopping ??= (async () => {
-      const bridged = await this.page.evaluate(() => window.wortlautMeet?.stop()).catch(() => false);
+      const bridged = await this.page.evaluate(() => {
+        window.wortlautVideoTile?.stop();
+        return window.wortlautMeet?.stop();
+      }).catch(() => false);
       this.drained = (await this.transport.drain()) && bridged === true;
       if (!['removed', 'meeting_ended', 'admission_denied', 'prejoin_denied'].includes(reason)) {
         const leave = this.page.getByRole('button', {name: actions.leave});

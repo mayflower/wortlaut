@@ -163,11 +163,13 @@ class LocalProcessRuntime(LocalSecretStore):
         if not entry:
             raise ApiException(status=404, reason="Not Found")
         deadline = (body.get("spec") or {}).get("activeDeadlineSeconds")
+        elapsed = (datetime.now(UTC) - entry["start_time"]).total_seconds()
         if deadline is not None:
             entry["active_deadline_seconds"] = deadline
-        proc = self.procs.get(name)
-        if proc and proc.poll() is None:
-            proc.send_signal(signal.SIGTERM)
+        if deadline is None or deadline <= elapsed + 1:
+            proc = self.procs.get(name)
+            if proc and proc.poll() is None:
+                proc.send_signal(signal.SIGTERM)
         return self._to_job(entry)
 
     def list_namespaced_pod(self, _namespace: str, label_selector: str = "", **_kwargs):
@@ -334,9 +336,11 @@ class DockerRuntime(LocalSecretStore):
         if not entry:
             raise ApiException(status=404, reason="Not Found")
         deadline = (body.get("spec") or {}).get("activeDeadlineSeconds")
+        elapsed = (datetime.now(UTC) - entry["start_time"]).total_seconds()
         if deadline is not None:
             entry["active_deadline_seconds"] = deadline
-        self._docker_request("POST", f"/containers/{name}/stop?t=15")
+        if deadline is None or deadline <= elapsed + 1:
+            self._docker_request("POST", f"/containers/{name}/stop?t=15")
         return LocalProcessRuntime._to_job(entry)
 
     def list_namespaced_pod(self, _namespace: str, label_selector: str = "", **_kwargs):

@@ -330,18 +330,30 @@ def import_event(
     entry.status = "accepted"
     db.flush()
     if recording:
+        raw_sched = (
+            recording.protocol_meta.get("scheduled_ends_at")
+            if isinstance(recording.protocol_meta, dict)
+            else None
+        )
+        baseline_ends = (
+            datetime.fromisoformat(raw_sched).astimezone(UTC)
+            if isinstance(raw_sched, str) and raw_sched
+            else recording.ends_at
+        )
         if recording.participation == "ended":
             entry.reason = "historical_unchanged"
         elif recording.active_attempt_id and (
             recording.starts_at != starts
             or recording.meeting_url != link
             or recording.provider != provider
-            or recording.ends_at != ends
+            or baseline_ends != ends
         ):
             entry.status, entry.reason = "conflict", "active_change_conflict"
             recording.calendar_conflict = True
         else:
-            recording.starts_at, recording.ends_at, recording.meeting_url = starts, ends, link
+            recording.starts_at, recording.meeting_url = starts, link
+            if not recording.active_attempt_id or ends > recording.ends_at:
+                recording.ends_at = ends
             recording.provider = provider
             recording.title = title
             recording.calendar_conflict = False
