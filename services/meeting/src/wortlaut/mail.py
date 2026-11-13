@@ -242,6 +242,7 @@ def _build_completed_bodies(
         for note in notices:
             plain_lines.append(f"• {note}")
 
+    has_summary_content = bool(summary_text or topics or actions)
     if summary_text or topics:
         plain_lines.extend(["", "ZUSAMMENFASSUNG", "-" * 68])
         if summary_text:
@@ -254,14 +255,17 @@ def _build_completed_bodies(
                 t_details = " ".join(str(t.get("details") or "").split())
                 plain_lines.append(f"• {t_title}: {t_details}" if t_details else f"• {t_title}")
 
-    if actions:
+    if has_summary_content:
         plain_lines.extend(["", "TO-DO-LISTE", "-" * 68])
-        for a in actions:
-            owner = " ".join(str(a.get("owner") or "Team").split()) or "Team"
-            task = " ".join(str(a["task"]).split())
-            due = " ".join(str(a.get("due") or "").split())
-            suffix = f" (Fällig: {due})" if due else ""
-            plain_lines.append(f"[ ] {owner}: {task}{suffix}")
+        if actions:
+            for a in actions:
+                owner = " ".join(str(a.get("owner") or "Team").split()) or "Team"
+                task = " ".join(str(a["task"]).split())
+                due = " ".join(str(a.get("due") or "").split())
+                suffix = f" (Fällig: {due})" if due else ""
+                plain_lines.append(f"[ ] {owner}: {task}{suffix}")
+        else:
+            plain_lines.append("Keine offenen Aufgaben vereinbart.")
 
     if speakers:
         plain_lines.extend(["", "SPRECHERANTEILE", "-" * 68])
@@ -326,7 +330,7 @@ def _build_completed_bodies(
         )
 
     summary_html = ""
-    if summary_text or topics or actions:
+    if has_summary_content:
         summary_parts = []
         if summary_text:
             summary_parts.append(
@@ -334,40 +338,51 @@ def _build_completed_bodies(
                 f"{escape(summary_text)}</div>"
             )
         if topics:
-            topic_items = "".join(
-                "<li style='margin:4px 0;font-size:13px;line-height:1.5;color:#334155;'>"
-                f"<strong>{escape(str(t.get('title') or 'Thema').strip())}:</strong> "
-                f"{escape(str(t.get('details') or '').strip())}</li>"
-                for t in topics
-            )
+            topic_rows = []
+            for t in topics:
+                t_title = " ".join(str(t.get("title") or "Thema").split())
+                t_details = " ".join(str(t.get("details") or "").split())
+                body_html = (
+                    f"<strong>{escape(t_title)}:</strong> {escape(t_details)}"
+                    if t_details
+                    else f"<strong>{escape(t_title)}</strong>"
+                )
+                topic_rows.append(
+                    "<li style='margin:4px 0;font-size:13px;line-height:1.5;color:#334155;'>"
+                    f"{body_html}</li>"
+                )
             summary_parts.append(
                 "<div style='margin-top:8px;'>"
                 "<div style='font-size:11px;font-weight:700;text-transform:uppercase;"
                 "letter-spacing:0.06em;color:#475569;margin-bottom:4px;'>"
                 "Besprochene Themen &amp; Ergebnisse</div>"
-                f"<ul style='margin:0;padding-left:18px;'>{topic_items}</ul></div>"
+                f"<ul style='margin:0;padding-left:18px;'>{''.join(topic_rows)}</ul></div>"
             )
         if actions:
-            action_items_html = "".join(
-                "<div style='margin:5px 0;font-size:13px;line-height:1.5;color:#0f172a;'>"
-                "☐ "
-                f"<strong>{escape(str(a.get('owner') or 'Team').strip())}:</strong> "
-                f"{escape(str(a['task']).strip())}"
-                + (
-                    " <span style='color:#64748b;'>"
-                    f"(Fällig: {escape(str(a['due']).strip())})</span>"
-                    if str(a.get("due") or "").strip()
-                    else ""
+            action_rows = []
+            for a in actions:
+                owner = " ".join(str(a.get("owner") or "Team").split()) or "Team"
+                task = " ".join(str(a["task"]).split())
+                due = " ".join(str(a.get("due") or "").split())
+                due_html = (
+                    f" <span style='color:#64748b;'>(Fällig: {escape(due)})</span>" if due else ""
                 )
-                + "</div>"
-                for a in actions
+                action_rows.append(
+                    "<div style='margin:5px 0;font-size:13px;line-height:1.5;color:#0f172a;'>"
+                    f"☐ <strong>{escape(owner)}:</strong> {escape(task)}{due_html}</div>"
+                )
+            action_items_html = "".join(action_rows)
+        else:
+            action_items_html = (
+                "<div style='font-size:13px;line-height:1.5;color:#64748b;font-style:italic;'>"
+                "Keine offenen Aufgaben vereinbart.</div>"
             )
-            summary_parts.append(
-                "<div style='margin-top:12px;padding-top:10px;border-top:1px solid #d1fae5;'>"
-                "<div style='font-size:11px;font-weight:700;text-transform:uppercase;"
-                "letter-spacing:0.06em;color:#047857;margin-bottom:6px;'>To-Do-Liste</div>"
-                f"{action_items_html}</div>"
-            )
+        summary_parts.append(
+            "<div style='margin-top:12px;padding-top:10px;border-top:1px solid #d1fae5;'>"
+            "<div style='font-size:11px;font-weight:700;text-transform:uppercase;"
+            "letter-spacing:0.06em;color:#047857;margin-bottom:6px;'>To-Do-Liste</div>"
+            f"{action_items_html}</div>"
+        )
         summary_html = (
             "<div style='background:#f0fdf4;border:1px solid #bbf7d0;border-radius:12px;"
             "padding:16px 18px;margin-bottom:22px;'>"

@@ -1465,10 +1465,15 @@ def rejoin_recording(recording_id: uuid.UUID, db: Db, principal: AuthPrincipal):
     recording.processing = "pending"
     recording.processing_error = None
     recording.processing_finished_at = None
-    if isinstance(recording.protocol_meta, dict) and "summary" in recording.protocol_meta:
+    if isinstance(recording.protocol_meta, dict):
         meta = dict(recording.protocol_meta)
-        meta.pop("summary", None)
-        recording.protocol_meta = meta
+        changed_meta = False
+        for key in ("summary", "summary_claim_until", "scheduled_ends_at"):
+            if key in meta:
+                meta.pop(key, None)
+                changed_meta = True
+        if changed_meta:
+            recording.protocol_meta = meta
     existing_delivery = db.get(Delivery, recording.id)
     if existing_delivery is not None:
         db.delete(existing_delivery)
@@ -1557,16 +1562,12 @@ def update_recording_protocol(
                 item["due"] = due
             cleaned_actions.append(item)
         if cleaned_summary_text or cleaned_topics or cleaned_actions:
-            prior_summary = meta.get("summary")
-            summary_payload: dict = {
+            meta["summary"] = {
                 "summary": cleaned_summary_text,
                 "topics": cleaned_topics,
                 "action_items": cleaned_actions,
                 "generated_at": datetime.now(UTC).isoformat(),
             }
-            if isinstance(prior_summary, dict) and prior_summary.get("model"):
-                summary_payload["model"] = str(prior_summary["model"])
-            meta["summary"] = summary_payload
         else:
             meta.pop("summary", None)
     if body.speaker_overrides is not None:
@@ -1654,7 +1655,12 @@ def create_recording_summary(
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from None
     except Exception as exc:
-        raise HTTPException(502, f"KI-Zusammenfassung fehlgeschlagen: {exc}") from None
+        reason = (
+            str(exc)
+            if isinstance(exc, RuntimeError) and str(exc).startswith("ollama_")
+            else type(exc).__name__
+        )
+        raise HTTPException(502, f"KI-Zusammenfassung fehlgeschlagen ({reason})") from None
     try:
         locked_rec = db.scalar(
             select(Recording).where(Recording.id == recording_id).with_for_update()
@@ -2034,6 +2040,7 @@ def worker_status(
     now = datetime.now(UTC)
     prev_diag = attempt.diagnostics if isinstance(attempt.diagnostics, dict) else {}
     prev_active_samples = int(prev_diag.get("active_audio_samples") or 0)
+    prev_audio_samples = int(prev_diag.get("audio_samples") or 0)
     attempt.last_heartbeat_at = now
     # Status is evidence about the current worker, not a provider acceptance test.
     attempt.diagnostics = body.model_dump(mode="json", exclude={"participation"})
@@ -2063,11 +2070,18 @@ def worker_status(
         and settings.bootstrap_lifetime_seconds == 0
         and now >= recording.ends_at - timedelta(minutes=2)
     ):
-        room_active = (
-            (body.active_audio_samples > prev_active_samples and body.streams > 0)
-            or (body.participant_sources.dom_participants or 0) >= 1
-            or body.participant_sources.total >= 1
+        dom_count = body.participant_sources.dom_participants
+        is_sdk_worker = body.configured_speaker_slots is not None
+        has_live_participants = (
+            dom_count >= 1
+            if dom_count is not None
+            else (is_sdk_worker and body.participant_sources.total >= 2)
         )
+        speech_advancing = body.streams > 0 and (
+            body.active_audio_samples > prev_active_samples
+            or (is_sdk_worker and body.audio_samples > prev_audio_samples)
+        )
+        room_active = speech_advancing or has_live_participants
         if room_active:
             meta = dict(recording.protocol_meta or {})
             raw_sched = meta.get("scheduled_ends_at")

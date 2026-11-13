@@ -46,7 +46,9 @@ export class ZoomBrowser {
   private videoStartAttempts = 0;
   private videoStopped = false;
   private chatSent = false;
+  private chatAttempts = 0;
   private rosterOpened = false;
+  private rosterAttempts = 0;
   private drained: boolean | null = null;
   private pushVideoTile?: (patch: VideoTilePatch) => Promise<void>;
 
@@ -191,7 +193,8 @@ export class ZoomBrowser {
   }
 
   private async ensureRosterOpen() {
-    if (this.rosterOpened) return;
+    if (this.rosterOpened || this.rosterAttempts >= 6) return;
+    this.rosterAttempts += 1;
     try {
       const rosterPanel = this.page.locator('.participants-section-container, #participants-list, [aria-label*="Participants" i][role="region"]');
       if (await rosterPanel.first().isVisible().catch(() => false)) {
@@ -211,12 +214,13 @@ export class ZoomBrowser {
   }
 
   private async sendChatIntro() {
-    if (this.chatSent) return;
+    if (this.chatSent || this.chatAttempts >= 8) return;
     const text = this.bootstrap.chat_intro?.trim();
     if (!text) {
       this.chatSent = true;
       return;
     }
+    this.chatAttempts += 1;
     try {
       const chatInput = this.page.locator(
         'textarea.chat-box__chat-textarea, [contenteditable="true"][aria-label*="chat" i], textarea[placeholder*="Type message" i], textarea[placeholder*="Nachricht" i]'
@@ -399,7 +403,7 @@ export class ZoomBrowser {
       participant_sources: capture?.participant_sources ?? {available: false, total: 0, truncated: false, sources: []},
       data_channels: capture?.data_channels ?? [],
       sdp: capture?.sdp ?? {descriptions: 0, audio_sections: 0, video_sections: 0, ssrc_count: 0, cname_count: 0, msid_count: 0},
-      audio_clock: capture?.audio_clock ?? {interrupted: false, gap_samples: 0, max_gap_samples: 0},
+      audio_clock: capture?.audio_clock ?? {state: 'unknown', total_interruptions: 0, interruptions: []},
       drained: this.drained,
     };
   }

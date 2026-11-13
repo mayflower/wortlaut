@@ -843,6 +843,53 @@ def test_active_capturing_overtime_extends_deadline_and_k8s_job_up_to_cap(
         controller_pass(database, cluster.apis)
         assert cluster.jobs[name].spec.active_deadline_seconds > initial_job_deadline + 800
 
+        # Emptied browser room (dom_participants == 0 despite historical total == 2 and
+        # advancing comfort-noise audio_samples) must NOT extend recording.ends_at.
+        with Session(database) as db:
+            rec = db.get(Recording, uuid.UUID(recording_id))
+            near_end = (datetime.now(UTC) + timedelta(seconds=60)).replace(microsecond=0)
+            rec.ends_at = near_end
+            db.commit()
+
+        empty_resp = client.post(
+            f"/v1/attempts/{identifier}/status",
+            headers={**headers, "X-Worker-ID": "owner"},
+            json={
+                "participation": "capturing",
+                "streams": 2,
+                "audio_samples": 240000,
+                "active_audio_samples": 80000,
+                "participant_sources": {
+                    "available": True,
+                    "total": 2,
+                    "dom_participants": 0,
+                    "sources": [],
+                },
+            },
+        )
+        assert empty_resp.status_code == 200
+        assert datetime.fromisoformat(empty_resp.json()["deadline"]) == near_end
+
+        # Browser worker (configured_speaker_slots is None) with omitted dom_participants
+        # (e.g. DOM-only-name tiles after hangup) must also NOT extend on historical total >= 2.
+        omitted_dom_resp = client.post(
+            f"/v1/attempts/{identifier}/status",
+            headers={**headers, "X-Worker-ID": "owner"},
+            json={
+                "participation": "capturing",
+                "streams": 2,
+                "audio_samples": 260000,
+                "active_audio_samples": 80000,
+                "participant_sources": {
+                    "available": True,
+                    "total": 2,
+                    "sources": [],
+                },
+            },
+        )
+        assert omitted_dom_resp.status_code == 200
+        assert datetime.fromisoformat(omitted_dom_resp.json()["deadline"]) == near_end
+
         # Push recording.ends_at to scheduled_end + 58 min; next tick caps at +60 min.
         with Session(database) as db:
             rec = db.get(Recording, uuid.UUID(recording_id))
@@ -877,5 +924,20 @@ def test_active_capturing_overtime_extends_deadline_and_k8s_job_up_to_cap(
         with Session(database) as db:
             rec = db.get(Recording, uuid.UUID(recording_id))
             assert rec.ends_at == expected_hard_cap
+            rec.protocol_meta = {**rec.protocol_meta, "summary_claim_until": now.isoformat()}
+            db.commit()
+
+        end_resp = client.post(
+            f"/v1/attempts/{identifier}/status",
+            headers={**headers, "X-Worker-ID": "owner"},
+            json={"participation": "ended", "reason": "normal", "drained": True},
+        )
+        assert end_resp.status_code == 200
+        rejoin_resp = client.post(f"/v1/recordings/{recording_id}/rejoin", headers=API)
+        assert rejoin_resp.status_code == 200
+        with Session(database) as db:
+            rec = db.get(Recording, uuid.UUID(recording_id))
+            assert "scheduled_ends_at" not in rec.protocol_meta
+            assert "summary_claim_until" not in rec.protocol_meta
     finally:
         get_settings.cache_clear()

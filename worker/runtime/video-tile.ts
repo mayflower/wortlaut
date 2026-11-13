@@ -252,10 +252,14 @@ export async function installVideoTile(
       ctx.fillText(truncateText(ctx, subtitle, 610), titleX, 104);
 
       // Status pill (top right)
+      const isJoining = participation === 'joining' || participation === 'preparing';
       const inLobby = participation === 'waiting_admission';
+      const isPendingEntry = isJoining || inLobby;
       const statusText = inLobby
         ? (isEn ? 'Waiting in lobby' : 'Wartet im Warteraum')
-        : (isEn ? 'Live Transcript Active' : 'Wortprotokoll aktiv');
+        : isJoining
+          ? (isEn ? 'Joining meeting…' : 'Tritt Konferenz bei…')
+          : (isEn ? 'Live Transcript Active' : 'Wortprotokoll aktiv');
       ctx.font = `600 19px ${FONT_SANS}`;
       const statusTextW = ctx.measureText(statusText).width;
       const pillW = statusTextW + 48;
@@ -264,26 +268,26 @@ export async function installVideoTile(
       const pillY = 60;
 
       roundRect(ctx, pillX, pillY, pillW, pillH, 21);
-      ctx.fillStyle = inLobby ? 'rgba(245, 158, 11, 0.16)' : 'rgba(16, 185, 129, 0.16)';
+      ctx.fillStyle = isPendingEntry ? 'rgba(245, 158, 11, 0.16)' : 'rgba(16, 185, 129, 0.16)';
       ctx.fill();
       ctx.lineWidth = 1.5;
-      ctx.strokeStyle = inLobby ? 'rgba(251, 191, 36, 0.48)' : 'rgba(52, 211, 153, 0.48)';
+      ctx.strokeStyle = isPendingEntry ? 'rgba(251, 191, 36, 0.48)' : 'rgba(52, 211, 153, 0.48)';
       ctx.stroke();
 
       const dotX = pillX + 21;
       const dotY = pillY + pillH / 2;
       ctx.beginPath();
       ctx.arc(dotX, dotY, 7.5, 0, Math.PI * 2);
-      ctx.fillStyle = inLobby
+      ctx.fillStyle = isPendingEntry
         ? `rgba(251, 191, 36, ${(0.28 * pulse).toFixed(2)})`
         : `rgba(52, 211, 153, ${(0.28 * pulse).toFixed(2)})`;
       ctx.fill();
       ctx.beginPath();
       ctx.arc(dotX, dotY, 4.8, 0, Math.PI * 2);
-      ctx.fillStyle = inLobby ? '#fbbf24' : '#34d399';
+      ctx.fillStyle = isPendingEntry ? '#fbbf24' : '#34d399';
       ctx.fill();
 
-      ctx.fillStyle = inLobby ? '#fde68a' : '#d1fae5';
+      ctx.fillStyle = isPendingEntry ? '#fde68a' : '#d1fae5';
       ctx.fillText(statusText, pillX + 35, pillY + 27);
 
       // Opt-out info strip
@@ -323,7 +327,7 @@ export async function installVideoTile(
         const centerY = (bodyTop + bodyBottom) / 2 - 14;
         // Subtle animated listening waveform
         const eqBars = [10, 18, 26, 16, 28, 14, 10];
-        ctx.strokeStyle = inLobby ? 'rgba(251, 191, 36, 0.55)' : 'rgba(96, 165, 250, 0.65)';
+        ctx.strokeStyle = isPendingEntry ? 'rgba(251, 191, 36, 0.55)' : 'rgba(96, 165, 250, 0.65)';
         ctx.lineWidth = 4;
         ctx.lineCap = 'round';
         for (let i = 0; i < eqBars.length; i++) {
@@ -341,14 +345,16 @@ export async function installVideoTile(
         ctx.fillStyle = '#e2e8f0';
         const emptyPrimary = inLobby
           ? (isEn ? 'Waiting for host admission…' : 'Wartet auf Einlass durch den Organisator…')
-          : (isEn
-              ? 'Listening — spoken statements appear here live'
-              : 'Hört zu – aktuelle Beiträge erscheinen hier live');
+          : isJoining
+            ? (isEn ? 'Connecting to meeting…' : 'Verbindet mit der Konferenz…')
+            : (isEn
+                ? 'Listening — spoken statements appear here live'
+                : 'Hört zu – aktuelle Beiträge erscheinen hier live');
         ctx.fillText(emptyPrimary, centerX, centerY + 14);
 
         ctx.font = `400 18px ${FONT_SANS}`;
         ctx.fillStyle = '#94a3b8';
-        const emptySecondary = inLobby
+        const emptySecondary = isPendingEntry
           ? (isEn
               ? 'Audio capture starts only after admission to the meeting.'
               : 'Die Audioerfassung startet erst nach Zulassung zum Meeting.')
@@ -530,9 +536,9 @@ export async function installVideoTile(
         }
         if (Array.isArray(patch.segments)) {
           segments = patch.segments.slice(-8).map((s) => ({
-            speaker: s.speaker.slice(0, 80),
-            text: s.text.slice(0, 420),
-            start: s.start,
+            speaker: String(s?.speaker ?? '').slice(0, 80),
+            text: String(s?.text ?? '').slice(0, 420),
+            start: typeof s?.start === 'number' && Number.isFinite(s.start) ? s.start : 0,
           }));
         }
         const sig = `${participation}::${JSON.stringify(segments)}`;

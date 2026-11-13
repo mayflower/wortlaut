@@ -1099,6 +1099,8 @@ def _resolve_summary(
         if due:
             item["due"] = due
         action_items.append(item)
+    if not summary_text and not topics and not action_items:
+        return None
     resolved: dict = {
         "summary": summary_text,
         "topics": topics,
@@ -1298,7 +1300,8 @@ def generate_protocol_summary(db: Session, recording_id: uuid.UUID) -> dict:
     if recording is None or recording.transcript_deleted_at is not None:
         db.rollback()
         raise LookupError("recording_not_found")
-    prior_opted_out = _opted_out_set(recording.protocol_meta)
+    prior_meta = dict(recording.protocol_meta or {})
+    prior_opted_out = _opted_out_set(prior_meta)
     prior_participation = recording.participation
     data = export_data(db, recording)
     title = _single_line(recording.title) or f"Besprechung ({provider_label(recording.provider)})"
@@ -1363,31 +1366,50 @@ def generate_protocol_summary(db: Session, recording_id: uuid.UUID) -> dict:
     meta_lines = [f"Titel der Besprechung: {title}"]
     if known_speakers:
         meta_lines.append(f"Bekannte Teilnehmende: {', '.join(known_speakers)}")
-    if settings.asr_glossary:
-        meta_lines.append(f"Fachbegriffe / Glossar: {', '.join(settings.asr_glossary[:40])}")
+    term_repls = prior_meta.get("term_replacements")
+    repl_values = list(term_repls.values()) if isinstance(term_repls, dict) else []
+    merged_glossary: list[str] = []
+    seen_glossary: set[str] = set()
+    for raw_term in [*(settings.asr_glossary or []), *repl_values]:
+        term = _single_line(raw_term)[:60]
+        if term and term.lower() not in seen_glossary and len(merged_glossary) < 40:
+            seen_glossary.add(term.lower())
+            merged_glossary.append(term)
+    if merged_glossary:
+        meta_lines.append(f"Fachbegriffe / Glossar: {', '.join(merged_glossary)}")
     user_prompt = "\n".join(meta_lines) + f"\n\nWortprotokoll:\n{transcript_text}"
 
     url = settings.ollama_url.rstrip("/") + "/api/chat"
-    resp = httpx.post(
-        url,
-        json={
-            "model": settings.ollama_model,
-            "think": False,
-            "stream": False,
-            "format": "json",
-            "options": {"num_ctx": 32768, "temperature": 0.2},
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-        },
-        timeout=float(settings.ollama_timeout_seconds),
-    )
+    try:
+        resp = httpx.post(
+            url,
+            json={
+                "model": settings.ollama_model,
+                "think": False,
+                "stream": False,
+                "format": "json",
+                "options": {"num_ctx": 32768, "temperature": 0.2},
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+            },
+            timeout=float(settings.ollama_timeout_seconds),
+        )
+    except httpx.TimeoutException:
+        raise RuntimeError("ollama_timeout") from None
+    except httpx.HTTPError:
+        raise RuntimeError("ollama_unreachable") from None
     if resp.status_code != 200:
         raise RuntimeError(f"ollama_http_{resp.status_code}")
 
-    raw_content = (resp.json().get("message") or {}).get("content") or "{}"
-    parsed = json.loads(raw_content)
+    try:
+        raw_content = (resp.json().get("message") or {}).get("content") or "{}"
+        parsed = json.loads(raw_content)
+    except (ValueError, TypeError, AttributeError):
+        raise RuntimeError("ollama_invalid_json") from None
+    if not isinstance(parsed, dict):
+        raise RuntimeError("ollama_invalid_json")
     action_items: list[dict[str, str]] = []
     for a in parsed.get("action_items") or []:
         if not isinstance(a, dict) or not _single_line(a.get("task")):
@@ -1400,17 +1422,21 @@ def generate_protocol_summary(db: Session, recording_id: uuid.UUID) -> dict:
         if due:
             item["due"] = due
         action_items.append(item)
+    topics_list = [
+        {
+            "title": _single_line(t.get("title")),
+            "details": _single_line(t.get("details")),
+        }
+        for t in (parsed.get("topics") or [])
+        if isinstance(t, dict)
+        and (_single_line(t.get("title")) or _single_line(t.get("details")))
+    ]
+    cleaned_summary = str(parsed.get("summary") or "").strip()
+    if not cleaned_summary and not topics_list and not action_items:
+        raise RuntimeError("ollama_empty_summary")
     summary_obj = {
-        "summary": str(parsed.get("summary") or "").strip(),
-        "topics": [
-            {
-                "title": _single_line(t.get("title")),
-                "details": _single_line(t.get("details")),
-            }
-            for t in (parsed.get("topics") or [])
-            if isinstance(t, dict)
-            and (_single_line(t.get("title")) or _single_line(t.get("details")))
-        ],
+        "summary": cleaned_summary,
+        "topics": topics_list,
         "action_items": action_items,
         "model": settings.ollama_model,
         "generated_at": datetime.now(UTC).isoformat(),

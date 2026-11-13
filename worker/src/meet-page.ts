@@ -198,6 +198,7 @@ function install(config: MeetCaptureConfig) {
   const ignoredParticipantIds = new Set<string>();
   const optedOutParticipants = new Set<string>();
   let liveDomCount = 0;
+  let everSawDomParticipants = false;
   const NOTETAKER_BOT_RE =
     /\b(fireflies(\.ai)?|otter(\.ai)?|read\.ai|fathom|tl;dv|tldv|meetgeek|fellow(\.app)?|avoma|sembly|supernormal|grain|krisp|tactiq|airgram|notta|nyota|circleback|sonnet|bluedot|granola|notetaker|note[\s-]*taker|meeting[\s-]*bot|ai[\s-]*notetaker|ai[\s-]*assistant)\b/i;
   const SELF_OR_UI_TEXT_RE =
@@ -965,6 +966,7 @@ function install(config: MeetCaptureConfig) {
       }
     }
     liveDomCount = seenLiveDom.size;
+    if (liveDomCount > 0) everSawDomParticipants = true;
     if (scanDomChatOptOut()) updated = true;
     if (syncOptOutCrossLinks()) updated = true;
     return updated;
@@ -2050,7 +2052,7 @@ function install(config: MeetCaptureConfig) {
         available: participants.size > 0,
         total: totalParticipants,
         truncated: totalParticipants > 256,
-        ...(liveDomCount > 0 || domNames.size > 0 ? {dom_participants: liveDomCount} : {}),
+        ...(everSawDomParticipants || domNames.size > 0 ? {dom_participants: liveDomCount} : {}),
         ...(optedOutParticipants.size > 0 ? {opted_out: [...optedOutParticipants].slice(0, 64)} : {}),
         sources: [...participants.values()].slice(0, 256).map((p) => ({
           participant_id: p.participant_id,

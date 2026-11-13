@@ -174,9 +174,10 @@ async function run(api: string, credential: string) {
             }
           }
         }
+        const domEmptied = maxDomParticipants >= 1 && currentDom === 0;
         const rtpAdvanced = maxRtpTs > lastRtpTimestamp;
         if (rtpAdvanced) lastRtpTimestamp = maxRtpTs;
-        if ((activeSamples > lastActiveSamples && state.streams > 0) || rtpAdvanced) {
+        if ((activeSamples > lastActiveSamples && state.streams > 0) || (!domEmptied && rtpAdvanced)) {
           if (activeSamples > lastActiveSamples) lastActiveSamples = activeSamples;
           emptySince = undefined;
         } else {

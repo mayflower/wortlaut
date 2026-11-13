@@ -101,6 +101,17 @@ def test_successful_real_smtp_has_three_exports_and_does_not_send_without_audio(
     smtp,
 ):
     recording = finished_capture(client, database)
+    with Session(database) as db:
+        rec = db.get(Recording, recording)
+        rec.protocol_meta = {
+            **(rec.protocol_meta or {}),
+            "summary": {
+                "summary": "Kurzer Überblick.",
+                "topics": [{"title": "Architekturfreigabe", "details": ""}],
+                "action_items": [],
+            },
+        }
+        db.commit()
     smtp_pass(database)
     assert len(smtp.messages) == 1
     message = smtp.messages[0]
@@ -117,10 +128,17 @@ def test_successful_real_smtp_has_three_exports_and_does_not_send_without_audio(
     html_body = message.get_body(preferencelist=("html",)).get_content()
     assert "WORTPROTOKOLL" in body
     assert "Web-Ansicht:" in body
+    assert "• Architekturfreigabe" in body.splitlines()
+    assert "• Architekturfreigabe:" not in body
+    assert "TO-DO-LISTE" in body
+    assert "Keine offenen Aufgaben vereinbart." in body
     assert "Quellenabdeckung: unknown" not in body
     assert "Audioabschluss:" not in body
     assert "<!DOCTYPE html>" in html_body
     assert "Protokoll im Browser öffnen" in html_body
+    assert "<strong>Architekturfreigabe</strong></li>" in html_body
+    assert "To-Do-Liste" in html_body
+    assert "Keine offenen Aufgaben vereinbart." in html_body
     with Session(database) as db:
         delivery = db.get(Delivery, recording)
         assert delivery.status == "delivered"

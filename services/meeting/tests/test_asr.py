@@ -539,7 +539,7 @@ def test_asr_glossary_and_context_prompt_exclude_opted_out_speakers(
     import base64
 
     from wortlaut.asr import build_asr_context_prompt
-    from wortlaut.models import Attempt, Recording, TranscriptSegment
+    from wortlaut.models import Attempt, AudioControl, Recording, TranscriptSegment
     from wortlaut.settings import Settings, get_settings
 
     # Comma-separated and JSON list formats both parse cleanly in Settings.
@@ -573,6 +573,7 @@ def test_asr_glossary_and_context_prompt_exclude_opted_out_speakers(
                 protocol_meta={
                     "opted_out_speakers": ["Geheimer Gast"],
                     "term_replacements": {"meistack": "mAIstack"},
+                    "speaker_overrides": {"spaces/r/devices/9": "Björn Schotte"},
                 },
             )
             db.add(rec)
@@ -612,6 +613,20 @@ def test_asr_glossary_and_context_prompt_exclude_opted_out_speakers(
                 },
             )
             db.add(st)
+            db.flush()
+            db.add(
+                AudioControl(
+                    id=f"{att.id}/{st.stream_id}/{st.epoch}/16000/bind",
+                    stream_id=st.id,
+                    kind="bind",
+                    start_sample=16000,
+                    contract={
+                        "participant_id": "spaces/r/devices/3",
+                        "speaker_id": "spaces/r/devices/3",
+                        "participant_name": "Robin Gloster",
+                    },
+                )
+            )
             db.flush()
             prior_job = AsrJob(
                 id="0" * 64,
@@ -654,10 +669,19 @@ def test_asr_glossary_and_context_prompt_exclude_opted_out_speakers(
             assert prompt is not None
             assert "mAIstack Architektur Sync" in prompt
             assert "Johann Peter Hartmann" in prompt
+            assert "Robin Gloster" in prompt
+            assert "Björn Schotte" in prompt
             assert "Geheimer Gast" not in prompt
             assert "Mayflower" in prompt and "Astryx" in prompt
             assert "Wir starten heute mit dem" in prompt
             encoded = base64.b64encode(prompt.encode("utf-8")).decode("ascii")
             assert base64.b64decode(encoded).decode("utf-8") == prompt
+
+            prior_seg = db.get(TranscriptSegment, "0" * 64)
+            prior_seg.result = {**prior_seg.result, "confidence": 0.25}
+            db.flush()
+            low_conf_prompt = build_asr_context_prompt(db, cur_job, st, get_settings())
+            assert low_conf_prompt is not None
+            assert "Wir starten heute mit dem" not in low_conf_prompt
     finally:
         get_settings.cache_clear()

@@ -226,6 +226,10 @@ export function MeetingDetailView({
         }
         mdLines.push('');
       }
+      const notesVal = (transcript.notes || '').trim();
+      if (notesVal) {
+        mdLines.push(`## ${tr('Notizen', 'Notes')}`, '', notesVal, '');
+      }
       mdLines.push(`## ${tr('Transkript', 'Transcript')}`, '');
       const segs = transcript.segments || [];
       if (segs.length === 0) {

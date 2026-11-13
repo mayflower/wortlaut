@@ -12,7 +12,15 @@ import httpx
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from wortlaut.models import AsrJob, Attempt, AudioChunk, AudioStream, Recording, TranscriptSegment
+from wortlaut.models import (
+    AsrJob,
+    Attempt,
+    AudioChunk,
+    AudioControl,
+    AudioStream,
+    Recording,
+    TranscriptSegment,
+)
 from wortlaut.processing import (
     MAX_CHUNK,
     RATE,
@@ -224,6 +232,18 @@ def build_asr_context_prompt(
         pname = s.contract.get("participant_name")
         if pid and isinstance(pname, str) and pname.strip():
             raw_names[str(pid)] = " ".join(pname.split())
+    stream_db_ids = [s.id for s in streams if s.id is not None]
+    if stream_db_ids:
+        for ctrl in db.scalars(
+            select(AudioControl).where(
+                AudioControl.stream_id.in_(stream_db_ids),
+                AudioControl.kind == "bind",
+            )
+        ):
+            pid = ctrl.contract.get("participant_id") or ctrl.contract.get("speaker_id")
+            pname = ctrl.contract.get("participant_name")
+            if pid and isinstance(pname, str) and pname.strip():
+                raw_names[str(pid)] = " ".join(pname.split())
     for a in attempts:
         diag = a.diagnostics if isinstance(a.diagnostics, dict) else {}
         ps = diag.get("participant_sources")
@@ -238,11 +258,30 @@ def build_asr_context_prompt(
         )
         raw_names[b_pid] = " ".join(str(job.binding["participant_name"]).split())
 
+    meta = (
+        recording.protocol_meta
+        if recording and isinstance(recording.protocol_meta, dict)
+        else {}
+    )
     _, opted_out_norm = (
         collect_opted_out_speakers(recording, attempts, raw_names)
         if recording is not None
         else ([], set())
     )
+    speaker_overrides = meta.get("speaker_overrides")
+    if isinstance(speaker_overrides, dict):
+        for ov_key, ov_val in speaker_overrides.items():
+            clean_ov = " ".join(str(ov_val or "").split())
+            if not clean_ov:
+                continue
+            if is_speaker_opted_out(
+                opted_out_norm,
+                participant_id=str(ov_key),
+                participant_name=clean_ov,
+            ):
+                continue
+            raw_names[f"override:{ov_key}"] = clean_ov
+
     participant_list: list[str] = []
     seen_names: set[str] = set()
     for pid, pname in raw_names.items():
@@ -257,11 +296,6 @@ def build_asr_context_prompt(
 
     glossary_terms: list[str] = []
     seen_terms: set[str] = set()
-    meta = (
-        recording.protocol_meta
-        if recording and isinstance(recording.protocol_meta, dict)
-        else {}
-    )
     term_replacements = meta.get("term_replacements")
     replacement_targets = (
         list(term_replacements.values()) if isinstance(term_replacements, dict) else []
@@ -287,7 +321,9 @@ def build_asr_context_prompt(
             .limit(1)
         )
         if prior_seg is not None and isinstance(prior_seg.result, dict):
-            if not stream_binding_opted_out(db, stream, prior_seg.result):
+            prior_conf = prior_seg.result.get("confidence")
+            conf_ok = not _is_number(prior_conf) or float(prior_conf) >= 0.45
+            if conf_ok and not stream_binding_opted_out(db, stream, prior_seg.result):
                 candidate = " ".join(str(prior_seg.result.get("text") or "").split())
                 if candidate:
                     prior_text = candidate[-120:]
@@ -431,9 +467,11 @@ def _streams_and_jobs_ready(db: Session, recording_id) -> tuple[bool, str | None
 
 
 def finalize_processing(engine):
+    settings = get_settings()
     ready_ids = []
     failed_count = 0
     with Session(engine) as db:
+        now = datetime.now(UTC)
         recordings = db.scalars(
             select(Recording)
             .where(
@@ -443,11 +481,20 @@ def finalize_processing(engine):
             .with_for_update(skip_locked=True)
         ).all()
         for recording in recordings:
+            meta = dict(recording.protocol_meta or {})
+            raw_claim = meta.get("summary_claim_until")
+            if isinstance(raw_claim, str) and raw_claim:
+                try:
+                    if datetime.fromisoformat(raw_claim).astimezone(UTC) > now:
+                        continue
+                except ValueError:
+                    pass
             ready, unreadable, failed = _streams_and_jobs_ready(db, recording.id)
             if not ready:
                 continue
             if failed:
-                now = datetime.now(UTC)
+                meta.pop("summary_claim_until", None)
+                recording.protocol_meta = meta
                 recording.processing = "failed"
                 if unreadable:
                     recording.processing_error = unreadable
@@ -455,13 +502,17 @@ def finalize_processing(engine):
                 recording.audio_closed_at = now
                 failed_count += 1
             else:
+                meta["summary_claim_until"] = (
+                    now + timedelta(seconds=settings.ollama_timeout_seconds + 30)
+                ).isoformat()
+                recording.protocol_meta = meta
                 recording.processing = "processing"
                 ready_ids.append(recording.id)
         db.commit()
 
     completed_ids = []
     for rec_id in ready_ids:
-        if get_settings().enable_llm_summary:
+        if settings.enable_llm_summary:
             from wortlaut.exports import generate_protocol_summary
 
             try:
@@ -474,8 +525,13 @@ def finalize_processing(engine):
             except (ValueError, LookupError):
                 pass
             except Exception as exc:
+                reason = (
+                    str(exc)
+                    if isinstance(exc, RuntimeError) and str(exc).startswith("ollama_")
+                    else type(exc).__name__
+                )
                 logging.getLogger("wortlaut").warning(
-                    "llm_summary_auto_failed recording=%s error=%s", rec_id, exc
+                    "llm_summary_auto_failed recording=%s error=%s", rec_id, reason
                 )
 
         with Session(engine) as db:
@@ -490,8 +546,12 @@ def finalize_processing(engine):
             )
             if rec is None:
                 continue
+            meta = dict(rec.protocol_meta or {})
+            meta.pop("summary_claim_until", None)
+            rec.protocol_meta = meta
             ready, unreadable, failed = _streams_and_jobs_ready(db, rec.id)
             if not ready:
+                db.commit()
                 continue
             now = datetime.now(UTC)
             if failed:

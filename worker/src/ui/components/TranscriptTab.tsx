@@ -479,13 +479,27 @@ export function TranscriptTab({
                     'Executive Summary & To-Do List'
                   )}
                 </Heading>
-                {(summary?.model || instance.llmModel) && (
+                {summary ? (
+                  summary.model ? (
+                    <Token
+                      size="sm"
+                      color="green"
+                      label={`${tr('Lokal', 'Local')} · ${summary.model}`}
+                    />
+                  ) : (
+                    <Token
+                      size="sm"
+                      color="gray"
+                      label={tr('Manuell', 'Manual')}
+                    />
+                  )
+                ) : llmSummaryEnabled && instance.llmModel ? (
                   <Token
                     size="sm"
                     color="green"
-                    label={`${tr('Lokal', 'Local')} · ${summary?.model || instance.llmModel}`}
+                    label={`${tr('Lokal', 'Local')} · ${instance.llmModel}`}
                   />
-                )}
+                ) : null}
               </HStack>
 
               {isOperator && !editingSummary && (
@@ -762,12 +776,16 @@ export function TranscriptTab({
                           className="rounded-md border border-[var(--color-border)] bg-[var(--color-background-muted)] p-2.5"
                         >
                           <VStack gap={0.5}>
-                            <Text type="supporting" weight="semibold" color="primary">
-                              {t.title}
-                            </Text>
-                            <Text type="supporting" color="secondary">
-                              {t.details}
-                            </Text>
+                            {t.title ? (
+                              <Text type="supporting" weight="semibold" color="primary">
+                                {t.title}
+                              </Text>
+                            ) : null}
+                            {t.details ? (
+                              <Text type="supporting" color="secondary">
+                                {t.details}
+                              </Text>
+                            ) : null}
                           </VStack>
                         </div>
                       ))}
