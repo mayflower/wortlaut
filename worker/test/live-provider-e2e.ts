@@ -1528,6 +1528,23 @@ async function runProviderLiveTest(provider: Provider, config: LiveConfig) {
     const useSeparateTeamsHost = provider === 'teams' && hasHostState;
     let pageHost: Page | undefined;
     if (useSeparateTeamsHost) {
+      const silentHostWavPath = join(wavDir, 'host-silent.wav');
+      const silentPcm = Buffer.alloc(16000 * 2);
+      const silentHdr = Buffer.alloc(44);
+      silentHdr.write('RIFF', 0, 'ascii');
+      silentHdr.writeUInt32LE(36 + silentPcm.byteLength, 4);
+      silentHdr.write('WAVE', 8, 'ascii');
+      silentHdr.write('fmt ', 12, 'ascii');
+      silentHdr.writeUInt32LE(16, 16);
+      silentHdr.writeUInt16LE(1, 20);
+      silentHdr.writeUInt16LE(1, 22);
+      silentHdr.writeUInt32LE(16000, 24);
+      silentHdr.writeUInt32LE(32000, 28);
+      silentHdr.writeUInt16LE(2, 32);
+      silentHdr.writeUInt16LE(16, 34);
+      silentHdr.write('data', 36, 'ascii');
+      silentHdr.writeUInt32LE(silentPcm.byteLength, 40);
+      await writeFile(silentHostWavPath, Buffer.concat([silentHdr, silentPcm]));
       browserHost = await chromium.launch({
         headless: !config.headed,
         args: [
@@ -1535,7 +1552,7 @@ async function runProviderLiveTest(provider: Provider, config: LiveConfig) {
           '--autoplay-policy=no-user-gesture-required',
           '--use-fake-ui-for-media-stream',
           '--use-fake-device-for-media-stream',
-          `--use-file-for-fake-audio-capture=${wavPathA}`,
+          `--use-file-for-fake-audio-capture=${silentHostWavPath}`,
         ],
       });
       const ctxHost = await browserHost.newContext({
@@ -1543,6 +1560,7 @@ async function runProviderLiveTest(provider: Provider, config: LiveConfig) {
         permissions: ['microphone', 'camera'],
         storageState: hostStatePath,
       });
+      await installSenderGate(ctxHost);
       pageHost = await ctxHost.newPage();
     }
 
@@ -1584,6 +1602,7 @@ async function runProviderLiveTest(provider: Provider, config: LiveConfig) {
         joinRoomAsSpeaker(pageB, provider, meetingUrl, config.speakerBName, config.joinTimeoutSeconds),
         ...(pageC ? [joinRoomAsSpeaker(pageC, provider, meetingUrl, config.speakerCName, config.joinTimeoutSeconds)] : []),
       ]);
+      await setSpeakerTransmitting(pageHost, false);
       await setSpeakerTransmitting(pageA, false);
       await setSpeakerTransmitting(pageB, false);
       if (pageC) await setSpeakerTransmitting(pageC, false);
@@ -1820,6 +1839,7 @@ async function runProviderLiveTest(provider: Provider, config: LiveConfig) {
       await setSpeakerTransmitting(pageA, true);
       await setSpeakerTransmitting(pageB, true);
       await delay(Math.ceil((Math.max(durationA, durationB) + 1.0) * 1000));
+      if (pageHost) await setSpeakerTransmitting(pageHost, false);
       await setSpeakerTransmitting(pageA, false);
       await setSpeakerTransmitting(pageB, false);
     }

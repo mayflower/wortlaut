@@ -812,7 +812,8 @@ try {
     await lobbyPrewarmed.context.close();
   }
 
-  // Admitted into a muted/silent Google Meet call where tiles only expose data-requested-participant-id
+  // Admitted into a muted/silent Google Meet call where tiles only expose data-requested-participant-id,
+  // a post-join informational modal ("Ok") hides background buttons from the Accessibility Tree,
   // and stale organizer-chat / chat-unavailable labels remain visible.
   {
     const silentAdmitted = await preparePage('guest');
@@ -827,8 +828,20 @@ try {
       peopleBtn.setAttribute('aria-label', 'People');
       peopleBtn.setAttribute('data-panel-id', '1');
       document.body.append(remoteTile, peopleBtn);
+      const infoDialog = document.createElement('dialog');
+      infoDialog.id = 'post-join-info';
+      const infoText = document.createElement('p');
+      infoText.textContent = 'Others might still see your full video';
+      const okBtn = document.createElement('button');
+      okBtn.textContent = 'Ok';
+      okBtn.onclick = () => infoDialog.remove();
+      infoDialog.append(infoText, okBtn);
+      document.body.append(infoDialog);
+      infoDialog.showModal();
     });
     const silentState = await silentAdmitted.meet.inspect();
+    assert.equal(await silentAdmitted.page.locator('#post-join-info').count(), 0,
+      'Post-join informational modal must be dismissed so toolbar controls are accessible');
     assert.equal(silentState.participation, 'capturing',
       'Silent Google Meet room with [data-requested-participant-id] and in-call controls must enter capturing');
     await silentAdmitted.page.locator('#waiting').evaluate((el) => {
@@ -836,7 +849,24 @@ try {
     });
     assert.equal((await silentAdmitted.meet.inspect()).participation, 'capturing',
       'In-call chat text matching waiting keywords must never revert capturing back to waiting_admission');
-    await silentAdmitted.meet.stop('cancelled');
+    await silentAdmitted.page.evaluate(() => {
+      const consentDialog = document.createElement('dialog');
+      consentDialog.id = 'consent-modal';
+      const consentText = document.createElement('p');
+      consentText.textContent = 'Allow taking notes for me in this call?';
+      const okBtn = document.createElement('button');
+      okBtn.textContent = 'OK';
+      okBtn.onclick = () => consentDialog.remove();
+      consentDialog.append(consentText, okBtn);
+      document.body.append(consentDialog);
+      consentDialog.showModal();
+    });
+    const consentState = await silentAdmitted.meet.inspect();
+    assert.equal(consentState.reason, 'consent_required',
+      'Consent modal must stop with consent_required instead of being dismissed');
+    assert.equal(await silentAdmitted.page.locator('#consent-modal').count(), 1);
+    await silentAdmitted.page.evaluate(() => document.querySelector('#consent-modal')?.remove());
+    await silentAdmitted.meet.stop('consent_required');
     await silentAdmitted.context.close();
   }
 

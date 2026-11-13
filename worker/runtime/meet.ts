@@ -473,9 +473,9 @@ const actions = {
   withoutMedia: /^(Continue without (?:microphone and camera|camera|microphone)|Ohne (?:Mikrofon und Kamera|Kamera|Mikrofon) fortfahren)$/i,
   leave: /^(Leave call|Leave meeting|Anruf verlassen|Besprechung verlassen)(?: \(.*\))?$/i,
   micOff: /^(Turn off microphone|Mikrofon ausschalten|Mikrofon deaktivieren)(?: \(.*\))?$/i,
-  micOn: /^(Turn on microphone|Show more info(?: about the microphone problem)?|Mikrofon einschalten|Mikrofon aktivieren|Weitere Informationen(?: zum Mikrofonproblem)? anzeigen)(?: \(.*\))?$/i,
+  micOn: /^(Turn on microphone|(?:Microphone problem\.\s*)?Show more info(?: about the microphone problem)?|Microphone:\s*Permission needed|Mikrofon einschalten|Mikrofon aktivieren|(?:Mikrofonproblem\.\s*)?Weitere Informationen(?: zum Mikrofonproblem)? anzeigen|Mikrofon:\s*Berechtigung erforderlich)(?: \(.*\))?$/i,
   cameraOff: /^(Turn off camera|Kamera ausschalten|Kamera deaktivieren)(?: \(.*\))?$/i,
-  cameraOn: /^(Turn on camera|Show more info(?: about the camera problem)?|Kamera einschalten|Kamera aktivieren|Weitere Informationen(?: zum Kameraproblem)? anzeigen)(?: \(.*\))?$/i,
+  cameraOn: /^(Turn on camera|(?:Camera problem\.\s*)?Show more info(?: about the camera problem)?|Camera:\s*Permission needed|Kamera einschalten|Kamera aktivieren|(?:Kameraproblem\.\s*)?Weitere Informationen(?: zum Kameraproblem)? anzeigen|Kamera:\s*Berechtigung erforderlich)(?: \(.*\))?$/i,
 };
 const knockJoin = /^(?:Ask to join|Teilnahme erbitten|Um Teilnahme bitten)$/i;
 const emptyPrejoin = /Andere Anrufteilnehmer werden gesucht|Looking for others|Außer (?:Ihnen|dir) ist niemand (?:da|hier)|Noch ist niemand (?:sonst )?(?:da|hier)|Niemand sonst ist (?:da|hier)|No one else is here|You[’']re the first one here/i;
@@ -483,12 +483,22 @@ const waiting = /Please wait until a meeting host brings you into the call|Askin
 const denied = /You (?:can[’']t|cannot) join this video call|denied your request|request to join was denied|not allowed to join|weren[’']t allowed|Anfrage.*abgelehnt|Teilnahme.*(?:abgelehnt|nicht gestattet)|Sie können nicht an diesem Videoanruf teilnehmen/i;
 const removed = /removed from (?:the )?(?:call|meeting)|aus.*(?:Besprechung|Anruf).*entfernt/i;
 const ended = /^(?:This )?(?:meeting|call) (?:has )?ended\.?$|Besprechung.*beendet|Anruf.*beendet/i;
+const consentPrompt = /take notes for me|taking notes|Notizen.*(?:zustimmen|Einwilligung)/i;
 
 // Meet can replace the accessible name with a device-state description.
 function joinButton(page: Page) {
   return page.getByRole('button', {name: actions.join})
     .or(page.getByRole('button').filter({hasText: actions.join}))
     .or(page.getByRole('menuitem').filter({hasText: actions.join}));
+}
+
+function leaveButton(page: Page) {
+  return page.getByRole('button', {name: actions.leave}).or(
+    page.locator(
+      'button[aria-label="Leave call" i], button[aria-label="Leave meeting" i], ' +
+      'button[aria-label="Anruf verlassen" i], button[aria-label="Besprechung verlassen" i]',
+    ),
+  );
 }
 
 async function visible(locator: Locator) { return locator.first().isVisible(); }
@@ -573,6 +583,21 @@ export class MeetBrowser {
     return dismissed;
   }
 
+  private async dismissInfoDialog() {
+    const dialog = this.page.getByRole('dialog').or(this.page.getByRole('alertdialog'))
+      .filter({hasNotText: consentPrompt});
+    if (!await visible(dialog)) return false;
+    const choiceOrCancel = dialog.first().getByRole('button', {
+      name: /^(?:Cancel|Deny|Reject|Agree|Allow|Turn on|Leave|Remove|Abbrechen|Ablehnen|Zustimmen|Erlauben|Aktivieren|Verlassen|Entfernen)/i,
+    });
+    if (await visible(choiceOrCancel)) return false;
+    const ok = dialog.first().getByRole('button', {name: /^(?:OK|Got it|Verstanden)$/i});
+    if (await ok.count() !== 1 || !await visible(ok)) return false;
+    await this.input.click(ok.first());
+    await ok.first().waitFor({state: 'hidden', timeout: 5000}).catch(() => {});
+    return true;
+  }
+
   async join() {
     await this.initialize?.();
     const button = joinButton(this.page);
@@ -583,6 +608,16 @@ export class MeetBrowser {
       await this.dismissWithoutMedia()
         .catch(() => { throw new MeetError('join_click_failed'); });
       if (await visible(button)) break;
+      if (this.bootstrap.meet.auth_mode === 'guest') {
+        const continueAsGuest = this.page.getByRole('button', {
+          name: /^(?:Continue as guest|Als Gast fortfahren|Ohne Konto fortfahren)$/i,
+        });
+        if (await visible(continueAsGuest)) {
+          await this.input.click(continueAsGuest.first()).catch(() => {});
+          await continueAsGuest.first().waitFor({state: 'hidden', timeout: 5000}).catch(() => {});
+          if (await visible(button)) break;
+        }
+      }
       const switchHere = this.page.getByRole('button', {name: /^(Switch here|Auf dieses Gerät wechseln)$/i})
         .or(this.page.getByRole('button').filter({hasText: /^(Switch here|Auf dieses Gerät wechseln)$/i}));
       const otherWays = this.page.getByRole('button', {name: /^(Other ways to join|Weitere Möglichkeiten zur Teilnahme)$/i});
@@ -745,66 +780,72 @@ export class MeetBrowser {
       else if (await visible(this.page.getByText(removed))) this.reason = 'removed';
       else if (await visible(this.page.getByText(ended))) this.reason = 'meeting_ended';
       else if (await humanVerificationVisible(this.page)) this.reason = 'human_verification_required';
-      else if (await visible(this.page.getByRole('dialog').filter({hasText: /take notes for me|taking notes|Notizen.*(?:zustimmen|Einwilligung)/i}))) {
+      else if (await visible(this.page.getByRole('dialog').filter({hasText: consentPrompt}))) {
         this.reason = 'consent_required';
-      } else if (this.participation !== 'capturing' && await visible(this.page.getByText(waiting))) {
-        this.participation = 'waiting_admission';
-      } else if (this.joinSent && !await visible(joinButton(this.page))) {
-        const hasLeave = await visible(this.page.getByRole('button', {name: actions.leave}));
-        const hasRtp =
-          (state?.streams ?? 0) > 0 ||
-          (state?.receiver_sources ?? []).some((r: Record<string, any>) =>
-            (r.ssrc?.length ?? 0) > 0 ||
-            (r.csrc?.length ?? 0) > 0 ||
-            (r.encoded_transform?.frame_count ?? 0) > 0);
-        const hasRtpOrDomParticipants =
-          hasRtp ||
-          (state?.participant_sources?.dom_participants ?? 0) > 0;
-        const collectionsChannel = (state?.data_channels ?? []).find(
-          (dc: Record<string, any>) => dc.label === 'collections',
-        );
-        const isPrewarmedLobbyChannel =
-          collectionsChannel != null &&
-          (collectionsChannel.binary_frames ?? 0) +
-            (collectionsChannel.text_frames ?? 0) +
-            (collectionsChannel.json_frames ?? 0) === 0 &&
-          !hasRtp;
-        const hasInCallControls = hasLeave && await visible(
-          this.page.locator('button[data-panel-id="1"], button[data-panel-id="2"]:not([aria-label*="Organisator" i]):not([aria-label*="organizer" i]):not([aria-label*="Host" i]):not([aria-label*="Gastgeber" i])').or(
-            this.page.getByRole('button', {
-              name: /^(?:People|Participants|Show everyone|Alle anzeigen|Teilnehmer|Personen|Chat with everyone|Mit allen chatten|In-call messages|Nachrichten im Anruf|Raise hand|Hand heben)(?:\b|\s|\d|$)/i,
-            }),
-          ),
-        );
-        if (this.participation === 'capturing' ||
-            (hasLeave && !isPrewarmedLobbyChannel && (hasRtpOrDomParticipants || hasInCallControls) &&
-              await this.page.locator('[data-self-name], [data-participant-id], [data-requested-participant-id]').count() > 0)) {
-          this.participation = 'capturing';
-          if (!this.chatSent && this.chatAttempts < 8) {
-            this.chatAttempts += 1;
-            await this.sendChatIntro();
-          }
-          if (!this.rosterOpened && (this.chatSent || !this.bootstrap.chat_intro?.trim() || this.chatAttempts >= 3)) {
-            this.rosterOpened = true;
-            const toggle = this.page.getByRole('button', {
-              name: /^(?:People|Participants|Show everyone|Alle anzeigen|Teilnehmer|Personen)(?:\b|\s|\d|$)/i,
-            }).or(this.page.locator('button[data-panel-id="1"]'))
-              .and(this.page.locator(':not([aria-expanded="true"]):not([aria-pressed="true"])')).first();
-            if (await visible(toggle)) {
-              await this.input.click(toggle).catch(() => {});
-            }
-          } else if (this.rosterOpened && this.chatSent && Boolean(this.bootstrap.chat_intro?.trim()) && !this.chatRestored) {
-            this.chatRestored = true;
-            const chatToggle = this.page.getByRole('button', {
-              name: /^(?:Chat with everyone|Mit allen chatten|Chat|Nachricht an alle|In-call messages|Nachrichten im Anruf)(?:\b|\s|\d|$)/i,
-            }).or(this.page.locator('button[data-panel-id="2"]:not([aria-label*="Organisator" i]):not([aria-label*="organizer" i]):not([aria-label*="Host" i]):not([aria-label*="Gastgeber" i])'))
-              .and(this.page.locator(':not([aria-expanded="true"]):not([aria-pressed="true"])')).first();
-            if (await visible(chatToggle)) {
-              await this.input.click(chatToggle).catch(() => {});
-            }
-          }
-        } else {
+      } else {
+        if (this.joinSent) {
+          await this.dismissWithoutMedia().catch(() => {});
+          await this.dismissInfoDialog().catch(() => {});
+        }
+        if (this.participation !== 'capturing' && await visible(this.page.getByText(waiting))) {
           this.participation = 'waiting_admission';
+        } else if (this.joinSent && !await visible(joinButton(this.page))) {
+          const hasLeave = await visible(leaveButton(this.page));
+          const hasRtp =
+            (state?.streams ?? 0) > 0 ||
+            (state?.receiver_sources ?? []).some((r: Record<string, any>) =>
+              (r.ssrc?.length ?? 0) > 0 ||
+              (r.csrc?.length ?? 0) > 0 ||
+              (r.encoded_transform?.frame_count ?? 0) > 0);
+          const hasRtpOrDomParticipants =
+            hasRtp ||
+            (state?.participant_sources?.dom_participants ?? 0) > 0;
+          const collectionsChannel = (state?.data_channels ?? []).find(
+            (dc: Record<string, any>) => dc.label === 'collections',
+          );
+          const isPrewarmedLobbyChannel =
+            collectionsChannel != null &&
+            (collectionsChannel.binary_frames ?? 0) +
+              (collectionsChannel.text_frames ?? 0) +
+              (collectionsChannel.json_frames ?? 0) === 0 &&
+            !hasRtp;
+          const hasInCallControls = hasLeave && await visible(
+            this.page.locator('[data-panel-id="1"], button[data-panel-id="2"]:not([aria-label*="Organisator" i]):not([aria-label*="organizer" i]):not([aria-label*="Host" i]):not([aria-label*="Gastgeber" i])').or(
+              this.page.getByRole('button', {
+                name: /^(?:People|Participants|Show everyone|Alle anzeigen|Teilnehmer|Personen|Chat with everyone|Mit allen chatten|In-call messages|Nachrichten im Anruf|Raise hand|Hand heben)(?:\b|\s|\d|$)/i,
+              }),
+            ),
+          );
+          if (this.participation === 'capturing' ||
+              (hasLeave && !isPrewarmedLobbyChannel && (hasRtpOrDomParticipants || hasInCallControls) &&
+                await this.page.locator('[data-self-name], [data-participant-id], [data-requested-participant-id]').count() > 0)) {
+            this.participation = 'capturing';
+            if (!this.chatSent && this.chatAttempts < 8) {
+              this.chatAttempts += 1;
+              await this.sendChatIntro();
+            }
+            if (!this.rosterOpened && (this.chatSent || !this.bootstrap.chat_intro?.trim() || this.chatAttempts >= 3)) {
+              this.rosterOpened = true;
+              const toggle = this.page.getByRole('button', {
+                name: /^(?:People|Participants|Show everyone|Alle anzeigen|Teilnehmer|Personen)(?:\b|\s|\d|$)/i,
+              }).or(this.page.locator('[data-panel-id="1"]'))
+                .and(this.page.locator(':not([aria-expanded="true"]):not([aria-pressed="true"])')).first();
+              if (await visible(toggle)) {
+                await this.input.click(toggle).catch(() => {});
+              }
+            } else if (this.rosterOpened && this.chatSent && Boolean(this.bootstrap.chat_intro?.trim()) && !this.chatRestored) {
+              this.chatRestored = true;
+              const chatToggle = this.page.getByRole('button', {
+                name: /^(?:Chat with everyone|Mit allen chatten|Chat|Nachricht an alle|In-call messages|Nachrichten im Anruf)(?:\b|\s|\d|$)/i,
+              }).or(this.page.locator('button[data-panel-id="2"]:not([aria-label*="Organisator" i]):not([aria-label*="organizer" i]):not([aria-label*="Host" i]):not([aria-label*="Gastgeber" i])'))
+                .and(this.page.locator(':not([aria-expanded="true"]):not([aria-pressed="true"])')).first();
+              if (await visible(chatToggle)) {
+                await this.input.click(chatToggle).catch(() => {});
+              }
+            }
+          } else {
+            this.participation = 'waiting_admission';
+          }
         }
       }
     }
@@ -831,7 +872,8 @@ export class MeetBrowser {
       }).catch(() => false);
       this.drained = (await this.transport.drain()) && bridged === true;
       if (!['removed', 'meeting_ended', 'admission_denied', 'prejoin_denied'].includes(reason)) {
-        const leave = this.page.getByRole('button', {name: actions.leave});
+        await this.dismissInfoDialog().catch(() => {});
+        const leave = leaveButton(this.page);
         if (await visible(leave)) await this.input.click(leave.first()).catch(() => { this.reason = 'leave_unconfirmed'; });
       }
     })();
