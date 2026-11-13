@@ -14,7 +14,7 @@ export type TeamsBootstrap = {provider: 'teams'; meeting_id: string; attempt_id:
 const browserLabel = /^(Continue on this browser|Join on the web instead|In diesem Browser fortfahren|Stattdessen im Web teilnehmen)$/i;
 const joinLabel = /^(Join now|Jetzt teilnehmen)$/i;
 const leaveLabel = /^(Leave|Leave meeting|Verlassen|Besprechung verlassen)(?: \(.*\))?$/i;
-const waiting = /Someone will let you in shortly|You[’']re in the lobby|Waiting.*(?:admit|let you in)|Please wait until someone admits|Jemand wird Sie.*einlassen|Sie (?:befinden sich|sind) im Wartebereich|Warten.*(?:Zulassung|eingelassen)/i;
+const waiting = /Someone will let you in\b|You[’']re in the lobby|Waiting.*(?:admit|let you in)|Please wait until someone admits|Jemand wird Sie.*einlassen|Sie (?:befinden sich|sind) im Wartebereich|Warten.*(?:Zulassung|eingelassen)/i;
 
 // Join flow reference: Vexa f1a62fbbdfd2c98cb162582d82c31fe8102acc89.
 export class TeamsBrowser {
@@ -244,9 +244,12 @@ export class TeamsBrowser {
     if (/meeting not found|Besprechung nicht gefunden/i.test(text)) this.reason = 'meeting_not_found';
     const state = trusted ? await this.page.evaluate(() => window.wortlautMeet?.inspect()).catch(() => undefined) : undefined;
     this.reason ||= state?.reason ?? '';
-    const joinVisible = trusted && await this.page.getByRole('button', {name: joinLabel})
+    const joinBtn = this.page.getByRole('button', {name: joinLabel})
       .or(this.page.locator('button[data-tid="prejoin-join-button"]'))
-      .first().isVisible().catch(() => false);
+      .first();
+    const joinVisible = trusted &&
+      await joinBtn.isVisible().catch(() => false) &&
+      await joinBtn.isEnabled().catch(() => false);
     let participation = 'joining';
     if (trusted && this.joined && !joinVisible && waiting.test(text)) {
       participation = 'waiting_admission';

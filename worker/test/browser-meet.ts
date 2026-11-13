@@ -812,6 +812,34 @@ try {
     await lobbyPrewarmed.context.close();
   }
 
+  // Admitted into a muted/silent Google Meet call where tiles only expose data-requested-participant-id
+  // and stale organizer-chat / chat-unavailable labels remain visible.
+  {
+    const silentAdmitted = await preparePage('guest');
+    await silentAdmitted.meet.join();
+    assert.equal((await silentAdmitted.meet.inspect()).participation, 'waiting_admission');
+    await silentAdmitted.page.evaluate(() => {
+      document.querySelector('#waiting')!.textContent = 'Messages from the organizer — Chat is unavailable';
+      const remoteTile = document.createElement('div');
+      remoteTile.setAttribute('data-requested-participant-id', 'spaces/testroom/devices/muted-host');
+      remoteTile.textContent = 'Muted Host';
+      const peopleBtn = document.createElement('button');
+      peopleBtn.setAttribute('aria-label', 'People');
+      peopleBtn.setAttribute('data-panel-id', '1');
+      document.body.append(remoteTile, peopleBtn);
+    });
+    const silentState = await silentAdmitted.meet.inspect();
+    assert.equal(silentState.participation, 'capturing',
+      'Silent Google Meet room with [data-requested-participant-id] and in-call controls must enter capturing');
+    await silentAdmitted.page.locator('#waiting').evaluate((el) => {
+      el.textContent = 'Someone in the call will let you in';
+    });
+    assert.equal((await silentAdmitted.meet.inspect()).participation, 'capturing',
+      'In-call chat text matching waiting keywords must never revert capturing back to waiting_admission');
+    await silentAdmitted.meet.stop('cancelled');
+    await silentAdmitted.context.close();
+  }
+
   // 4-Speaker dynamic SFU Loudest-N transceiver switching + mid-call late joiner on 2 shared RTCRtpReceivers
   {
     const sfuDynamic = await preparePage('guest');
@@ -1303,12 +1331,13 @@ try {
       });
       document.querySelector('#prejoin-join-button').onclick = () => {
         window.coldTeamsEvents.push('join-clicked:' + document.querySelector('#name-input').value);
-        document.querySelector('#prejoin-join-button').remove();
-        document.querySelector('#waiting').textContent = 'Sie befinden sich im Wartebereich';
-        const leave = document.createElement('button');
-        leave.textContent = 'Besprechung verlassen';
-        leave.onclick = () => leave.remove();
-        document.body.append(leave);
+        // Real Teams 2026 keeps prejoin-join-button visible with disabled=true in the lobby.
+        document.querySelector('#prejoin-join-button').disabled = true;
+        document.querySelector('#waiting').textContent = 'Someone will let you in when the meeting starts.';
+        const cancel = document.createElement('button');
+        cancel.setAttribute('data-tid', 'prejoin-cancel-button');
+        cancel.textContent = 'Cancel';
+        document.body.append(cancel);
       };
       </script>`,
     }));

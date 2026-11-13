@@ -479,7 +479,7 @@ const actions = {
 };
 const knockJoin = /^(?:Ask to join|Teilnahme erbitten|Um Teilnahme bitten)$/i;
 const emptyPrejoin = /Andere Anrufteilnehmer werden gesucht|Looking for others|Außer (?:Ihnen|dir) ist niemand (?:da|hier)|Noch ist niemand (?:sonst )?(?:da|hier)|Niemand sonst ist (?:da|hier)|No one else is here|You[’']re the first one here/i;
-const waiting = /Please wait until a meeting host brings you into the call|invited to the call by the (?:meeting )?organizer|Asking to be let in|You[’']ll join the call when someone lets you|Someone in the call (?:will|can) let you in|Waiting (?:for the host|to be let in)|Host hasn[’']t joined yet|Messages from the organizer|Chat is unavailable|waiting room|Um Teilnahme (?:gebeten|bitten)|Teilnahme wird angefragt|Anfrage.*Teilnahme|(?:Sie|Du)\s+(?:können|kannst|nehmen|nimmst)\s+teil(?:nehmen)?,\s*sobald|Jemand.*(?:(?:lässt|lassen)\s+(?:Sie|dich).*(?:ein|teilnehmen)|kann\s+(?:Sie|dich).*einlassen)|Bitte warten(?:\s+Sie)?,\s*bis.*(?:einlässt|eingeladen)|vom Organisator.*eingeladen|Nachrichten vom Organisator|Chat nicht verfügbar|Warten.*(?:Zulassung|Gastgeber|Host|Organisator|einlässt|eingelassen|eingeladen)|Sobald.*(?:zugelassen|teilnehmen|einlässt)|noch nicht eingelassen/i;
+const waiting = /Please wait until a meeting host brings you into the call|Asking to be let in|You[’']ll join the call when someone lets you|Someone in the call (?:will|can) let you in|Waiting (?:for the host|to be let in)|Host hasn[’']t joined yet|Um Teilnahme (?:gebeten|bitten)|Teilnahme wird angefragt|Anfrage.*Teilnahme|(?:Sie|Du)\s+(?:können|kannst|nehmen|nimmst)\s+teil(?:nehmen)?,\s*sobald|Jemand.*(?:(?:lässt|lassen)\s+(?:Sie|dich).*(?:ein|teilnehmen)|kann\s+(?:Sie|dich).*einlassen)|Bitte warten(?:\s+Sie)?,\s*bis.*(?:einlässt|eingeladen)|Warten.*(?:Zulassung|Gastgeber|Host|Organisator|einlässt|eingelassen|eingeladen)|Sobald.*(?:zugelassen|teilnehmen|einlässt)|noch nicht eingelassen/i;
 const denied = /You (?:can[’']t|cannot) join this video call|denied your request|request to join was denied|not allowed to join|weren[’']t allowed|Anfrage.*abgelehnt|Teilnahme.*(?:abgelehnt|nicht gestattet)|Sie können nicht an diesem Videoanruf teilnehmen/i;
 const removed = /removed from (?:the )?(?:call|meeting)|aus.*(?:Besprechung|Anruf).*entfernt/i;
 const ended = /^(?:This )?(?:meeting|call) (?:has )?ended\.?$|Besprechung.*beendet|Anruf.*beendet/i;
@@ -747,8 +747,9 @@ export class MeetBrowser {
       else if (await humanVerificationVisible(this.page)) this.reason = 'human_verification_required';
       else if (await visible(this.page.getByRole('dialog').filter({hasText: /take notes for me|taking notes|Notizen.*(?:zustimmen|Einwilligung)/i}))) {
         this.reason = 'consent_required';
-      } else if (await visible(this.page.getByText(waiting))) this.participation = 'waiting_admission';
-      else if (this.joinSent && !await visible(joinButton(this.page))) {
+      } else if (this.participation !== 'capturing' && await visible(this.page.getByText(waiting))) {
+        this.participation = 'waiting_admission';
+      } else if (this.joinSent && !await visible(joinButton(this.page))) {
         const hasLeave = await visible(this.page.getByRole('button', {name: actions.leave}));
         const hasRtp =
           (state?.streams ?? 0) > 0 ||
@@ -777,7 +778,7 @@ export class MeetBrowser {
         );
         if (this.participation === 'capturing' ||
             (hasLeave && !isPrewarmedLobbyChannel && (hasRtpOrDomParticipants || hasInCallControls) &&
-              await this.page.locator('[data-self-name], [data-participant-id]').count() > 0)) {
+              await this.page.locator('[data-self-name], [data-participant-id], [data-requested-participant-id]').count() > 0)) {
           this.participation = 'capturing';
           if (!this.chatSent && this.chatAttempts < 8) {
             this.chatAttempts += 1;
