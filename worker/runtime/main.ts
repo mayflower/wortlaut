@@ -1,5 +1,6 @@
 import {randomUUID} from 'node:crypto';
 import type {Browser} from 'playwright';
+import {shouldStopForEmptyRoom, type KeyframeDiagnostics} from '../src/keyframes.js';
 import {serviceRequest} from './http.js';
 import {MeetBrowser, MeetError} from './meet.js';
 import {TeamsBrowser} from './teams-browser.js';
@@ -70,12 +71,22 @@ async function run(api: string, credential: string) {
     : isTeams ? new TeamsBrowser(page, bootstrap, api, credential, workerId)
     : isZoom ? new ZoomBrowser(page, bootstrap, api, credential, workerId)
     : isWebexBrowser ? new WebexBrowser(page, bootstrap, api, credential, workerId) : undefined;
+  const fallbackKeyframes: KeyframeDiagnostics = {
+    capability: bootstrap.enable_keyframes === false ? 'disabled' : 'unsupported',
+    active_share: false,
+    evaluated_ticks: 0,
+    emitted: 0,
+    uploaded: 0,
+    dropped_unverified: 0,
+    dropped_opted_out: 0,
+    dropped_queue_full: 0,
+  };
   let stopping: Promise<void> | undefined;
   let endReason = 'normal';
   let diagnostics: Record<string, unknown> = {capability: 'unverified', streams: 0, audio_samples: 0, drained: null,
     configured_speaker_slots: 0, configured_share_slots: 0,
     receiver_sources: [], participant_sources: {available: false, total: 0, truncated: false, sources: []},
-    data_channels: []};
+    data_channels: [], keyframes: fallbackKeyframes};
   let signalStop!: () => void;
   let lobbySince: number | undefined;
   let emptySince: number | undefined;
@@ -132,6 +143,7 @@ async function run(api: string, credential: string) {
         data_channels: state.data_channels ?? [],
         sdp: state.sdp ?? {descriptions: 0, audio_sections: 0, video_sections: 0, ssrc_count: 0, cname_count: 0, msid_count: 0},
         audio_clock: state.audio_clock,
+        keyframes: state.keyframes ?? fallbackKeyframes,
         ...(state.media ? {media: state.media} : {}),
         drained: state.stopped ? state.drained : null};
       if (performance.now() - lastMediaLogAt >= 10_000) {
@@ -162,7 +174,6 @@ async function run(api: string, credential: string) {
       } else { lobbySince = undefined; }
       if (state.participation === 'capturing') {
         const currentDom = state.participant_sources?.dom_participants ?? 0;
-        if (currentDom > maxDomParticipants) maxDomParticipants = currentDom;
         const activeSamples = typeof state.active_audio_samples === 'number'
           ? state.active_audio_samples
           : (state.streams > 0 ? state.audio_samples : 0);
@@ -174,26 +185,26 @@ async function run(api: string, credential: string) {
             }
           }
         }
-        const domEmptied = maxDomParticipants >= 1 && currentDom === 0;
         const rtpAdvanced = maxRtpTs > lastRtpTimestamp;
         if (rtpAdvanced) lastRtpTimestamp = maxRtpTs;
-        if ((activeSamples > lastActiveSamples && state.streams > 0) || (!domEmptied && rtpAdvanced)) {
-          if (activeSamples > lastActiveSamples) lastActiveSamples = activeSamples;
-          emptySince = undefined;
-        } else {
-          emptySince ??= performance.now();
-          const configuredTimeout = bootstrap.empty_room_timeout_seconds ?? 300;
-          const emptyTimeoutSeconds = (maxDomParticipants >= 1 && currentDom === 0)
-            ? Math.min(configuredTimeout, 15)
-            : (maxDomParticipants >= 2 && currentDom <= 1)
-              ? Math.min(configuredTimeout, 60)
-              : currentDom >= 2
-                ? Math.max(configuredTimeout * 6, 1800)
-                : configuredTimeout;
-          if (performance.now() - emptySince >= emptyTimeoutSeconds * 1000) {
-            await stop('room_empty');
-            return;
-          }
+        const evalRes = shouldStopForEmptyRoom({
+          nowMs: performance.now(),
+          emptySinceMs: emptySince,
+          configuredTimeoutSeconds: bootstrap.empty_room_timeout_seconds,
+          currentDomParticipants: currentDom,
+          maxDomParticipants,
+          streams: state.streams ?? 0,
+          activeSamples,
+          lastActiveSamples,
+          rtpAdvanced,
+          activeShare: Boolean(state.keyframes?.active_share),
+        });
+        maxDomParticipants = evalRes.maxDomParticipants;
+        lastActiveSamples = evalRes.lastActiveSamples;
+        emptySince = evalRes.emptySinceMs;
+        if (evalRes.shouldStop) {
+          await stop('room_empty');
+          return;
         }
       } else { emptySince = undefined; }
       if (Date.now() >= renewAt && renewAt < deadline) {
@@ -275,6 +286,7 @@ async function run(api: string, credential: string) {
         data_channels: state.data_channels ?? [],
         sdp: state.sdp ?? {descriptions: 0, audio_sections: 0, video_sections: 0, ssrc_count: 0, cname_count: 0, msid_count: 0},
         audio_clock: state.audio_clock, drained: state.drained,
+        keyframes: state.keyframes ?? diagnostics.keyframes ?? fallbackKeyframes,
         ...((state.media ?? diagnostics.media) ? {media: state.media ?? diagnostics.media} : {})};
     } catch { /* preserve last known diagnostics */ }
     // An SDK event alone is not proof of process termination. Report ended only

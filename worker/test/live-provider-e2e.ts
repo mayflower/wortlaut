@@ -30,9 +30,26 @@ interface LiveConfig {
   requireLobbyHold: boolean;
   testChatOptOut: boolean;
   requireChatOptOut: boolean;
+  testKeyframes: boolean;
+  testVideoDisplay: boolean;
+  requireVideoDisplay: boolean;
+  videoOnly: boolean;
   processingTimeoutSeconds: number;
   requireSpeakerBinding: boolean;
   headed: boolean;
+}
+
+interface ExportedKeyframe {
+  id: string;
+  offset_seconds: number;
+  presenter: string;
+  participant_id: string | null;
+  provider_source_id: string;
+  width: number;
+  height: number;
+  byte_size: number;
+  sha256: string;
+  image_path: string;
 }
 
 interface TranscriptSegment {
@@ -49,6 +66,21 @@ interface TranscriptSegment {
 }
 
 const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+
+function redactMeetingUrl(raw: string): string {
+  if (!raw) return '';
+  try {
+    const parsed = new URL(raw);
+    for (const key of ['pwd', 'zak', 'token', 'passcode']) {
+      if (parsed.searchParams.has(key)) {
+        parsed.searchParams.set(key, '<REDACTED>');
+      }
+    }
+    return parsed.toString();
+  } catch {
+    return raw.replace(/([?&](?:pwd|zak|token|passcode)=)[^&\s]+/gi, '$1<REDACTED>');
+  }
+}
 
 function parseDotEnv(content: string): Record<string, string> {
   const result: Record<string, string> = {};
@@ -239,7 +271,10 @@ async function loadConfig(): Promise<LiveConfig> {
       teams: '',
       zoom: resolveOptionalPath(env.WORTLAUT_LIVE_ZOOM_GUEST_STORAGE_STATE),
     },
-    speakerCount: Math.max(2, Number(env.WORTLAUT_LIVE_SPEAKER_COUNT || 2)),
+    speakerCount:
+      (env.WORTLAUT_LIVE_VIDEO_ONLY || 'false').toLowerCase() === 'true'
+        ? 1
+        : Math.max(2, Number(env.WORTLAUT_LIVE_SPEAKER_COUNT || 2)),
     speakerAName: env.WORTLAUT_LIVE_SPEAKER_A_NAME || 'Alice Test',
     speakerBName: env.WORTLAUT_LIVE_SPEAKER_B_NAME || 'Bob Test',
     speakerCName: env.WORTLAUT_LIVE_SPEAKER_C_NAME || 'Clara Test',
@@ -250,6 +285,10 @@ async function loadConfig(): Promise<LiveConfig> {
     requireLobbyHold: (env.WORTLAUT_LIVE_REQUIRE_LOBBY || 'false').toLowerCase() === 'true',
     testChatOptOut: (env.WORTLAUT_LIVE_TEST_CHAT_OPTOUT || 'true').toLowerCase() !== 'false',
     requireChatOptOut: (env.WORTLAUT_LIVE_REQUIRE_CHAT_OPTOUT || 'false').toLowerCase() === 'true',
+    testKeyframes: (env.WORTLAUT_LIVE_TEST_KEYFRAMES || 'true').toLowerCase() !== 'false',
+    testVideoDisplay: (env.WORTLAUT_LIVE_TEST_VIDEO_DISPLAY || 'true').toLowerCase() !== 'false',
+    requireVideoDisplay: (env.WORTLAUT_LIVE_REQUIRE_VIDEO_DISPLAY || 'false').toLowerCase() === 'true',
+    videoOnly: (env.WORTLAUT_LIVE_VIDEO_ONLY || 'false').toLowerCase() === 'true',
     processingTimeoutSeconds: Number(env.WORTLAUT_LIVE_PROCESSING_TIMEOUT_SECONDS || 90),
     requireSpeakerBinding: (env.WORTLAUT_LIVE_REQUIRE_SPEAKER_BINDING || 'true').toLowerCase() !== 'false',
     headed: (env.WORTLAUT_LIVE_HEADED || 'false').toLowerCase() === 'true',
@@ -380,6 +419,10 @@ async function installSenderGate(context: BrowserContext, wavPath?: string): Pro
       __wortlautMicGateOpen?: boolean;
       __wortlautSetMicGate?: (open: boolean) => number;
       __wortlautLastGumTrack?: MediaStreamTrack;
+      __wortlautShareActive?: boolean;
+      __wortlautShareSlideIndex?: number;
+      __wortlautSetShareSlide?: (idx: number) => void;
+      __wortlautStopShareStream?: () => void;
     };
     const pcs = new Set<RTCPeerConnection>();
     g.__wortlautPeerConnections = pcs;
@@ -488,6 +531,89 @@ async function installSenderGate(context: BrowserContext, wavPath?: string): Pro
             }
           }
         }
+        return stream;
+      };
+    }
+
+    if (navigator.mediaDevices) {
+      let shareTimer: ReturnType<typeof setInterval> | undefined;
+      let activeShareStream: MediaStream | undefined;
+      g.__wortlautShareActive = false;
+      g.__wortlautShareSlideIndex = 0;
+
+      const renderSlide = (ctx2d: CanvasRenderingContext2D, idx: number) => {
+        if (idx === 0) {
+          ctx2d.fillStyle = '#0f172a';
+          ctx2d.fillRect(0, 0, 1280, 720);
+          ctx2d.fillStyle = '#38bdf8';
+          ctx2d.fillRect(80, 70, 1120, 90);
+          ctx2d.fillStyle = '#f8fafc';
+          ctx2d.font = 'bold 48px sans-serif';
+          ctx2d.fillText('SLIDE 1: SYSTEM ARCHITECTURE', 110, 132);
+          ctx2d.fillStyle = '#1e293b';
+          ctx2d.fillRect(80, 210, 520, 420);
+          ctx2d.fillRect(680, 210, 520, 420);
+          ctx2d.fillStyle = '#e2e8f0';
+          ctx2d.font = '32px sans-serif';
+          ctx2d.fillText('WebRTC Receiver Isolation', 120, 320);
+          ctx2d.fillText('Pre-Mix Speaker Streams', 720, 320);
+        } else {
+          ctx2d.fillStyle = '#f8fafc';
+          ctx2d.fillRect(0, 0, 1280, 720);
+          ctx2d.fillStyle = '#059669';
+          ctx2d.fillRect(0, 0, 1280, 140);
+          ctx2d.fillStyle = '#ffffff';
+          ctx2d.font = 'bold 52px sans-serif';
+          ctx2d.fillText('SLIDE 2: DEPLOYMENT METRICS', 90, 92);
+          ctx2d.fillStyle = '#0f172a';
+          for (let r = 0; r < 4; r++) {
+            ctx2d.fillRect(90, 200 + r * 115, 1100, 75);
+          }
+        }
+      };
+
+      g.__wortlautSetShareSlide = (idx: number) => {
+        g.__wortlautShareSlideIndex = idx;
+      };
+      g.__wortlautStopShareStream = () => {
+        if (shareTimer !== undefined) {
+          clearInterval(shareTimer);
+          shareTimer = undefined;
+        }
+        if (activeShareStream) {
+          for (const t of activeShareStream.getTracks()) {
+            try {
+              t.stop();
+              t.dispatchEvent(new Event('ended'));
+            } catch {
+              // ignore
+            }
+          }
+          activeShareStream = undefined;
+        }
+        g.__wortlautShareActive = false;
+      };
+
+      navigator.mediaDevices.getDisplayMedia = async () => {
+        g.__wortlautStopShareStream?.();
+        const canvas = document.createElement('canvas');
+        canvas.width = 1280;
+        canvas.height = 720;
+        const ctx2d = canvas.getContext('2d');
+        if (ctx2d) renderSlide(ctx2d, g.__wortlautShareSlideIndex ?? 0);
+        shareTimer = setInterval(() => {
+          if (ctx2d) renderSlide(ctx2d, g.__wortlautShareSlideIndex ?? 0);
+        }, 100);
+        const stream = canvas.captureStream(10);
+        for (const vt of stream.getVideoTracks()) {
+          try {
+            Object.defineProperty(vt, 'contentHint', {value: 'detail', configurable: true});
+          } catch {
+            // ignore
+          }
+        }
+        activeShareStream = stream;
+        g.__wortlautShareActive = true;
         return stream;
       };
     }
@@ -1578,6 +1704,550 @@ async function sendMeetingChatMessage(page: Page, provider: Provider, message: s
   return false;
 }
 
+async function setParticipantCamera(page: Page, provider: Provider, enabled: boolean): Promise<boolean> {
+  try {
+    if (provider === 'zoom') {
+      const btn = enabled
+        ? page
+            .locator(
+              'button.send-video-container__btn[aria-label*="Start Video" i], button[aria-label^="Start Video" i], button[aria-label^="Video starten" i]',
+            )
+            .or(page.getByRole('button', {name: /^(Start Video|Video starten)(?: \(.*\))?$/i}))
+        : page
+            .locator(
+              'button.send-video-container__btn[aria-label*="Stop Video" i], button[aria-label^="Stop Video" i], button[aria-label^="Video beenden" i]',
+            )
+            .or(page.getByRole('button', {name: /^(Stop Video|Video beenden|Video stoppen)(?: \(.*\))?$/i}));
+      if (await btn.first().isVisible().catch(() => false)) {
+        await btn.first().click({timeout: 3000}).catch(() => {});
+        return true;
+      }
+      return false;
+    }
+    if (provider === 'google_meet') {
+      const btn = enabled
+        ? page.getByRole('button', {name: /^(Turn on camera|Kamera einschalten|Kamera aktivieren)(?: \(.*\))?$/i})
+        : page.getByRole('button', {name: /^(Turn off camera|Kamera ausschalten|Kamera deaktivieren)(?: \(.*\))?$/i});
+      if (await btn.first().isVisible().catch(() => false)) {
+        await btn.first().click({timeout: 3000}).catch(() => {});
+        return true;
+      }
+      return false;
+    }
+    if (provider === 'teams') {
+      const btn = page.locator('#video-button').or(
+        page.getByRole('button', {
+          name: enabled
+            ? /^(Turn camera on|Camera off|Kamera einschalten)(?: \(.*\))?$/i
+            : /^(Turn camera off|Camera on|Kamera ausschalten)(?: \(.*\))?$/i,
+        }),
+      );
+      if (await btn.first().isVisible().catch(() => false)) {
+        await btn.first().click({timeout: 3000}).catch(() => {});
+        return true;
+      }
+      return false;
+    }
+    if (provider === 'webex') {
+      const matchingFrames = page
+        .frames()
+        .filter(f => /^https:\/\/web\.webex\.com\/(?:meetings?|guest-join-meeting)(?:[?#]|$)/.test(f.url()));
+      const frame = matchingFrames[matchingFrames.length - 1];
+      if (!frame) return false;
+      const btn = frame.getByRole('button', {
+        name: enabled ? /^Start video|^Video starten/i : /^Stop video|^Video beenden|^Video stoppen/i,
+      });
+      if (await btn.first().isVisible().catch(() => false)) {
+        await btn.first().click({timeout: 3000}).catch(() => {});
+        return true;
+      }
+      return false;
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
+async function isSyntheticShareActive(page: Page): Promise<boolean> {
+  for (const frame of [page.mainFrame(), ...page.frames()]) {
+    try {
+      const active = await frame.evaluate(
+        () => Boolean((window as unknown as {__wortlautShareActive?: boolean}).__wortlautShareActive),
+      );
+      if (active) return true;
+    } catch {
+      // ignore cross-origin frames
+    }
+  }
+  return false;
+}
+
+async function setSyntheticShareSlide(page: Page, slideIdx: number): Promise<void> {
+  for (const frame of [page.mainFrame(), ...page.frames()]) {
+    try {
+      await frame.evaluate(idx => {
+        (window as unknown as {__wortlautSetShareSlide?: (n: number) => void}).__wortlautSetShareSlide?.(idx);
+      }, slideIdx);
+    } catch {
+      // ignore
+    }
+  }
+}
+
+async function stopSyntheticScreenShare(page: Page, provider: Provider): Promise<void> {
+  for (const frame of [page.mainFrame(), ...page.frames()]) {
+    try {
+      await frame.evaluate(() => {
+        (window as unknown as {__wortlautStopShareStream?: () => void}).__wortlautStopShareStream?.();
+      });
+    } catch {
+      // ignore
+    }
+  }
+  if (provider === 'zoom') {
+    const stopBtn = page
+      .locator('button[aria-label*="Stop Share" i], button[aria-label*="Freigabe beenden" i], button[aria-label*="Stoppen" i]')
+      .or(page.getByRole('button', {name: /^(Stop Share|Freigabe beenden|Freigabe stoppen)$/i}));
+    await clickIfVisible(stopBtn);
+  }
+}
+
+async function startSyntheticScreenShare(page: Page, provider: Provider): Promise<boolean> {
+  await setSyntheticShareSlide(page, 0);
+  try {
+    if (provider === 'zoom') {
+      const shareBtn = page
+        .locator(
+          'button[aria-label*="Share Screen" i], button[aria-label*="Bildschirm freigeben" i], .footer-button__share-icon',
+        )
+        .or(page.getByRole('button', {name: /^(Share Screen|Share|Bildschirm freigeben)(?: \(.*\))?$/i}));
+      if (await shareBtn.first().isVisible().catch(() => false)) {
+        await shareBtn.first().click({timeout: 3000}).catch(() => {});
+        await delay(1500);
+        if (await isSyntheticShareActive(page)) return true;
+        // Zoom Web Client may show a secondary "Share" / "Screen" modal button
+        const modalShare = page
+          .locator('.share-option-modal button, [role="dialog"] button')
+          .filter({hasText: /^(Share|Share Screen|Screen|Freigeben|Bildschirm)$/i});
+        if (await modalShare.first().isVisible().catch(() => false)) {
+          await modalShare.first().click({timeout: 3000}).catch(() => {});
+          await delay(1500);
+        }
+        return await isSyntheticShareActive(page);
+      }
+      return false;
+    }
+    if (provider === 'google_meet') {
+      const presentBtn = page.getByRole('button', {
+        name: /Present now|Share screen|Jetzt präsentieren|Bildschirm teilen/i,
+      });
+      if (await presentBtn.first().isVisible().catch(() => false)) {
+        await presentBtn.first().click({timeout: 3000}).catch(() => {});
+        await delay(1000);
+        if (await isSyntheticShareActive(page)) return true;
+        const entireScreen = page.getByRole('menuitem', {
+          name: /Your entire screen|Entire screen|A window|Gesamter Bildschirm|Ein Fenster/i,
+        });
+        if (await entireScreen.first().isVisible().catch(() => false)) {
+          await entireScreen.first().click({timeout: 3000}).catch(() => {});
+          await delay(1500);
+        }
+        return await isSyntheticShareActive(page);
+      }
+      return false;
+    }
+    if (provider === 'teams') {
+      const shareBtn = page
+        .locator('#share-button, button[data-tid="share-screen-button"]')
+        .or(page.getByRole('button', {name: /^(Share|Teilen|Inhalt teilen)(?: \(.*\))?$/i}));
+      if (await shareBtn.first().isVisible().catch(() => false)) {
+        await shareBtn.first().click({timeout: 3000}).catch(() => {});
+        await delay(1500);
+        if (await isSyntheticShareActive(page)) return true;
+        const screenOpt = page
+          .locator('[data-tid*="share-screen"], button, [role="menuitem"]')
+          .filter({hasText: /Screen, window, or tab|Screen|Window|Bildschirm|Fenster/i});
+        if (await screenOpt.first().isVisible().catch(() => false)) {
+          await screenOpt.first().click({timeout: 3000}).catch(() => {});
+          await delay(1500);
+        }
+        return await isSyntheticShareActive(page);
+      }
+      return false;
+    }
+    if (provider === 'webex') {
+      const matchingFrames = page
+        .frames()
+        .filter(f => /^https:\/\/web\.webex\.com\/(?:meetings?|guest-join-meeting)(?:[?#]|$)/.test(f.url()));
+      const frame = matchingFrames[matchingFrames.length - 1];
+      if (!frame) return false;
+      const shareBtn = frame.getByRole('button', {name: /^(Share|Share content|Teilen|Inhalte teilen)/i});
+      if (await shareBtn.first().isVisible().catch(() => false)) {
+        await shareBtn.first().click({timeout: 3000}).catch(() => {});
+        await delay(1500);
+        if (await isSyntheticShareActive(page)) return true;
+        const shareScreenOpt = frame.getByRole('button', {name: /Share screen|Screen|Bildschirm teilen|Bildschirm/i});
+        if (await shareScreenOpt.first().isVisible().catch(() => false)) {
+          await shareScreenOpt.first().click({timeout: 3000}).catch(() => {});
+          await delay(1500);
+        }
+        return await isSyntheticShareActive(page);
+      }
+      return false;
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
+interface BotVideoDisplayObservation {
+  receivingVideo: boolean;
+  inboundVideoFramesDecoded: number;
+  inboundVideoPacketsReceived: number;
+  inboundVideoBytesReceived: number;
+  inboundFrameWidth: number;
+  inboundFrameHeight: number;
+  decodedVideoElements: number;
+  maxVideoWidth: number;
+  maxVideoHeight: number;
+  videoNonBlackRatio: number;
+  zoomOrCanvasVideoSurfaces: number;
+  botTileDomVisible: boolean;
+  compositorNonBlackRatio: number;
+  compositorSlateAccentRatio: number;
+  stageSignature: number[];
+  screenshotPath: string | null;
+}
+
+function countLumaSignatureChanges(a: number[], b: number[], threshold = 10): number {
+  const len = Math.min(a.length, b.length);
+  let changed = 0;
+  for (let i = 0; i < len; i++) {
+    if (Math.abs(a[i] - b[i]) >= threshold) changed += 1;
+  }
+  return changed;
+}
+
+async function ensureParticipantGalleryView(page: Page, provider: Provider): Promise<void> {
+  if (provider !== 'zoom') return;
+  try {
+    const galleryAlready = await page
+      .locator('.gallery-video-container, .multi-speaker-Mode')
+      .first()
+      .isVisible()
+      .catch(() => false);
+    if (galleryAlready) return;
+    const viewBtn = page
+      .locator(
+        'button.full-screen-widget__button, button[aria-label*="View" i], button[aria-label*="Ansicht" i]',
+      )
+      .or(page.getByRole('button', {name: /^(View|Ansicht)(?: \(.*\))?$/i}))
+      .first();
+    if (!(await viewBtn.isVisible().catch(() => false))) return;
+    await viewBtn.click({timeout: 2000}).catch(() => {});
+    await delay(300);
+    const galleryItem = page
+      .getByRole('menuitem', {name: /Gallery|Galerie/i})
+      .or(page.locator('a, li, button').filter({hasText: /^(Gallery View|Gallery|Galerieansicht|Galerie)$/i}))
+      .first();
+    if (await galleryItem.isVisible().catch(() => false)) {
+      await galleryItem.click({timeout: 2000}).catch(() => {});
+      await delay(600);
+    } else {
+      await page.keyboard.press('Escape').catch(() => {});
+    }
+  } catch {
+    // non-critical best-effort layout switch
+  }
+}
+
+async function inspectBotVideoDisplay(
+  page: Page,
+  provider: Provider,
+  screenshotPath?: string,
+): Promise<BotVideoDisplayObservation> {
+  if (provider === 'zoom') {
+    await ensureParticipantGalleryView(page, provider);
+  }
+
+  let targetFrame: Page | Frame = page;
+  if (provider === 'webex') {
+    const matching = page
+      .frames()
+      .filter(f => /^https:\/\/web\.webex\.com\/(?:meetings?|guest-join-meeting)(?:[?#]|$)/.test(f.url()));
+    if (matching.length > 0) targetFrame = matching[matching.length - 1];
+  }
+
+  const inPage = await targetFrame
+    .evaluate(async (prov: string) => {
+      let inboundVideoFramesDecoded = 0;
+      let inboundVideoPacketsReceived = 0;
+      let inboundVideoBytesReceived = 0;
+      let inboundFrameWidth = 0;
+      let inboundFrameHeight = 0;
+
+      const pcs = (window as unknown as {__wortlautPeerConnections?: Set<RTCPeerConnection>}).__wortlautPeerConnections;
+      for (const pc of pcs ?? []) {
+        try {
+          const stats = await pc.getStats();
+          stats.forEach((v: Record<string, any>) => {
+            if (v.type === 'inbound-rtp' && v.kind === 'video') {
+              inboundVideoFramesDecoded += Number(v.framesDecoded || 0);
+              inboundVideoPacketsReceived += Number(v.packetsReceived || 0);
+              inboundVideoBytesReceived += Number(v.bytesReceived || 0);
+              inboundFrameWidth = Math.max(inboundFrameWidth, Number(v.frameWidth || 0));
+              inboundFrameHeight = Math.max(inboundFrameHeight, Number(v.frameHeight || 0));
+            }
+          });
+        } catch {
+          // ignore closed peer connections
+        }
+      }
+
+      let decodedVideoElements = 0;
+      let maxVideoWidth = 0;
+      let maxVideoHeight = 0;
+      let videoNonBlackRatio = 0;
+      let bestVideoSignature: number[] = [];
+
+      const videos = Array.from(document.querySelectorAll('video'));
+      for (const vid of videos) {
+        if (vid.readyState < 2 || vid.videoWidth < 64 || vid.videoHeight < 36) continue;
+        const rect = vid.getBoundingClientRect();
+        if (rect.width < 40 || rect.height < 30) continue;
+        // Exclude local self-preview tiles when identifiable
+        if (
+          vid.closest('[data-self-name]:not([data-participant-id]), [data-tid*="local-video"], [data-tid*="self-video"]')
+        ) {
+          continue;
+        }
+        decodedVideoElements += 1;
+        if (vid.videoWidth >= maxVideoWidth) {
+          maxVideoWidth = vid.videoWidth;
+          maxVideoHeight = Math.max(maxVideoHeight, vid.videoHeight);
+        }
+        try {
+          const c = document.createElement('canvas');
+          c.width = 64;
+          c.height = 36;
+          const ctx = c.getContext('2d', {willReadFrequently: true});
+          if (ctx) {
+            ctx.drawImage(vid, 0, 0, 64, 36);
+            const data = ctx.getImageData(0, 0, 64, 36).data;
+            let nonBlack = 0;
+            const sig: number[] = [];
+            for (let y = 0; y < 36; y += 2) {
+              for (let x = 0; x < 64; x += 2) {
+                const idx = (y * 64 + x) * 4;
+                const luma = Math.round(0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2]);
+                if (luma > 10) nonBlack += 1;
+                sig.push(luma);
+              }
+            }
+            const ratio = nonBlack / sig.length;
+            if (ratio >= videoNonBlackRatio) {
+              videoNonBlackRatio = Math.round(ratio * 1000) / 1000;
+              bestVideoSignature = sig;
+            }
+          }
+        } catch {
+          // ignore tainted media surface
+        }
+      }
+
+      let zoomOrCanvasVideoSurfaces = 0;
+      const surfaceEls = Array.from(
+        document.querySelectorAll(
+          'canvas:not(#wortlaut-share-canvas), video-player, [data-tid*="video-tile"] canvas',
+        ),
+      );
+      for (const el of surfaceEls) {
+        const r = el.getBoundingClientRect();
+        if (r.width >= 120 && r.height >= 68) {
+          zoomOrCanvasVideoSurfaces += 1;
+        }
+      }
+
+      const bodyText = (document.body?.innerText ?? '').toLowerCase();
+      const hasAriaBot =
+        Boolean(document.querySelector('[aria-label*="wortlaut" i], [title*="wortlaut" i]')) ||
+        bodyText.includes('wortlaut');
+      const botTileDomVisible =
+        hasAriaBot ||
+        (prov !== 'zoom' && decodedVideoElements > 0);
+
+      return {
+        inboundVideoFramesDecoded,
+        inboundVideoPacketsReceived,
+        inboundVideoBytesReceived,
+        inboundFrameWidth,
+        inboundFrameHeight,
+        decodedVideoElements,
+        maxVideoWidth,
+        maxVideoHeight,
+        videoNonBlackRatio,
+        zoomOrCanvasVideoSurfaces,
+        botTileDomVisible,
+        bestVideoSignature,
+      };
+    }, provider)
+    .catch(() => ({
+      inboundVideoFramesDecoded: 0,
+      inboundVideoPacketsReceived: 0,
+      inboundVideoBytesReceived: 0,
+      inboundFrameWidth: 0,
+      inboundFrameHeight: 0,
+      decodedVideoElements: 0,
+      maxVideoWidth: 0,
+      maxVideoHeight: 0,
+      videoNonBlackRatio: 0,
+      zoomOrCanvasVideoSurfaces: 0,
+      botTileDomVisible: false,
+      bestVideoSignature: [] as number[],
+    }));
+
+  // Capture GPU-composited PNG screenshot so WebRTC <video>, WebGL <canvas>, and Zoom <video-player>
+  // WebCodecs surfaces are all measured directly from Chromium's Viz compositor!
+  let compositorNonBlackRatio = 0;
+  let compositorSlateAccentRatio = 0;
+  let compositorSignature: number[] = [];
+  let savedShot: string | null = null;
+
+  try {
+    const pngBuf = await page.screenshot({type: 'png'});
+    if (screenshotPath) {
+      await mkdir(dirname(screenshotPath), {recursive: true});
+      await writeFile(screenshotPath, pngBuf, {mode: 0o600});
+      await chmod(screenshotPath, 0o600).catch(() => {});
+      savedShot = screenshotPath;
+    }
+    const b64 = pngBuf.toString('base64');
+    const compStats = await page
+      .evaluate(async (dataB64: string) => {
+        const img = new Image();
+        img.src = `data:image/png;base64,${dataB64}`;
+        await new Promise<void>((res, rej) => {
+          img.onload = () => res();
+          img.onerror = () => rej(new Error('png decode failed'));
+        });
+        const c = document.createElement('canvas');
+        c.width = 64;
+        c.height = 36;
+        const ctx = c.getContext('2d', {willReadFrequently: true})!;
+        // Crop central stage region (15%..85% width, 12%..82% height) excluding toolbars
+        ctx.drawImage(
+          img,
+          Math.floor(img.width * 0.15),
+          Math.floor(img.height * 0.12),
+          Math.floor(img.width * 0.7),
+          Math.floor(img.height * 0.7),
+          0,
+          0,
+          64,
+          36,
+        );
+        const data = ctx.getImageData(0, 0, 64, 36).data;
+        let nonBlack = 0;
+        let slateAccent = 0;
+        const sig: number[] = [];
+        for (let y = 0; y < 36; y += 2) {
+          for (let x = 0; x < 64; x += 2) {
+            const idx = (y * 64 + x) * 4;
+            const r = data[idx];
+            const g = data[idx + 1];
+            const b = data[idx + 2];
+            const luma = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
+            if (luma > 14) nonBlack += 1;
+            // wortlaut slate/blue/emerald palette (#0f172a / #1e293b / #3b82f6 / #34d399) has b > r + 8 or g > r + 12
+            if ((b >= r + 10 && b >= 32) || (g >= r + 14 && g >= 60)) {
+              slateAccent += 1;
+            }
+            sig.push(luma);
+          }
+        }
+        return {
+          nonBlackRatio: Math.round((nonBlack / sig.length) * 1000) / 1000,
+          slateAccentRatio: Math.round((slateAccent / sig.length) * 1000) / 1000,
+          sig,
+        };
+      }, b64)
+      .catch(() => null);
+    if (compStats) {
+      compositorNonBlackRatio = compStats.nonBlackRatio;
+      compositorSlateAccentRatio = compStats.slateAccentRatio;
+      compositorSignature = compStats.sig;
+    }
+  } catch {
+    // ignore transient screenshot errors
+  }
+
+  const stageSignature =
+    inPage.bestVideoSignature.length > 0 ? inPage.bestVideoSignature : compositorSignature;
+
+  const hasWebRtcVideo =
+    (inPage.inboundVideoFramesDecoded > 0 && inPage.inboundVideoBytesReceived > 1000) ||
+    (inPage.decodedVideoElements > 0 && inPage.videoNonBlackRatio > 0.05);
+
+  const hasZoomCanvasVideo =
+    provider === 'zoom' &&
+    inPage.zoomOrCanvasVideoSurfaces > 0 &&
+    inPage.botTileDomVisible &&
+    compositorNonBlackRatio > 0.08 &&
+    compositorSlateAccentRatio > 0.02;
+
+  return {
+    receivingVideo: hasWebRtcVideo || hasZoomCanvasVideo,
+    inboundVideoFramesDecoded: inPage.inboundVideoFramesDecoded,
+    inboundVideoPacketsReceived: inPage.inboundVideoPacketsReceived,
+    inboundVideoBytesReceived: inPage.inboundVideoBytesReceived,
+    inboundFrameWidth: inPage.inboundFrameWidth,
+    inboundFrameHeight: inPage.inboundFrameHeight,
+    decodedVideoElements: inPage.decodedVideoElements,
+    maxVideoWidth: inPage.maxVideoWidth,
+    maxVideoHeight: inPage.maxVideoHeight,
+    videoNonBlackRatio: inPage.videoNonBlackRatio,
+    zoomOrCanvasVideoSurfaces: inPage.zoomOrCanvasVideoSurfaces,
+    botTileDomVisible: inPage.botTileDomVisible,
+    compositorNonBlackRatio,
+    compositorSlateAccentRatio,
+    stageSignature,
+    screenshotPath: savedShot,
+  };
+}
+
+async function waitForBotVideoDisplay(
+  observers: Page[],
+  provider: Provider,
+  timeoutMs: number,
+  screenshotPath?: string,
+): Promise<{observerIndex: number; obs: BotVideoDisplayObservation}> {
+  const deadline = Date.now() + timeoutMs;
+  let lastObs: BotVideoDisplayObservation | undefined;
+  let bestIdx = 0;
+  while (true) {
+    for (let i = 0; i < observers.length; i++) {
+      const saveNow = Date.now() + 1500 >= deadline ? screenshotPath : undefined;
+      const obs = await inspectBotVideoDisplay(observers[i], provider, saveNow);
+      lastObs = obs;
+      bestIdx = i;
+      if (obs.receivingVideo) {
+        const finalObs = screenshotPath && !obs.screenshotPath
+          ? await inspectBotVideoDisplay(observers[i], provider, screenshotPath)
+          : obs;
+        return {observerIndex: i, obs: finalObs};
+      }
+    }
+    if (Date.now() >= deadline) break;
+    await delay(1500);
+  }
+  return {
+    observerIndex: bestIdx,
+    obs: lastObs ?? (await inspectBotVideoDisplay(observers[0], provider, screenshotPath)),
+  };
+}
+
 async function runProviderLiveTest(provider: Provider, config: LiveConfig) {
   const meetingUrl = config.urls[provider];
   if (!meetingUrl) {
@@ -1589,7 +2259,7 @@ async function runProviderLiveTest(provider: Provider, config: LiveConfig) {
 
   console.log(`\n======================================================================`);
   console.log(`[LIVE-E2E] Starte echten Provider-Test: ${provider.toUpperCase()}`);
-  console.log(`[LIVE-E2E] Meeting-URL: ${meetingUrl}`);
+  console.log(`[LIVE-E2E] Meeting-URL: ${redactMeetingUrl(meetingUrl)}`);
   console.log(`[LIVE-E2E] wortlaut-API: ${config.apiUrl} (Sprecher: ${config.speakerCount}, ChatOptOut: ${config.testChatOptOut})`);
   console.log(`======================================================================`);
 
@@ -1608,16 +2278,19 @@ async function runProviderLiveTest(provider: Provider, config: LiveConfig) {
   let recordingId: string | undefined;
 
   try {
-    // 1. Launch synthetic Speaker A (Host / First Speaker) & Speaker B (Second Speaker) (+ optional C for >=3 speakers)
+    // 1. Launch synthetic Speaker A (Host / First Speaker) & optional Speaker B/C
     const [localeA, localeB] = config.speakerLocales;
     console.log(
-      `[1/6] Starte Browser für "${config.speakerAName}" (${localeA}) und "${config.speakerBName}" (${localeB})` +
+      `[1/6] Starte Browser für "${config.speakerAName}" (${localeA})` +
+        (config.speakerCount >= 2 ? ` und "${config.speakerBName}" (${localeB})` : ' (Video-Display-Modus)') +
         (config.speakerCount >= 3 ? ` + "${config.speakerCName}"` : '') +
         (config.speakerCount >= 4 ? ` (+ Late-Joiner "${config.speakerDName}" während aktivem Call)` : '') +
         `...`,
     );
     browserA = await launchSpeakerBrowser(wavPathA, localeA, config.headed);
-    browserB = await launchSpeakerBrowser(wavPathB, localeB, config.headed);
+    if (config.speakerCount >= 2) {
+      browserB = await launchSpeakerBrowser(wavPathB, localeB, config.headed);
+    }
     if (config.speakerCount >= 3) {
       browserC = await launchSpeakerBrowser(wavPathA, localeA, config.headed);
     }
@@ -1679,17 +2352,19 @@ async function runProviderLiveTest(provider: Provider, config: LiveConfig) {
     });
     const useHostForGuests = !hasGuestState && hasHostState && provider === 'google_meet';
     const guestStorage = hasGuestState ? {storageState: guestStatePath} : useHostForGuests ? {storageState: hostStatePath} : {};
-    const ctxB = await browserB.newContext({
-      locale: localeB,
-      permissions: ['microphone', 'camera'],
-      ...guestStorage,
-    });
-
     await installSenderGate(ctxA, wavPathA);
-    await installSenderGate(ctxB, wavPathB);
 
     const pageA = await ctxA.newPage();
-    const pageB = await ctxB.newPage();
+    let pageB: Page | undefined;
+    if (browserB) {
+      const ctxB = await browserB.newContext({
+        locale: localeB,
+        permissions: ['microphone', 'camera'],
+        ...guestStorage,
+      });
+      await installSenderGate(ctxB, wavPathB);
+      pageB = await ctxB.newPage();
+    }
     let pageC: Page | undefined;
     if (browserC) {
       const ctxC = await browserC.newContext({
@@ -1707,12 +2382,12 @@ async function runProviderLiveTest(provider: Provider, config: LiveConfig) {
       await Promise.all([
         pageHost.goto(meetingUrl, {waitUntil: 'domcontentloaded', timeout: 45000}),
         joinRoomAsSpeaker(pageA, provider, meetingUrl, config.speakerAName, config.joinTimeoutSeconds),
-        joinRoomAsSpeaker(pageB, provider, meetingUrl, config.speakerBName, config.joinTimeoutSeconds),
+        ...(pageB ? [joinRoomAsSpeaker(pageB, provider, meetingUrl, config.speakerBName, config.joinTimeoutSeconds)] : []),
         ...(pageC ? [joinRoomAsSpeaker(pageC, provider, meetingUrl, config.speakerCName, config.joinTimeoutSeconds)] : []),
       ]);
       await setSpeakerTransmitting(pageHost, false);
       await setSpeakerTransmitting(pageA, false);
-      await setSpeakerTransmitting(pageB, false);
+      if (pageB) await setSpeakerTransmitting(pageB, false);
       if (pageC) await setSpeakerTransmitting(pageC, false);
       console.log(`      Teilnehmer sind im Raum aktiv.`);
     } else {
@@ -1738,10 +2413,12 @@ async function runProviderLiveTest(provider: Provider, config: LiveConfig) {
       await setSpeakerTransmitting(pageA, false);
       console.log(`      "${config.speakerAName}" ist im Raum aktiv (Lobby-Admit-Watcher läuft).`);
 
-      console.log(`      "${config.speakerBName}" tritt dem Raum bei...`);
-      await joinRoomAsSpeaker(pageB, provider, meetingUrl, config.speakerBName, config.joinTimeoutSeconds);
-      await setSpeakerTransmitting(pageB, false);
-      console.log(`      "${config.speakerBName}" ist im Raum aktiv.`);
+      if (pageB) {
+        console.log(`      "${config.speakerBName}" tritt dem Raum bei...`);
+        await joinRoomAsSpeaker(pageB, provider, meetingUrl, config.speakerBName, config.joinTimeoutSeconds);
+        await setSpeakerTransmitting(pageB, false);
+        console.log(`      "${config.speakerBName}" ist im Raum aktiv.`);
+      }
 
       if (pageC) {
         console.log(`      "${config.speakerCName}" tritt dem Raum bei...`);
@@ -1897,70 +2574,138 @@ async function runProviderLiveTest(provider: Provider, config: LiveConfig) {
     // Allow WebRTC receivers and initial 5s capture buffer to stabilize
     await delay(5500);
 
-    // 4. Execute deterministic speech choreography (Solo A -> Solo B -> C / Late-Joiner D / Overlap)
+    // 3b. Check incoming wortlaut live-transcript video tile on participant browser(s) before speech
+    const videoObservers = [pageA, ...(pageB ? [pageB] : [])];
+    let botVideoInitial: BotVideoDisplayObservation | null = null;
+    let botVideoObserverIdx = 0;
+    if (config.testVideoDisplay) {
+      console.log(`[3b/6] Prüfe Video-Anzeige der wortlaut-Kachel bei den Teilnehmern (${provider})...`);
+      const initialShotPath = resolve(ROOT_DIR, `.dev/live-e2e-${provider}-video-initial.png`);
+      const initialRes = await waitForBotVideoDisplay(videoObservers, provider, 12000, initialShotPath);
+      botVideoObserverIdx = initialRes.observerIndex;
+      botVideoInitial = initialRes.obs;
+      console.log(
+        `      [Video-Initial] receiving=${botVideoInitial.receivingVideo}, ` +
+          `framesDecoded=${botVideoInitial.inboundVideoFramesDecoded}, ` +
+          `bytes=${botVideoInitial.inboundVideoBytesReceived}, ` +
+          `video=${botVideoInitial.maxVideoWidth}x${botVideoInitial.maxVideoHeight} (n=${botVideoInitial.decodedVideoElements}), ` +
+          `surfaces=${botVideoInitial.zoomOrCanvasVideoSurfaces}, ` +
+          `compositorNonBlack=${botVideoInitial.compositorNonBlackRatio}`,
+      );
+    }
+
+    // 4. Execute deterministic speech choreography (Solo A -> optional Solo B -> C / Late-Joiner D / Overlap)
     console.log(`[4/6] Spiele Referenz-Sprachbeiträge über getrennte Teilnehmer-Streams ein...`);
     console.log(`      -> Turn 1: "${config.speakerAName}" spricht (german-a.wav)...`);
     await setSpeakerTransmitting(pageA, true);
-    await setSpeakerTransmitting(pageB, false);
+    if (pageB) await setSpeakerTransmitting(pageB, false);
     if (pageC) await setSpeakerTransmitting(pageC, false);
-    await delay(Math.ceil((durationA * 2 + 1.6) * 1000));
+    await delay(Math.ceil(((config.videoOnly ? durationA * 1.5 : durationA * 2) + 1.6) * 1000));
     const statsA = await readOutboundAudioStats(pageA);
     console.log(`         [RTP-A] packetsSent=${statsA.packetsSent}, bytesSent=${statsA.bytesSent}, audioLevel=${statsA.audioLevel}`);
     await setSpeakerTransmitting(pageA, false);
     await delay(3000);
 
-    console.log(`      -> Turn 2: "${config.speakerBName}" spricht (german-b.wav)...`);
-    await setSpeakerTransmitting(pageA, false);
-    await setSpeakerTransmitting(pageB, true);
-    await delay(Math.ceil((durationB * 2 + 1.6) * 1000));
-    const statsB = await readOutboundAudioStats(pageB);
-    console.log(`         [RTP-B] packetsSent=${statsB.packetsSent}, bytesSent=${statsB.bytesSent}, audioLevel=${statsB.audioLevel}`);
-    await setSpeakerTransmitting(pageB, false);
-    await delay(3000);
-
-    if (pageC) {
-      console.log(`      -> Turn 3: "${config.speakerCName}" spricht (SFU Loudest-N Transceiver-Wechsel)...`);
-      await setSpeakerTransmitting(pageC, true);
-      await delay(Math.ceil((durationA * 1.5 + 1.2) * 1000));
-      await setSpeakerTransmitting(pageC, false);
-      await delay(2500);
-    }
-
     let pageD: Page | undefined;
     let lateJoinerVerified = false;
-    if (config.speakerCount >= 4) {
-      console.log(`      -> Late-Joiner: "${config.speakerDName}" tritt während laufender Aufnahme bei...`);
-      browserD = await launchSpeakerBrowser(wavPathB, localeB, config.headed);
-      const ctxD = await browserD.newContext({
-        locale: localeB,
-        permissions: ['microphone', 'camera'],
-        ...guestStorage,
-      });
-      await installSenderGate(ctxD, wavPathB);
-      pageD = await ctxD.newPage();
-      await joinRoomAsSpeaker(pageD, provider, meetingUrl, config.speakerDName, config.joinTimeoutSeconds);
-      await setSpeakerTransmitting(pageD, false);
-      await delay(2500);
-      console.log(`      -> Turn 4: Late-Joiner "${config.speakerDName}" spricht (german-b.wav)...`);
-      await setSpeakerTransmitting(pageD, true);
-      await delay(Math.ceil((durationB * 2 + 1.6) * 1000));
-      await setSpeakerTransmitting(pageD, false);
-      await delay(3000);
-      lateJoinerVerified = true;
-    } else if (provider === 'teams' || provider === 'webex') {
-      console.log(`      -> Turn 3: "${config.speakerAName}" spricht erneut (Sprecherwechsel zurück auf A)...`);
-      await setSpeakerTransmitting(pageA, true);
-      await setSpeakerTransmitting(pageB, false);
-      await delay(Math.ceil((durationA + 1.0) * 1000));
+    if (pageB && !config.videoOnly) {
+      console.log(`      -> Turn 2: "${config.speakerBName}" spricht (german-b.wav)...`);
       await setSpeakerTransmitting(pageA, false);
-    } else {
-      console.log(`      -> Turn 3: Überlappendes Sprechen (${config.speakerAName} + ${config.speakerBName} gleichzeitig)...`);
-      await setSpeakerTransmitting(pageA, true);
       await setSpeakerTransmitting(pageB, true);
-      await delay(Math.ceil((Math.max(durationA, durationB) + 1.0) * 1000));
-      if (pageHost) await setSpeakerTransmitting(pageHost, false);
-      await setSpeakerTransmitting(pageA, false);
+      await delay(Math.ceil((durationB * 2 + 1.6) * 1000));
+      const statsB = await readOutboundAudioStats(pageB);
+      console.log(`         [RTP-B] packetsSent=${statsB.packetsSent}, bytesSent=${statsB.bytesSent}, audioLevel=${statsB.audioLevel}`);
       await setSpeakerTransmitting(pageB, false);
+      await delay(3000);
+
+      if (pageC) {
+        console.log(`      -> Turn 3: "${config.speakerCName}" spricht (SFU Loudest-N Transceiver-Wechsel)...`);
+        await setSpeakerTransmitting(pageC, true);
+        await delay(Math.ceil((durationA * 1.5 + 1.2) * 1000));
+        await setSpeakerTransmitting(pageC, false);
+        await delay(2500);
+      }
+
+      if (config.speakerCount >= 4) {
+        console.log(`      -> Late-Joiner: "${config.speakerDName}" tritt während laufender Aufnahme bei...`);
+        browserD = await launchSpeakerBrowser(wavPathB, localeB, config.headed);
+        const ctxD = await browserD.newContext({
+          locale: localeB,
+          permissions: ['microphone', 'camera'],
+          ...guestStorage,
+        });
+        await installSenderGate(ctxD, wavPathB);
+        pageD = await ctxD.newPage();
+        await joinRoomAsSpeaker(pageD, provider, meetingUrl, config.speakerDName, config.joinTimeoutSeconds);
+        await setSpeakerTransmitting(pageD, false);
+        await delay(2500);
+        console.log(`      -> Turn 4: Late-Joiner "${config.speakerDName}" spricht (german-b.wav)...`);
+        await setSpeakerTransmitting(pageD, true);
+        await delay(Math.ceil((durationB * 2 + 1.6) * 1000));
+        await setSpeakerTransmitting(pageD, false);
+        await delay(3000);
+        lateJoinerVerified = true;
+      } else if (provider === 'teams' || provider === 'webex') {
+        console.log(`      -> Turn 3: "${config.speakerAName}" spricht erneut (Sprecherwechsel zurück auf A)...`);
+        await setSpeakerTransmitting(pageA, true);
+        await setSpeakerTransmitting(pageB, false);
+        await delay(Math.ceil((durationA + 1.0) * 1000));
+        await setSpeakerTransmitting(pageA, false);
+      } else {
+        console.log(`      -> Turn 3: Überlappendes Sprechen (${config.speakerAName} + ${config.speakerBName} gleichzeitig)...`);
+        await setSpeakerTransmitting(pageA, true);
+        await setSpeakerTransmitting(pageB, true);
+        await delay(Math.ceil((Math.max(durationA, durationB) + 1.0) * 1000));
+        if (pageHost) await setSpeakerTransmitting(pageHost, false);
+        await setSpeakerTransmitting(pageA, false);
+        await setSpeakerTransmitting(pageB, false);
+      }
+    }
+
+    // 4b & 4c. Camera exclusion + Screen-Share Slide-Change Keyframe verification (when supported by server)
+    let keyframesServerSupported = false;
+    let cameraExclusionVerified: boolean | null = null;
+    let screenShareStarted = false;
+    if (config.testKeyframes) {
+      const midRec = await apiRequest<any>(config, 'GET', `/v1/recordings/${recordingId}`);
+      const midKfDiag = midRec?.attempts?.[0]?.diagnostics?.keyframes;
+      keyframesServerSupported = Boolean(midKfDiag && midKfDiag.capability !== 'disabled');
+      if (keyframesServerSupported) {
+        console.log(`[4b/6] Prüfe Kamera-Ausschluss ("${config.speakerAName}" aktiviert Kamera ohne Screen-Share)...`);
+        const camEnabled = await setParticipantCamera(pageA, provider, true);
+        if (camEnabled) {
+          await delay(4500);
+          await setParticipantCamera(pageA, provider, false);
+        } else {
+          await delay(2000);
+        }
+        const preShareTx = await apiRequest<{keyframes?: ExportedKeyframe[]}>(
+          config,
+          'GET',
+          `/v1/recordings/${recordingId}/transcript`,
+        );
+        const preShareKfCount = preShareTx.keyframes?.length ?? 0;
+        assert.equal(
+          preShareKfCount,
+          0,
+          `Kamera-Ausschluss verletzt: ${preShareKfCount} Keyframe(s) vor Screen-Share erfasst!`,
+        );
+        cameraExclusionVerified = true;
+        console.log(`      Kamera-Ausschluss bestanden (0 Keyframes bei aktiver Teilnehmerkamera).`);
+
+        console.log(`[4c/6] Starte synthetische Bildschirmfreigabe durch "${config.speakerAName}" (Slide 1 -> Slide 2)...`);
+        screenShareStarted = await startSyntheticScreenShare(pageA, provider);
+        if (screenShareStarted) {
+          await delay(5500);
+          await setSyntheticShareSlide(pageA, 1);
+          await delay(6500);
+          await stopSyntheticScreenShare(pageA, provider);
+          await delay(2000);
+          console.log(`      Bildschirmfreigabe abgeschlossen (2 Folien präsentiert).`);
+        } else {
+          console.log(`      [Hinweis] Bildschirmfreigabe konnte im ${provider}-Gast-UI nicht automatisch gestartet werden.`);
+        }
+      }
     }
 
     // 5. Verify live streaming transcript segments while the meeting is still active (BEFORE any chat opt-out!)
@@ -1977,7 +2722,7 @@ async function runProviderLiveTest(provider: Provider, config: LiveConfig) {
         liveStreamedSegments = transcript.segments;
         const hasLiveA = liveStreamedSegments.some(s => /getrennten.*Audioquellen|Audioquellen|prüfen die getrenn/i.test(s.text));
         const hasLiveB = liveStreamedSegments.some(s => /zweite Teilnehmer|gleichen Zeit/i.test(s.text));
-        if (hasLiveA && hasLiveB) break;
+        if (config.videoOnly || config.speakerCount < 2 ? hasLiveA : hasLiveA && hasLiveB) break;
       }
       await delay(2000);
     }
@@ -1999,11 +2744,59 @@ async function runProviderLiveTest(provider: Provider, config: LiveConfig) {
         `(liveA=${liveSegmentsA.length}, liveB=${liveSegmentsB.length}, liveDisjointSpeakers=${liveDisjointSpeakers})`,
     );
 
+    // 5a. Verify that live transcript segments propagate onto wortlaut's incoming video tile
+    let botVideoLive: BotVideoDisplayObservation | null = null;
+    let botVideoDisplayVerified: boolean | null = null;
+    let botVideoLiveUpdateVerified: boolean | null = null;
+    let botVideoChangedCells = 0;
+    if (config.testVideoDisplay) {
+      // Allow one 3s worker status poll + WebRTC/Canvas frame propagation
+      await delay(3800);
+      const liveShotPath = resolve(ROOT_DIR, `.dev/live-e2e-${provider}-video-live.png`);
+      const targetObserver = videoObservers[botVideoObserverIdx] ?? pageA;
+      botVideoLive = await inspectBotVideoDisplay(targetObserver, provider, liveShotPath);
+      if (!botVideoLive.receivingVideo && videoObservers.length > 1) {
+        const retryRes = await waitForBotVideoDisplay(videoObservers, provider, 5000, liveShotPath);
+        botVideoLive = retryRes.obs;
+      }
+      botVideoChangedCells =
+        botVideoInitial && botVideoLive
+          ? countLumaSignatureChanges(botVideoInitial.stageSignature, botVideoLive.stageSignature)
+          : 0;
+      const framesAdvanced =
+        Boolean(botVideoInitial && botVideoLive) &&
+        (botVideoLive!.inboundVideoFramesDecoded > botVideoInitial!.inboundVideoFramesDecoded ||
+          botVideoLive!.inboundVideoBytesReceived > botVideoInitial!.inboundVideoBytesReceived);
+      botVideoDisplayVerified = Boolean(botVideoInitial?.receivingVideo || botVideoLive?.receivingVideo);
+      botVideoLiveUpdateVerified = Boolean(
+        botVideoDisplayVerified && (framesAdvanced || botVideoChangedCells >= 4),
+      );
+      console.log(
+        `[5a/6] [Video-Live-Update] verified=${botVideoDisplayVerified}, liveUpdated=${botVideoLiveUpdateVerified}, ` +
+          `framesDecoded=${botVideoLive.inboundVideoFramesDecoded}, changedCells=${botVideoChangedCells}, ` +
+          `screenshot=${botVideoLive.screenshotPath ?? 'none'}`,
+      );
+      if (config.requireVideoDisplay) {
+        assert.equal(
+          botVideoDisplayVerified,
+          true,
+          `wortlaut-Video-Kachel wurde bei den Teilnehmern auf ${provider} nicht empfangen/angezeigt! Siehe ${liveShotPath}`,
+        );
+        if (liveStreamingVerified) {
+          assert.equal(
+            botVideoLiveUpdateVerified,
+            true,
+            `wortlaut-Video-Kachel hat sich nach Live-Transkript auf ${provider} nicht aktualisiert (changedCells=${botVideoChangedCells})!`,
+          );
+        }
+      }
+    }
+
     // 5b. Test real In-Call Chat Opt-Out ("nein") and subsequent audio zeroing + GDPR retroactive purge
     let chatOptOutSent = false;
     let optOutSpeakerName: string | null = null;
-    if (config.testChatOptOut) {
-      const optOutPage = pageC ?? pageB;
+    if (config.testChatOptOut && (pageC || pageB)) {
+      const optOutPage = (pageC ?? pageB)!;
       optOutSpeakerName = pageC ? config.speakerCName : config.speakerBName;
       console.log(`[5b/6] Prüfe echten In-Call-Chat-Widerspruch ("nein") durch "${optOutSpeakerName}"...`);
       chatOptOutSent = await sendMeetingChatMessage(optOutPage, provider, 'nein');
@@ -2062,10 +2855,31 @@ async function runProviderLiveTest(provider: Provider, config: LiveConfig) {
     const exportedJson = await apiRequest<{
       processing: string;
       segments: TranscriptSegment[];
+      keyframes?: ExportedKeyframe[];
       quality: {has_audio_gaps: boolean; has_unknown_attribution: boolean};
     }>(config, 'GET', `/v1/recordings/${recordingId}/exports/json`);
     const exportedTxt = await apiRequest<string>(config, 'GET', `/v1/recordings/${recordingId}/exports/txt`);
     const exportedVtt = await apiRequest<string>(config, 'GET', `/v1/recordings/${recordingId}/exports/vtt`);
+
+    const exportedKeyframes = exportedJson.keyframes ?? [];
+    let keyframesVerified: boolean | null = null;
+    if (keyframesServerSupported && screenShareStarted) {
+      assert.ok(
+        exportedKeyframes.length >= 1,
+        `Screen-Share war aktiv, aber 0 Keyframes erfasst (diagnostics=${JSON.stringify(finalRecording.attempts?.[0]?.diagnostics?.keyframes)})`,
+      );
+      const firstKf = exportedKeyframes[0];
+      assert.ok(firstKf.presenter && firstKf.presenter.length > 0, 'Keyframe hat keinen gebundenen Presenter');
+      const unauthPngRes = await fetch(`${config.apiUrl}${firstKf.image_path}?token=${encodeURIComponent(config.apiToken)}`);
+      assert.equal(unauthPngRes.status, 401, 'Keyframe-PNG akzeptierte unzulässiges ?token= Query-Secret');
+      const authPngRes = await fetch(`${config.apiUrl}${firstKf.image_path}`, {
+        headers: {Authorization: `Bearer ${config.apiToken}`},
+      });
+      assert.equal(authPngRes.status, 200, `Keyframe-PNG-Abruf schlug fehl (HTTP ${authPngRes.status})`);
+      const pngBytes = Buffer.from(await authPngRes.arrayBuffer());
+      assert.equal(pngBytes.subarray(0, 8).toString('hex'), '89504e470d0a1a0a', 'Ungültige PNG-Signatur');
+      keyframesVerified = true;
+    }
 
     const segments = exportedJson.segments || [];
     const distinctStreams = new Set(segments.map(s => s.stream_id));
@@ -2115,7 +2929,7 @@ async function runProviderLiveTest(provider: Provider, config: LiveConfig) {
       timestamp: new Date().toISOString(),
       provider,
       recording_id: recordingId,
-      meeting_url: meetingUrl,
+      meeting_url: redactMeetingUrl(meetingUrl),
       speaker_count: config.speakerCount,
       speaker_locales: config.speakerLocales,
       lobby_hold_verified: lobbyHoldVerified,
@@ -2123,8 +2937,39 @@ async function runProviderLiveTest(provider: Provider, config: LiveConfig) {
       lobby_signaled_participants: lobbySignaledParticipants,
       late_joiner_verified: lateJoinerVerified,
       participation_verified: true,
+      bot_video_display_verified: botVideoDisplayVerified,
+      bot_video_live_update_verified: botVideoLiveUpdateVerified,
+      bot_video_changed_cells: botVideoChangedCells,
+      bot_video_initial: botVideoInitial
+        ? {
+            receiving_video: botVideoInitial.receivingVideo,
+            frames_decoded: botVideoInitial.inboundVideoFramesDecoded,
+            bytes_received: botVideoInitial.inboundVideoBytesReceived,
+            video_width: botVideoInitial.maxVideoWidth || botVideoInitial.inboundFrameWidth,
+            video_height: botVideoInitial.maxVideoHeight || botVideoInitial.inboundFrameHeight,
+            surfaces: botVideoInitial.zoomOrCanvasVideoSurfaces,
+            compositor_non_black_ratio: botVideoInitial.compositorNonBlackRatio,
+            screenshot: botVideoInitial.screenshotPath,
+          }
+        : null,
+      bot_video_live: botVideoLive
+        ? {
+            receiving_video: botVideoLive.receivingVideo,
+            frames_decoded: botVideoLive.inboundVideoFramesDecoded,
+            bytes_received: botVideoLive.inboundVideoBytesReceived,
+            video_width: botVideoLive.maxVideoWidth || botVideoLive.inboundFrameWidth,
+            video_height: botVideoLive.maxVideoHeight || botVideoLive.inboundFrameHeight,
+            surfaces: botVideoLive.zoomOrCanvasVideoSurfaces,
+            compositor_non_black_ratio: botVideoLive.compositorNonBlackRatio,
+            screenshot: botVideoLive.screenshotPath,
+          }
+        : null,
       live_streaming_verified: liveStreamingVerified,
       live_disjoint_speakers: liveDisjointSpeakers,
+      camera_exclusion_verified: cameraExclusionVerified,
+      screen_share_started: screenShareStarted,
+      keyframe_count: exportedKeyframes.length,
+      keyframes_verified: keyframesVerified,
       chat_opt_out_sent: chatOptOutSent,
       chat_opt_out_speaker: optOutSpeakerName,
       chat_opt_out_diagnostics: optedOutDiag,
@@ -2147,20 +2992,35 @@ async function runProviderLiveTest(provider: Provider, config: LiveConfig) {
 
     await mkdir(resolve(ROOT_DIR, '.dev'), {recursive: true});
     const reportPath = resolve(ROOT_DIR, `.dev/live-e2e-${provider}-result.json`);
-    await writeFile(reportPath, JSON.stringify(report, null, 2), 'utf8');
+    await writeFile(reportPath, JSON.stringify(report, null, 2), {encoding: 'utf8', mode: 0o600});
+    await chmod(reportPath, 0o600).catch(() => {});
     console.log(`\n[ERGEBNIS ${provider.toUpperCase()}] Report gespeichert in: ${reportPath}`);
     console.log(`  - Segmente gesamt (final):     ${report.segment_count}`);
     console.log(`  - Getrennte Audio-Streams:     ${report.distinct_stream_count}`);
     console.log(`  - Erkannte Sprecher-IDs:       ${report.distinct_speaker_ids.join(', ') || '(keine)'}`);
     console.log(`  - Erkannte Sprecher-Namen:     ${report.distinct_speaker_names.join(', ') || '(keine)'}`);
     console.log(`  - Satz A erkannt (Alice):      ${report.phrase_a_matched}`);
-    console.log(`  - Satz B erkannt (Bob):        ${report.phrase_b_matched}`);
+    if (config.speakerCount >= 2 && !config.videoOnly) {
+      console.log(`  - Satz B erkannt (Bob):        ${report.phrase_b_matched}`);
+    }
+    if (config.testVideoDisplay) {
+      console.log(
+        `  - Bot-Video-Kachel sichtbar:   ${report.bot_video_display_verified} ` +
+          `(liveUpdate=${report.bot_video_live_update_verified}, changedCells=${report.bot_video_changed_cells})`,
+      );
+    }
+    if (keyframesServerSupported) {
+      console.log(`  - Kamera-Ausschluss:           ${report.camera_exclusion_verified}`);
+      console.log(`  - Screen-Share-Keyframes:      ${report.keyframe_count} (verified=${report.keyframes_verified})`);
+    }
     if (chatOptOutSent) {
       console.log(`  - Chat-Opt-Out verifiziert:    ${report.chat_opt_out_verified} (opted_out=${optedOutDiag.join(', ')})`);
     }
-    console.log(`  - Getrennte Kanäle A vs. B:    ${report.disjoint_streams_for_a_and_b}`);
-    console.log(`  - Getrennte Sprecher A vs. B:  ${report.disjoint_speakers_for_a_and_b}`);
-    console.log(`  - Sprecherbindung verifiziert: ${report.speaker_attribution_verified}`);
+    if (config.speakerCount >= 2 && !config.videoOnly) {
+      console.log(`  - Getrennte Kanäle A vs. B:    ${report.disjoint_streams_for_a_and_b}`);
+      console.log(`  - Getrennte Sprecher A vs. B:  ${report.disjoint_speakers_for_a_and_b}`);
+      console.log(`  - Sprecherbindung verifiziert: ${report.speaker_attribution_verified}`);
+    }
 
     if (sharedAccountOptedOut) {
       assert.ok(liveStreamedSegments.length > 0, 'Keine Live-Segmente vor dem Chat-Opt-Out empfangen');
@@ -2169,7 +3029,9 @@ async function runProviderLiveTest(provider: Provider, config: LiveConfig) {
       assert.ok(report.segment_count > 0, 'Keine Transkript-Segmente erzeugt');
     }
     assert.ok(report.phrase_a_matched, 'Referenzsatz A ("getrennten Audioquellen") wurde im Transkript nicht gefunden');
-    assert.ok(report.phrase_b_matched, 'Referenzsatz B ("zweite Teilnehmer") wurde im Transkript nicht gefunden');
+    if (config.speakerCount >= 2 && !config.videoOnly) {
+      assert.ok(report.phrase_b_matched, 'Referenzsatz B ("zweite Teilnehmer") wurde im Transkript nicht gefunden');
+    }
     assert.ok(report.exports_verified, 'TXT/VTT-Exporte unvollständig');
     if (chatOptOutSent) {
       assert.equal(
@@ -2185,7 +3047,7 @@ async function runProviderLiveTest(provider: Provider, config: LiveConfig) {
       );
     }
 
-    if (config.requireSpeakerBinding) {
+    if (config.requireSpeakerBinding && config.speakerCount >= 2 && !config.videoOnly) {
       assert.ok(
         report.disjoint_streams_for_a_and_b,
         `Sprecher A und B wurden nicht auf getrennten Audio-Streams empfangen (distinct_stream_count=${report.distinct_stream_count})`,
@@ -2254,6 +3116,20 @@ async function main() {
   const config = await loadConfig();
   if (args.includes('--four-speakers')) {
     config.speakerCount = Math.max(4, config.speakerCount);
+  }
+  if (args.includes('--video-only')) {
+    config.videoOnly = true;
+    config.speakerCount = 1;
+    config.lobbyHoldSeconds = config.requireLobbyHold ? config.lobbyHoldSeconds : 0;
+    config.testChatOptOut = false;
+    config.requireChatOptOut = false;
+    config.requireSpeakerBinding = false;
+    config.testVideoDisplay = true;
+    config.requireVideoDisplay = true;
+  }
+  if (args.includes('--require-video-display')) {
+    config.testVideoDisplay = true;
+    config.requireVideoDisplay = true;
   }
   if (args.includes('--chat-optout')) {
     config.testChatOptOut = true;

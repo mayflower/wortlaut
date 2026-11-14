@@ -21,6 +21,7 @@ from wortlaut.models import (
     AudioControl,
     AudioStream,
     Recording,
+    RecordingKeyframe,
     TranscriptSegment,
 )
 from wortlaut.settings import get_settings
@@ -721,6 +722,138 @@ def purge_opted_out_transcript_segments(
             job.status, job.error, job.retry_at = "completed", None, None
 
     return deleted
+
+
+def purge_opted_out_keyframes(
+    db: Session,
+    recording: Recording,
+    attempts: list[Attempt] | None = None,
+) -> int:
+    if attempts is None:
+        attempts = list(
+            db.scalars(select(Attempt).where(Attempt.recording_id == recording.id)).all()
+        )
+    streams = (
+        list(
+            db.scalars(
+                select(AudioStream).where(AudioStream.attempt_id.in_([a.id for a in attempts]))
+            ).all()
+        )
+        if attempts
+        else []
+    )
+    participant_names: dict[str, str] = {}
+    for s in streams:
+        pid = s.contract.get("participant_id") or s.contract.get("speaker_id")
+        if pid and s.contract.get("participant_name"):
+            participant_names[str(pid)] = str(s.contract["participant_name"])
+    bind_controls = (
+        list(
+            db.scalars(
+                select(AudioControl).where(
+                    AudioControl.stream_id.in_([s.id for s in streams]),
+                    AudioControl.kind == "bind",
+                )
+            ).all()
+        )
+        if streams
+        else []
+    )
+    for ctrl in bind_controls:
+        pid = ctrl.contract.get("participant_id") or ctrl.contract.get("speaker_id")
+        if pid and ctrl.contract.get("participant_name"):
+            participant_names[str(pid)] = str(ctrl.contract["participant_name"])
+
+    active_keyframes = list(
+        db.scalars(
+            select(RecordingKeyframe).where(
+                RecordingKeyframe.recording_id == recording.id,
+                RecordingKeyframe.deleted_at.is_(None),
+            )
+        ).all()
+    )
+    for kf in active_keyframes:
+        if kf.participant_id and kf.participant_name:
+            participant_names.setdefault(str(kf.participant_id), str(kf.participant_name))
+
+    _, opted_out_norm = collect_opted_out_speakers(recording, attempts, participant_names)
+    if not opted_out_norm or not active_keyframes:
+        return 0
+
+    now = datetime.now(UTC)
+    deleted = 0
+    s3_configured = bool(get_settings().s3_access_key and get_settings().s3_secret_key)
+    for kf in active_keyframes:
+        pname = kf.participant_name or participant_names.get(str(kf.participant_id))
+        if is_speaker_opted_out(
+            opted_out_norm,
+            participant_id=kf.participant_id,
+            participant_name=pname,
+            provider_source_id=kf.provider_source_id,
+        ):
+            kf.deleted_at = now
+            kf.participant_name = None
+            if kf.object_key and s3_configured:
+                try:
+                    get_storage().delete_object(kf.object_key)
+                    kf.object_key = ""
+                except (BotoCoreError, ClientError, RuntimeError, Exception) as exc:
+                    logging.getLogger("wortlaut").warning(
+                        "keyframe_opt_out_s3_delete_deferred recording=%s keyframe=%s type=%s",
+                        recording.id,
+                        kf.id,
+                        type(exc).__name__,
+                    )
+            elif not s3_configured:
+                kf.object_key = ""
+            deleted += 1
+    return deleted
+
+
+def is_keyframe_opted_out(
+    db: Session,
+    recording: Recording,
+    kf: RecordingKeyframe,
+) -> bool:
+    attempts = list(
+        db.scalars(select(Attempt).where(Attempt.recording_id == recording.id)).all()
+    )
+    streams = (
+        list(
+            db.scalars(
+                select(AudioStream).where(AudioStream.attempt_id.in_([a.id for a in attempts]))
+            ).all()
+        )
+        if attempts
+        else []
+    )
+    participant_names: dict[str, str] = {}
+    for s in streams:
+        pid = s.contract.get("participant_id") or s.contract.get("speaker_id")
+        if pid and s.contract.get("participant_name"):
+            participant_names[str(pid)] = str(s.contract["participant_name"])
+    if streams:
+        bind_controls = db.scalars(
+            select(AudioControl).where(
+                AudioControl.stream_id.in_([s.id for s in streams]),
+                AudioControl.kind == "bind",
+            )
+        ).all()
+        for ctrl in bind_controls:
+            pid = ctrl.contract.get("participant_id") or ctrl.contract.get("speaker_id")
+            if pid and ctrl.contract.get("participant_name"):
+                participant_names[str(pid)] = str(ctrl.contract["participant_name"])
+    if kf.participant_id and kf.participant_name:
+        participant_names.setdefault(str(kf.participant_id), str(kf.participant_name))
+    _, opted_out_norm = collect_opted_out_speakers(recording, attempts, participant_names)
+    if not opted_out_norm:
+        return False
+    return is_speaker_opted_out(
+        opted_out_norm,
+        participant_id=kf.participant_id,
+        participant_name=kf.participant_name or participant_names.get(str(kf.participant_id)),
+        provider_source_id=kf.provider_source_id,
+    )
 
 
 def stream_binding_opted_out(

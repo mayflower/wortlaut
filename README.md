@@ -28,6 +28,7 @@ Commercial meeting bots (*Fireflies, Otter, Fathom, Read.ai*) route confidential
 | **Individual opt-out right in the call** | Any participant who prefers not to be quoted simply types **`opt out`** or **`no`** (`nein`) in the meeting chat. The call continues seamlessly for everyone else while their track and prior statements are purged immediately. |
 | **Protocols right where people look** | As soon as transcription finishes, `wortlaut` writes a read-only transcript link directly back into the **Google Calendar** or **Microsoft 365 / Outlook** event, emails the protocol, and offers `.md`, `.txt`, `.vtt`, and `.json` downloads. |
 | **Click-to-listen verification** | Every statement has a clickable timestamp. During the 24-hour raw-audio retention window, operators can play back the exact isolated audio snippet in the browser before raw audio is automatically purged. |
+| **Screen-share slide keyframes (never camera video)** | Captures settled static PNG snapshots (`<= 1280 × 720`) strictly from verified screen-share streams (`WORTLAUT_ENABLE_KEYFRAMES=true`) — participant camera feeds are rejected fail-closed. Slides appear inline on the transcript timeline and via MCP without recording creepy video. |
 
 ---
 
@@ -46,8 +47,8 @@ Commercial meeting bots (*Fireflies, Otter, Fathom, Read.ai*) route confidential
 
 ### 2. Transparent Presence & Live In-Call Chat Opt-Out
 
-* Upon joining, `wortlaut` displays the inviting person’s name — e.g. **`wortlaut (Elena Rostova)`** — and posts a concise notice in the meeting chat with a link to your instance’s [Privacy & Transparency Notice (`/privacy`)](services/meeting/src/wortlaut/ui.py).
-* **Live Chat Opt-Out:** If any participant writes `opt out`, `optout`, `no`, `nein`, or `stop` in the meeting chat during the call, their audio stream is discarded on the spot and any already-transcribed segments from that participant are deleted from PostgreSQL ([meet-page.ts](worker/src/meet-page.ts), [processing.py](services/meeting/src/wortlaut/processing.py)).
+* Upon joining, `wortlaut` displays the inviting person’s name — e.g. **`wortlaut (Elena Rostova)`** — and posts a concise notice in the meeting chat with a link to your instance’s [Privacy & Transparency Notice (`/privacy`)](services/meeting/src/wortlaut/ui.py) (explicitly noting when `WORTLAUT_ENABLE_KEYFRAMES=true` that participant camera video is never recorded and only settled screen-share snapshots are captured; see [`./docs/configuration.md`](./docs/configuration.md)).
+* **Live Chat Opt-Out:** If any participant writes `opt out`, `optout`, `no`, `nein`, or `stop` in the meeting chat during the call, their audio stream and screen-share sampler are halted on the spot and any already-transcribed segments and uploaded screen-share keyframes from that participant are purged immediately from PostgreSQL and S3 ([meet-page.ts](worker/src/meet-page.ts), [processing.py](services/meeting/src/wortlaut/processing.py)).
 
 ### 3. Review, Search, Edit & Share
 
@@ -63,10 +64,10 @@ All four platforms work side-by-side in the same `wortlaut` deployment:
 
 | Platform | Join Mode & Capabilities |
 | :--- | :--- |
-| **Google Meet** | Joins as guest or with a saved Google session ([meet.ts](worker/runtime/meet.ts), [meet-page.ts](worker/src/meet-page.ts), [capture.ts](worker/src/capture.ts)); isolated WebRTC receiver tracks, participant binding, and live chat opt-out. |
-| **Microsoft Teams** | Joins via Teams web client in English or German ([teams-browser.ts](worker/runtime/teams-browser.ts)); isolated WebRTC receiver capture, CSI speaker binding, and live chat opt-out. |
-| **Cisco Webex** | Joins as browser guest ([webex-browser.ts](worker/runtime/webex-browser.ts)) or via Service App SDK; multistream `AUDIO-MAIN` capture, `activeSpeakerNotification` binding, and live chat opt-out. |
-| **Zoom** | Joins via Zoom Web Client as guest or authenticated session ([zoom-browser.ts](worker/runtime/zoom-browser.ts), [zoom-url.ts](worker/src/zoom-url.ts)); waiting-room handling, Opus capture, and live chat opt-out. |
+| **Google Meet** | Joins as guest or with a saved Google session ([meet.ts](worker/runtime/meet.ts), [meet-page.ts](worker/src/meet-page.ts), [capture.ts](worker/src/capture.ts)); isolated WebRTC receiver tracks, participant binding, settled screen-share keyframes (`a=content:slides` + screencast DOM, camera tracks excluded), and live chat opt-out. |
+| **Microsoft Teams** | Joins via Teams web client in English or German ([teams-browser.ts](worker/runtime/teams-browser.ts)); isolated WebRTC receiver capture, CSI speaker binding, `applicationsharing-video` screen-share keyframes, and live chat opt-out. |
+| **Cisco Webex** | Joins as browser guest ([webex-browser.ts](worker/runtime/webex-browser.ts)) or via Service App SDK; multistream `AUDIO-MAIN` capture, `activeSpeakerNotification` binding, `VIDEO`/`SLIDES` screen-share keyframes in browser mode (`"unsupported"` in Guest-Issuer SDK mode), and live chat opt-out. |
+| **Zoom** | Joins via Zoom Web Client as guest or authenticated session ([zoom-browser.ts](worker/runtime/zoom-browser.ts), [zoom-url.ts](worker/src/zoom-url.ts)); waiting-room handling, Opus capture, `.sharing-layout-container` / `#sharee-container-canvas` screen-share keyframes bound to a unique roster presenter, and live chat opt-out. |
 
 *(Whenever a conference provider does not expose a verified participant binding for a stream, `wortlaut` surfaces `attribution_unknown: true` transparently instead of guessing speaker names.)*
 
@@ -132,12 +133,23 @@ Set `WORTLAUT_DEFAULT_LOCALE=en` (already enabled in [`.env.example`](.env.examp
 ## Privacy & Retention by Design
 
 1. **Short Raw-Audio Window (24 Hours):** Isolated speaker audio chunks are used strictly for asynchronous ASR and short snippet verification, then automatically deleted from S3 **24 hours after the meeting ends**.
-2. **Automatic Transcript Expiration (30 Days):** Transcripts and metadata expire after **30 days** by default (configurable in [settings.py](services/meeting/src/wortlaut/settings.py)) and can be deleted immediately at any time (`DELETE /v1/recordings/{id}`).
+2. **Automatic Transcript & Slide Keyframe Expiration (30 Days):** Transcripts, settled screen-share keyframes (`keyframes/{recording_id}/`), and metadata share the `WORTLAUT_TRANSCRIPT_RETENTION_DAYS` lifecycle (**30 days** by default in [settings.py](services/meeting/src/wortlaut/settings.py), counted toward `WORTLAUT_MAX_STORED_AUDIO_BYTES`) and can be deleted immediately as a whole (`DELETE /v1/recordings/{id}`) or slide-by-slide (`DELETE /v1/recordings/{id}/keyframes/{keyframe_id}`).
 3. **Multi-Tenant Isolation & Scoped Share Tokens:** Users signed in via **OIDC** ([oidc.py](services/meeting/src/wortlaut/oidc.py) — Dex, Keycloak, Authentik, Zitadel, Entra ID, Google) only see their own recordings and calendar events they were invited to. Shared `wortlaut-read-<recording_id>.<hmac>` links grant read-only access to a single recording.
 
 ---
 
 ## Optional Integrations
+
+### Authenticated Model Context Protocol (MCP) Server (`/mcp` + OAuth 2.1)
+
+`wortlaut` includes a built-in **MCP Streamable HTTP** server (`POST /mcp`, [mcp_server.py](services/meeting/src/wortlaut/mcp_server.py)) protected by **OAuth 2.1 (`mcp auth`)** with RFC 9728 Protected Resource Metadata, RFC 8414 Authorization Server Metadata, RFC 7591 Dynamic Client Registration, PKCE `S256`, and explicit user consent ([mcp_oauth.py](services/meeting/src/wortlaut/mcp_oauth.py)):
+
+```sh
+claude mcp add --transport http wortlaut https://wortlaut.example.org/mcp
+```
+
+* **Zero static API keys:** MCP clients (`Claude Code`, `Cursor`, `VS Code`, `Antigravity`) automatically discover OAuth endpoints, sign users in via your existing OIDC provider (or local instance token), and request `mcp:read` and optional `mcp:write` scopes.
+* **Strict per-user isolation & revocation:** Every tool call (`list_recordings`, `get_recording`, `get_transcript`, `export_protocol`, `list_calendar_events`, `schedule_recording`, `cancel_recording`, `update_protocol`, `generate_summary`, `toggle_calendar_event_recording`, `publish_calendar_protocol_link`) and `wortlaut://` resource (including screen-share slide snapshots via the `wortlaut://recordings/{recording_id}/keyframes/{keyframe_id}.png` resource template) is scoped to the authenticated user. Active client grants can be reviewed and revoked at `/ui#view=mcp` (`GET/DELETE /v1/mcp/grants`).
 
 ### Local AI Executive Summaries & Action Items (Ollama)
 
@@ -190,12 +202,14 @@ WORTLAUT_SMTP_FROM=bot@example.org
 | `GET /v1/recordings/{id}/transcript` | Retrieve live or completed speaker-attributed transcript |
 | `GET /v1/recordings/{id}/exports/{format}` | Download protocol as `md`, `txt`, `vtt`, or `json` |
 | `GET /v1/recordings/{id}/audio-snippet` | Stream isolated WAV snippet for statement verification |
+| `GET /v1/recordings/{id}/keyframes/{kf_id}.png` (`DELETE …/{kf_id}`) | Fetch (`Authorization: Bearer`) or permanently delete a settled screen-share slide PNG |
 | `POST /v1/recordings/{id}/summary` | Generate local LLM executive summary & action items via Ollama |
 | `POST /v1/recordings/{id}/calendar-link` | Write protocol link into the linked Google Calendar / M365 event |
 | `POST /v1/recordings/{id}/reader-token` | Issue scoped read-only `wortlaut-read-…` share token |
 | `GET /v1/calendar` | List connected OAuth2 calendars, synced events, and `.ics` invitations |
 | `POST /v1/calendar/oauth/exchange` | Connect Google Calendar (`calendar.events`) or M365 (`Calendars.ReadWrite`) via PKCE |
 | `POST /v1/calendar/oauth/events/{id}/toggle` | Enable or disable auto-recording for a synced calendar event |
+| `POST /mcp` (`GET/DELETE /v1/mcp/grants`) | Authenticated MCP Streamable HTTP server (OAuth 2.1 `mcp:read` / `mcp:write`) & grant revocation |
 | `GET /privacy` / `GET /metrics` | Public privacy notice (`?lang=en` / `?lang=de`) and Prometheus metrics |
 
 #### Example: Dispatch & Export via CLI

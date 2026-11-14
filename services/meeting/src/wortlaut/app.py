@@ -10,8 +10,10 @@ import uuid
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
+from urllib.parse import parse_qs
 
 import httpx
+from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import (
     Depends,
     FastAPI,
@@ -23,7 +25,7 @@ from fastapi import (
     WebSocket,
     WebSocketDisconnect,
 )
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import (
     AwareDatetime,
@@ -61,8 +63,40 @@ from wortlaut.exports import (
     render_export,
     verify_recording_reader_token,
 )
-from wortlaut.ingest import accept_chunk, accept_control, capacity_reached, verify_owner
+from wortlaut.ingest import (
+    MAX_KEYFRAME_BYTES,
+    KeyframeIngestMetadata,
+    accept_chunk,
+    accept_control,
+    capacity_reached,
+    ingest_keyframe,
+    verify_owner,
+)
 from wortlaut.mail import FAILURE_REASONS, delivery_json, smtp_pass
+from wortlaut.mcp_oauth import (
+    authorization_server_metadata,
+    cors_oauth_headers,
+    exchange_oauth_token,
+    handle_mcp_oidc_callback,
+    is_mcp_oidc_callback,
+    list_user_mcp_grants,
+    oauth_error_json,
+    protected_resource_metadata,
+    public_origin,
+    register_oauth_client,
+    revoke_oauth_token,
+    revoke_user_mcp_grant,
+    start_oauth_authorization,
+    submit_oauth_consent,
+    verify_mcp_access_token_principal,
+)
+from wortlaut.mcp_server import (
+    handle_mcp_delete,
+    handle_mcp_get,
+    handle_mcp_post,
+    mcp_cors_headers,
+    validate_mcp_origin,
+)
 from wortlaut.models import (
     AsrJob,
     Attempt,
@@ -74,6 +108,7 @@ from wortlaut.models import (
     CalendarSyncedEvent,
     Delivery,
     Recording,
+    RecordingKeyframe,
     TranscriptSegment,
 )
 from wortlaut.oidc import (
@@ -87,6 +122,8 @@ from wortlaut.oidc import (
 )
 from wortlaut.processing import (
     RATE,
+    is_keyframe_opted_out,
+    purge_opted_out_keyframes,
     purge_opted_out_transcript_segments,
     segmentation_pass,
     stream_quality,
@@ -94,7 +131,7 @@ from wortlaut.processing import (
 from wortlaut.recurrence import recurrence_pass
 from wortlaut.retention import retention_pass
 from wortlaut.settings import get_settings
-from wortlaut.storage import get_storage
+from wortlaut.storage import ObjectConflict, get_storage
 from wortlaut.telemetry import record_worker_status_telemetry
 from wortlaut.ui import render_privacy, render_ui
 from wortlaut.validation import Provider, normalize_meeting_url
@@ -431,6 +468,17 @@ class SdpEvidence(BaseModel):
     msid_count: int = Field(default=0, ge=0)
 
 
+class KeyframeAttemptTelemetry(BaseModel):
+    capability: Literal["disabled", "unsupported", "unverified", "active"] = "unverified"
+    active_share: bool = False
+    evaluated_ticks: int = Field(default=0, ge=0)
+    emitted: int = Field(default=0, ge=0)
+    uploaded: int = Field(default=0, ge=0)
+    dropped_unverified: int = Field(default=0, ge=0)
+    dropped_opted_out: int = Field(default=0, ge=0)
+    dropped_queue_full: int = Field(default=0, ge=0)
+
+
 class WorkerStatus(BaseModel):
     participation: Literal["joining", "waiting_admission", "capturing", "ended"]
     capability: Literal["unverified", "capability_unsupported", "verified"] = "unverified"
@@ -446,6 +494,7 @@ class WorkerStatus(BaseModel):
     data_channels: list[DataChannelEvidence] = Field(default_factory=list, max_length=32)
     sdp: SdpEvidence = Field(default_factory=SdpEvidence)
     audio_clock: AudioClockEvidence = Field(default_factory=AudioClockEvidence)
+    keyframes: KeyframeAttemptTelemetry | None = None
     media: MediaEvidence | None = None
 
     @model_serializer(mode="wrap")
@@ -486,9 +535,199 @@ def recording_json(recording: Recording) -> dict:
 
 @app.get("/", response_class=HTMLResponse)
 @app.get("/ui", response_class=HTMLResponse)
-@app.get("/auth/callback", response_class=HTMLResponse)
 def web_ui():
     return HTMLResponse(render_ui(), headers={"Cache-Control": "no-store"})
+
+
+@app.get("/auth/callback")
+def auth_callback_page(request: Request):
+    if is_mcp_oidc_callback(request):
+        with Session(get_engine()) as db:
+            return handle_mcp_oidc_callback(request, db)
+    return HTMLResponse(render_ui(), headers={"Cache-Control": "no-store"})
+
+
+async def _read_oauth_params(request: Request) -> dict[str, list[str]]:
+    raw = await request.body()
+    if len(raw) > 65536:
+        raise ValueError("Request body exceeds maximum size")
+    if not raw:
+        return {}
+    ctype = (request.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
+    if ctype == "application/json":
+        parsed = json.loads(raw.decode("utf-8"))
+        if not isinstance(parsed, dict):
+            raise ValueError("Expected JSON object")
+        out: dict[str, list[str]] = {}
+        for k, v in parsed.items():
+            if v is None:
+                continue
+            if isinstance(v, list):
+                out[str(k)] = [str(item) for item in v if item is not None]
+            else:
+                out[str(k)] = [str(v)]
+        return out
+    return parse_qs(raw.decode("utf-8"), keep_blank_values=True)
+
+
+@app.options("/.well-known/oauth-protected-resource")
+@app.options("/.well-known/oauth-protected-resource/mcp")
+@app.options("/.well-known/oauth-authorization-server")
+@app.options("/.well-known/openid-configuration")
+@app.options("/oauth/register")
+@app.options("/oauth/token")
+@app.options("/oauth/revoke")
+def oauth_cors_preflight():
+    return Response(status_code=204, headers=cors_oauth_headers())
+
+
+@app.get("/.well-known/oauth-protected-resource")
+@app.get("/.well-known/oauth-protected-resource/mcp")
+def oauth_protected_resource_endpoint(request: Request):
+    return JSONResponse(protected_resource_metadata(request), headers=cors_oauth_headers())
+
+
+@app.get("/.well-known/oauth-authorization-server")
+@app.get("/.well-known/openid-configuration")
+def oauth_authorization_server_endpoint(request: Request):
+    return JSONResponse(authorization_server_metadata(request), headers=cors_oauth_headers())
+
+
+@app.post("/oauth/register")
+async def oauth_register_endpoint(request: Request, db: Db):
+    raw = await request.body()
+    if len(raw) > 65536:
+        return oauth_error_json("invalid_client_metadata", "Payload too large")
+    try:
+        payload = json.loads(raw.decode("utf-8")) if raw else {}
+    except (UnicodeDecodeError, ValueError):
+        return oauth_error_json("invalid_client_metadata", "Invalid JSON body")
+    if not isinstance(payload, dict):
+        return oauth_error_json("invalid_client_metadata", "JSON object required")
+    status_code, data = await run_in_threadpool(register_oauth_client, db, payload)
+    return JSONResponse(data, status_code=status_code, headers=cors_oauth_headers())
+
+
+@app.get("/oauth/authorize")
+def oauth_authorize_endpoint(
+    request: Request,
+    db: Db,
+    response_type: str | None = None,
+    client_id: str | None = None,
+    redirect_uri: str | None = None,
+    code_challenge: str | None = None,
+    code_challenge_method: str | None = None,
+    state: str | None = None,
+    scope: str | None = None,
+    resource: str | None = None,
+):
+    return start_oauth_authorization(
+        request,
+        db,
+        response_type=response_type,
+        client_id=client_id,
+        redirect_uri=redirect_uri,
+        code_challenge=code_challenge,
+        code_challenge_method=code_challenge_method,
+        state=state,
+        scope=scope,
+        resource=resource,
+    )
+
+
+@app.post("/oauth/consent")
+async def oauth_consent_endpoint(request: Request, db: Db):
+    try:
+        multi = await _read_oauth_params(request)
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise HTTPException(400, str(exc)) from None
+    auth_id_raw = (multi.get("auth_id") or [""])[0]
+    csrf_token = (multi.get("csrf_token") or [""])[0]
+    decision = (multi.get("decision") or ["deny"])[0]
+    scopes = multi.get("scopes") or []
+    operator_token = (multi.get("operator_token") or [None])[0]
+    return await run_in_threadpool(
+        submit_oauth_consent,
+        request,
+        db,
+        auth_id_raw=auth_id_raw,
+        csrf_token=csrf_token,
+        decision=decision,
+        selected_scopes=scopes,
+        operator_token=operator_token,
+    )
+
+
+@app.post("/oauth/token")
+async def oauth_token_endpoint(request: Request, db: Db):
+    try:
+        multi = await _read_oauth_params(request)
+    except (UnicodeDecodeError, ValueError) as exc:
+        return oauth_error_json("invalid_request", str(exc))
+    flat = {k: vals[0] for k, vals in multi.items() if vals}
+    return await run_in_threadpool(exchange_oauth_token, request, db, flat)
+
+
+@app.post("/oauth/revoke")
+async def oauth_revoke_endpoint(request: Request, db: Db):
+    try:
+        multi = await _read_oauth_params(request)
+    except (UnicodeDecodeError, ValueError):
+        return oauth_error_json("invalid_request", "Malformed revocation payload")
+    flat = {k: vals[0] for k, vals in multi.items() if vals}
+    return await run_in_threadpool(revoke_oauth_token, request, db, flat)
+
+
+@app.options("/mcp")
+def mcp_options_endpoint(request: Request):
+    validate_mcp_origin(request)
+    return Response(status_code=204, headers=mcp_cors_headers(request))
+
+
+@app.post("/mcp")
+async def mcp_post_endpoint(
+    request: Request,
+    db: Db,
+    authorization: Annotated[str | None, Header()] = None,
+):
+    raw_body = await request.body()
+    if len(raw_body) > 1_048_576:
+        raise HTTPException(413, "MCP request payload exceeds 1 MiB")
+    return await run_in_threadpool(handle_mcp_post, request, db, raw_body, authorization)
+
+
+@app.get("/mcp")
+def mcp_get_endpoint(
+    request: Request,
+    db: Db,
+    authorization: Annotated[str | None, Header()] = None,
+):
+    return handle_mcp_get(request, db, authorization)
+
+
+@app.delete("/mcp")
+def mcp_delete_endpoint(
+    request: Request,
+    db: Db,
+    authorization: Annotated[str | None, Header()] = None,
+):
+    return handle_mcp_delete(request, db, authorization)
+
+
+@app.get("/v1/mcp/grants")
+def list_mcp_grants_endpoint(request: Request, db: Db, principal: AuthPrincipal):
+    origin = public_origin(request)
+    return {
+        "endpoint": f"{origin}/mcp",
+        "grants": list_user_mcp_grants(db, principal),
+    }
+
+
+@app.delete("/v1/mcp/grants/{grant_id}")
+def revoke_mcp_grant_endpoint(grant_id: uuid.UUID, db: Db, principal: AuthPrincipal):
+    if not revoke_user_mcp_grant(db, principal, grant_id):
+        raise HTTPException(404, "MCP grant not found")
+    return {"revoked": True, "id": str(grant_id)}
 
 
 @app.get("/privacy", response_class=HTMLResponse)
@@ -800,6 +1039,12 @@ def prometheus_metrics(db: Db):
             func.coalesce(func.sum(AudioChunk.object_size), 0),
         ).where(AudioChunk.deleted_at.is_(None))
     ).one()
+    stored_keyframes, stored_keyframe_bytes = db.execute(
+        select(
+            func.count(RecordingKeyframe.id),
+            func.coalesce(func.sum(RecordingKeyframe.byte_size), 0),
+        ).where(RecordingKeyframe.deleted_at.is_(None))
+    ).one()
     lines = [
         "# HELP wortlaut_recordings_total Total recordings by provider and state.",
         "# TYPE wortlaut_recordings_total gauge",
@@ -828,6 +1073,12 @@ def prometheus_metrics(db: Db):
             "# HELP wortlaut_stored_audio_bytes Active stored S3 audio bytes.",
             "# TYPE wortlaut_stored_audio_bytes gauge",
             f"wortlaut_stored_audio_bytes {stored_bytes}",
+            "# HELP wortlaut_stored_keyframes Active stored screen-share keyframes.",
+            "# TYPE wortlaut_stored_keyframes gauge",
+            f"wortlaut_stored_keyframes {stored_keyframes}",
+            "# HELP wortlaut_stored_keyframe_bytes Active stored S3 keyframe bytes.",
+            "# TYPE wortlaut_stored_keyframe_bytes gauge",
+            f"wortlaut_stored_keyframe_bytes {stored_keyframe_bytes}",
         ]
     )
     return Response(
@@ -1121,7 +1372,9 @@ def _authenticate_recording_access(
     elif verify_recording_reader_token(recording, token):
         principal = Principal(kind="reader", recording_id=recording.id if recording else None)
     else:
-        principal = verify_user_session_token(token)
+        principal = verify_mcp_access_token_principal(db, token, required_scope="mcp:read")
+        if principal is None:
+            principal = verify_user_session_token(token)
         if principal is None and token.count(".") == 2 and not token.startswith("wortlaut-read-"):
             claims = verify_dex_id_token(token)
             email = claims["email"].strip().lower()
@@ -1401,6 +1654,11 @@ def delete_recording(recording_id: uuid.UUID, db: Db, principal: AuthPrincipal):
             get_storage().delete_recording(recording.id)
         except Exception:
             pass
+        try:
+            get_storage().delete_recording_keyframes(recording.id)
+        except Exception:
+            pass
+    db.execute(delete(RecordingKeyframe).where(RecordingKeyframe.recording_id == recording.id))
     attempt_ids = db.scalars(select(Attempt.id).where(Attempt.recording_id == recording.id)).all()
     if attempt_ids:
         stream_ids = db.scalars(
@@ -1629,6 +1887,7 @@ def update_recording_protocol(
     recording.protocol_meta = meta
     if body.opted_out_speakers:
         purge_opted_out_transcript_segments(db, recording)
+        purge_opted_out_keyframes(db, recording)
     db.commit()
     return export_data(db, recording)
 
@@ -1728,6 +1987,101 @@ def get_audio_snippet(
         media_type="audio/wav",
         headers={"Cache-Control": "private, max-age=300"},
     )
+
+
+@app.get("/v1/recordings/{recording_id}/keyframes/{keyframe_id}.png")
+def get_recording_keyframe_png(
+    recording_id: uuid.UUID,
+    keyframe_id: uuid.UUID,
+    db: Db,
+    authorization: Annotated[str | None, Header()] = None,
+):
+    recording, _ = _authenticate_recording_access(db, recording_id, authorization)
+    if recording.transcript_deleted_at or recording.metadata_deleted_at:
+        raise HTTPException(410, "Transcript retention expired")
+    kf = db.get(RecordingKeyframe, keyframe_id)
+    if (
+        kf is None
+        or kf.recording_id != recording.id
+        or kf.deleted_at is not None
+        or not kf.object_key
+        or is_keyframe_opted_out(db, recording, kf)
+    ):
+        raise HTTPException(404, "Keyframe not found")
+    try:
+        png_bytes = get_storage().read(kf.object_key)
+    except ClientError as exc:
+        code = str(exc.response.get("Error", {}).get("Code") or "")
+        if code in ("NoSuchKey", "404"):
+            raise HTTPException(404, "Keyframe not found") from None
+        raise HTTPException(502, "Storage read failed") from None
+    except ObjectConflict:
+        raise HTTPException(502, "Invalid keyframe object integrity") from None
+    if hashlib.sha256(png_bytes).hexdigest() != kf.sha256:
+        raise HTTPException(502, "Invalid keyframe object integrity")
+    return Response(
+        png_bytes,
+        media_type="image/png",
+        headers={
+            "Cache-Control": "private, max-age=3600",
+            "Content-Security-Policy": "default-src 'none'",
+        },
+    )
+
+
+@app.delete("/v1/recordings/{recording_id}/keyframes/{keyframe_id}")
+def delete_recording_keyframe(
+    recording_id: uuid.UUID,
+    keyframe_id: uuid.UUID,
+    db: Db,
+    principal: AuthPrincipal,
+):
+    recording = db.scalar(select(Recording).where(Recording.id == recording_id).with_for_update())
+    if recording is None or not can_access_recording(db, principal, recording):
+        raise HTTPException(404, "Recording not found")
+    if recording.transcript_deleted_at or recording.metadata_deleted_at:
+        raise HTTPException(410, "Transcript retention expired")
+    kf = db.scalar(
+        select(RecordingKeyframe)
+        .where(
+            RecordingKeyframe.id == keyframe_id,
+            RecordingKeyframe.recording_id == recording.id,
+        )
+        .with_for_update()
+    )
+    if kf is None or kf.deleted_at is not None:
+        raise HTTPException(404, "Keyframe not found")
+    object_key = kf.object_key
+    kf_id = kf.id
+    kf.deleted_at = datetime.now(UTC)
+    kf.participant_name = None
+    db.commit()
+    if object_key and get_settings().s3_access_key and get_settings().s3_secret_key:
+        try:
+            get_storage().delete_object(object_key)
+        except (BotoCoreError, ClientError) as exc:
+            logging.getLogger(__name__).warning(
+                "Deferred S3 keyframe delete after API tombstone for %s: %s",
+                kf_id,
+                exc,
+            )
+        else:
+            locked_kf = db.scalar(
+                select(RecordingKeyframe)
+                .where(RecordingKeyframe.id == kf_id)
+                .with_for_update()
+            )
+            if locked_kf is not None and locked_kf.object_key == object_key:
+                locked_kf.object_key = ""
+                db.commit()
+    elif object_key:
+        locked_kf = db.scalar(
+            select(RecordingKeyframe).where(RecordingKeyframe.id == kf_id).with_for_update()
+        )
+        if locked_kf is not None:
+            locked_kf.object_key = ""
+            db.commit()
+    return Response(status_code=204)
 
 
 @app.get("/v1/recordings/{recording_id}/exports/{format}")
@@ -1895,14 +2249,32 @@ def build_chat_intro(
     recording_url = f"{base_url}/ui#view=meetings&id={recording.id}{token_param}"
     privacy_url = settings.privacy_url or f"{base_url}/privacy"
     bot_label = display_name.strip() or "wortlaut"
+    keyframes_on = bool(getattr(settings, "enable_keyframes", True))
     if getattr(settings, "default_locale", "de") == "en":
         who_en = inviter.strip() if inviter and inviter.strip() else "a participant"
+        if keyframes_on:
+            return (
+                f"Hello! I am {bot_label}, invited by {who_en} to transcribe this meeting "
+                f"(including static snapshots of shared screens; cameras are never recorded). "
+                f"If you do not want your statements or screen shares recorded, "
+                f'simply type "no" or "opt out" in chat. '
+                f"Transcript: {recording_url} | Privacy Notice: {privacy_url}?lang=en"
+            )
         return (
             f"Hello! I am {bot_label}, invited by {who_en} to transcribe this meeting. "
             f'If you do not want your statements recorded, simply type "no" or "opt out" in chat. '
             f"Transcript: {recording_url} | Privacy Notice: {privacy_url}?lang=en"
         )
     who = inviter.strip() if inviter and inviter.strip() else "einem Teilnehmenden"
+    if keyframes_on:
+        return (
+            f"Hallo! Ich bin {bot_label} und wurde von {who} eingeladen, "
+            f"dieses Meeting zu protokollieren (inkl. einzelner Standbilder geteilter "
+            f"Bildschirme; Kameras werden nie aufgezeichnet). "
+            f"Wenn deine Aussagen oder Bildschirmfreigaben nicht protokolliert werden sollen, "
+            f"schreibe einfach „nein“ oder „opt out“ in den Chat. "
+            f"Protokoll: {recording_url} | Datenschutz-Info: {privacy_url}"
+        )
     return (
         f"Hallo! Ich bin {bot_label} und wurde von {who} eingeladen, "
         f"dieses Meeting zu protokollieren. "
@@ -1948,6 +2320,7 @@ def bootstrap(
         "invited_by_name": inviter_name,
         "meeting_title": recording.title,
         "default_locale": settings.default_locale,
+        "enable_keyframes": settings.enable_keyframes,
         "chat_intro": chat_intro,
     }
     if recording.provider == "google_meet":
@@ -2031,6 +2404,7 @@ def worker_status(
                 "data_channels": [],
                 "active_audio_samples": 0,
                 "sdp": SdpEvidence().model_dump(),
+                "keyframes": None,
                 **attempt.diagnostics,
             }
             == body.model_dump(mode="json", exclude={"participation"})
@@ -2060,6 +2434,7 @@ def worker_status(
             meta.pop("summary", None)
             recording.protocol_meta = meta
         purge_opted_out_transcript_segments(db, recording, [attempt])
+        purge_opted_out_keyframes(db, recording, [attempt])
     recording.participation = body.participation
     settings = get_settings()
     if (
@@ -2081,7 +2456,8 @@ def worker_status(
             body.active_audio_samples > prev_active_samples
             or (is_sdk_worker and body.audio_samples > prev_audio_samples)
         )
-        room_active = speech_advancing or has_live_participants
+        active_share = bool(body.keyframes and body.keyframes.active_share)
+        room_active = speech_advancing or has_live_participants or active_share
         if room_active:
             meta = dict(recording.protocol_meta or {})
             raw_sched = meta.get("scheduled_ends_at")
@@ -2174,6 +2550,75 @@ def worker_status(
         "deadline": effective_deadline,
         "live_transcript": live_transcript,
     }
+
+
+def _decode_keyframe_header(raw_header: str) -> KeyframeIngestMetadata:
+    clean = raw_header.strip()
+    if not clean or len(clean) > 4096:
+        raise HTTPException(400, "Invalid X-Wortlaut-Keyframe header")
+    padded = clean + "=" * (-len(clean) % 4)
+    try:
+        decoded = base64.urlsafe_b64decode(padded.encode("ascii"))
+        payload = json.loads(decoded.decode("utf-8"))
+    except Exception:
+        raise HTTPException(400, "Invalid X-Wortlaut-Keyframe encoding") from None
+    if not isinstance(payload, dict):
+        raise HTTPException(400, "Invalid X-Wortlaut-Keyframe object")
+    try:
+        return KeyframeIngestMetadata.model_validate(payload)
+    except ValidationError as exc:
+        msg = exc.errors()[0].get("msg", "validation error") if exc.errors() else "validation error"
+        raise HTTPException(400, f"Invalid keyframe metadata: {msg}") from None
+
+
+@app.post("/v1/attempts/{attempt_id}/keyframes")
+async def upload_attempt_keyframe(
+    attempt_id: uuid.UUID,
+    request: Request,
+    db: Db,
+    x_worker_id: Annotated[str, Header()],
+    x_wortlaut_keyframe: Annotated[str, Header()],
+    authorization: Annotated[str | None, Header()] = None,
+):
+    meta = _decode_keyframe_header(x_wortlaut_keyframe)
+    ctype = (request.headers.get("content-type") or "").split(";", 1)[0].strip().lower()
+    if ctype != "image/png":
+        raise HTTPException(400, "Content-Type must be image/png")
+    buf = bytearray()
+    async for chunk in request.stream():
+        buf.extend(chunk)
+        if len(buf) > MAX_KEYFRAME_BYTES + 1:
+            raise HTTPException(400, "Invalid keyframe byte size")
+    png_bytes = bytes(buf)
+
+    def _store():
+        attempt = authenticated_attempt(attempt_id, db, authorization)
+        recording = db.scalar(
+            select(Recording).where(Recording.id == attempt.recording_id).with_for_update()
+        )
+        db.refresh(attempt)
+        if (
+            recording is None
+            or recording.active_attempt_id != attempt.id
+            or attempt.worker_id != x_worker_id
+            or attempt.ended_at is not None
+            or recording.participation == "ended"
+            or recording.audio_closed_at is not None
+            or recording.audio_deleted_at is not None
+            or recording.transcript_deleted_at is not None
+        ):
+            raise HTTPException(409, "Worker does not own this occurrence")
+        kf, duplicate = ingest_keyframe(db, attempt, recording, meta, png_bytes)
+        return {"id": str(kf.id), "sequence": kf.sequence, "duplicate": duplicate}, (
+            200 if duplicate else 201
+        )
+
+    body_out, status_code = await run_in_threadpool(_store)
+    return JSONResponse(
+        body_out,
+        status_code=status_code,
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 def ingest_message(attempt_id, credential, worker_id, connection_id, frame):

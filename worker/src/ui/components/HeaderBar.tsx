@@ -12,6 +12,7 @@ import {
   Search,
   ShieldCheck,
   Sun,
+  Terminal,
 } from 'lucide-react';
 import { Button } from '@astryxdesign/core/Button';
 import { IconButton } from '@astryxdesign/core/IconButton';
@@ -36,7 +37,7 @@ import type { AuthMode } from '../types';
 import { useI18n, type UiLang } from '../i18n';
 import { useThemeMode, type ThemeMode } from './ui/primitives';
 
-export type NavSection = 'home' | 'meetings' | 'calendar' | 'system';
+export type NavSection = 'home' | 'meetings' | 'calendar' | 'mcp' | 'system';
 
 export interface HeaderBarProps {
   healthy: boolean;
@@ -50,6 +51,7 @@ export interface HeaderBarProps {
   activeLiveCount: number;
   calendarCount: number;
   calendarConnectedCount?: number;
+  mcpGrantCount?: number;
   livePoll: boolean;
   onToggleLivePoll: (enabled: boolean) => void;
   onManualRefresh: () => void;
@@ -203,6 +205,7 @@ export function HeaderBar({
   activeLiveCount,
   calendarCount,
   calendarConnectedCount = 0,
+  mcpGrantCount = 0,
   livePoll,
   onToggleLivePoll,
   onManualRefresh,
@@ -416,6 +419,17 @@ export function HeaderBar({
                   <Token size="sm" label={String(calendarCount)} />
                 </span>
               </HStack>
+            }
+          />
+          <SideNavItem
+            label={tr('MCP & KI-Clients', 'MCP & AI Clients')}
+            icon={<Terminal className="h-4 w-4" />}
+            isSelected={activeNav === 'mcp'}
+            onClick={() => onChangeNav('mcp')}
+            endContent={
+              mcpGrantCount > 0 ? (
+                <Token size="sm" color="green" label={String(mcpGrantCount)} />
+              ) : undefined
             }
           />
           <SideNavItem

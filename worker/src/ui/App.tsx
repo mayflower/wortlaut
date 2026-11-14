@@ -13,6 +13,7 @@ import {
   completeOidcCallbackIfPresent,
   exitReaderModeToAccount,
   fetchCalendar,
+  fetchMcpGrants,
   fetchRecordingDetail,
   fetchRecordings,
   fetchTranscript,
@@ -35,6 +36,7 @@ import {
   ReaderTopBar,
   type NavSection,
 } from './components/HeaderBar';
+import { McpWorkspace } from './components/McpWorkspace';
 import { MeetingDetailView } from './components/MeetingDetailView';
 import { NewRecordingDialog } from './components/NewRecordingDialog';
 import {
@@ -299,6 +301,15 @@ export function App() {
     retry: false,
   });
 
+  // Connected MCP clients query (operator only)
+  const mcpGrantsQuery = useQuery({
+    queryKey: ['mcpGrants', token],
+    queryFn: () => fetchMcpGrants(token),
+    enabled: authMode.kind === 'operator',
+    refetchInterval: livePoll && activeNav === 'mcp' ? 5000 : false,
+    retry: false,
+  });
+
   // Active recording detail + transcript
   const activeRecordingId =
     authMode.kind === 'reader' ? authMode.recordingId : selectedId;
@@ -442,6 +453,21 @@ export function App() {
         },
       },
       {
+        id: 'nav:mcp',
+        label: tr(
+          'Zu MCP & KI-Clients wechseln',
+          'Go to MCP & AI Clients'
+        ),
+        auxiliaryData: {
+          group: 'Navigation',
+          keywords: ['mcp', 'oauth', 'claude', 'cursor', 'agent', 'ai', 'ki'],
+          action: () => {
+            setSelectedId(null);
+            setActiveNav('mcp');
+          },
+        },
+      },
+      {
         id: 'nav:system',
         label: tr(
           'Zu System & Diagnose wechseln',
@@ -568,6 +594,7 @@ export function App() {
               : upcomingIcsCount
           }
           calendarConnectedCount={calendarConnections.length}
+          mcpGrantCount={mcpGrantsQuery.data?.grants.length || 0}
           livePoll={livePoll}
           onToggleLivePoll={setLivePoll}
           onManualRefresh={handleManualRefresh}
@@ -588,6 +615,20 @@ export function App() {
           }
           onSelectRecording={handleOpenRecording}
           onOpenImportModal={() => handleOpenNewModal('ics')}
+          onNavigateHome={() => {
+            setSelectedId(null);
+            setActiveNav('home');
+          }}
+        />
+      ) : activeNav === 'mcp' ? (
+        <McpWorkspace
+          token={token}
+          endpoint={mcpGrantsQuery.data?.endpoint}
+          grants={mcpGrantsQuery.data?.grants || []}
+          isLoading={mcpGrantsQuery.isLoading}
+          onRefresh={() =>
+            queryClient.invalidateQueries({ queryKey: ['mcpGrants'] })
+          }
           onNavigateHome={() => {
             setSelectedId(null);
             setActiveNav('home');

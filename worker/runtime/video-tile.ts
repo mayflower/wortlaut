@@ -69,7 +69,8 @@ export async function installVideoTile(
     const trusted =
       cfg.provider === 'webex'
         ? location.origin === 'https://web.webex.com' &&
-          /^\/(?:meeting|guest-join-meeting)$/.test(location.pathname)
+          /^\/(?:meeting|guest-join-meeting)$/.test(location.pathname) &&
+          !location.search.includes('preload=true')
         : cfg.provider === 'teams'
           ? window === window.top && cfg.teamsOrigins.includes(location.origin)
           : cfg.provider === 'zoom'

@@ -19,7 +19,16 @@ import { HStack } from '@astryxdesign/core/HStack';
 import { VStack } from '@astryxdesign/core/VStack';
 import { Button } from '@astryxdesign/core/Button';
 import { Divider } from '@astryxdesign/core/Divider';
-import { DELIVERY_STATUS_LABELS, PROCESSING_LABELS } from '../api';
+import {
+  DELIVERY_STATUS_LABELS,
+  KEYFRAME_CAPABILITY_LABELS,
+  PROCESSING_LABELS,
+} from '../api';
+import {
+  KEYFRAME_STRINGS,
+  localizeKeyframeCapability,
+  useI18n,
+} from '../i18n';
 import type { AttemptInfo, RecordingDetail, TranscriptExport } from '../types';
 
 export interface DiagnosticsTabProps {
@@ -39,6 +48,8 @@ export function DiagnosticsTab({
   onRetryMail,
   retryingMail,
 }: DiagnosticsTabProps) {
+  const { lang, tr } = useI18n();
+  const kStr = KEYFRAME_STRINGS[lang];
   const origin = typeof window !== 'undefined' ? window.location.origin : '';
   const curlSnippet = `curl --fail -H "Authorization: Bearer $WORTLAUT_API_TOKEN" "${origin}/v1/recordings/${recording.id}/exports/json"`;
 
@@ -179,6 +190,60 @@ export function DiagnosticsTab({
               data={recording.attempts as AttemptRow[]}
               columns={attemptColumns}
             />
+          </VStack>
+        </Section>
+      )}
+
+      {recording.attempts?.some((a) => Boolean(a.diagnostics?.keyframes)) && (
+        <Section variant="section">
+          <VStack gap={3}>
+            <Heading level={3}>{kStr.diagHeading}</Heading>
+            {recording.attempts
+              .filter((a) => Boolean(a.diagnostics?.keyframes))
+              .map((attempt) => {
+                const kfDiag = attempt.diagnostics!.keyframes!;
+                return (
+                  <div key={`kf-diag-${attempt.id}`} className="space-y-1.5">
+                    {recording.attempts.length > 1 && (
+                      <Text type="supporting" weight="semibold" color="secondary" hasTabularNumbers>
+                        Attempt {attempt.id.slice(0, 8)}…
+                      </Text>
+                    )}
+                    <MetadataList columns={4}>
+                      <MetadataListItem label={kStr.diagCapability}>
+                        {localizeKeyframeCapability(
+                          kfDiag.capability,
+                          lang,
+                          KEYFRAME_CAPABILITY_LABELS
+                        )}
+                      </MetadataListItem>
+                      <MetadataListItem label={kStr.diagActiveShare}>
+                        {kfDiag.active_share
+                          ? tr('Ja', 'Yes')
+                          : tr('Nein', 'No')}
+                      </MetadataListItem>
+                      <MetadataListItem label={kStr.diagEvaluatedTicks}>
+                        {kfDiag.evaluated_ticks}
+                      </MetadataListItem>
+                      <MetadataListItem label={kStr.diagEmitted}>
+                        {kfDiag.emitted}
+                      </MetadataListItem>
+                      <MetadataListItem label={kStr.diagUploaded}>
+                        {kfDiag.uploaded}
+                      </MetadataListItem>
+                      <MetadataListItem label={kStr.diagDroppedUnverified}>
+                        {kfDiag.dropped_unverified}
+                      </MetadataListItem>
+                      <MetadataListItem label={kStr.diagDroppedOptedOut}>
+                        {kfDiag.dropped_opted_out}
+                      </MetadataListItem>
+                      <MetadataListItem label={kStr.diagDroppedQueueFull}>
+                        {kfDiag.dropped_queue_full}
+                      </MetadataListItem>
+                    </MetadataList>
+                  </div>
+                );
+              })}
           </VStack>
         </Section>
       )}

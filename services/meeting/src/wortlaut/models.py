@@ -309,3 +309,104 @@ class CalendarSyncedEvent(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC), server_default=func.now()
     )
 
+
+class McpOAuthClient(Base):
+    __tablename__ = "mcp_oauth_clients"
+
+    client_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    client_secret_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    client_name: Mapped[str] = mapped_column(String(200))
+    client_uri: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    redirect_uris: Mapped[list] = mapped_column(JSONB, default=list)
+    token_endpoint_auth_method: Mapped[str] = mapped_column(String(32), default="none")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), server_default=func.now()
+    )
+
+
+class McpOAuthAuthorization(Base):
+    __tablename__ = "mcp_oauth_authorizations"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    client_id: Mapped[str] = mapped_column(
+        ForeignKey("mcp_oauth_clients.client_id", ondelete="CASCADE"), index=True
+    )
+    redirect_uri: Mapped[str] = mapped_column(String(2048))
+    client_state: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    code_challenge: Mapped[str] = mapped_column(String(128))
+    requested_scopes: Mapped[list] = mapped_column(JSONB, default=list)
+    granted_scopes: Mapped[list] = mapped_column(JSONB, default=list)
+    resource: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    upstream_verifier: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    upstream_nonce: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    csrf_token: Mapped[str] = mapped_column(String(128))
+    user_sub: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    user_email: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    user_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    is_operator: Mapped[bool] = mapped_column(Boolean, default=False)
+    code_hash: Mapped[str | None] = mapped_column(
+        String(64), unique=True, index=True, nullable=True
+    )
+    code_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    consumed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    grant_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), server_default=func.now()
+    )
+
+
+class McpOAuthGrant(Base):
+    __tablename__ = "mcp_oauth_grants"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    client_id: Mapped[str] = mapped_column(
+        ForeignKey("mcp_oauth_clients.client_id", ondelete="CASCADE"), index=True
+    )
+    client_name: Mapped[str] = mapped_column(String(200))
+    owner_sub: Mapped[str | None] = mapped_column(String(256), index=True, nullable=True)
+    owner_email: Mapped[str | None] = mapped_column(String(320), index=True, nullable=True)
+    owner_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    is_operator: Mapped[bool] = mapped_column(Boolean, default=False)
+    scopes: Mapped[list] = mapped_column(JSONB, default=list)
+    resource: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    access_token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    access_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    refresh_token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    refresh_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), server_default=func.now()
+    )
+
+
+class RecordingKeyframe(Base):
+    __tablename__ = "recording_keyframes"
+    __table_args__ = (
+        UniqueConstraint(
+            "attempt_id", "sequence", name="uq_recording_keyframes_attempt_seq"
+        ),
+        Index("ix_recording_keyframes_rec_captured", "recording_id", "captured_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    recording_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("recordings.id"), index=True)
+    attempt_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("attempts.id"), index=True)
+    sequence: Mapped[int] = mapped_column(Integer)
+    provider_source_id: Mapped[str] = mapped_column(String(200))
+    participant_id: Mapped[str] = mapped_column(String(200))
+    participant_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    captured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    width: Mapped[int] = mapped_column(Integer)
+    height: Mapped[int] = mapped_column(Integer)
+    byte_size: Mapped[int] = mapped_column(Integer)
+    sha256: Mapped[str] = mapped_column(String(64))
+    object_key: Mapped[str] = mapped_column(String(512))
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+

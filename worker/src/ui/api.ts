@@ -4,9 +4,11 @@ import type {
   CalendarEvent,
   CalendarSyncedEventInfo,
   InstanceInfo,
+  McpGrantsResponse,
   ProtocolSummary,
   Provider,
   RecordingDetail,
+  RecordingKeyframe,
   RecordingSummary,
   SourceSummary,
   TranscriptExport,
@@ -419,7 +421,7 @@ export function exitReaderModeToAccount(): string {
   return getSavedAccountToken();
 }
 
-export type UiNavView = 'home' | 'meetings' | 'calendar' | 'system';
+export type UiNavView = 'home' | 'meetings' | 'calendar' | 'mcp' | 'system';
 
 export function readNavStateFromHash(): {
   view: UiNavView;
@@ -434,11 +436,16 @@ export function readNavStateFromHash(): {
   }
   const params = new URLSearchParams(raw);
   const rawView = params.get('view');
+  const id = params.get('id') || params.get('recording');
   const view: UiNavView =
-    rawView === 'meetings' || rawView === 'calendar' || rawView === 'system'
+    rawView === 'meetings' ||
+    rawView === 'calendar' ||
+    rawView === 'mcp' ||
+    rawView === 'system'
       ? rawView
-      : 'home';
-  const id = params.get('id');
+      : id && id.trim()
+        ? 'meetings'
+        : 'home';
   return {
     view,
     recordingId: id && id.trim() ? id.trim() : null,
@@ -500,6 +507,7 @@ export function getInstanceInfo(): InstanceInfo {
         audioHours: 24,
         transcriptDays: 30,
       },
+      enable_keyframes: true,
     }
   );
 }
@@ -543,6 +551,13 @@ export const ATTRIBUTION_STATUS_LABELS: Record<string, string> = {
   unbound: 'Ohne bestätigte Sitzungs-ID',
   ambiguous: 'Mehrdeutige Spurbindung',
   unknown: 'Zuordnung offen',
+};
+
+export const KEYFRAME_CAPABILITY_LABELS: Record<string, string> = {
+  active: 'Aktiv (Bildschirmfreigabe erkannt)',
+  unverified: 'Bereit (keine verifizierte Freigabe)',
+  disabled: 'Deaktiviert',
+  unsupported: 'Nicht unterstützt (SDK-Modus)',
 };
 
 export const PROVIDER_LABELS: Record<Provider, string> = {
@@ -671,6 +686,19 @@ export async function fetchCalendar(token: string): Promise<{
   synced_events?: CalendarSyncedEventInfo[];
 }> {
   return apiRequest('/v1/calendar', token);
+}
+
+export async function fetchMcpGrants(token: string): Promise<McpGrantsResponse> {
+  return apiRequest('/v1/mcp/grants', token);
+}
+
+export async function revokeMcpGrant(
+  token: string,
+  grantId: string
+): Promise<{ revoked: boolean; id: string }> {
+  return apiRequest(`/v1/mcp/grants/${encodeURIComponent(grantId)}`, token, {
+    method: 'DELETE',
+  });
 }
 
 export async function syncCalendarConnection(
@@ -875,6 +903,52 @@ export async function fetchAudioSnippetBlobUrl(
   return URL.createObjectURL(blob);
 }
 
+export async function fetchKeyframeBlobUrl(
+  imagePath: string,
+  token?: string
+): Promise<string> {
+  const headers: Record<string, string> = {};
+  if (token) {
+    headers.Authorization = `Bearer ${normalizeBearerToken(token)}`;
+  }
+  const res = await fetch(imagePath, { headers });
+  if (!res.ok) {
+    throw new ApiError(res.status, 'Folie nicht verfügbar.');
+  }
+  const blob = await res.blob();
+  return URL.createObjectURL(blob);
+}
+
+export async function deleteRecordingKeyframe(
+  token: string,
+  recordingId: string,
+  keyframeId: string
+): Promise<void> {
+  const headers: Record<string, string> = {};
+  if (token) {
+    headers.Authorization = `Bearer ${normalizeBearerToken(token)}`;
+  }
+  const res = await fetch(
+    `/v1/recordings/${encodeURIComponent(recordingId)}/keyframes/${encodeURIComponent(keyframeId)}`,
+    {
+      method: 'DELETE',
+      headers,
+    }
+  );
+  if (!res.ok) {
+    let detail = res.statusText;
+    try {
+      const err = await res.json();
+      if (err?.detail) {
+        detail = formatApiErrorDetail(err.detail, res.status);
+      }
+    } catch {
+      // ignore empty/non-JSON error bodies
+    }
+    throw new ApiError(res.status, detail || `HTTP ${res.status}`);
+  }
+}
+
 export async function importCalendarPayload(
   token: string,
   rawContent: string
@@ -1021,6 +1095,26 @@ export function matchesSourceFilter(
     return segName === targetName;
   }
   return seg.provider_source_id === filterKey;
+}
+
+export function matchesKeyframeSourceFilter(
+  kf: RecordingKeyframe,
+  filterKey: string
+): boolean {
+  if (!filterKey || filterKey === 'all') return true;
+  if (filterKey.startsWith('participant:')) {
+    return kf.participant_id === filterKey.slice('participant:'.length);
+  }
+  if (filterKey.startsWith('name:')) {
+    return kf.presenter === filterKey.slice('name:'.length);
+  }
+  if (filterKey.startsWith('speaker:')) {
+    return kf.presenter === filterKey.slice('speaker:'.length);
+  }
+  if (filterKey.startsWith('source:')) {
+    return kf.provider_source_id === filterKey.slice('source:'.length);
+  }
+  return kf.provider_source_id === filterKey;
 }
 
 export function formatDurationHuman(seconds: number): string {

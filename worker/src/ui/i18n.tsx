@@ -127,6 +127,56 @@ const ATTRIBUTION_STATUS_EN: Record<string, string> = {
   unknown: 'Attribution pending',
 };
 
+const KEYFRAME_CAPABILITY_EN: Record<string, string> = {
+  active: 'Active (screen share detected)',
+  unverified: 'Ready (no verified screen share)',
+  disabled: 'Disabled',
+  unsupported: 'Unsupported (SDK mode)',
+};
+
+export const KEYFRAME_STRINGS = {
+  de: {
+    screenShareBadge: 'Bildschirmfreigabe',
+    slideSnapshotAlt: 'Folie aus Bildschirmfreigabe',
+    openPreview: 'Folie vergrößern',
+    closePreview: 'Vorschau schließen',
+    deleteSlide: 'Folie dauerhaft löschen',
+    confirmDeleteSlide:
+      'Diese Bildschirmfreigabe-Folie dauerhaft aus dem Protokoll und Objektspeicher löschen?',
+    loadingSlide: 'Folie lädt…',
+    slideUnavailable: 'Folie nicht verfügbar',
+    diagHeading: 'Bildschirmfreigabe-Keyframes',
+    diagCapability: 'Status',
+    diagActiveShare: 'Aktive Freigabe',
+    diagEvaluatedTicks: 'Geprüfte Ticks (1 Hz)',
+    diagEmitted: 'Erkannte Folienwechsel',
+    diagUploaded: 'Gespeicherte Keyframes',
+    diagDroppedUnverified: 'Verworfen (Kamera / unbestätigt)',
+    diagDroppedOptedOut: 'Verworfen (Widerspruch / Opt-Out)',
+    diagDroppedQueueFull: 'Verworfen (Warteschlange voll)',
+  },
+  en: {
+    screenShareBadge: 'Screen share',
+    slideSnapshotAlt: 'Screen-share slide snapshot',
+    openPreview: 'Enlarge slide',
+    closePreview: 'Close preview',
+    deleteSlide: 'Delete slide permanently',
+    confirmDeleteSlide:
+      'Permanently delete this screen-share slide from the protocol and object storage?',
+    loadingSlide: 'Loading slide…',
+    slideUnavailable: 'Slide unavailable',
+    diagHeading: 'Screen-Share Keyframes',
+    diagCapability: 'Capability',
+    diagActiveShare: 'Active share',
+    diagEvaluatedTicks: 'Evaluated ticks (1 Hz)',
+    diagEmitted: 'Emitted slide changes',
+    diagUploaded: 'Uploaded keyframes',
+    diagDroppedUnverified: 'Dropped (camera / unverified)',
+    diagDroppedOptedOut: 'Dropped (opted out)',
+    diagDroppedQueueFull: 'Dropped (queue full)',
+  },
+} as const;
+
 export function localizeParticipation(
   state: string,
   lang: UiLang,
@@ -169,4 +219,15 @@ export function localizeAttributionStatus(
     return ATTRIBUTION_STATUS_EN[status] || status;
   }
   return fallbackDe[status] || status;
+}
+
+export function localizeKeyframeCapability(
+  capability: string,
+  lang: UiLang,
+  fallbackDe: Record<string, string>
+): string {
+  if (lang === 'en') {
+    return KEYFRAME_CAPABILITY_EN[capability] || capability;
+  }
+  return fallbackDe[capability] || capability;
 }

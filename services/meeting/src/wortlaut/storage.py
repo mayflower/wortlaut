@@ -115,6 +115,28 @@ class AudioStorage:
                 if response.get("Errors"):
                     raise RuntimeError("Audio cleanup did not delete all objects")
 
+    def delete_object(self, key: str) -> None:
+        if not key:
+            return
+        try:
+            self.client.delete_object(Bucket=self.bucket, Key=key)
+        except ClientError as error:
+            code = str(error.response.get("Error", {}).get("Code") or "")
+            if code in ("NoSuchKey", "404"):
+                return
+            raise
+
+    def delete_recording_keyframes(self, recording_id) -> None:
+        pages = self.client.get_paginator("list_objects_v2")
+        for page in pages.paginate(Bucket=self.bucket, Prefix=f"keyframes/{recording_id}/"):
+            objects = [{"Key": item["Key"]} for item in page.get("Contents", [])]
+            if objects:
+                response = self.client.delete_objects(
+                    Bucket=self.bucket, Delete={"Objects": objects, "Quiet": True}
+                )
+                if response.get("Errors"):
+                    raise RuntimeError("Keyframe cleanup did not delete all objects")
+
 
 @lru_cache
 def get_storage() -> AudioStorage:

@@ -6,6 +6,7 @@ export type CaptureSink = {
   bind?: (metadata: Record<string, unknown>) => void;
   end: (metadata: Record<string, unknown>) => void;
   gap: (metadata: Record<string, unknown>) => void;
+  keyframe?: (metadata: Record<string, unknown>, png: Uint8Array) => void;
   error: (reason: string) => void;
 };
 type Handle = {stop: () => Promise<void>; suspend: () => void;
@@ -55,6 +56,10 @@ export class AudioCapture {
   inspectClock(): AudioClock {
     return {state: this.context.state, total_interruptions: this.totalInterruptions,
       interruptions: this.interruptions.map((interval) => ({...interval}))};
+  }
+
+  nowUtc(): string {
+    return this.anchor ? this.observedUtc() : new Date().toISOString();
   }
 
   private observedUtc() {

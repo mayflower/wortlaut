@@ -247,12 +247,9 @@ PRIVACY_HTML = """<!DOCTYPE html>
         </p>
       </div>
       <div class="priv-card-sm">
-        <h3>Keine Stimmprofile &amp; kein Video</h3>
+        <h3>__VIDEO_CARD_TITLE_DE__</h3>
         <p>
-          Es werden weder Kamerabilder noch Bildschirminhalte aufgezeichnet. Die
-          Sprecherzuordnung erfolgt ausschließlich über die technische
-          Konferenz-Teilnehmersitzung (WebRTC), niemals über biometrische Stimmprofile
-          (Voiceprints).
+          __VIDEO_CARD_BODY_DE__
         </p>
       </div>
     </section>
@@ -273,9 +270,7 @@ PRIVACY_HTML = """<!DOCTYPE html>
           <strong>__AUDIO_HOURS__ Stunden</strong> gelöscht.
         </li>
         <li>
-          <strong>Transkripte &amp; Exporte:</strong> Fertige Wortprotokolle werden automatisch
-          nach <strong>__TRANSCRIPT_DAYS__ Tagen</strong> gelöscht und können in der Web-UI
-          jederzeit sofort gelöscht werden.
+          __TRANSCRIPT_RETENTION_ITEM_DE__
         </li>
       </ul>
     </section>
@@ -288,9 +283,7 @@ PRIVACY_HTML = """<!DOCTYPE html>
         <strong>Eigene Aussagen von der Protokollierung ausschließen (Chat-Opt-out):</strong>
         Schreiben Sie während des laufenden Calls einfach <strong>„opt out“</strong>,
         <strong>„optout“</strong>, <strong>„nein“</strong> oder <strong>„no“</strong> in den
-        Meeting-Chat. __ASSISTANT_NAME__ erkennt dies automatisch, verwirft Ihre Audiospur und
-        löscht auch bereits während des Calls erfasste Redebeiträge Ihrer Person vollständig aus
-        dem Protokoll.<br><br>
+        Meeting-Chat. __OPTOUT_EFFECT_DE__<br><br>
         <strong>Gesamte Aufzeichnung beenden:</strong> Der Bot <strong>__ASSISTANT_NAME__</strong>
         kann jederzeit direkt über die Teilnehmerliste von Google Meet, Microsoft Teams, Zoom
         oder Cisco Webex aus dem Raum entfernt oder durch die einladende Person in der
@@ -371,6 +364,7 @@ def _build_instance_info() -> dict:
                 "microsoftTenantId": "common",
             },
             "privacyUrl": "/privacy",
+            "enable_keyframes": True,
         }
 
     bot_email: str | None = None
@@ -422,6 +416,7 @@ def _build_instance_info() -> dict:
             "microsoftTenantId": s.microsoft_calendar_tenant_id or "common",
         },
         "privacyUrl": s.privacy_url or "/privacy",
+        "enable_keyframes": bool(s.enable_keyframes),
         "llmSummaryEnabled": bool(s.enable_llm_summary and s.ollama_url),
         "llmModel": s.ollama_model if s.enable_llm_summary else "",
     }
@@ -554,10 +549,9 @@ PRIVACY_HTML_EN = """<!DOCTYPE html>
         </p>
       </div>
       <div class="priv-card-sm">
-        <h3>No Voiceprints &amp; No Video</h3>
+        <h3>__VIDEO_CARD_TITLE_EN__</h3>
         <p>
-          Neither camera video nor screen shares are recorded. Speaker attribution relies strictly
-          on isolated WebRTC conference receiver tracks — never biometric voiceprints.
+          __VIDEO_CARD_BODY_EN__
         </p>
       </div>
     </section>
@@ -574,9 +568,7 @@ PRIVACY_HTML_EN = """<!DOCTYPE html>
           <strong>__AUDIO_HOURS__ hours</strong>.
         </li>
         <li>
-          <strong>Transcripts &amp; Exports:</strong> Completed transcripts expire automatically
-          after <strong>__TRANSCRIPT_DAYS__ days</strong> and can be deleted immediately at
-          any time.
+          __TRANSCRIPT_RETENTION_ITEM_EN__
         </li>
       </ul>
     </section>
@@ -586,8 +578,7 @@ PRIVACY_HTML_EN = """<!DOCTYPE html>
         <strong>Exclude only your own statements (Chat Opt-Out):</strong>
         Simply type <strong>"opt out"</strong>, <strong>"optout"</strong>, <strong>"no"</strong>,
         or <strong>"nein"</strong> in the meeting chat at any point during the call.
-        __ASSISTANT_NAME__ immediately discards your audio track and purges any statements already
-        captured from you while continuing the transcript for everyone else.<br><br>
+        __OPTOUT_EFFECT_EN__<br><br>
         <strong>Stop the entire recording:</strong> Remove <strong>__ASSISTANT_NAME__</strong> from
         the call roster or cancel/delete the recording in the <a href="/ui">wortlaut Web-UI</a>.
       </p>
@@ -604,15 +595,97 @@ def render_privacy(lang: str | None = None) -> str:
         assistant_name = s.assistant_name or "wortlaut"
         audio_hours = s.audio_retention_hours
         transcript_days = s.transcript_retention_days
+        enable_keyframes = bool(s.enable_keyframes)
         effective_lang = (lang or s.default_locale or "de").strip().lower()
     except Exception:
         assistant_name = "wortlaut"
         audio_hours = 24
         transcript_days = 30
+        enable_keyframes = True
         effective_lang = (lang or "de").strip().lower()
+    escaped_name = html.escape(assistant_name)
+    if enable_keyframes:
+        video_title_de = "Keine Stimmprofile &amp; keine Kamerabilder"
+        video_body_de = (
+            "Es werden niemals Teilnehmer-Kamerabilder oder durchlaufendes Video aufgezeichnet; "
+            "bei aktiver Bildschirmpräsentation erfasst der Bot ausschließlich einzelne, "
+            "beruhigte Standbilder (Keyframes) geteilter Folien oder Diagramme. Die "
+            "Sprecherzuordnung erfolgt ausschließlich über die technische "
+            "Konferenz-Teilnehmersitzung (WebRTC), niemals über biometrische Stimmprofile "
+            "(Voiceprints)."
+        )
+        retention_item_de = (
+            "<strong>Transkripte, Bildschirm-Standbilder &amp; Exporte:</strong> Fertige "
+            "Wortprotokolle sowie erfasste Bildschirm-Standbilder werden automatisch nach "
+            f"<strong>{transcript_days} Tagen</strong> gelöscht und können in der Web-UI "
+            "jederzeit einzeln oder vollständig sofort gelöscht werden."
+        )
+        optout_de = (
+            f"{escaped_name} erkennt dies automatisch, verwirft Ihre Audiospur sowie etwaige "
+            "Bildschirmfreigaben und löscht auch bereits während des Calls erfasste Redebeiträge "
+            "und Bildschirm-Standbilder Ihrer Person vollständig aus dem Protokoll."
+        )
+        video_title_en = "No Voiceprints &amp; Zero Camera Video"
+        video_body_en = (
+            "Participant camera feeds and continuous video are never recorded; only settled "
+            "static snapshots (keyframes) of active screen shares are captured to preserve slide "
+            "and diagram context. Speaker attribution relies strictly on isolated WebRTC "
+            "conference receiver tracks — never biometric voiceprints."
+        )
+        retention_item_en = (
+            "<strong>Transcripts, Screen-Share Snapshots &amp; Exports:</strong> Completed "
+            "transcripts and captured screen-share snapshots expire automatically after "
+            f"<strong>{transcript_days} days</strong> and can be deleted individually or "
+            "completely at any time."
+        )
+        optout_en = (
+            f"{escaped_name} immediately discards your audio track and screen share and purges "
+            "any statements and screen-share snapshots already captured from you while continuing "
+            "the transcript for everyone else."
+        )
+    else:
+        video_title_de = "Keine Stimmprofile &amp; kein Video"
+        video_body_de = (
+            "Es werden weder Kamerabilder noch Bildschirminhalte aufgezeichnet. Die "
+            "Sprecherzuordnung erfolgt ausschließlich über die technische "
+            "Konferenz-Teilnehmersitzung (WebRTC), niemals über biometrische Stimmprofile "
+            "(Voiceprints)."
+        )
+        retention_item_de = (
+            "<strong>Transkripte &amp; Exporte:</strong> Fertige Wortprotokolle werden automatisch "
+            f"nach <strong>{transcript_days} Tagen</strong> gelöscht und können in der Web-UI "
+            "jederzeit sofort gelöscht werden."
+        )
+        optout_de = (
+            f"{escaped_name} erkennt dies automatisch, verwirft Ihre Audiospur und löscht auch "
+            "bereits während des Calls erfasste Redebeiträge Ihrer Person vollständig aus dem "
+            "Protokoll."
+        )
+        video_title_en = "No Voiceprints &amp; No Video"
+        video_body_en = (
+            "Neither camera video nor screen shares are recorded. Speaker attribution relies "
+            "strictly on isolated WebRTC conference receiver tracks — never biometric voiceprints."
+        )
+        retention_item_en = (
+            "<strong>Transcripts &amp; Exports:</strong> Completed transcripts expire "
+            f"automatically after <strong>{transcript_days} days</strong> and can be deleted "
+            "immediately at any time."
+        )
+        optout_en = (
+            f"{escaped_name} immediately discards your audio track and purges any statements "
+            "already captured from you while continuing the transcript for everyone else."
+        )
     template = PRIVACY_HTML_EN if effective_lang.startswith("en") else PRIVACY_HTML
     return (
-        template.replace("__ASSISTANT_NAME__", html.escape(assistant_name))
+        template.replace("__VIDEO_CARD_TITLE_DE__", video_title_de)
+        .replace("__VIDEO_CARD_BODY_DE__", video_body_de)
+        .replace("__TRANSCRIPT_RETENTION_ITEM_DE__", retention_item_de)
+        .replace("__OPTOUT_EFFECT_DE__", optout_de)
+        .replace("__VIDEO_CARD_TITLE_EN__", video_title_en)
+        .replace("__VIDEO_CARD_BODY_EN__", video_body_en)
+        .replace("__TRANSCRIPT_RETENTION_ITEM_EN__", retention_item_en)
+        .replace("__OPTOUT_EFFECT_EN__", optout_en)
+        .replace("__ASSISTANT_NAME__", escaped_name)
         .replace("__AUDIO_HOURS__", str(audio_hours))
         .replace("__TRANSCRIPT_DAYS__", str(transcript_days))
         .replace("__ASSET_VERSION__", _asset_version())

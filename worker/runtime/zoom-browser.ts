@@ -1,12 +1,14 @@
 import type {Page} from 'playwright';
 import {AudioTransport} from '../src/transport.js';
-import {installMeetCapture, MeetError} from './meet.js';
+import {KeyframeTransport, type KeyframeUploadMetadata} from './keyframe-transport.js';
+import {installMeetCapture, MeetError, mergeKeyframeDiagnostics} from './meet.js';
 import {isZoomOrigin} from '../src/zoom-url.js';
 import {installVideoTile, type VideoTilePatch} from './video-tile.js';
 
 export type ZoomBootstrap = {provider: 'zoom'; meeting_id: string; attempt_id: string;
   meeting_url: string; deadline: string; lobby_timeout_seconds: number;
   empty_room_timeout_seconds?: number; chat_intro?: string | null;
+  enable_keyframes?: boolean;
   invited_by: string | null; invited_by_name: string | null; meeting_title: string | null;
   default_locale: string;
   zoom: {display_name: string; locale: string; auth_mode?: 'guest' | 'account'}};
@@ -35,6 +37,7 @@ async function zoomHumanVerificationVisible(page: Page) {
 // Join flow reference: Vexa core/meetings/modules/join/src/zoom/join.ts (Apache-2.0).
 export class ZoomBrowser {
   private readonly transport: AudioTransport;
+  private readonly keyframes: KeyframeTransport;
   private initialize?: () => Promise<void>;
   private stopping?: Promise<void>;
   private reason = '';
@@ -58,6 +61,11 @@ export class ZoomBrowser {
     if (!['https:', 'http:'].includes(url.protocol)) throw new MeetError('invalid_ingest_url');
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
     this.transport = new AudioTransport(url.href, credential, workerId, reason => { this.reason = reason; });
+    this.keyframes = new KeyframeTransport(api, bootstrap.attempt_id, credential, workerId, {
+      onHalted: () => {
+        void this.page.evaluate(() => window.wortlautMeet?.haltKeyframes?.()).catch(() => {});
+      },
+    });
   }
 
   async prepare() {
@@ -72,6 +80,7 @@ export class ZoomBrowser {
       end: metadata => this.transport.control(metadata as Record<string, unknown> & {id: string}),
       gap: metadata => this.transport.control(metadata as Record<string, unknown> & {id: string}),
       chunk: (metadata, pcm) => this.transport.chunk(metadata, pcm),
+      keyframe: (metadata, png) => this.keyframes.enqueue(metadata as KeyframeUploadMetadata, png),
       error: reason => { this.reason = reason; },
     }, this.assets, 'zoom');
     this.transport.connect();
@@ -135,20 +144,23 @@ export class ZoomBrowser {
     try {
       const stopVideoBtn = this.page.locator(
         'button.send-video-container__btn[aria-label*="Stop Video" i], ' +
-        'button[aria-label^="Stop Video" i], button[aria-label^="Video beenden" i], button[aria-label^="Video stoppen" i]'
+        'button:not(#preview-video-control-button)[aria-label^="Stop Video" i], ' +
+        'button:not(#preview-video-control-button)[aria-label^="Video beenden" i], ' +
+        'button:not(#preview-video-control-button)[aria-label^="Video stoppen" i]'
       ).or(this.page.getByRole('button', {
         name: /^(Stop Video|Video beenden|Video stoppen)(?: \(.*\))?$/i,
-      })).first();
+      }).and(this.page.locator(':not(#preview-video-control-button)'))).first();
       if (await stopVideoBtn.isVisible().catch(() => false)) {
         this.videoStarted = true;
         return;
       }
       const startVideoBtn = this.page.locator(
         'button.send-video-container__btn[aria-label*="Start Video" i], ' +
-        'button[aria-label^="Start Video" i], button[aria-label^="Video starten" i]'
+        'button:not(#preview-video-control-button)[aria-label^="Start Video" i], ' +
+        'button:not(#preview-video-control-button)[aria-label^="Video starten" i]'
       ).or(this.page.getByRole('button', {
         name: /^(Start Video|Video starten)(?: \(.*\))?$/i,
-      })).first();
+      }).and(this.page.locator(':not(#preview-video-control-button)'))).first();
       if (await startVideoBtn.isVisible().catch(() => false)) {
         await startVideoBtn.click({timeout: 2500});
         this.videoStarted = true;
@@ -404,6 +416,7 @@ export class ZoomBrowser {
       data_channels: capture?.data_channels ?? [],
       sdp: capture?.sdp ?? {descriptions: 0, audio_sections: 0, video_sections: 0, ssrc_count: 0, cname_count: 0, msid_count: 0},
       audio_clock: capture?.audio_clock ?? {state: 'unknown', total_interruptions: 0, interruptions: []},
+      keyframes: mergeKeyframeDiagnostics(capture?.keyframes, this.bootstrap.enable_keyframes, this.keyframes.stats()),
       drained: this.drained,
     };
   }
@@ -415,7 +428,11 @@ export class ZoomBrowser {
         window.wortlautVideoTile?.stop();
         return window.wortlautMeet?.stop();
       }).catch(() => false);
-      this.drained = await this.transport.drain() && ended === true;
+      const [audioDrained] = await Promise.all([
+        this.transport.drain(),
+        this.keyframes.drain(10000),
+      ]);
+      this.drained = audioDrained && ended === true;
       if (!isZoomOrigin(new URL(this.page.url()))) return;
       const leave = this.page.locator(
         'button.footer-button-base__button[aria-label*="Leave" i], button[aria-label*="Verlassen" i], .footer__leave-btn'

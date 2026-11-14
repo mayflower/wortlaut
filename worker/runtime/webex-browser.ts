@@ -1,11 +1,13 @@
 import type {Frame, Locator, Page} from 'playwright';
 import {AudioTransport} from '../src/transport.js';
-import {installMeetCapture, MeetError} from './meet.js';
+import {KeyframeTransport, type KeyframeUploadMetadata} from './keyframe-transport.js';
+import {installMeetCapture, MeetError, mergeKeyframeDiagnostics} from './meet.js';
 import {installVideoTile, type VideoTilePatch} from './video-tile.js';
 
 export type WebexBrowserBootstrap = {provider: 'webex'; meeting_id: string; attempt_id: string;
   meeting_url: string; deadline: string; lobby_timeout_seconds: number;
   empty_room_timeout_seconds?: number; chat_intro?: string | null;
+  enable_keyframes?: boolean;
   invited_by: string | null; invited_by_name: string | null; meeting_title: string | null;
   default_locale: string;
   webex_browser: {display_name: string}};
@@ -14,12 +16,15 @@ export type WebexBrowserBootstrap = {provider: 'webex'; meeting_id: string; atte
 // Do not interact with arbitrary login, help or advertisement frames.
 export class WebexBrowser {
   private readonly transport: AudioTransport;
+  private readonly keyframes: KeyframeTransport;
   private initialize?: () => Promise<void>;
   private stopping?: Promise<void>;
   private reason = '';
   private joined = false;
   private chatSent = false;
   private chatAttempts = 0;
+  private videoCheckedInCall = false;
+  private videoCheckAttempts = 0;
   private rosterOpened = false;
   private drained: boolean | null = null;
   private pushVideoTile?: (patch: VideoTilePatch) => Promise<void>;
@@ -29,6 +34,11 @@ export class WebexBrowser {
     const url = new URL(`/v1/attempts/${bootstrap.attempt_id}/audio`, api);
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
     this.transport = new AudioTransport(url.href, credential, workerId, reason => { this.reason = reason; });
+    this.keyframes = new KeyframeTransport(api, bootstrap.attempt_id, credential, workerId, {
+      onHalted: () => {
+        void this.frame()?.evaluate(() => window.wortlautMeet?.haltKeyframes?.()).catch(() => {});
+      },
+    });
   }
 
   private frame(): Frame | undefined {
@@ -64,6 +74,7 @@ export class WebexBrowser {
       end: metadata => this.transport.control(metadata as Record<string, unknown> & {id: string}),
       gap: metadata => this.transport.control(metadata as Record<string, unknown> & {id: string}),
       chunk: (metadata, pcm) => this.transport.chunk(metadata, pcm),
+      keyframe: (metadata, png) => this.keyframes.enqueue(metadata as KeyframeUploadMetadata, png),
       error: reason => { this.reason = reason; },
     }, this.assets, 'webex');
     this.transport.connect();
@@ -174,6 +185,24 @@ export class WebexBrowser {
       name: /^(Leave meeting|Leave|Meeting verlassen|Meeting verlassen oder Meeting für alle beenden|Verlassen)(?:\s|$)/i,
     }).first().isVisible()) {
       participation = 'capturing';
+      if (!this.videoCheckedInCall && this.videoCheckAttempts < 6) {
+        this.videoCheckAttempts += 1;
+        const stopVideo = frame.getByRole('button', {
+          name: /^Stop video|^Video beenden|^Sending video is currently enabled|^(?:Senden von )?Video(?!.*\bdeaktiviert\b).*aktiviert/i,
+        }).first();
+        if (await stopVideo.isVisible().catch(() => false)) {
+          this.videoCheckedInCall = true;
+        } else {
+          const enableVideo = frame.getByRole('button', {
+            name: /^Sending video is currently disabled|^(?:Senden von )?Video.*deaktiviert|^Start (?:my )?video|^(?:Eigenes )?Video starten/i,
+          }).first();
+          if (await enableVideo.isVisible().catch(() => false)) {
+            await this.click(enableVideo).then(() => {
+              this.videoCheckedInCall = true;
+            }).catch(() => {});
+          }
+        }
+      }
       if (!this.chatSent && this.chatAttempts < 8) {
         this.chatAttempts += 1;
         await this.sendChatIntro(frame);
@@ -198,7 +227,8 @@ export class WebexBrowser {
       configured_share_slots: null,
       participant_sources: state?.participant_sources ?? {available: false, total: 0, truncated: false, sources: []},
       data_channels: state?.data_channels ?? [],
-      sdp: state?.sdp ?? {descriptions: 0, audio_sections: 0, video_sections: 0, ssrc_count: 0, cname_count: 0, msid_count: 0}};
+      sdp: state?.sdp ?? {descriptions: 0, audio_sections: 0, video_sections: 0, ssrc_count: 0, cname_count: 0, msid_count: 0},
+      keyframes: mergeKeyframeDiagnostics(state?.keyframes, this.bootstrap.enable_keyframes, this.keyframes.stats())};
   }
 
   stop(reason: string) {
@@ -209,7 +239,11 @@ export class WebexBrowser {
         window.wortlautVideoTile?.stop();
         return window.wortlautMeet?.stop();
       }).catch(() => false);
-      this.drained = await this.transport.drain() && ended === true;
+      const [audioDrained] = await Promise.all([
+        this.transport.drain(),
+        this.keyframes.drain(10000),
+      ]);
+      this.drained = audioDrained && ended === true;
       const leave = frame?.getByRole('button', {
         name: /^(Leave meeting|Leave|Meeting verlassen|Meeting verlassen oder Meeting für alle beenden|Verlassen)(?:\s|$)/i,
       }).first();

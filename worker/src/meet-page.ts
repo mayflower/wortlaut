@@ -2,14 +2,16 @@ import {isTeamsOrigin} from './teams-url.js';
 import {isZoomOrigin} from './zoom-url.js';
 import {AudioCapture, type AudioClock, type CaptureSink} from './capture.js';
 import type {Binding, Chunk} from './chunks.js';
+import {ScreenShareKeyframeSampler, type KeyframeDiagnostics} from './keyframes.js';
 import resamplerSource from '@alexanderolsen/libsamplerate-js/dist/libsamplerate.worklet.js?raw';
 import pcmSource from '../public/pcm-worklet.js?raw';
 import encodedObserverSource from '../public/encoded-audio-observer.js?raw';
 
 export type MeetCaptureConfig = {meeting_id: string; attempt_id: string; meeting_url: string;
-  provider?: 'google_meet' | 'webex' | 'teams' | 'zoom'; teams_origins?: string[]};
-export type MeetBridgeMessage = {attempt_id: string; type: 'control' | 'chunk';
-  metadata: Record<string, unknown>; pcm?: string};
+  provider?: 'google_meet' | 'webex' | 'teams' | 'zoom'; teams_origins?: string[];
+  enable_keyframes?: boolean};
+export type MeetBridgeMessage = {attempt_id: string; type: 'control' | 'chunk' | 'keyframe';
+  metadata: Record<string, unknown>; pcm?: string; png?: string};
 
 declare global {
   interface Window {
@@ -29,7 +31,8 @@ declare global {
       frameConnections?: Set<RTCPeerConnection>;
       onRemoteDescription?: (sdp: string) => void;
       observe?: (receiver: RTCRtpReceiver, pc: RTCPeerConnection) => void};
-    wortlautMeet: {stop: () => Promise<boolean>; inspect: () => MeetCaptureState & {audio_clock: AudioClock}};
+    wortlautMeet: {stop: () => Promise<boolean>; inspect: () => MeetCaptureState & {audio_clock: AudioClock};
+      haltKeyframes?: () => void};
   }
 }
 
@@ -88,6 +91,7 @@ type MeetCaptureState = {streams: number; audio_samples: number; active_audio_sa
   participant_sources: ParticipantSourcesState;
   data_channels: DataChannelState[];
   sdp: SdpState;
+  keyframes: KeyframeDiagnostics;
   media?: MediaState};
 
 type EncodedEvidence = {state: 'unsupported' | 'failed' | 'waiting_frames' | 'observing' |
@@ -108,11 +112,22 @@ if (config.provider === 'webex'
     location.pathname.replace(/^\/meet\//, '/') === new URL(config.meeting_url).pathname.replace(/^\/meet\//, '/')) install(config);
 
 function install(config: MeetCaptureConfig) {
+  const keyframesEnabled = config.enable_keyframes !== false;
   const state: MeetCaptureState = {streams: 0, audio_samples: 0, active_audio_samples: 0,
     reason: '', stopped: false, capture_ready: false, drained: false, receiver_sources: [],
     participant_sources: {available: false, total: 0, truncated: false, sources: []},
     data_channels: [],
-    sdp: {descriptions: 0, audio_sections: 0, video_sections: 0, ssrc_count: 0, cname_count: 0, msid_count: 0}};
+    sdp: {descriptions: 0, audio_sections: 0, video_sections: 0, ssrc_count: 0, cname_count: 0, msid_count: 0},
+    keyframes: {
+      capability: keyframesEnabled ? 'unverified' : 'disabled',
+      active_share: false,
+      evaluated_ticks: 0,
+      emitted: 0,
+      uploaded: 0,
+      dropped_unverified: 0,
+      dropped_opted_out: 0,
+      dropped_queue_full: 0,
+    }};
   let trustedPolicy: {createScriptURL: (url: string) => unknown} | undefined;
   function toWorkerScriptUrl(url: string): string {
     const tt = (window as unknown as {
@@ -190,8 +205,18 @@ function install(config: MeetCaptureConfig) {
   const participants = new Map<string, {
     participant_id: string; participant_name: string | null;
     audio_csis: Set<number>; share_audio_csis: Set<number>;
+    share_video_csis: Set<number>;
+    share_video_track_ids: Set<string>;
+    share_video_stream_ids: Set<string>;
     track_ids: Set<string>; stream_ids: Set<string>;
   }>();
+  const cameraVideoCsis = new Set<number>();
+  const cameraVideoStreamIds = new Set<string>();
+  const cameraVideoTrackIds = new Set<string>();
+  const meetSlideVideoMids = new Set<string>();
+  const meetSlideVideoSsrcs = new Set<number>();
+  const meetSlideVideoStreamIds = new Set<string>();
+  const meetSlideVideoTrackIds = new Set<string>();
   const domNames = new Map<string, string>();
   const protoNames = new Map<string, string>();
   const unmuteHookedTracks = new WeakSet<MediaStreamTrack>();
@@ -339,6 +364,7 @@ function install(config: MeetCaptureConfig) {
   const webexParticipantOwnedCsis = new Map<string, Set<number>>();
   const webexParticipantDeviceCsis = new Map<string, Set<number>>();
   const webexSsrcToParticipant = new Map<number, string>();
+  const webexSlideVideoSsrcToParticipant = new Map<number, string>();
   let webexCurrentActiveSpeakerCsis: number[] = [];
   let webexLastActiveSpeakerAt = 0;
 
@@ -522,6 +548,7 @@ function install(config: MeetCaptureConfig) {
     }
     const teamsAudioCsis: number[] = [];
     const teamsShareCsis: number[] = [];
+    const teamsShareVideoCsis: number[] = [];
     if (node.endpoints && typeof node.endpoints === 'object') {
       for (const ep of Object.values(node.endpoints as Record<string, unknown>).slice(0, 16)) {
         if (!ep || typeof ep !== 'object') continue;
@@ -536,20 +563,35 @@ function install(config: MeetCaptureConfig) {
           const sid = typeof msRec.sourceId === 'string' && /^\d+$/.test(msRec.sourceId)
             ? Number(msRec.sourceId) : msRec.sourceId;
           if (!validCsi(sid)) continue;
-          if (msRec.type === 'audio') teamsAudioCsis.push(sid);
-          else if (msRec.type === 'applicationsharing-audio' || msRec.type === 'sharing-audio') {
+          const msType = typeof msRec.type === 'string' ? msRec.type.toLowerCase() : '';
+          const msContent = typeof msRec.content === 'string' ? msRec.content.toLowerCase() : '';
+          if (msType === 'audio') teamsAudioCsis.push(sid);
+          else if (msType === 'applicationsharing-audio' || msType === 'sharing-audio') {
             teamsShareCsis.push(sid);
+          } else if (
+            msType === 'applicationsharing-video' ||
+            msType === 'sharing-video' ||
+            (msType === 'video' && msContent === 'screen')
+          ) {
+            teamsShareVideoCsis.push(sid);
+            cameraVideoCsis.delete(sid);
+          } else if (msType === 'video') {
+            if (cameraVideoCsis.size < 512) cameraVideoCsis.add(sid);
           }
         }
       }
     }
     const webexAudioCsis: number[] = [];
     const webexShareCsis: number[] = [];
+    const webexShareVideoCsis: number[] = [];
     const webexDeviceFallbackCsis: number[] = [];
     if (isWebexParticipant) {
       if (node.state === 'LEFT' || node.state === 'REMOVED') {
         webexParticipantOwnedCsis.delete(id);
         webexParticipantDeviceCsis.delete(id);
+        for (const [ssrc, ownerId] of webexSlideVideoSsrcToParticipant) {
+          if (ownerId === id) webexSlideVideoSsrcToParticipant.delete(ssrc);
+        }
         updateWebexActiveSpeakerBindings();
       }
       const status = node.status && typeof node.status === 'object'
@@ -574,18 +616,27 @@ function install(config: MeetCaptureConfig) {
             const msRec = ms as Record<string, unknown>;
             const csi = msRec.csi;
             if (!validCsi(csi)) continue;
-            if (msRec.mediaType === 'audio') {
-              if (msRec.mediaContent === 'slides') {
+            const mType = typeof msRec.mediaType === 'string' ? msRec.mediaType.toLowerCase() : '';
+            const mContent = typeof msRec.mediaContent === 'string' ? msRec.mediaContent.toLowerCase() : '';
+            if (mType === 'audio') {
+              if (mContent === 'slides') {
                 webexShareCsis.push(csi);
               } else {
                 webexAudioCsis.push(csi);
+              }
+            } else if (mType === 'video') {
+              if (mContent === 'slides') {
+                webexShareVideoCsis.push(csi);
+                cameraVideoCsis.delete(csi);
+              } else if (cameraVideoCsis.size < 512) {
+                cameraVideoCsis.add(csi);
               }
             }
           }
         }
       }
       if (node.state !== 'LEFT' && node.state !== 'REMOVED') {
-        if (webexAudioCsis.length || webexShareCsis.length) {
+        if (webexAudioCsis.length || webexShareCsis.length || webexShareVideoCsis.length) {
           let owned = webexParticipantOwnedCsis.get(id);
           if (!owned && webexParticipantOwnedCsis.size < 256) {
             owned = new Set<number>();
@@ -594,6 +645,7 @@ function install(config: MeetCaptureConfig) {
           if (owned) {
             for (const c of webexAudioCsis) if (owned.size < 64) owned.add(c);
             for (const c of webexShareCsis) if (owned.size < 64) owned.add(c);
+            for (const c of webexShareVideoCsis) if (owned.size < 64) owned.add(c);
           }
         }
         if (webexDeviceFallbackCsis.length) {
@@ -630,6 +682,18 @@ function install(config: MeetCaptureConfig) {
       ...teamsShareCsis,
       ...webexShareCsis,
     ].filter(validCsi);
+    const shareVideoRaw = [
+      ...(Array.isArray(node.share_video_csis) ? node.share_video_csis : []),
+      ...(Array.isArray(node.shareVideoCsis) ? node.shareVideoCsis : []),
+      ...teamsShareVideoCsis,
+      ...webexShareVideoCsis,
+    ].filter(validCsi);
+    const shareVideoTrackRaw = [
+      ...(Array.isArray(node.share_video_track_ids) ? node.share_video_track_ids : []),
+    ].filter((v): v is string => typeof v === 'string' && v.length > 0 && v.length <= 256);
+    const shareVideoStreamRaw = [
+      ...(Array.isArray(node.share_video_stream_ids) ? node.share_video_stream_ids : []),
+    ].filter((v): v is string => typeof v === 'string' && v.length > 0 && v.length <= 256);
     const trackRaw = [
       node.track_id, node.trackId, node.audioTrackId,
       ...(Array.isArray(node.track_ids) ? node.track_ids : []),
@@ -639,7 +703,15 @@ function install(config: MeetCaptureConfig) {
       ...(Array.isArray(node.stream_ids) ? node.stream_ids : []),
     ].filter((v): v is string => typeof v === 'string' && v.length > 0 && v.length <= 256);
     let entry = participants.get(id);
-    if (!audioRaw.length && !shareRaw.length && !trackRaw.length && !streamRaw.length) {
+    if (
+      !audioRaw.length &&
+      !shareRaw.length &&
+      !shareVideoRaw.length &&
+      !shareVideoTrackRaw.length &&
+      !shareVideoStreamRaw.length &&
+      !trackRaw.length &&
+      !streamRaw.length
+    ) {
       if (entry && cleanedName && entry.participant_name !== cleanedName) {
         entry.participant_name = cleanedName;
         return true;
@@ -652,6 +724,7 @@ function install(config: MeetCaptureConfig) {
       if (participants.size >= 256) return false;
       entry = {participant_id: id, participant_name: null,
         audio_csis: new Set(), share_audio_csis: new Set(),
+        share_video_csis: new Set(), share_video_track_ids: new Set(), share_video_stream_ids: new Set(),
         track_ids: new Set(), stream_ids: new Set()};
       participants.set(id, entry);
       changed = true;
@@ -668,6 +741,21 @@ function install(config: MeetCaptureConfig) {
     for (const csi of shareRaw) {
       if (entry.share_audio_csis.size < 64 && !entry.share_audio_csis.has(csi)) {
         entry.share_audio_csis.add(csi); changed = true;
+      }
+    }
+    for (const csi of shareVideoRaw) {
+      if (entry.share_video_csis.size < 64 && !entry.share_video_csis.has(csi)) {
+        entry.share_video_csis.add(csi); changed = true;
+      }
+    }
+    for (const tid of shareVideoTrackRaw) {
+      if (entry.share_video_track_ids.size < 64 && !entry.share_video_track_ids.has(tid)) {
+        entry.share_video_track_ids.add(tid); changed = true;
+      }
+    }
+    for (const sid of shareVideoStreamRaw) {
+      if (entry.share_video_stream_ids.size < 64 && !entry.share_video_stream_ids.has(sid)) {
+        entry.share_video_stream_ids.add(sid); changed = true;
       }
     }
     for (const tid of trackRaw) {
@@ -866,7 +954,16 @@ function install(config: MeetCaptureConfig) {
       const zoomRowLabel = el.hasAttribute('data-participants-row')
         ? (el.getAttribute('aria-label') || el.textContent || '')
         : '';
-      const mediaElements = Array.from(el.querySelectorAll('audio, video')).slice(0, 8);
+      const isScreencastTile =
+        el.getAttribute('data-is-screencast') === 'true' ||
+        el.hasAttribute('data-screencast') ||
+        el.getAttribute('data-is-presentation') === 'true' ||
+        Boolean(el.querySelector('[data-is-screencast="true"], [data-is-presentation="true"]')) ||
+        Boolean(el.closest('[data-is-screencast="true"], [data-is-presentation="true"]')) ||
+        /screen-share|stage-share|sharing-stage/i.test(el.getAttribute('data-tid') ?? '');
+      const mediaElements = Array.from(
+        el.querySelectorAll('audio:not([data-wortlaut-keepalive]), video:not([data-wortlaut-keyframe-probe])'),
+      ).slice(0, 8);
       const hasVirtualSelfVideo = mediaElements.some((media) => {
         const ownerTile = media.closest(
           '[data-participant-id], [data-requested-participant-id], [data-member-id], ' +
@@ -911,6 +1008,8 @@ function install(config: MeetCaptureConfig) {
       const csis: number[] = [];
       const streamIds: string[] = [];
       const trackIds: string[] = [];
+      const shareVideoStreamIds: string[] = [];
+      const shareVideoTrackIds: string[] = [];
       for (const node of [el, ...Array.from(el.querySelectorAll('[data-ssrc], [data-csi], [data-csrc], [data-stream-id], [data-msid], [data-track-id], [data-audio-track-id]')).slice(0, 16)]) {
         for (const attr of ['data-ssrc', 'data-csi', 'data-csrc']) {
           const parsed = parseAttrCsi(node.getAttribute(attr));
@@ -918,11 +1017,17 @@ function install(config: MeetCaptureConfig) {
         }
         for (const attr of ['data-stream-id', 'data-msid']) {
           const val = node.getAttribute(attr)?.trim();
-          if (val && val.length <= 256) streamIds.push(val);
+          if (val && val.length <= 256) {
+            if (isScreencastTile) shareVideoStreamIds.push(val);
+            else streamIds.push(val);
+          }
         }
         for (const attr of ['data-track-id', 'data-audio-track-id']) {
           const val = node.getAttribute(attr)?.trim();
-          if (val && val.length <= 256) trackIds.push(val);
+          if (val && val.length <= 256) {
+            if (isScreencastTile && attr === 'data-track-id') shareVideoTrackIds.push(val);
+            else trackIds.push(val);
+          }
         }
       }
       for (const media of mediaElements) {
@@ -933,15 +1038,44 @@ function install(config: MeetCaptureConfig) {
           )) {
             continue;
           }
-          if (src.id) streamIds.push(src.id);
-          for (const t of src.getTracks()) if (t.id) trackIds.push(t.id);
+          if (media.tagName.toLowerCase() === 'video') {
+            if (isScreencastTile) {
+              if (src.id) {
+                shareVideoStreamIds.push(src.id);
+                if (meetSlideVideoStreamIds.size < 256) meetSlideVideoStreamIds.add(src.id);
+                cameraVideoStreamIds.delete(src.id);
+              }
+              for (const vt of src.getVideoTracks()) {
+                if (vt.id) {
+                  shareVideoTrackIds.push(vt.id);
+                  if (meetSlideVideoTrackIds.size < 256) meetSlideVideoTrackIds.add(vt.id);
+                  cameraVideoTrackIds.delete(vt.id);
+                }
+              }
+            } else {
+              if (src.id && !meetSlideVideoStreamIds.has(src.id) && cameraVideoStreamIds.size < 512) {
+                cameraVideoStreamIds.add(src.id);
+              }
+              for (const vt of src.getVideoTracks()) {
+                if (vt.id && !meetSlideVideoTrackIds.has(vt.id) && cameraVideoTrackIds.size < 512) {
+                  cameraVideoTrackIds.add(vt.id);
+                }
+              }
+            }
+          }
+          if (!isScreencastTile) {
+            if (src.id) streamIds.push(src.id);
+            for (const t of src.getTracks()) if (t.id) trackIds.push(t.id);
+          }
           for (const group of sdpCnames.values()) {
             const sharesStream = src.id && group.stream_ids.has(src.id);
             const sharesTrack = src.getTracks().some((t) => group.track_ids.has(t.id));
             if (sharesStream || sharesTrack) {
-              csis.push(...group.audio_ssrcs);
-              streamIds.push(...group.stream_ids);
-              trackIds.push(...group.track_ids);
+              if (!isScreencastTile) {
+                csis.push(...group.audio_ssrcs);
+                streamIds.push(...group.stream_ids);
+                trackIds.push(...group.track_ids);
+              }
             }
           }
         }
@@ -952,16 +1086,18 @@ function install(config: MeetCaptureConfig) {
         streamIds.push(...group.stream_ids);
         trackIds.push(...group.track_ids);
       }
-      const effectiveId = rawId || (name && (streamIds.length || trackIds.length || csis.length)
-        ? `dom:${streamIds[0] ?? trackIds[0] ?? csis[0]}`
+      const effectiveId = rawId || (name && (streamIds.length || trackIds.length || csis.length || shareVideoStreamIds.length || shareVideoTrackIds.length)
+        ? `dom:${streamIds[0] ?? trackIds[0] ?? shareVideoStreamIds[0] ?? shareVideoTrackIds[0] ?? csis[0]}`
         : '');
-      if (effectiveId && (csis.length || streamIds.length || trackIds.length)) {
+      if (effectiveId && (csis.length || streamIds.length || trackIds.length || shareVideoStreamIds.length || shareVideoTrackIds.length)) {
         if (ingestParticipantRecord({
           participant_id: effectiveId,
           participant_name: name ?? domNames.get(effectiveId) ?? null,
           audio_csis: csis,
           stream_ids: streamIds,
           track_ids: trackIds,
+          share_video_stream_ids: shareVideoStreamIds,
+          share_video_track_ids: shareVideoTrackIds,
         })) updated = true;
       }
     }
@@ -981,15 +1117,50 @@ function install(config: MeetCaptureConfig) {
     const ssrcCname = new Map<number, string>();
     const ssrcMsid = new Map<number, {streamId: string; trackId?: string}>();
     let sectionMsid: {streamId: string; trackId?: string} | null = null;
+    let sectionMid: string | null = null;
+    let sectionIsSlides = false;
+    let sectionSsrcs: number[] = [];
+    const flushVideoSection = () => {
+      if (currentMedia !== 'video' || !sectionIsSlides) return;
+      if (sectionMid && meetSlideVideoMids.size < 128) meetSlideVideoMids.add(sectionMid);
+      if (sectionMsid) {
+        if (meetSlideVideoStreamIds.size < 256) meetSlideVideoStreamIds.add(sectionMsid.streamId);
+        cameraVideoStreamIds.delete(sectionMsid.streamId);
+        if (sectionMsid.trackId) {
+          if (meetSlideVideoTrackIds.size < 256) meetSlideVideoTrackIds.add(sectionMsid.trackId);
+          cameraVideoTrackIds.delete(sectionMsid.trackId);
+        }
+      }
+      for (const ssrc of sectionSsrcs) {
+        if (meetSlideVideoSsrcs.size < 256) meetSlideVideoSsrcs.add(ssrc);
+        cameraVideoCsis.delete(ssrc);
+      }
+    };
     for (const rawLine of sdp.split(/\r?\n/)) {
       const line = rawLine.trim();
       if (line.startsWith('m=audio ')) {
-        currentMedia = 'audio'; sdpStats.audio_sections++; sectionMsid = null;
+        flushVideoSection();
+        currentMedia = 'audio'; sdpStats.audio_sections++;
+        sectionMsid = null; sectionMid = null; sectionIsSlides = false; sectionSsrcs = [];
       } else if (line.startsWith('m=video ')) {
-        currentMedia = 'video'; sdpStats.video_sections++; sectionMsid = null;
+        flushVideoSection();
+        currentMedia = 'video'; sdpStats.video_sections++;
+        sectionMsid = null; sectionMid = null; sectionIsSlides = false; sectionSsrcs = [];
       } else if (line.startsWith('m=')) {
+        flushVideoSection();
         if (line.startsWith('m=application ')) sdpHasApplication = true;
-        currentMedia = 'other'; sectionMsid = null;
+        currentMedia = 'other';
+        sectionMsid = null; sectionMid = null; sectionIsSlides = false; sectionSsrcs = [];
+      } else if (line.startsWith('a=mid:')) {
+        const mid = line.slice(6).trim();
+        if (mid && mid.length <= 64) sectionMid = mid;
+      } else if (
+        currentMedia === 'video' &&
+        (line === 'a=content:slides' ||
+          /^a=content:.*\bslides\b/i.test(line) ||
+          /^a=label:.*(?:screen|slides|presentation)/i.test(line))
+      ) {
+        sectionIsSlides = true;
       } else if (line.startsWith('a=msid:')) {
         const parts = line.slice(7).trim().split(/\s+/);
         if (parts[0] && parts[0] !== '-' && parts[0].length <= 256) {
@@ -1004,6 +1175,9 @@ function install(config: MeetCaptureConfig) {
         const val = match[3].trim();
         if (!validCsi(ssrc)) continue;
         if (sdpStats.ssrcs.size < 256) sdpStats.ssrcs.add(ssrc);
+        if (currentMedia === 'video' && sectionSsrcs.length < 64 && !sectionSsrcs.includes(ssrc)) {
+          sectionSsrcs.push(ssrc);
+        }
         if (attr === 'cname' && val && val.length <= 256) {
           if (sdpStats.cnames.size < 256) sdpStats.cnames.add(val);
           ssrcCname.set(ssrc, val);
@@ -1015,7 +1189,7 @@ function install(config: MeetCaptureConfig) {
           if (group) {
             if (currentMedia === 'audio' && group.audio_ssrcs.size < 64) group.audio_ssrcs.add(ssrc);
             if (currentMedia === 'video' && group.video_ssrcs.size < 64) group.video_ssrcs.add(ssrc);
-            if (sectionMsid) {
+            if (sectionMsid && currentMedia === 'audio') {
               if (group.stream_ids.size < 64) group.stream_ids.add(sectionMsid.streamId);
               if (sectionMsid.trackId && group.track_ids.size < 64) group.track_ids.add(sectionMsid.trackId);
             }
@@ -1029,7 +1203,17 @@ function install(config: MeetCaptureConfig) {
         }
       }
     }
+    flushVideoSection();
     for (const [ssrc, msid] of ssrcMsid) {
+      if (meetSlideVideoSsrcs.has(ssrc)) {
+        if (meetSlideVideoStreamIds.size < 256) meetSlideVideoStreamIds.add(msid.streamId);
+        cameraVideoStreamIds.delete(msid.streamId);
+        if (msid.trackId) {
+          if (meetSlideVideoTrackIds.size < 256) meetSlideVideoTrackIds.add(msid.trackId);
+          cameraVideoTrackIds.delete(msid.trackId);
+        }
+        continue;
+      }
       const cname = ssrcCname.get(ssrc);
       const group = cname ? sdpCnames.get(cname) : undefined;
       if (group) {
@@ -1039,17 +1223,31 @@ function install(config: MeetCaptureConfig) {
     }
     let updated = scanDomParticipants();
     for (const [cname, group] of sdpCnames) {
-      if (!group.audio_ssrcs.size && !group.stream_ids.size && !group.track_ids.size) continue;
+      if (!group.audio_ssrcs.size && !group.video_ssrcs.size && !group.stream_ids.size && !group.track_ids.size) continue;
       const matchedId = (domNames.has(cname) || protoNames.has(cname) || participants.has(cname))
         ? cname
-        : [...group.stream_ids].find((sid) => domNames.has(sid) || protoNames.has(sid) || participants.has(sid));
+        : [...group.stream_ids].find((sid) => domNames.has(sid) || protoNames.has(sid) || participants.has(sid)) ??
+          [...participants.values()].find((p) => [...group.audio_ssrcs].some((s) => p.audio_csis.has(s)))?.participant_id;
       if (matchedId) {
+        const slideSsrcs = [...group.video_ssrcs].filter((s) => meetSlideVideoSsrcs.has(s));
+        const slideStreamIds: string[] = [];
+        const slideTrackIds: string[] = [];
+        for (const s of slideSsrcs) {
+          const m = ssrcMsid.get(s);
+          if (m) {
+            slideStreamIds.push(m.streamId);
+            if (m.trackId) slideTrackIds.push(m.trackId);
+          }
+        }
         if (ingestParticipantRecord({
           participant_id: matchedId,
           participant_name: domNames.get(matchedId) ?? protoNames.get(matchedId) ?? null,
           audio_csis: [...group.audio_ssrcs],
           stream_ids: [...group.stream_ids],
           track_ids: [...group.track_ids],
+          share_video_csis: slideSsrcs,
+          share_video_stream_ids: slideStreamIds,
+          share_video_track_ids: slideTrackIds,
         })) updated = true;
       }
     }
@@ -1147,6 +1345,51 @@ function install(config: MeetCaptureConfig) {
                   webexLastActiveSpeakerAt = performance.now();
                   if (updateWebexActiveSpeakerBindings()) updated = true;
                   else updated = true;
+                }
+              }
+            } else if (outer.mediaFamily === 'VIDEO' && outer.payload && typeof outer.payload === 'object') {
+              const inner = outer.payload as Record<string, unknown>;
+              const innerPayload = inner.payload && typeof inner.payload === 'object'
+                ? (inner.payload as Record<string, unknown>) : undefined;
+              const isSlides = String(outer.mediaContent ?? '').toUpperCase() === 'SLIDES';
+              if (inner.msgType === 'mediaRequest' && Array.isArray(innerPayload?.requests)) {
+                for (const req of innerPayload.requests) {
+                  if (!req || typeof req !== 'object') continue;
+                  const pInfo = (req as Record<string, unknown>).policySpecificInfo;
+                  const selfCsi = pInfo && typeof pInfo === 'object'
+                    ? (pInfo as Record<string, unknown>).csi : undefined;
+                  if (validCsi(selfCsi)) webexSelfCsis.add(selfCsi);
+                }
+              } else if (inner.msgType === 'mediaRequestStatus' && Array.isArray(innerPayload?.streamStates)) {
+                for (const st of innerPayload.streamStates) {
+                  if (!st || typeof st !== 'object') continue;
+                  const stRec = st as Record<string, unknown>;
+                  const idObj = stRec.id && typeof stRec.id === 'object'
+                    ? (stRec.id as Record<string, unknown>) : undefined;
+                  const slotSsrc = idObj?.ssrc;
+                  const stCsi = stRec.csi;
+                  if (!validCsi(slotSsrc)) continue;
+                  if (isSlides) {
+                    const pid = validCsi(stCsi) ? findWebexParticipantByCsi(stCsi) : null;
+                    if (pid && pid !== webexSelfParticipantId) {
+                      webexSlideVideoSsrcToParticipant.set(slotSsrc, pid);
+                      cameraVideoCsis.delete(slotSsrc);
+                      for (const [entryId, entry] of participants) {
+                        if (entryId === pid) {
+                          if (entry.share_video_csis.size < 64) entry.share_video_csis.add(slotSsrc);
+                        } else {
+                          entry.share_video_csis.delete(slotSsrc);
+                        }
+                      }
+                      updated = true;
+                    } else {
+                      webexSlideVideoSsrcToParticipant.delete(slotSsrc);
+                    }
+                  } else {
+                    if (cameraVideoCsis.size < 512) cameraVideoCsis.add(slotSsrc);
+                    webexSlideVideoSsrcToParticipant.delete(slotSsrc);
+                    for (const entry of participants.values()) entry.share_video_csis.delete(slotSsrc);
+                  }
                 }
               }
             }
@@ -2020,6 +2263,445 @@ function install(config: MeetCaptureConfig) {
       .finally(() => { inspecting = undefined; }));
   }
 
+  let nextVideoSource = 0;
+  const videoSourceIds = new WeakMap<RTCRtpReceiver, string>();
+  let probeVideo: {el: HTMLVideoElement; track: MediaStreamTrack} | null = null;
+
+  function teardownProbeVideo() {
+    if (!probeVideo) return;
+    try {
+      probeVideo.el.pause();
+      probeVideo.el.srcObject = null;
+      probeVideo.el.remove();
+    } catch { /* ignore DOM detach errors */ }
+    probeVideo = null;
+  }
+
+  function isOutboundOrSelfVideoTrack(
+    track: MediaStreamTrack | null | undefined,
+    owningPc?: RTCPeerConnection,
+  ): boolean {
+    if (!track) return true;
+    if ((track as MediaStreamTrack & {__wortlautVirtualVideo?: boolean}).__wortlautVirtualVideo) {
+      return true;
+    }
+    if (track.label === 'wortlaut Live-Protokoll') {
+      return true;
+    }
+    for (const pc of connections) {
+      if (pc.connectionState === 'closed') continue;
+      for (const sender of pc.getSenders()) {
+        if (!sender.track) continue;
+        if (sender.track === track) return true;
+        if (owningPc && pc === owningPc && sender.track.id === track.id) return true;
+      }
+    }
+    return false;
+  }
+
+  function extractZoomSharePresenterName(): {presenterId: string | null; presenterName: string | null} {
+    if (!document.body) return {presenterId: null, presenterName: null};
+    const explicit = document.querySelector(
+      '.sharing-layout-container [data-presenter-id], [class*="sharee-container"] [data-presenter-id], ' +
+      '.sharing-layout-container[data-presenter-id], canvas#sharee-container-canvas[data-presenter-id]',
+    );
+    if (explicit) {
+      const pid = explicit.getAttribute('data-presenter-id')?.trim() || null;
+      const pname = explicit.getAttribute('data-presenter-name')?.trim() || null;
+      if (pid || pname) return {presenterId: pid, presenterName: pname};
+    }
+    const banners = document.querySelectorAll(
+      '[class*="share-info"], [class*="sharing-banner"], [class*="view-sharing"], ' +
+      '[aria-label*="screen" i], [aria-label*="Bildschirm" i]',
+    );
+    const patterns = [
+      /You are viewing\s+(.+?)(?:['’]s|s)\s+screen/i,
+      /Viewing\s+(.+?)(?:['’]s|s)\s+screen/i,
+      /Sie sehen den Bildschirm von\s+(.+?)(?:\s*$|[.!|])/i,
+      /(.+?)\s+(?:is sharing|shared)\s+(?:their\s+)?screen/i,
+      /(.+?)\s+gibt\s+(?:den\s+)?Bildschirm\s+frei/i,
+    ];
+    for (const banner of Array.from(banners).slice(0, 32)) {
+      const candidates = [banner.getAttribute('aria-label') ?? '', banner.textContent ?? ''];
+      for (const raw of candidates) {
+        const cleaned = raw.trim().replace(/\s+/g, ' ');
+        if (!cleaned || cleaned.length > 240) continue;
+        for (const pat of patterns) {
+          const m = pat.exec(cleaned);
+          if (m && m[1]) {
+            const name = m[1]
+              .replace(/\s*\((?:Host|Co-host|Gastgeber|Co-Gastgeber|Organizer|Organisator)\)\s*$/i, '')
+              .trim();
+            if (name && name.length <= 200) {
+              return {presenterId: null, presenterName: name};
+            }
+          }
+        }
+      }
+    }
+    return {presenterId: null, presenterName: null};
+  }
+
+  function resolveZoomRosterByPresenter(
+    presenterId: string | null,
+    presenterName: string | null,
+  ): {participant_id: string; participant_name: string | null} | null {
+    const roster = new Map<string, string | null>();
+    for (const p of participants.values()) {
+      if (ignoredParticipantIds.has(p.participant_id)) continue;
+      roster.set(
+        p.participant_id,
+        p.participant_name ?? domNames.get(p.participant_id) ?? protoNames.get(p.participant_id) ?? null,
+      );
+    }
+    for (const [pid, name] of domNames) {
+      if (!ignoredParticipantIds.has(pid) && !isIgnoredParticipantName(name) && !roster.has(pid)) {
+        roster.set(pid, name);
+      }
+    }
+    for (const [pid, name] of protoNames) {
+      if (!ignoredParticipantIds.has(pid) && !isIgnoredParticipantName(name) && !roster.has(pid)) {
+        roster.set(pid, name);
+      }
+    }
+    if (presenterId && roster.has(presenterId)) {
+      return {participant_id: presenterId, participant_name: roster.get(presenterId) ?? presenterName};
+    }
+    if (!presenterName) return null;
+    const target = presenterName.trim().toLowerCase();
+    if (!target || isIgnoredParticipantName(presenterName)) return null;
+    const matches: {participant_id: string; participant_name: string | null}[] = [];
+    for (const [pid, name] of roster) {
+      if (name && name.trim().toLowerCase() === target) {
+        matches.push({participant_id: pid, participant_name: name});
+      }
+    }
+    return matches.length === 1 ? matches[0] : null;
+  }
+
+  function resolveWebRtcShareReceiver():
+    | {kind: 'admitted'; receiver: RTCRtpReceiver; participant_id: string; participant_name: string | null}
+    | {kind: 'opted_out'}
+    | {kind: 'unverified'}
+    | {kind: 'none'} {
+    const provider = config.provider ?? 'google_meet';
+    const candidates: {receiver: RTCRtpReceiver; pc: RTCPeerConnection; mid: string | null}[] = [];
+    for (const pc of connections) {
+      if (pc.connectionState === 'closed') continue;
+      const midByReceiver = new Map<RTCRtpReceiver, string | null>();
+      if (typeof pc.getTransceivers === 'function') {
+        for (const tr of pc.getTransceivers()) {
+          if (
+            tr.receiver &&
+            (tr.currentDirection === 'recvonly' ||
+              tr.currentDirection === 'sendrecv' ||
+              tr.direction === 'recvonly' ||
+              tr.direction === 'sendrecv')
+          ) {
+            midByReceiver.set(tr.receiver, tr.mid ?? null);
+          }
+        }
+      }
+      for (const receiver of pc.getReceivers()) {
+        if (
+          (received.has(receiver) || midByReceiver.has(receiver)) &&
+          receiver.track?.kind === 'video' &&
+          receiver.track.readyState === 'live' &&
+          !isOutboundOrSelfVideoTrack(receiver.track, pc)
+        ) {
+          candidates.push({receiver, pc, mid: midByReceiver.get(receiver) ?? null});
+        }
+      }
+    }
+    if (!candidates.length) return {kind: 'none'};
+
+    let sawOptedOut = false;
+    for (const {receiver, mid} of candidates) {
+      const trackId = receiver.track.id;
+      const streamIds = receiverStreams?.get(receiver) ?? [];
+      if (cameraVideoTrackIds.has(trackId)) continue;
+      if (streamIds.some((sid) => cameraVideoStreamIds.has(sid))) continue;
+
+      const hookedMeta = encodedFrameMeta?.get(receiver);
+      const csrcs = [
+        ...new Set([
+          ...recentRtpSources(receiver.getContributingSources()).filter(validCsi),
+          ...(hookedMeta?.csrcs ?? []).filter(validCsi),
+        ]),
+      ];
+      const ssrcs = [
+        ...new Set([
+          ...recentRtpSources(receiver.getSynchronizationSources()).filter(validCsi),
+          ...(validCsi(hookedMeta?.ssrc) ? [hookedMeta.ssrc] : []),
+        ]),
+      ];
+      const allCsis = [...new Set([...csrcs, ...ssrcs])];
+      if (allCsis.some((c) => cameraVideoCsis.has(c) || webexSelfCsis.has(c))) continue;
+
+      let matchedOwners: {participant_id: string; participant_name: string | null}[] = [];
+      if (provider === 'teams') {
+        const owners = new Map<string, string | null>();
+        for (const p of participants.values()) {
+          if (ignoredParticipantIds.has(p.participant_id)) continue;
+          if (
+            allCsis.some((c) => p.share_video_csis.has(c)) ||
+            p.share_video_track_ids.has(trackId) ||
+            streamIds.some((sid) => p.share_video_stream_ids.has(sid))
+          ) {
+            owners.set(p.participant_id, p.participant_name);
+          }
+        }
+        matchedOwners = [...owners.entries()].map(([participant_id, participant_name]) => ({
+          participant_id,
+          participant_name,
+        }));
+      } else if (provider === 'webex') {
+        const owners = new Map<string, string | null>();
+        for (const c of allCsis) {
+          const mappedPid = webexSlideVideoSsrcToParticipant.get(c);
+          if (mappedPid && mappedPid !== webexSelfParticipantId && !ignoredParticipantIds.has(mappedPid)) {
+            const entry = participants.get(mappedPid);
+            owners.set(mappedPid, entry?.participant_name ?? domNames.get(mappedPid) ?? protoNames.get(mappedPid) ?? null);
+          }
+          for (const p of participants.values()) {
+            if (p.participant_id === webexSelfParticipantId || ignoredParticipantIds.has(p.participant_id)) continue;
+            if (p.share_video_csis.has(c)) {
+              owners.set(p.participant_id, p.participant_name);
+            }
+          }
+        }
+        matchedOwners = [...owners.entries()].map(([participant_id, participant_name]) => ({
+          participant_id,
+          participant_name,
+        }));
+      } else if (provider === 'google_meet') {
+        const isPositivelySlides =
+          (mid !== null && meetSlideVideoMids.has(mid)) ||
+          meetSlideVideoTrackIds.has(trackId) ||
+          streamIds.some((sid) => meetSlideVideoStreamIds.has(sid)) ||
+          allCsis.some((c) => meetSlideVideoSsrcs.has(c));
+        if (!isPositivelySlides) continue;
+
+        const owners = new Map<string, string | null>();
+        for (const p of participants.values()) {
+          if (ignoredParticipantIds.has(p.participant_id)) continue;
+          if (
+            allCsis.some((c) => p.share_video_csis.has(c)) ||
+            p.share_video_track_ids.has(trackId) ||
+            streamIds.some((sid) => p.share_video_stream_ids.has(sid))
+          ) {
+            owners.set(p.participant_id, p.participant_name);
+          }
+        }
+        if (owners.size === 0 && allCsis.length > 0) {
+          for (const [cname, group] of sdpCnames) {
+            if (!allCsis.some((c) => group.video_ssrcs.has(c))) continue;
+            for (const p of participants.values()) {
+              if (ignoredParticipantIds.has(p.participant_id)) continue;
+              if (
+                p.participant_id === cname ||
+                [...group.audio_ssrcs].some((a) => p.audio_csis.has(a)) ||
+                [...group.stream_ids].some((s) => p.stream_ids.has(s))
+              ) {
+                owners.set(p.participant_id, p.participant_name);
+              }
+            }
+          }
+        }
+        matchedOwners = [...owners.entries()].map(([participant_id, participant_name]) => ({
+          participant_id,
+          participant_name,
+        }));
+      }
+
+      if (matchedOwners.length === 1) {
+        const owner = matchedOwners[0];
+        const resolvedName =
+          owner.participant_name ??
+          domNames.get(owner.participant_id) ??
+          protoNames.get(owner.participant_id) ??
+          null;
+        if (isParticipantOptedOut(owner.participant_id, resolvedName)) {
+          sawOptedOut = true;
+          continue;
+        }
+        return {
+          kind: 'admitted',
+          receiver,
+          participant_id: owner.participant_id,
+          participant_name: resolvedName,
+        };
+      }
+    }
+
+    if (sawOptedOut) return {kind: 'opted_out'};
+    return {kind: 'unverified'};
+  }
+
+  const sampler = new ScreenShareKeyframeSampler(
+    (metadata, base64Png, byteLength) => {
+      send(
+        {
+          attempt_id: config.attempt_id,
+          type: 'keyframe',
+          metadata: metadata as unknown as Record<string, unknown>,
+          png: base64Png,
+        },
+        base64Png.length + byteLength + 1024,
+      );
+    },
+    {
+      nowUtc: () => capture.nowUtc(),
+    },
+  );
+
+  let samplingTick = false;
+  async function sampleKeyframeTick() {
+    if (!keyframesEnabled || stopping || sampler.isHalted || samplingTick) return;
+    samplingTick = true;
+    try {
+      await initialized;
+      if (stopping || state.reason || sampler.isHalted) return;
+      scanDomParticipants();
+
+      if (config.provider === 'zoom') {
+        teardownProbeVideo();
+        const rawCanvases = Array.from(
+          document.querySelectorAll<HTMLCanvasElement>(
+            'canvas#sharee-container-canvas, .sharing-layout-container canvas, [class*="sharee-container"] canvas',
+          ),
+        );
+        const shareCanvas = rawCanvases.find(
+          (c) =>
+            c !== window.wortlautVideoTile?.canvas &&
+            !c.hasAttribute('data-wortlaut-video-tile') &&
+            !c.closest('.gallery-video-container, .speaker-active-container, .video-avatar'),
+        );
+        if (!shareCanvas) {
+          state.keyframes.active_share = false;
+          const nonShareCanvas = Array.from(
+            document.querySelectorAll<HTMLCanvasElement>(
+              '#sv-active-video canvas, .speaker-active-container canvas, .gallery-video-container canvas',
+            ),
+          ).some((c) => c !== window.wortlautVideoTile?.canvas && !c.hasAttribute('data-wortlaut-video-tile'));
+          if (nonShareCanvas) {
+            state.keyframes.dropped_unverified += 1;
+          }
+          await sampler.tick(null);
+          return;
+        }
+        const {presenterId, presenterName} = extractZoomSharePresenterName();
+        const owner = resolveZoomRosterByPresenter(presenterId, presenterName);
+        if (!owner) {
+          state.keyframes.active_share = false;
+          state.keyframes.dropped_unverified += 1;
+          await sampler.tick(null);
+          return;
+        }
+        if (isParticipantOptedOut(owner.participant_id, owner.participant_name)) {
+          state.keyframes.active_share = false;
+          state.keyframes.dropped_opted_out += 1;
+          await sampler.tick(null);
+          return;
+        }
+        state.keyframes.capability = 'active';
+        state.keyframes.active_share = true;
+        const w = shareCanvas.width || shareCanvas.clientWidth;
+        const h = shareCanvas.height || shareCanvas.clientHeight;
+        await sampler.tick({
+          element: shareCanvas,
+          sourceWidth: w,
+          sourceHeight: h,
+          provider_source_id: `zoom:${config.meeting_id}:share_canvas:1`,
+          participant_id: owner.participant_id,
+          participant_name: owner.participant_name,
+        });
+        return;
+      }
+
+      const resolution = resolveWebRtcShareReceiver();
+      if (resolution.kind !== 'admitted') {
+        teardownProbeVideo();
+        state.keyframes.active_share = false;
+        if (resolution.kind === 'opted_out') {
+          state.keyframes.dropped_opted_out += 1;
+        } else if (resolution.kind === 'unverified') {
+          state.keyframes.dropped_unverified += 1;
+        }
+        await sampler.tick(null);
+        return;
+      }
+
+      const {receiver, participant_id, participant_name} = resolution;
+      let providerSourceId = videoSourceIds.get(receiver);
+      if (!providerSourceId) {
+        providerSourceId = `${config.provider ?? 'google_meet'}:${config.meeting_id}:video_receiver:${++nextVideoSource}`;
+        videoSourceIds.set(receiver, providerSourceId);
+      }
+
+      state.keyframes.capability = 'active';
+      state.keyframes.active_share = true;
+
+      let readySubscribedVideo: HTMLVideoElement | null = null;
+      for (const el of document.querySelectorAll<HTMLVideoElement>('video:not([data-wortlaut-keyframe-probe])')) {
+        const src = el.srcObject;
+        if (
+          src instanceof MediaStream &&
+          src.getVideoTracks().some((t) => t === receiver.track || t.id === receiver.track.id)
+        ) {
+          if (el.paused) void el.play().catch(() => {});
+          if (el.readyState >= 2 && el.videoWidth >= 2 && el.videoHeight >= 2) {
+            readySubscribedVideo = el;
+            break;
+          }
+        }
+      }
+
+      let targetVideo: HTMLVideoElement | null = readySubscribedVideo;
+      if (targetVideo) {
+        teardownProbeVideo();
+      } else {
+        if (!probeVideo || probeVideo.track !== receiver.track) {
+          teardownProbeVideo();
+          try {
+            const el = document.createElement('video');
+            el.dataset.wortlautKeyframeProbe = '1';
+            el.autoplay = true;
+            el.playsInline = true;
+            el.muted = true;
+            el.style.position = 'fixed';
+            el.style.width = '2px';
+            el.style.height = '2px';
+            el.style.opacity = '0';
+            el.style.pointerEvents = 'none';
+            el.srcObject = receiverMediaStreams?.get(receiver) ?? new MediaStream([receiver.track]);
+            document.body?.append(el);
+            void el.play().catch(() => {});
+            probeVideo = {el, track: receiver.track};
+          } catch { /* ignore headless video element errors */ }
+        } else if (probeVideo.el.paused) {
+          void probeVideo.el.play().catch(() => {});
+        }
+        targetVideo = probeVideo?.el ?? null;
+      }
+
+      if (targetVideo && targetVideo.readyState >= 2 && targetVideo.videoWidth >= 2 && targetVideo.videoHeight >= 2) {
+        await sampler.tick({
+          element: targetVideo,
+          sourceWidth: targetVideo.videoWidth,
+          sourceHeight: targetVideo.videoHeight,
+          provider_source_id: providerSourceId,
+          participant_id,
+          participant_name,
+        });
+      }
+    } finally {
+      state.keyframes.evaluated_ticks = sampler.evaluatedTicks;
+      state.keyframes.emitted = sampler.emitted;
+      samplingTick = false;
+    }
+  }
+
   for (const sdp of window.wortlautMeetReceivers.remoteDescriptions?.splice(0) ?? []) onRemoteDescription(sdp);
   window.wortlautMeetReceivers.onRemoteDescription = onRemoteDescription;
   for (const queued of window.wortlautMeetReceivers.dataMessages?.splice(0) ?? []) onDataMessage(queued);
@@ -2027,6 +2709,11 @@ function install(config: MeetCaptureConfig) {
   const interval = setInterval(() => {
     void inspectReceivers();
   }, 250);
+  const keyframeInterval = keyframesEnabled
+    ? setInterval(() => {
+        void sampleKeyframeTick();
+      }, 1000)
+    : undefined;
   const evidence = (receiver: RTCRtpReceiver, id: string) => {
     const source = (item: RTCRtpContributingSource) => ({source: item.source,
       timestamp: item.timestamp, rtp_timestamp: item.rtpTimestamp});
@@ -2042,6 +2729,11 @@ function install(config: MeetCaptureConfig) {
       ...(receiverStats.has(receiver) ? {rtp_stats: receiverStats.get(receiver)} : {})};
   };
   window.wortlautMeet = {
+    haltKeyframes: () => {
+      sampler.halt();
+      teardownProbeVideo();
+      state.keyframes.active_share = false;
+    },
     inspect: () => {
       scanDomParticipants();
       for (const dc of window.wortlautMeetReceivers.dataChannels ?? []) {
@@ -2079,13 +2771,18 @@ function install(config: MeetCaptureConfig) {
         cname_count: sdpStats.cnames.size,
         msid_count: sdpStats.msids.size,
       };
+      state.keyframes.evaluated_ticks = sampler.evaluatedTicks;
+      state.keyframes.emitted = sampler.emitted;
       // Media evidence stays the pre-stop snapshot: stopping closes receivers.
       if (!stopping) state.media = mediaState();
-      return {...state, audio_clock: capture.inspectClock()};
+      return {...state, keyframes: {...state.keyframes}, audio_clock: capture.inspectClock()};
     },
     stop: () => stopping ??= (async () => {
       clearInterval(interval);
+      if (keyframeInterval !== undefined) clearInterval(keyframeInterval);
       clearInterval(statsInterval);
+      teardownProbeVideo();
+      state.keyframes.active_share = false;
       await initialized;
       await inspecting;
       await capture.stop();

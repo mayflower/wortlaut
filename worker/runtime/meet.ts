@@ -2,8 +2,10 @@ import {readFile} from 'node:fs/promises';
 import type {Frame, Locator, Page} from 'playwright';
 import type {CaptureSink} from '../src/capture.js';
 import type {Chunk} from '../src/chunks.js';
+import type {KeyframeDiagnostics} from '../src/keyframes.js';
 import type {MeetBridgeMessage, MeetCaptureConfig} from '../src/meet-page.js';
 import type {MeetInput} from './browser.js';
+import {KeyframeTransport, type KeyframeUploadMetadata} from './keyframe-transport.js';
 import {AudioTransport} from '../src/transport.js';
 import {isTeamsOrigin, teamsOrigins} from '../src/teams-url.js';
 import {isZoomOrigin} from '../src/zoom-url.js';
@@ -12,9 +14,33 @@ import {installVideoTile, type VideoTilePatch} from './video-tile.js';
 export type MeetBootstrap = {provider: 'google_meet'; meeting_id: string; attempt_id: string;
   meeting_url: string; deadline: string; lobby_timeout_seconds: number;
   empty_room_timeout_seconds?: number; chat_intro?: string | null;
+  enable_keyframes?: boolean;
   invited_by: string | null; invited_by_name: string | null; meeting_title: string | null;
   default_locale: string;
   meet: {display_name: string; locale: string; auth_mode: 'guest' | 'account'}};
+
+export function mergeKeyframeDiagnostics(
+  pageKf: KeyframeDiagnostics | undefined,
+  enableKeyframes: boolean | undefined,
+  transportStats: {uploaded: number; dropped_queue_full: number; dropped_opted_out: number},
+): KeyframeDiagnostics {
+  const base: KeyframeDiagnostics = pageKf ?? {
+    capability: enableKeyframes === false ? 'disabled' : 'unverified',
+    active_share: false,
+    evaluated_ticks: 0,
+    emitted: 0,
+    uploaded: 0,
+    dropped_unverified: 0,
+    dropped_opted_out: 0,
+    dropped_queue_full: 0,
+  };
+  return {
+    ...base,
+    uploaded: transportStats.uploaded,
+    dropped_opted_out: base.dropped_opted_out + transportStats.dropped_opted_out,
+    dropped_queue_full: base.dropped_queue_full + transportStats.dropped_queue_full,
+  };
+}
 
 export class MeetError extends Error {
   constructor(readonly reason: string) { super(reason); }
@@ -22,8 +48,13 @@ export class MeetError extends Error {
 
 const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 
-export async function installMeetCapture(page: Page, bootstrap: Pick<MeetBootstrap, 'meeting_id' | 'attempt_id' | 'meeting_url'>, sink: CaptureSink,
-  assets = new URL('../../dist/meet/', import.meta.url), provider: 'google_meet' | 'webex' | 'teams' | 'zoom' = 'google_meet') {
+export async function installMeetCapture(
+  page: Page,
+  bootstrap: Pick<MeetBootstrap, 'meeting_id' | 'attempt_id' | 'meeting_url' | 'enable_keyframes'>,
+  sink: CaptureSink,
+  assets = new URL('../../dist/meet/', import.meta.url),
+  provider: 'google_meet' | 'webex' | 'teams' | 'zoom' = 'google_meet',
+) {
   const bundle = await readFile(new URL('capture.js', assets), 'utf8');
   const active = new Set<string>();
   let captureFrame: Frame | undefined = provider !== 'webex' ? page.mainFrame() : undefined;
@@ -36,16 +67,55 @@ export async function installMeetCapture(page: Page, bootstrap: Pick<MeetBootstr
           : provider === 'zoom' ? !isZoomOrigin(url)
           : url.origin !== 'https://meet.google.com' ||
             url.pathname.replace(/^\/meet\//, '/') !== new URL(bootstrap.meeting_url).pathname.replace(/^\/meet\//, '/')) ||
-        !raw || raw.attempt_id !== bootstrap.attempt_id || !['control', 'chunk'].includes(raw.type)) {
+        !raw || raw.attempt_id !== bootstrap.attempt_id || !['control', 'chunk', 'keyframe'].includes(raw.type)) {
       throw new MeetError('browser_bridge_rejected');
     }
     const metadata = raw.metadata;
-    if (!metadata || JSON.stringify(metadata).length > 8192 || typeof metadata.stream_id !== 'string' ||
-        !uuid.test(metadata.stream_id) || typeof metadata.epoch !== 'string' || !uuid.test(metadata.epoch)) {
+    if (!metadata || JSON.stringify(metadata).length > 8192) {
+      throw new MeetError('browser_bridge_rejected');
+    }
+    const unsigned = (value: unknown) => Number.isSafeInteger(value) && (value as number) >= 0;
+    if (raw.type === 'keyframe') {
+      if (
+        bootstrap.enable_keyframes === false ||
+        !unsigned(metadata.sequence) ||
+        (metadata.sequence as number) >= 1000 ||
+        typeof metadata.provider_source_id !== 'string' ||
+        metadata.provider_source_id.length < 1 ||
+        metadata.provider_source_id.length > 200 ||
+        !metadata.provider_source_id.startsWith(`${provider}:${bootstrap.meeting_id}:`) ||
+        typeof metadata.participant_id !== 'string' ||
+        metadata.participant_id.length < 1 ||
+        metadata.participant_id.length > 200 ||
+        (metadata.participant_name != null &&
+          (typeof metadata.participant_name !== 'string' || metadata.participant_name.length > 200)) ||
+        typeof metadata.captured_at !== 'string' ||
+        !Number.isFinite(Date.parse(metadata.captured_at)) ||
+        !unsigned(metadata.width) ||
+        (metadata.width as number) < 1 ||
+        (metadata.width as number) > 1280 ||
+        !unsigned(metadata.height) ||
+        (metadata.height as number) < 1 ||
+        (metadata.height as number) > 720 ||
+        typeof metadata.sha256 !== 'string' ||
+        !/^[0-9a-f]{64}$/.test(metadata.sha256) ||
+        typeof raw.png !== 'string' ||
+        raw.png.length < 16 ||
+        raw.png.length > 2_097_156 ||
+        !/^[A-Za-z0-9+/]*={0,2}$/.test(raw.png)
+      ) {
+        throw new MeetError('browser_bridge_rejected');
+      }
+      const png = Buffer.from(raw.png, 'base64');
+      if (png.length < 8 || png.length > 1_572_864) throw new MeetError('browser_bridge_rejected');
+      sink.keyframe?.(metadata, png);
+      return;
+    }
+    if (typeof metadata.stream_id !== 'string' || !uuid.test(metadata.stream_id) ||
+        typeof metadata.epoch !== 'string' || !uuid.test(metadata.epoch)) {
       throw new MeetError('browser_bridge_rejected');
     }
     const key = `${metadata.stream_id}/${metadata.epoch}`;
-    const unsigned = (value: unknown) => Number.isSafeInteger(value) && (value as number) >= 0;
     const validBinding = () => (metadata.source_kind === 'speaker' || metadata.source_kind === 'share_audio') &&
       (metadata.attribution_unknown === true
         ? metadata.speaker_id === null && metadata.participant_id == null && metadata.participant_name == null
@@ -96,7 +166,8 @@ export async function installMeetCapture(page: Page, bootstrap: Pick<MeetBootstr
     } else throw new MeetError('browser_bridge_rejected');
   });
   const config: MeetCaptureConfig = {meeting_id: bootstrap.meeting_id, attempt_id: bootstrap.attempt_id,
-    meeting_url: bootstrap.meeting_url, provider, teams_origins: teamsOrigins};
+    meeting_url: bootstrap.meeting_url, provider, teams_origins: teamsOrigins,
+    enable_keyframes: bootstrap.enable_keyframes};
   // Only the small native hook belongs in every new document. The local WASM
   // bundle is loaded once in the main Meet document, before clicking join.
   await page.addInitScript((config: MeetCaptureConfig) => {
@@ -520,10 +591,13 @@ export class MeetBrowser {
   private reason = '';
   private stopping: Promise<void> | undefined;
   private readonly transport: AudioTransport;
+  private readonly keyframes: KeyframeTransport;
   private drained = false;
   private joinSent = false;
   private chatSent = false;
   private chatAttempts = 0;
+  private videoCheckedInCall = false;
+  private videoCheckAttempts = 0;
   private rosterOpened = false;
   private chatRestored = false;
   private initialize?: () => Promise<void>;
@@ -539,6 +613,11 @@ export class MeetBrowser {
     ingest.protocol = ingest.protocol === 'https:' ? 'wss:' : 'ws:';
     this.transport = new AudioTransport(ingest.href, credential, workerId,
       (reason) => { this.reason = reason; });
+    this.keyframes = new KeyframeTransport(api, bootstrap.attempt_id, credential, workerId, {
+      onHalted: () => {
+        void this.page.evaluate(() => window.wortlautMeet?.haltKeyframes?.()).catch(() => {});
+      },
+    });
   }
 
   async prepare() {
@@ -553,6 +632,7 @@ export class MeetBrowser {
       end: (metadata) => this.transport.control(metadata as Record<string, unknown> & {id: string}),
       gap: (metadata) => this.transport.control(metadata as Record<string, unknown> & {id: string}),
       chunk: (metadata, pcm) => this.transport.chunk(metadata, pcm),
+      keyframe: (metadata, png) => this.keyframes.enqueue(metadata as KeyframeUploadMetadata, png),
       error: (reason) => { this.reason = reason; },
     }, this.assets);
     this.transport.connect();
@@ -820,6 +900,21 @@ export class MeetBrowser {
               (hasLeave && !isPrewarmedLobbyChannel && (hasRtpOrDomParticipants || hasInCallControls) &&
                 await this.page.locator('[data-self-name], [data-participant-id], [data-requested-participant-id]').count() > 0)) {
             this.participation = 'capturing';
+            if (!this.videoCheckedInCall && this.videoCheckAttempts < 6) {
+              this.videoCheckAttempts += 1;
+              if (await visible(this.page.getByRole('button', {name: actions.cameraOff}))) {
+                this.videoCheckedInCall = true;
+              } else {
+                const enableCamera = this.page.getByRole('button', {
+                  name: /^(Turn on camera|Kamera einschalten|Kamera aktivieren)(?: \(.*\))?$/i,
+                }).first();
+                if (await visible(enableCamera)) {
+                  await this.input.click(enableCamera).then(() => {
+                    this.videoCheckedInCall = true;
+                  }).catch(() => {});
+                }
+              }
+            }
             if (!this.chatSent && this.chatAttempts < 8) {
               this.chatAttempts += 1;
               await this.sendChatIntro();
@@ -861,6 +956,7 @@ export class MeetBrowser {
       participant_sources: state?.participant_sources ?? {available: false, total: 0, truncated: false, sources: []},
       data_channels: state?.data_channels ?? [],
       sdp: state?.sdp ?? {descriptions: 0, audio_sections: 0, video_sections: 0, ssrc_count: 0, cname_count: 0, msid_count: 0},
+      keyframes: mergeKeyframeDiagnostics(state?.keyframes, this.bootstrap.enable_keyframes, this.keyframes.stats()),
       ...(state?.media ? {media: state.media} : {})};
   }
 
@@ -870,7 +966,11 @@ export class MeetBrowser {
         window.wortlautVideoTile?.stop();
         return window.wortlautMeet?.stop();
       }).catch(() => false);
-      this.drained = (await this.transport.drain()) && bridged === true;
+      const [audioDrained] = await Promise.all([
+        this.transport.drain(),
+        this.keyframes.drain(10000),
+      ]);
+      this.drained = audioDrained && bridged === true;
       if (!['removed', 'meeting_ended', 'admission_denied', 'prejoin_denied'].includes(reason)) {
         await this.dismissInfoDialog().catch(() => {});
         const leave = leaveButton(this.page);

@@ -28,6 +28,7 @@ Kommerzielle Meeting-Bots (*Fireflies, Otter, Fathom, Read.ai*) leiten Gespräch
 | **Individueller Opt-out mitten im Call** | Wer nicht protokolliert werden möchte, schreibt im Meeting-Chat einfach **`nein`** oder **`opt out`**. Das Gespräch läuft für alle anderen weiter – die Aussagen dieser Person werden sofort verworfen und rückstandslos gelöscht. |
 | **Protokoll direkt dort, wo man sucht** | Nach dem Gespräch trägt `wortlaut` den schreibgeschützten Protokoll-Link automatisch in den **Google-Calendar-** oder **Outlook/M365-Termin** ein, verschickt das Ergebnis per E-Mail und stellt `.md`, `.txt`, `.vtt` und `.json` bereit. |
 | **Sekundengenaue Prüfbarkeit** | Jedes Zitat besitzt einen klickbaren Zeitstempel. Innerhalb der 24-stündigen Audio-Aufbewahrungsfrist lässt sich jeder Satz direkt im Browser mit dem Original-Ton gegenhören, bevor das Roh-Audio automatisch gelöscht wird. |
+| **Folien-Keyframes nur bei Bildschirmfreigabe (niemals Kameravideo)** | Erfasst statische PNG-Standbilder (`<= 1280 × 720`) ausschließlich von nachgewiesenen Bildschirmfreigabe-Spuren (`WORTLAUT_ENABLE_KEYFRAMES=true`) – Kamerabilder von Teilnehmenden werden strikt fail-closed verworfen. Folien erscheinen chronologisch im Protokoll und über MCP ganz ohne Videoüberwachung. |
 
 ---
 
@@ -46,8 +47,8 @@ Kommerzielle Meeting-Bots (*Fireflies, Otter, Fathom, Read.ai*) leiten Gespräch
 
 ### 2. Transparente Teilnahme & Live-Widerspruch im Call
 
-* Beim Beitritt erscheint `wortlaut` klar erkennbar mit dem Namen der einladenden Person – z. B. **`wortlaut (Elena Rostova)`** – und postet im Meeting-Chat einen kurzen Hinweis (`DE` oder `EN`) samt Link zur [Datenschutz-Information (`/privacy`)](services/meeting/src/wortlaut/ui.py).
-* **Live-Chat-Opt-out:** Schreibt eine teilnehmende Person im Meeting-Chat `nein`, `no`, `opt out`, `optout`, `stop` oder `widerspruch`, wird ihre Tonspur sofort verworfen und bereits transkribierte Sätze dieser Person werden aus der Datenbank gelöscht ([meet-page.ts](worker/src/meet-page.ts), [processing.py](services/meeting/src/wortlaut/processing.py)).
+* Beim Beitritt erscheint `wortlaut` klar erkennbar mit dem Namen der einladenden Person – z. B. **`wortlaut (Elena Rostova)`** – und postet im Meeting-Chat einen kurzen Hinweis (`DE` oder `EN`) samt Link zur [Datenschutz-Information (`/privacy`)](services/meeting/src/wortlaut/ui.py) (inklusive explizitem Hinweis bei `WORTLAUT_ENABLE_KEYFRAMES=true`, dass niemals Kameravideos aufgezeichnet werden, sondern lediglich statische Standbilder aktiver Bildschirmfreigaben; siehe [`./docs/configuration.md`](./docs/configuration.md)).
+* **Live-Chat-Opt-out:** Schreibt eine teilnehmende Person im Meeting-Chat `nein`, `no`, `opt out`, `optout`, `stop` oder `widerspruch`, werden Tonspur und Folien-Erfassung dieser Person sofort gestoppt und bereits transkribierte Sätze sowie gespeicherte Bildschirmfreigabe-Folien rückstandslos aus PostgreSQL und S3 gelöscht ([meet-page.ts](worker/src/meet-page.ts), [processing.py](services/meeting/src/wortlaut/processing.py)).
 
 ### 3. Nachbereiten, Prüfen & Teilen
 
@@ -63,10 +64,10 @@ Alle vier Plattformen laufen parallel in derselben `wortlaut`-Instanz:
 
 | Plattform | Beitritt & Funktionsumfang |
 | :--- | :--- |
-| **Google Meet** | Beitritt als Gast oder mit hinterlegtem Google-Konto ([meet.ts](worker/runtime/meet.ts), [meet-page.ts](worker/src/meet-page.ts), [capture.ts](worker/src/capture.ts)); getrennte WebRTC-Einzelspuren, Teilnehmer-Zuordnung und Live-Chat-Opt-out. |
-| **Microsoft Teams** | Beitritt als Gast mit deutscher/englischer Steuerung ([teams-browser.ts](worker/runtime/teams-browser.ts)); getrennte WebRTC-Empfangsspuren, CSI-Sprecher-Bindung und Live-Chat-Opt-out. |
-| **Cisco Webex** | Beitritt als Browser-Gast ([webex-browser.ts](worker/runtime/webex-browser.ts)) oder per Service-App-SDK; Multistream-`AUDIO-MAIN`-Erfassung, `activeSpeakerNotification`-Zuordnung und Live-Chat-Opt-out. |
-| **Zoom** | Beitritt über den Zoom Web-Client als Gast oder mit hinterlegter Sitzung ([zoom-browser.ts](worker/runtime/zoom-browser.ts), [zoom-url.ts](worker/src/zoom-url.ts)); Warteraum-Unterstützung, Opus-Audio-Erfassung und Live-Chat-Opt-out. |
+| **Google Meet** | Beitritt als Gast oder mit hinterlegtem Google-Konto ([meet.ts](worker/runtime/meet.ts), [meet-page.ts](worker/src/meet-page.ts), [capture.ts](worker/src/capture.ts)); getrennte WebRTC-Einzelspuren, Teilnehmer-Zuordnung, Bildschirmfreigabe-Keyframes (`a=content:slides` + Screencast-DOM, Kameraspuren ausgeschlossen) und Live-Chat-Opt-out. |
+| **Microsoft Teams** | Beitritt als Gast mit deutscher/englischer Steuerung ([teams-browser.ts](worker/runtime/teams-browser.ts)); getrennte WebRTC-Empfangsspuren, CSI-Sprecher-Bindung, `applicationsharing-video`-Folien-Keyframes und Live-Chat-Opt-out. |
+| **Cisco Webex** | Beitritt als Browser-Gast ([webex-browser.ts](worker/runtime/webex-browser.ts)) oder per Service-App-SDK; Multistream-`AUDIO-MAIN`-Erfassung, `activeSpeakerNotification`-Zuordnung, `VIDEO`/`SLIDES`-Folien-Keyframes im Browser-Modus (`"unsupported"` im Guest-Issuer-SDK-Modus) und Live-Chat-Opt-out. |
+| **Zoom** | Beitritt über den Zoom Web-Client als Gast oder mit hinterlegter Sitzung ([zoom-browser.ts](worker/runtime/zoom-browser.ts), [zoom-url.ts](worker/src/zoom-url.ts)); Warteraum-Unterstützung, Opus-Audio-Erfassung, `.sharing-layout-container`-/`#sharee-container-canvas`-Folien-Keyframes bei eindeutiger Teilnehmer-Zuordnung und Live-Chat-Opt-out. |
 
 *(Kann eine Tonspur vom Konferenzanbieter nicht eindeutig einer Teilnehmersitzung zugeordnet werden, weist `wortlaut` dies im Protokoll transparent als `attribution_unknown: true` aus, statt Namen zu erraten.)*
 
@@ -132,12 +133,22 @@ Für eine komplett englischsprachige Standard-Oberfläche samt englischem Bot-Ch
 ## Datenschutz & Aufbewahrungsfristen
 
 1. **Kurze Roh-Audio-Aufbewahrung (24 Stunden):** Aufgezeichnete Audiospuren dienen ausschließlich der Transkription und der kurzen Satz-Überprüfung und werden standardmäßig **24 Stunden nach Meeting-Ende** automatisch aus dem S3-Speicher gelöscht.
-2. **Automatische Protokoll-Löschfrist (30 Tage):** Transkripte und Metadaten laufen standardmäßig nach **30 Tagen** ab (konfigurierbar in [settings.py](services/meeting/src/wortlaut/settings.py)) oder können jederzeit sofort gelöscht werden (`DELETE /v1/recordings/{id}`).
+2. **Automatische Protokoll- & Folien-Löschfrist (30 Tage):** Transkripte, Bildschirmfreigabe-Keyframes (`keyframes/{recording_id}/`) und Metadaten teilen sich die Frist `WORTLAUT_TRANSCRIPT_RETENTION_DAYS` (standardmäßig **30 Tage** in [settings.py](services/meeting/src/wortlaut/settings.py), angerechnet auf `WORTLAUT_MAX_STORED_AUDIO_BYTES`) und können jederzeit komplett (`DELETE /v1/recordings/{id}`) oder einzeln je Folie (`DELETE /v1/recordings/{id}/keyframes/{keyframe_id}`) gelöscht werden.
 3. **Mandantentrennung & Scoped Links:** Über **OIDC** ([oidc.py](services/meeting/src/wortlaut/oidc.py)) angemeldete Nutzer sehen ausschließlich ihre eigenen Aufnahmen sowie Termine, zu denen sie eingeladen waren. Geteilte Lese-Links (`wortlaut-read-<recording_id>.<hmac>`) gewähren ausschließlich Lesezugriff auf genau ein Protokoll.
 
 ---
 
 ## Optionale Erweiterungen
+
+### Authentifizierter Model-Context-Protocol-(MCP)-Server (`/mcp` + OAuth 2.1)
+
+`wortlaut` stellt einen integrierten **MCP-Streamable-HTTP**-Server (`POST /mcp`, [mcp_server.py](services/meeting/src/wortlaut/mcp_server.py)) mit vollständiger **OAuth-2.1-Browser-Authentifizierung (`mcp auth`)** bereit (RFC 9728 Protected Resource Metadata, RFC 8414 Authorization Server Metadata, RFC 7591 Dynamic Client Registration, PKCE `S256` und expliziter Nutzerfreigabe in [mcp_oauth.py](services/meeting/src/wortlaut/mcp_oauth.py)):
+
+```sh
+claude mcp add --transport http wortlaut https://wortlaut.example.org/mcp
+```
+
+Über `mcp:read` und optional `mcp:write` greifen KI-Clients ausschließlich auf die eigenen bzw. freigegebenen Besprechungen des angemeldeten Nutzers zu (inklusive Bildschirmfreigabe-Folien über das Ressourcen-Template `wortlaut://recordings/{recording_id}/keyframes/{keyframe_id}.png`); aktive MCP-Clients lassen sich jederzeit unter `/ui#view=mcp` einsehen und widerrufen.
 
 ### Lokale KI-Zusammenfassung & Aufgabenliste (Ollama)
 

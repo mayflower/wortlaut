@@ -76,12 +76,35 @@ export interface LiveStatus {
   last_audio_activity: string | null;
 }
 
+export interface KeyframeDiagnostics {
+  capability: 'disabled' | 'unsupported' | 'unverified' | 'active';
+  active_share: boolean;
+  evaluated_ticks: number;
+  emitted: number;
+  uploaded: number;
+  dropped_unverified: number;
+  dropped_opted_out: number;
+  dropped_queue_full: number;
+}
+
+export interface RecordingKeyframe {
+  id: string;
+  captured_at: string;
+  offset_seconds: number;
+  presenter: string;
+  participant_id: string;
+  provider_source_id: string;
+  width: number;
+  height: number;
+  image_path: string;
+}
+
 export interface AttemptInfo {
   id: string;
   last_heartbeat_at: string | null;
   ended_at: string | null;
   end_reason: string | null;
-  diagnostics?: Record<string, unknown> | null;
+  diagnostics?: (Record<string, unknown> & { keyframes?: KeyframeDiagnostics }) | null;
   job_name?: string | null;
   job_uid?: string | null;
   pod_uids?: string[] | null;
@@ -190,6 +213,7 @@ export interface TranscriptExport {
   };
   sources_summary: SourceSummary[];
   segments: TranscriptSegment[];
+  keyframes?: RecordingKeyframe[];
 }
 
 export interface CalendarEvent {
@@ -296,8 +320,28 @@ export interface InstanceInfo {
     audioHours: number;
     transcriptDays: number;
   };
+  enable_keyframes?: boolean;
   llmSummaryEnabled?: boolean;
   llmModel?: string;
+}
+
+export interface McpGrantItem {
+  id: string;
+  client_id: string;
+  client_name: string;
+  owner_email: string | null;
+  owner_name: string | null;
+  is_operator: boolean;
+  scopes: string[];
+  created_at: string | null;
+  last_used_at: string | null;
+  access_expires_at: string | null;
+  refresh_expires_at: string | null;
+}
+
+export interface McpGrantsResponse {
+  endpoint: string;
+  grants: McpGrantItem[];
 }
 
 export function formatBotDisplayName(

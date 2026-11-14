@@ -232,7 +232,8 @@ export function MeetingDetailView({
       }
       mdLines.push(`## ${tr('Transkript', 'Transcript')}`, '');
       const segs = transcript.segments || [];
-      if (segs.length === 0) {
+      const kfs = transcript.keyframes || [];
+      if (segs.length === 0 && kfs.length === 0) {
         mdLines.push(
           tr(
             '_Noch keine transkribierten Segmente vorhanden._',
@@ -240,11 +241,53 @@ export function MeetingDetailView({
           )
         );
       } else {
-        for (const s of segs) {
-          mdLines.push(
-            `**${singleLine(s.speaker_label)}** (\`${formatWallClockTime(s.start, timeOriginUtc)} – ${formatWallClockTime(s.end, timeOriginUtc)}\`): ${singleLine(s.text)}`,
-            ''
-          );
+        const protocolViewUrl = `${window.location.origin}/ui#view=meetings&id=${encodeURIComponent(recording.id)}`;
+        type MdEntry =
+          | { kind: 'kf'; offset: number; presenter: string }
+          | {
+              kind: 'seg';
+              offset: number;
+              speaker: string;
+              start: number;
+              end: number;
+              text: string;
+            };
+        const entries: MdEntry[] = [
+          ...kfs.map(
+            (kf): MdEntry => ({
+              kind: 'kf',
+              offset: kf.offset_seconds,
+              presenter: kf.presenter,
+            })
+          ),
+          ...segs.map(
+            (s): MdEntry => ({
+              kind: 'seg',
+              offset: s.start,
+              speaker: s.speaker_label,
+              start: s.start,
+              end: s.end,
+              text: s.text,
+            })
+          ),
+        ];
+        entries.sort((a, b) => {
+          if (a.offset !== b.offset) return a.offset - b.offset;
+          if (a.kind === b.kind) return 0;
+          return a.kind === 'kf' ? -1 : 1;
+        });
+        for (const entry of entries) {
+          if (entry.kind === 'kf') {
+            mdLines.push(
+              `> **[${formatWallClockTime(entry.offset, timeOriginUtc)}] ${tr('Bildschirmfreigabe', 'Screen share')} (${singleLine(entry.presenter)}):** [${protocolViewUrl}](${protocolViewUrl})`,
+              ''
+            );
+          } else {
+            mdLines.push(
+              `**${singleLine(entry.speaker)}** (\`${formatWallClockTime(entry.start, timeOriginUtc)} – ${formatWallClockTime(entry.end, timeOriginUtc)}\`): ${singleLine(entry.text)}`,
+              ''
+            );
+          }
         }
       }
       body = mdLines.join('\n').trimEnd() + '\n';
@@ -851,6 +894,7 @@ export function MeetingDetailView({
                   summary={transcript.summary}
                   termReplacements={transcript.term_replacements}
                   segments={transcript.segments || []}
+                  keyframes={transcript.keyframes ?? []}
                   sources={transcript.sources_summary || []}
                   selectedSourceFilter={selectedSourceFilter}
                   onSelectedSourceFilterChange={setSelectedSourceFilter}

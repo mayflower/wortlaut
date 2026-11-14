@@ -1,4 +1,5 @@
 import hashlib
+import struct
 import uuid
 from datetime import UTC, datetime
 from typing import Literal
@@ -8,7 +9,15 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validato
 from sqlalchemy import Integer, cast, func, select, union_all
 from sqlalchemy.orm import Session
 
-from wortlaut.models import AsrJob, Attempt, AudioChunk, AudioControl, AudioStream, Recording
+from wortlaut.models import (
+    AsrJob,
+    Attempt,
+    AudioChunk,
+    AudioControl,
+    AudioStream,
+    Recording,
+    RecordingKeyframe,
+)
 from wortlaut.settings import get_settings
 from wortlaut.storage import ObjectConflict, canonical, get_storage
 
@@ -16,6 +25,9 @@ INGEST_BURST = 4096  # Twice the worker's maximum queued chunks plus controls.
 INGEST_FRAMES_PER_SECOND = 64
 AUDIO_WINDOW_SAMPLES = 16000 * 60
 MAX_WINDOW_RECORDS = 1024
+MAX_KEYFRAMES_PER_RECORDING = 60
+MAX_KEYFRAME_BYTES = 1_572_864
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
 
 def admit_frame(attempt: Attempt):
@@ -207,11 +219,17 @@ def pending_samples(db: Session, attempt_id: uuid.UUID | None = None):
 
 def capacity_reached(db: Session, incoming_samples=0, incoming_bytes=0):
     settings = get_settings()
-    stored = db.scalar(
+    stored_audio = db.scalar(
         select(func.coalesce(func.sum(AudioChunk.object_size), 0)).where(
             AudioChunk.deleted_at.is_(None)
         )
     )
+    stored_keyframes = db.scalar(
+        select(func.coalesce(func.sum(RecordingKeyframe.byte_size), 0)).where(
+            RecordingKeyframe.deleted_at.is_(None)
+        )
+    )
+    stored = (stored_audio or 0) + (stored_keyframes or 0)
     open_jobs = db.scalar(
         select(func.count()).select_from(AsrJob).where(AsrJob.status.in_(["pending", "processing"]))
     )
@@ -477,3 +495,149 @@ def accept_chunk(
     recording.processing = "processing"
     db.commit()
     return identifier
+
+
+class KeyframeIngestMetadata(BaseModel):
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    sequence: int = Field(ge=0, lt=1000)
+    provider_source_id: str = Field(min_length=1, max_length=200)
+    participant_id: str = Field(min_length=1, max_length=200)
+    participant_name: str | None = Field(default=None, max_length=200)
+    captured_at: AwareDatetime
+    width: int = Field(ge=1, le=1280)
+    height: int = Field(ge=1, le=720)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+def ingest_keyframe(
+    db: Session,
+    attempt: Attempt,
+    recording: Recording,
+    meta: KeyframeIngestMetadata,
+    png_bytes: bytes,
+) -> tuple[RecordingKeyframe, bool]:
+    from wortlaut.processing import collect_opted_out_speakers, is_speaker_opted_out
+
+    settings = get_settings()
+    if not settings.enable_keyframes:
+        raise HTTPException(409, "keyframes_disabled")
+    if not (1 <= len(png_bytes) <= MAX_KEYFRAME_BYTES):
+        raise HTTPException(400, "Invalid keyframe byte size")
+    if (
+        len(png_bytes) < 33
+        or png_bytes[:8] != PNG_SIGNATURE
+        or struct.unpack(">I", png_bytes[8:12])[0] != 13
+        or png_bytes[12:16] != b"IHDR"
+    ):
+        raise HTTPException(400, "Invalid PNG header")
+    ihdr_width, ihdr_height = struct.unpack(">II", png_bytes[16:24])
+    if ihdr_width != meta.width or ihdr_height != meta.height:
+        raise HTTPException(400, "PNG dimensions do not match metadata")
+    actual_sha = hashlib.sha256(png_bytes).hexdigest()
+    if actual_sha != meta.sha256:
+        raise HTTPException(400, "Keyframe SHA-256 mismatch")
+
+    existing = db.scalar(
+        select(RecordingKeyframe).where(
+            RecordingKeyframe.attempt_id == attempt.id,
+            RecordingKeyframe.sequence == meta.sequence,
+        )
+    )
+    if existing is not None:
+        if existing.deleted_at is not None:
+            raise HTTPException(409, "presenter_opted_out")
+        if existing.sha256 != meta.sha256:
+            raise HTTPException(409, "keyframe_sequence_conflict")
+        return existing, True
+
+    attempts = list(db.scalars(select(Attempt).where(Attempt.recording_id == recording.id)).all())
+    streams = (
+        list(
+            db.scalars(
+                select(AudioStream).where(AudioStream.attempt_id.in_([a.id for a in attempts]))
+            ).all()
+        )
+        if attempts
+        else []
+    )
+    participant_names: dict[str, str] = {}
+    for s in streams:
+        pid = s.contract.get("participant_id") or s.contract.get("speaker_id")
+        if pid and s.contract.get("participant_name"):
+            participant_names[str(pid)] = str(s.contract["participant_name"])
+    if streams:
+        bind_controls = db.scalars(
+            select(AudioControl).where(
+                AudioControl.stream_id.in_([s.id for s in streams]),
+                AudioControl.kind == "bind",
+            )
+        ).all()
+        for ctrl in bind_controls:
+            pid = ctrl.contract.get("participant_id") or ctrl.contract.get("speaker_id")
+            if pid and ctrl.contract.get("participant_name"):
+                participant_names[str(pid)] = str(ctrl.contract["participant_name"])
+    clean_pname = (meta.participant_name.strip() or None) if meta.participant_name else None
+    if clean_pname:
+        participant_names.setdefault(meta.participant_id, clean_pname)
+    _, opted_out_norm = collect_opted_out_speakers(recording, attempts, participant_names)
+    if is_speaker_opted_out(
+        opted_out_norm,
+        participant_id=meta.participant_id,
+        participant_name=clean_pname or participant_names.get(meta.participant_id),
+        provider_source_id=meta.provider_source_id,
+    ):
+        raise HTTPException(409, "presenter_opted_out")
+
+    active_count = db.scalar(
+        select(func.count())
+        .select_from(RecordingKeyframe)
+        .where(
+            RecordingKeyframe.recording_id == recording.id,
+            RecordingKeyframe.deleted_at.is_(None),
+        )
+    )
+    if (active_count or 0) >= MAX_KEYFRAMES_PER_RECORDING:
+        raise HTTPException(409, "keyframe_limit_reached")
+
+    captured_utc = meta.captured_at.astimezone(UTC)
+    contract = {
+        "kind": "keyframe",
+        "recording_id": str(recording.id),
+        "attempt_id": str(attempt.id),
+        "sequence": meta.sequence,
+        "provider_source_id": meta.provider_source_id,
+        "participant_id": meta.participant_id,
+        "captured_at": captured_utc.isoformat(),
+        "width": meta.width,
+        "height": meta.height,
+        "sha256": meta.sha256,
+    }
+    object_size = len(png_bytes) + 13 + len(canonical(contract).encode())
+    db.execute(select(func.pg_advisory_xact_lock(749836123)))
+    if capacity_reached(db, 0, object_size):
+        raise HTTPException(507, "storage_capacity_reached")
+
+    key = f"keyframes/{recording.id}/{attempt.id}/{meta.sequence:04d}.png"
+    try:
+        get_storage().put(key, png_bytes, contract)
+    except ObjectConflict:
+        raise HTTPException(409, "keyframe_sequence_conflict") from None
+
+    kf = RecordingKeyframe(
+        recording_id=recording.id,
+        attempt_id=attempt.id,
+        sequence=meta.sequence,
+        provider_source_id=meta.provider_source_id,
+        participant_id=meta.participant_id,
+        participant_name=clean_pname,
+        captured_at=captured_utc,
+        width=meta.width,
+        height=meta.height,
+        byte_size=object_size,
+        sha256=meta.sha256,
+        object_key=key,
+    )
+    db.add(kf)
+    db.commit()
+    return kf, False
+

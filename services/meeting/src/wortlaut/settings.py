@@ -64,6 +64,7 @@ class Settings(BaseSettings):
     assistant_name: str = "wortlaut"
     default_locale: Literal["de", "en"] = "de"
     enable_chat_intro: bool = True
+    enable_keyframes: bool = True
     privacy_url: str | None = None
     allowed_webex_hosts: list[str] = ["*.webex.com"]
     sdk_page_url: str = "https://wortlaut.example.org/sdk/"

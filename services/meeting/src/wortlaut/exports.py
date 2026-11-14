@@ -19,6 +19,7 @@ from wortlaut.models import (
     AudioControl,
     AudioStream,
     Recording,
+    RecordingKeyframe,
     TranscriptSegment,
 )
 from wortlaut.processing import (
@@ -481,11 +482,37 @@ def export_data(
         pid = seg.get("participant_id") or seg.get("speaker_id")
         if pid and seg.get("participant_name"):
             participant_names[pid] = seg["participant_name"]
+    keyframe_rows = (
+        list(
+            db.scalars(
+                select(RecordingKeyframe)
+                .where(
+                    RecordingKeyframe.recording_id == recording.id,
+                    RecordingKeyframe.deleted_at.is_(None),
+                )
+                .order_by(
+                    RecordingKeyframe.captured_at.asc(),
+                    RecordingKeyframe.sequence.asc(),
+                    RecordingKeyframe.id.asc(),
+                )
+            ).all()
+        )
+        if tail_segments_limit is None
+        else []
+    )
+    for kf in keyframe_rows:
+        if kf.participant_id and kf.participant_name and kf.participant_id not in participant_names:
+            participant_names[kf.participant_id] = kf.participant_name
     opted_out_list, opted_out_norm = collect_opted_out_speakers(
         recording, attempts, participant_names
     )
     anchors = [datetime.fromisoformat(s.contract["session_utc_origin"]) for s in streams]
-    origin = min(anchors) if anchors else recording.starts_at
+    if anchors:
+        origin = min(anchors)
+    elif keyframe_rows:
+        origin = min(kf.captured_at.astimezone(UTC) for kf in keyframe_rows)
+    else:
+        origin = recording.starts_at
     unambiguous_stream_bindings: dict[tuple[str, str], tuple[str, str | None, str]] = {}
     observed_by_stream: dict[tuple[str, str], set[tuple[str, str | None, str]]] = {}
     stream_bind_timeline: dict[tuple[str, str], list[tuple[float, str, str, str, str | None]]] = {}
@@ -721,6 +748,43 @@ def export_data(
             "segments": segments,
             "opted_out_speakers": opted_out_list,
         }
+    origin_utc_dt = origin.astimezone(UTC)
+    keyframes: list[dict] = []
+    for kf in keyframe_rows:
+        raw_name = kf.participant_name or participant_names.get(kf.participant_id)
+        base_label = raw_name or f"Sprecher {kf.participant_id}"
+        override = (
+            speaker_overrides.get(str(kf.participant_id))
+            or (speaker_overrides.get(raw_name) if raw_name else None)
+            or speaker_overrides.get(base_label)
+            or speaker_overrides.get(kf.provider_source_id)
+        )
+        presenter = override.strip() if override and override.strip() else base_label
+        if is_speaker_opted_out(
+            opted_out_norm,
+            participant_id=kf.participant_id,
+            participant_name=raw_name,
+            speaker_label=presenter,
+            provider_source_id=kf.provider_source_id,
+        ):
+            continue
+        offset_seconds = round(
+            max(0.0, (kf.captured_at.astimezone(UTC) - origin_utc_dt).total_seconds()),
+            3,
+        )
+        keyframes.append(
+            {
+                "id": str(kf.id),
+                "captured_at": kf.captured_at.astimezone(UTC).isoformat(),
+                "offset_seconds": offset_seconds,
+                "presenter": presenter,
+                "participant_id": kf.participant_id,
+                "provider_source_id": kf.provider_source_id,
+                "width": kf.width,
+                "height": kf.height,
+                "image_path": f"/v1/recordings/{recording.id}/keyframes/{kf.id}.png",
+            }
+        )
     qualities = [
         {
             "stream_id": str(s.stream_id),
@@ -787,6 +851,7 @@ def export_data(
                     "audio_clock",
                     {"state": "unknown", "total_interruptions": 0, "interruptions": []},
                 ),
+                "keyframes": a.diagnostics.get("keyframes"),
             }
             for a in attempts
         ],
@@ -799,6 +864,7 @@ def export_data(
             "no_audio_received": not any(q["accepted_samples"] for q in qualities),
             "capture_anomaly": bool(
                 not segments
+                and not keyframes
                 and not opted_out_list
                 and recording.participation_reason
                 not in ("lobby_timeout", "admission_denied", "prejoin_denied")
@@ -846,6 +912,7 @@ def export_data(
             opted_out_norm,
         ),
         "segments": segments,
+        "keyframes": keyframes,
     }
 
 
@@ -1214,15 +1281,37 @@ def render_export(data, format):
                 )
             lines.append("")
         lines.extend(["## Transkript", ""])
-        if not data["segments"]:
+        keyframes_list = data.get("keyframes") or []
+        if not data["segments"] and not keyframes_list:
             lines.append("_Keine Transkriptsegmente vorhanden._")
         else:
-            for segment in data["segments"]:
-                text = " ".join(segment["text"].split())
-                label = " ".join(segment["speaker_label"].split())
-                span = f"{timestamp(segment['start'])} – {timestamp(segment['end'])}"
-                lines.append(f"**{label}** (`{span}`): {text}")
-                lines.append("")
+            ui_url = f"{get_settings().api_url.rstrip('/')}/ui"
+            protocol_link = f"{ui_url}#view=meetings&id={data['recording_id']}"
+            timeline_items: list[tuple[float, int, int, str, dict]] = []
+            for idx, kf in enumerate(keyframes_list):
+                timeline_items.append(
+                    (float(kf.get("offset_seconds") or 0.0), 0, idx, "keyframe", kf)
+                )
+            for idx, segment in enumerate(data["segments"]):
+                timeline_items.append(
+                    (float(segment.get("start") or 0.0), 1, idx, "segment", segment)
+                )
+            timeline_items.sort(key=lambda item: (item[0], item[1], item[2]))
+            for _, _, _, kind, item in timeline_items:
+                if kind == "keyframe":
+                    ts = short_timestamp(float(item.get("offset_seconds") or 0.0))
+                    pres = _single_line(item.get("presenter")) or "Teilnehmer"
+                    lines.append(
+                        f"> **[{ts}] Screen share ({pres}):** "
+                        f"[{protocol_link}]({protocol_link})"
+                    )
+                    lines.append("")
+                else:
+                    text = " ".join(item["text"].split())
+                    label = " ".join(item["speaker_label"].split())
+                    span = f"{timestamp(item['start'])} – {timestamp(item['end'])}"
+                    lines.append(f"**{label}** (`{span}`): {text}")
+                    lines.append("")
         return "\n".join(lines).rstrip() + "\n", "text/markdown; charset=utf-8"
     if format == "txt":
         lines = [

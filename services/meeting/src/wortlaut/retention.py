@@ -1,8 +1,10 @@
 """Finite retry/audio retention, independent of worker-process termination."""
 
+import logging
 from datetime import UTC, datetime, timedelta
 
 import recurring_ical_events
+from botocore.exceptions import BotoCoreError, ClientError
 from icalendar import Calendar
 from sqlalchemy import delete, or_, select, text
 from sqlalchemy.orm import Session
@@ -17,7 +19,11 @@ from wortlaut.models import (
     CalendarEntry,
     Delivery,
     MailImport,
+    McpOAuthAuthorization,
+    McpOAuthClient,
+    McpOAuthGrant,
     Recording,
+    RecordingKeyframe,
     TranscriptSegment,
 )
 from wortlaut.settings import get_settings
@@ -31,6 +37,9 @@ def remove_audio_metadata(db, recording, stream_ids, now):
     delivery = db.get(Delivery, recording.id)
     if delivery and delivery.status == "sending":
         return  # The SMTP result can still update its recipient metadata.
+    if get_settings().s3_access_key and get_settings().s3_secret_key:
+        get_storage().delete_recording_keyframes(recording.id)
+    db.execute(delete(RecordingKeyframe).where(RecordingKeyframe.recording_id == recording.id))
     jobs = select(AsrJob.id).where(AsrJob.stream_id.in_(stream_ids))
     db.execute(delete(TranscriptSegment).where(TranscriptSegment.id.in_(jobs)))
     db.execute(delete(AsrJob).where(AsrJob.stream_id.in_(stream_ids)))
@@ -155,6 +164,30 @@ def calendar_retention(engine, now):
 
 def retention_pass(engine):
     now, settings = datetime.now(UTC), get_settings()
+    if settings.s3_access_key and settings.s3_secret_key:
+        with Session(engine) as db:
+            pending_kf = db.scalars(
+                select(RecordingKeyframe)
+                .where(
+                    RecordingKeyframe.deleted_at.is_not(None),
+                    RecordingKeyframe.object_key != "",
+                )
+                .limit(128)
+                .with_for_update(skip_locked=True)
+            ).all()
+            if pending_kf:
+                storage = get_storage()
+                for kf in pending_kf:
+                    try:
+                        storage.delete_object(kf.object_key)
+                        kf.object_key = ""
+                    except (BotoCoreError, ClientError) as exc:
+                        logging.getLogger(__name__).warning(
+                            "Deferred S3 keyframe delete failed for %s: %s",
+                            kf.id,
+                            exc,
+                        )
+                db.commit()
     with Session(engine) as db:
         identifiers = db.scalars(
             select(Recording.id)
@@ -223,6 +256,15 @@ def retention_pass(engine):
             if not recording.transcript_deleted_at and now >= finished + timedelta(
                 days=settings.transcript_retention_days
             ):
+                if settings.s3_access_key and settings.s3_secret_key:
+                    get_storage().delete_recording_keyframes(recording.id)
+                kf_rows = db.scalars(
+                    select(RecordingKeyframe).where(RecordingKeyframe.recording_id == recording.id)
+                ).all()
+                for kf in kf_rows:
+                    kf.deleted_at = kf.deleted_at or now
+                    kf.object_key = ""
+                    kf.participant_name = None
                 ids = select(AsrJob.id).where(AsrJob.stream_id.in_(stream_ids))
                 db.execute(delete(TranscriptSegment).where(TranscriptSegment.id.in_(ids)))
                 recording.protocol_meta = {}
@@ -235,3 +277,42 @@ def retention_pass(engine):
                 remove_audio_metadata(db, recording, stream_ids, now)
             db.commit()
     calendar_retention(engine, now)
+    mcp_oauth_retention(engine, now)
+
+
+def mcp_oauth_retention(engine, now):
+    with Session(engine) as db:
+        db.execute(
+            delete(McpOAuthAuthorization).where(
+                McpOAuthAuthorization.expires_at < now - timedelta(hours=1)
+            )
+        )
+        db.execute(
+            delete(McpOAuthGrant).where(
+                (McpOAuthGrant.refresh_expires_at < now - timedelta(days=7))
+                | (
+                    McpOAuthGrant.revoked_at.is_not(None)
+                    & (McpOAuthGrant.revoked_at < now - timedelta(days=7))
+                )
+            )
+        )
+        has_grant = (
+            select(McpOAuthGrant.id)
+            .where(McpOAuthGrant.client_id == McpOAuthClient.client_id)
+            .correlate(McpOAuthClient)
+            .exists()
+        )
+        has_auth = (
+            select(McpOAuthAuthorization.id)
+            .where(McpOAuthAuthorization.client_id == McpOAuthClient.client_id)
+            .correlate(McpOAuthClient)
+            .exists()
+        )
+        db.execute(
+            delete(McpOAuthClient).where(
+                McpOAuthClient.created_at < now - timedelta(days=30),
+                ~has_grant,
+                ~has_auth,
+            )
+        )
+        db.commit()

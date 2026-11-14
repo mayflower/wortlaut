@@ -1,10 +1,12 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Check,
   CheckSquare,
   Copy,
   Edit3,
   FileText,
+  Maximize2,
+  MonitorUp,
   Pause,
   Play,
   Plus,
@@ -14,6 +16,7 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
+import { AlertDialog } from '@astryxdesign/core/AlertDialog';
 import { HStack } from '@astryxdesign/core/HStack';
 import { VStack } from '@astryxdesign/core/VStack';
 import { Text } from '@astryxdesign/core/Text';
@@ -30,19 +33,23 @@ import { Button } from '@astryxdesign/core/Button';
 import { Banner } from '@astryxdesign/core/Banner';
 import {
   ATTRIBUTION_STATUS_LABELS,
+  deleteRecordingKeyframe,
   fetchAudioSnippetBlobUrl,
+  fetchKeyframeBlobUrl,
   formatWallClockTime,
   generateRecordingSummary,
   getInstanceInfo,
   getSourceFilterKey,
+  matchesKeyframeSourceFilter,
   matchesSourceFilter,
   updateRecordingProtocol,
 } from '../api';
-import { localizeAttributionStatus, useI18n } from '../i18n';
+import { KEYFRAME_STRINGS, localizeAttributionStatus, useI18n } from '../i18n';
 import type {
   ParticipationState,
   ProcessingState,
   ProtocolSummary,
+  RecordingKeyframe,
   SourceSummary,
   TranscriptSegment,
 } from '../types';
@@ -75,6 +82,7 @@ export interface TranscriptTabProps {
   summary?: ProtocolSummary | null;
   termReplacements?: Record<string, string>;
   segments: TranscriptSegment[];
+  keyframes?: RecordingKeyframe[];
   sources: SourceSummary[];
   selectedSourceFilter: string;
   onSelectedSourceFilterChange: (sourceId: string) => void;
@@ -102,6 +110,154 @@ interface GroupedTurn {
   paragraphs: TurnParagraph[];
 }
 
+type TimelineItem =
+  | { kind: 'turn'; offset: number; turn: GroupedTurn }
+  | { kind: 'keyframe'; offset: number; keyframe: RecordingKeyframe };
+
+interface KeyframeTimelineCardProps {
+  keyframe: RecordingKeyframe;
+  blobUrl?: string;
+  hasError?: boolean;
+  timeLabel: string;
+  badgeLabel: string;
+  altLabel: string;
+  loadingLabel: string;
+  unavailableLabel: string;
+  openPreviewLabel: string;
+  deleteLabel: string;
+  isOperator: boolean;
+  isActiveFilter: boolean;
+  onToggleFilter: () => void;
+  onRequestLoad: (kf: RecordingKeyframe) => void;
+  onOpenPreview: (kf: RecordingKeyframe) => void;
+  onRequestDelete: (kf: RecordingKeyframe) => void;
+}
+
+function KeyframeTimelineCard({
+  keyframe,
+  blobUrl,
+  hasError,
+  timeLabel,
+  badgeLabel,
+  altLabel,
+  loadingLabel,
+  unavailableLabel,
+  openPreviewLabel,
+  deleteLabel,
+  isOperator,
+  isActiveFilter,
+  onToggleFilter,
+  onRequestLoad,
+  onOpenPreview,
+  onRequestDelete,
+}: KeyframeTimelineCardProps) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (blobUrl || hasError) return;
+    const node = containerRef.current;
+    if (!node || typeof IntersectionObserver === 'undefined') {
+      onRequestLoad(keyframe);
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          onRequestLoad(keyframe);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: '240px' }
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [keyframe, blobUrl, hasError, onRequestLoad]);
+
+  return (
+    <div
+      ref={containerRef}
+      id={`keyframe-${keyframe.id}`}
+      className="group wl-turn-row wl-fade-in"
+    >
+      <HStack gap={3} vAlign="start">
+        <Avatar size="sm" shape="circle" name={keyframe.presenter} />
+        <div className="min-w-0 flex-1">
+          <HStack justify="between" vAlign="center" wrap="wrap" gap={2}>
+            <HStack gap={2} vAlign="center" wrap="wrap">
+              <button
+                type="button"
+                onClick={onToggleFilter}
+                className={`font-semibold text-sm cursor-pointer ${
+                  isActiveFilter
+                    ? 'text-[var(--color-text-accent)]'
+                    : 'text-[var(--color-text-primary)] hover:text-[var(--color-text-accent)]'
+                }`}
+              >
+                {keyframe.presenter}
+              </button>
+              <Text type="supporting" color="secondary" hasTabularNumbers>
+                {timeLabel}
+              </Text>
+              <Token size="sm" color="blue" label={badgeLabel} />
+            </HStack>
+
+            <HStack
+              gap={1}
+              vAlign="center"
+              className="opacity-0 group-hover:opacity-100 transition-opacity"
+            >
+              {blobUrl && (
+                <IconButton
+                  variant="ghost"
+                  size="sm"
+                  label={openPreviewLabel}
+                  tooltip={openPreviewLabel}
+                  icon={<Maximize2 className="h-3.5 w-3.5" />}
+                  onClick={() => onOpenPreview(keyframe)}
+                />
+              )}
+              {isOperator && (
+                <IconButton
+                  variant="ghost"
+                  size="sm"
+                  label={deleteLabel}
+                  tooltip={deleteLabel}
+                  icon={<Trash2 className="h-3.5 w-3.5" />}
+                  onClick={() => onRequestDelete(keyframe)}
+                />
+              )}
+            </HStack>
+          </HStack>
+
+          <div className="mt-2">
+            {blobUrl ? (
+              <button
+                type="button"
+                onClick={() => onOpenPreview(keyframe)}
+                className="block overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-background-muted)] hover:border-[var(--color-border-accent,var(--color-text-accent))] transition-colors cursor-zoom-in max-w-md"
+                title={openPreviewLabel}
+              >
+                <img
+                  src={blobUrl}
+                  alt={`${altLabel} — ${keyframe.presenter} (${timeLabel})`}
+                  width={keyframe.width}
+                  height={keyframe.height}
+                  className="max-h-56 w-auto object-contain block"
+                />
+              </button>
+            ) : (
+              <div className="inline-flex items-center gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-background-muted)] px-3.5 py-2.5 text-xs text-[var(--color-text-secondary)]">
+                <MonitorUp className="h-4 w-4 shrink-0" />
+                <span>{hasError ? unavailableLabel : loadingLabel}</span>
+              </div>
+            )}
+          </div>
+        </div>
+      </HStack>
+    </div>
+  );
+}
+
 export function TranscriptTab({
   recordingId,
   token = '',
@@ -113,12 +269,14 @@ export function TranscriptTab({
   summary,
   termReplacements = {},
   segments,
+  keyframes = [],
   sources,
   selectedSourceFilter,
   onSelectedSourceFilterChange,
   onProtocolUpdated,
 }: TranscriptTabProps) {
   const { lang, tr } = useI18n();
+  const kStr = KEYFRAME_STRINGS[lang];
   const [searchQuery, setSearchQuery] = useState('');
   const [copiedTurnId, setCopiedTurnId] = useState<string | null>(null);
 
@@ -155,10 +313,38 @@ export function TranscriptTab({
   const [termTo, setTermTo] = useState('');
   const [savingTerm, setSavingTerm] = useState(false);
 
+  // Screen-share keyframe blob URLs, preview modal & operator deletion state
+  const [keyframeBlobUrls, setKeyframeBlobUrls] = useState<
+    Record<string, string>
+  >({});
+  const [keyframeErrors, setKeyframeErrors] = useState<Record<string, boolean>>(
+    {}
+  );
+  const createdKeyframeUrlsRef = useRef<Map<string, string>>(new Map());
+  const inflightKeyframeIdsRef = useRef<Set<string>>(new Set());
+  const keyframeErrorsRef = useRef<Set<string>>(new Set());
+  const [previewKeyframe, setPreviewKeyframe] =
+    useState<RecordingKeyframe | null>(null);
+  const [confirmDeleteKeyframe, setConfirmDeleteKeyframe] =
+    useState<RecordingKeyframe | null>(null);
+  const [deletingKeyframeId, setDeletingKeyframeId] = useState<string | null>(
+    null
+  );
+
   useEffect(() => {
     setEditingSummary(false);
     setSummaryError(null);
     setEditingTurnId(null);
+    setPreviewKeyframe(null);
+    setConfirmDeleteKeyframe(null);
+    for (const url of createdKeyframeUrlsRef.current.values()) {
+      URL.revokeObjectURL(url);
+    }
+    createdKeyframeUrlsRef.current.clear();
+    inflightKeyframeIdsRef.current.clear();
+    keyframeErrorsRef.current.clear();
+    setKeyframeBlobUrls({});
+    setKeyframeErrors({});
   }, [recordingId]);
 
   useEffect(() => {
@@ -171,8 +357,77 @@ export function TranscriptTab({
         URL.revokeObjectURL(audioBlobUrlRef.current);
         audioBlobUrlRef.current = null;
       }
+      for (const url of createdKeyframeUrlsRef.current.values()) {
+        URL.revokeObjectURL(url);
+      }
+      createdKeyframeUrlsRef.current.clear();
     };
   }, []);
+
+  useEffect(() => {
+    if (!previewKeyframe) return;
+    const onKeyDown = (ev: KeyboardEvent) => {
+      if (ev.key === 'Escape') {
+        setPreviewKeyframe(null);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [previewKeyframe]);
+
+  const requestKeyframeImage = useCallback(
+    (kf: RecordingKeyframe) => {
+      if (
+        createdKeyframeUrlsRef.current.has(kf.id) ||
+        inflightKeyframeIdsRef.current.has(kf.id) ||
+        keyframeErrorsRef.current.has(kf.id)
+      ) {
+        return;
+      }
+      inflightKeyframeIdsRef.current.add(kf.id);
+      void fetchKeyframeBlobUrl(kf.image_path, token)
+        .then((blobUrl) => {
+          createdKeyframeUrlsRef.current.set(kf.id, blobUrl);
+          setKeyframeBlobUrls((prev) => ({ ...prev, [kf.id]: blobUrl }));
+        })
+        .catch(() => {
+          keyframeErrorsRef.current.add(kf.id);
+          setKeyframeErrors((prev) => ({ ...prev, [kf.id]: true }));
+        })
+        .finally(() => {
+          inflightKeyframeIdsRef.current.delete(kf.id);
+        });
+    },
+    [token]
+  );
+
+  const handleConfirmDeleteKeyframe = async () => {
+    if (!confirmDeleteKeyframe || !token) return;
+    const target = confirmDeleteKeyframe;
+    setDeletingKeyframeId(target.id);
+    try {
+      await deleteRecordingKeyframe(token, recordingId, target.id);
+      const existingUrl = createdKeyframeUrlsRef.current.get(target.id);
+      if (existingUrl) {
+        URL.revokeObjectURL(existingUrl);
+        createdKeyframeUrlsRef.current.delete(target.id);
+      }
+      setKeyframeBlobUrls((prev) => {
+        const next = { ...prev };
+        delete next[target.id];
+        return next;
+      });
+      if (previewKeyframe?.id === target.id) {
+        setPreviewKeyframe(null);
+      }
+      setConfirmDeleteKeyframe(null);
+      onProtocolUpdated?.();
+    } catch (err) {
+      setSummaryError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDeletingKeyframeId(null);
+    }
+  };
 
   const allSpeakersLabel = tr(
     `Alle Sprecher (${sources.length})`,
@@ -180,14 +435,44 @@ export function TranscriptTab({
   );
 
   const sourceOptions = useMemo(() => {
-    return [
+    const base = [
       { value: 'all', label: allSpeakersLabel },
       ...sources.map((src) => ({
         value: getSourceFilterKey(src),
         label: `${src.participant_name || src.speaker_label || src.provider_source_id} (${src.segment_count})`,
       })),
     ];
-  }, [sources, allSpeakersLabel]);
+    const knownKeys = new Set(base.map((opt) => opt.value));
+    for (const kf of keyframes) {
+      const kfKey = kf.participant_id
+        ? `participant:${kf.participant_id}`
+        : `source:${kf.provider_source_id}`;
+      if (!knownKeys.has(kfKey)) {
+        knownKeys.add(kfKey);
+        base.push({
+          value: kfKey,
+          label: `${kf.presenter} (${kStr.screenShareBadge})`,
+        });
+      }
+    }
+    return base;
+  }, [sources, keyframes, allSpeakersLabel, kStr.screenShareBadge]);
+
+  const filteredKeyframes = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    return keyframes.filter((kf) => {
+      if (
+        selectedSourceFilter &&
+        !matchesKeyframeSourceFilter(kf, selectedSourceFilter)
+      ) {
+        return false;
+      }
+      if (!q) return true;
+      const hay =
+        `${kf.presenter} ${kf.provider_source_id} bildschirmfreigabe screen share folie slide`.toLowerCase();
+      return hay.includes(q);
+    });
+  }, [keyframes, selectedSourceFilter, searchQuery]);
 
   const filteredSegments = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -257,6 +542,27 @@ export function TranscriptTab({
     }
     return turns;
   }, [filteredSegments]);
+
+  const timelineItems = useMemo<TimelineItem[]>(() => {
+    const items: TimelineItem[] = [
+      ...groupedTurns.map(
+        (turn): TimelineItem => ({ kind: 'turn', offset: turn.start, turn })
+      ),
+      ...filteredKeyframes.map(
+        (kf): TimelineItem => ({
+          kind: 'keyframe',
+          offset: kf.offset_seconds,
+          keyframe: kf,
+        })
+      ),
+    ];
+    items.sort((a, b) => {
+      if (a.offset !== b.offset) return a.offset - b.offset;
+      if (a.kind === b.kind) return 0;
+      return a.kind === 'keyframe' ? -1 : 1;
+    });
+    return items;
+  }, [groupedTurns, filteredKeyframes]);
 
   const handleCopyTurn = async (turn: GroupedTurn) => {
     if (!navigator.clipboard) return;
@@ -1020,7 +1326,7 @@ export function TranscriptTab({
 
       {/* Editorial Transcript Stream */}
       <div id="transcript-view">
-        {groupedTurns.length === 0 ? (
+        {groupedTurns.length === 0 && filteredKeyframes.length === 0 ? (
           <EmptyState
             icon={
               participation === 'capturing' ? (
@@ -1030,7 +1336,7 @@ export function TranscriptTab({
               )
             }
             title={
-              segments.length === 0
+              segments.length === 0 && keyframes.length === 0
                 ? participation === 'capturing'
                   ? tr(
                       'Hört zu — warte auf erste gesprochene Sätze…',
@@ -1051,7 +1357,7 @@ export function TranscriptTab({
                   )
             }
             description={
-              segments.length === 0
+              segments.length === 0 && keyframes.length === 0
                 ? tr(
                     'Sobald im Gespräch gesprochen wird, erscheinen die Wortbeiträge hier automatisch nach Sprechern getrennt.',
                     'As soon as participants speak, statements appear here automatically separated by speaker.'
@@ -1077,7 +1383,45 @@ export function TranscriptTab({
           />
         ) : (
           <div className="divide-y divide-[var(--color-border)]">
-            {groupedTurns.map((turn) => {
+            {timelineItems.map((item) => {
+              if (item.kind === 'keyframe') {
+                const kf = item.keyframe;
+                const kfFilterKey = kf.participant_id
+                  ? `participant:${kf.participant_id}`
+                  : `source:${kf.provider_source_id}`;
+                return (
+                  <KeyframeTimelineCard
+                    key={`kf-${kf.id}`}
+                    keyframe={kf}
+                    blobUrl={keyframeBlobUrls[kf.id]}
+                    hasError={Boolean(keyframeErrors[kf.id])}
+                    timeLabel={formatWallClockTime(
+                      kf.offset_seconds,
+                      timeOriginUtc
+                    )}
+                    badgeLabel={kStr.screenShareBadge}
+                    altLabel={kStr.slideSnapshotAlt}
+                    loadingLabel={kStr.loadingSlide}
+                    unavailableLabel={kStr.slideUnavailable}
+                    openPreviewLabel={kStr.openPreview}
+                    deleteLabel={kStr.deleteSlide}
+                    isOperator={isOperator}
+                    isActiveFilter={selectedSourceFilter === kfFilterKey}
+                    onToggleFilter={() =>
+                      onSelectedSourceFilterChange(
+                        selectedSourceFilter === kfFilterKey ? '' : kfFilterKey
+                      )
+                    }
+                    onRequestLoad={requestKeyframeImage}
+                    onOpenPreview={(target) => {
+                      requestKeyframeImage(target);
+                      setPreviewKeyframe(target);
+                    }}
+                    onRequestDelete={setConfirmDeleteKeyframe}
+                  />
+                );
+              }
+              const turn = item.turn;
               const isCopied = copiedTurnId === turn.id;
               const isBound = turn.attributionStatus === 'bound';
               const isPlaying = playingTurnId === turn.id;
@@ -1290,6 +1634,86 @@ export function TranscriptTab({
           </div>
         )}
       </div>
+
+      {/* Full-Size Slide Keyframe Preview Modal */}
+      {previewKeyframe && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={`${kStr.slideSnapshotAlt} — ${previewKeyframe.presenter}`}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4"
+          onClick={() => setPreviewKeyframe(null)}
+        >
+          <div
+            className="relative max-h-[92vh] max-w-[92vw] overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-background-surface)] shadow-2xl flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between gap-3 border-b border-[var(--color-border)] px-4 py-2.5">
+              <HStack gap={2} vAlign="center" wrap="wrap">
+                <Text type="body" weight="semibold" color="primary">
+                  {previewKeyframe.presenter}
+                </Text>
+                <Text type="supporting" color="secondary" hasTabularNumbers>
+                  {formatWallClockTime(
+                    previewKeyframe.offset_seconds,
+                    timeOriginUtc
+                  )}
+                </Text>
+                <Token size="sm" color="blue" label={kStr.screenShareBadge} />
+              </HStack>
+              <HStack gap={1} vAlign="center">
+                {isOperator && (
+                  <IconButton
+                    variant="ghost"
+                    size="sm"
+                    label={kStr.deleteSlide}
+                    tooltip={kStr.deleteSlide}
+                    icon={<Trash2 className="h-4 w-4" />}
+                    onClick={() => setConfirmDeleteKeyframe(previewKeyframe)}
+                  />
+                )}
+                <IconButton
+                  variant="ghost"
+                  size="sm"
+                  label={kStr.closePreview}
+                  tooltip={kStr.closePreview}
+                  icon={<X className="h-4 w-4" />}
+                  onClick={() => setPreviewKeyframe(null)}
+                />
+              </HStack>
+            </div>
+            <div className="overflow-auto bg-black/90 p-2 flex items-center justify-center">
+              {keyframeBlobUrls[previewKeyframe.id] ? (
+                <img
+                  src={keyframeBlobUrls[previewKeyframe.id]}
+                  alt={`${kStr.slideSnapshotAlt} — ${previewKeyframe.presenter}`}
+                  className="max-h-[82vh] max-w-[88vw] object-contain"
+                />
+              ) : (
+                <div className="p-8 text-sm text-white/80">
+                  {keyframeErrors[previewKeyframe.id]
+                    ? kStr.slideUnavailable
+                    : kStr.loadingSlide}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      <AlertDialog
+        isOpen={Boolean(confirmDeleteKeyframe)}
+        onOpenChange={(open) => {
+          if (!open) setConfirmDeleteKeyframe(null);
+        }}
+        title={kStr.deleteSlide}
+        description={kStr.confirmDeleteSlide}
+        actionLabel={tr('Dauerhaft löschen', 'Delete permanently')}
+        cancelLabel={tr('Abbrechen', 'Cancel')}
+        actionVariant="destructive"
+        isActionLoading={Boolean(deletingKeyframeId)}
+        onAction={handleConfirmDeleteKeyframe}
+      />
     </VStack>
   );
 }
