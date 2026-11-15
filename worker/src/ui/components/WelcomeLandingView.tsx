@@ -273,12 +273,15 @@ export function WelcomeLandingView({
               <div className="py-2.5">
                 <VStack gap={0.5}>
                   <Text type="body" weight="semibold">
-                    {tr('2. Im Warteraum zulassen', '2. Admit from the lobby')}
+                    {tr(
+                      '2. Im Warteraum zulassen & im Chat steuern',
+                      '2. Admit from lobby & control via chat'
+                    )}
                   </Text>
                   <Text type="supporting" color="secondary">
                     {tr(
-                      `Der Bot tritt stummgeschaltet als „${instance.assistantName}“ bei und erfasst jede Teilnehmer-Audiospur vor dem Konferenz-Mix einzeln.`,
-                      `The bot joins muted as “${instance.assistantName}” and captures each participant’s audio track individually before mixing.`
+                      `Der Bot tritt stummgeschaltet als „${instance.assistantName}“ bei, erfasst jede Tonspur vor dem Mix getrennt und reagiert im Konferenz-Chat auf „nein“ / „opt out“, „#pause“ / „#weiter“, „#decision“ und „#todo“.`,
+                      `The bot joins muted as “${instance.assistantName}”, captures isolated pre-mix tracks, and responds in meeting chat to “opt out”, “#pause” / “#resume”, “#decision”, and “#todo”.`
                     )}
                   </Text>
                 </VStack>

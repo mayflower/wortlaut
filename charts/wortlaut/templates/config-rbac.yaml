@@ -16,7 +16,11 @@ data:
   WORTLAUT_ENABLE_ZOOM: {{ .Values.providers.enableZoom | ternary "true" "false" | quote }}
   WORTLAUT_ZOOM_LOCALE: {{ .Values.providers.zoomLocale | quote }}
   WORTLAUT_ENABLE_WEBEX_BROWSER: {{ .Values.providers.enableWebexBrowser | ternary "true" "false" | quote }}
+  WORTLAUT_ENABLE_KEYFRAMES: {{ .Values.keyframes.enabled | ternary "true" "false" | quote }}
   WORTLAUT_ENABLE_LLM_SUMMARY: {{ .Values.llmSummary.enabled | ternary "true" "false" | quote }}
+{{- if .Values.asr.glossary }}
+  WORTLAUT_ASR_GLOSSARY: {{ .Values.asr.glossary | quote }}
+{{- end }}
   WORTLAUT_MAX_ACTIVE_MEETINGS: {{ .Values.capacity.maxActiveMeetings | toString | quote }}
   WORTLAUT_MAX_PENDING_SAMPLES_TOTAL: {{ .Values.capacity.maxPendingSamplesTotal | toString | quote }}
   WORTLAUT_MAX_STORED_AUDIO_BYTES: {{ .Values.capacity.maxStoredAudioBytes | toString | quote }}

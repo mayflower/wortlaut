@@ -103,7 +103,7 @@
         <div class="hero-top">
           <div class="eyebrow-badge">
             <span class="pulse-dot" aria-hidden="true"></span>
-            <span data-i18n="hero_badge">Open Source (AGPL-3.0) · 100% Self-Hosted · 25 Languages · GDPR-Ready</span>
+            <span data-i18n="hero_badge">Open Source (AGPL-3.0) · 100% Self-Hosted · 30 Languages · GDPR-Ready</span>
           </div>
 
           <h1 class="hero-title" data-i18n-html="hero_title_html">
@@ -323,9 +323,9 @@
 
           <div class="step-card">
             <span class="step-number">02</span>
-            <h3 data-i18n="step2_title">2. Transparent join &amp; live chat opt-out</h3>
+            <h3 data-i18n="step2_title">2. Transparent join &amp; live chat controls</h3>
             <p data-i18n="step2_desc">
-              wortlaut joins as a passive audio listener displaying the inviter’s name, posts a privacy link in chat, and lets any individual attendee type “opt out” or “no” in chat to exclude their stream on the spot.
+              wortlaut joins displaying the inviter’s name with on-screen chat commands on its live video tile: type “opt out” to exclude your voice, “#pause” / “#resume” to go off the record, or “#decision” &amp; “#todo” to pin markers.
             </p>
           </div>
 
@@ -359,7 +359,7 @@
             <span class="sub" data-i18n="ftab1_sub">Google &amp; Microsoft 365</span>
           </button>
           <button type="button" class="feature-tab-btn" data-ftab="adhoc">
-            <span data-i18n="ftab2_title">Ad-hoc &amp; 25 Languages</span>
+            <span data-i18n="ftab2_title">Ad-hoc &amp; 30 Languages</span>
             <span class="sub" data-i18n="ftab2_sub">Join in ~15s · Local Qwen3-ASR</span>
           </button>
           <button type="button" class="feature-tab-btn" data-ftab="share">
@@ -473,7 +473,7 @@
             <ul class="check-list">
               <li><span class="check-icon">✓</span><span data-i18n="f3_li1">Click-to-listen verification &amp; inline editor: play back isolated 24h audio snippets to verify exact wording, rename guest speakers, and apply 1-click vocabulary replacements across the entire protocol.</span></li>
               <li><span class="check-icon">✓</span><span data-i18n="f3_li2">Optional local AI summaries (Ollama): generate structured executive summaries, topic breakdowns, and action items on your own server with zero external API calls.</span></li>
-              <li><span class="check-icon">✓</span><span data-i18n="f3_li3">Scoped read-only links (wortlaut-read-…), automatic email delivery, and open exports (.md, .txt, .vtt, .json) plus an idempotent REST API (/docs).</span></li>
+              <li><span class="check-icon">✓</span><span data-i18n="f3_li3">Scoped read-only links (wortlaut-read-…), automatic email delivery, open exports (.md, .txt, .vtt, .json), an OAuth 2.1 MCP server (/mcp), and OpenAPI (/docs).</span></li>
             </ul>
           </div>
 
@@ -492,8 +492,8 @@
                 <div style="font-size:13px;color:var(--stone-600);margin-top:4px;" data-i18n="f3_exp_vtt_desc">Time-aligned .vtt captions &amp; clean .txt email protocols</div>
               </div>
               <div style="background:#ffffff;border:1px solid var(--stone-200);border-radius:var(--radius-md);padding:14px;">
-                <div class="mono" style="font-size:12px;font-weight:700;color:var(--emerald-700);">JSON &amp; REST API</div>
-                <div style="font-size:13px;color:var(--stone-600);margin-top:4px;" data-i18n="f3_exp_json_desc">Structured segments, track diagnostics &amp; OpenAPI (/docs)</div>
+                <div class="mono" style="font-size:12px;font-weight:700;color:var(--emerald-700);">MCP &amp; REST API</div>
+                <div style="font-size:13px;color:var(--stone-600);margin-top:4px;" data-i18n="f3_exp_json_desc">OAuth 2.1 MCP (/mcp), slide keyframes &amp; OpenAPI (/docs)</div>
               </div>
             </div>
           </div>
@@ -557,9 +557,9 @@
           </div>
 
           <div class="trust-card">
-            <h3 data-i18n="trust2_title">Live In-Call Chat Opt-Out</h3>
+            <h3 data-i18n="trust2_title">Live Chat Opt-Out &amp; Off-the-Record</h3>
             <p data-i18n="trust2_desc">
-              wortlaut joins as “wortlaut (Inviter Name)”, never records video or screen shares, and lets any participant type “opt out”, “no”, or “nein” in chat to immediately discard their stream and purge prior quotes.
+              wortlaut joins as “wortlaut (Inviter Name)”, never records participant cameras, and lets anyone type “opt out” / “nein” to purge their stream or “#pause” / “#resume” to go off the record instantly.
             </p>
           </div>
 
@@ -606,7 +606,7 @@
               <tr>
                 <td data-i18n="comp_r3_c">Camera &amp; screen recording</td>
                 <td data-i18n="comp_r3_cloud">Frequently records full video &amp; screen shares</td>
-                <td class="highlight-col" data-i18n="comp_r3_w">Strictly passive audio — camera &amp; screen capture blocked</td>
+                <td class="highlight-col" data-i18n="comp_r3_w">Participant cameras blocked fail-closed; optional static screen-share slide snapshots only</td>
               </tr>
               <tr>
                 <td data-i18n="comp_r4_c">Supported platforms</td>

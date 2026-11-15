@@ -270,8 +270,8 @@ export function McpWorkspace({
                       )}
                     >
                       {tr(
-                        'Ihr Browser öffnet den SSO-Login (Dex OIDC) und zeigt einen Freigabedialog für Lese- (mcp:read) und optionale Schreibrechte (mcp:write).',
-                        'Your browser opens SSO sign-in (Dex OIDC) and presents an explicit consent screen for read (mcp:read) and optional write (mcp:write) scopes.'
+                        'Ihr Browser öffnet den Login (OIDC SSO oder Instanz-Token) und zeigt einen Freigabedialog für Lese- (mcp:read) und optionale Schreibrechte (mcp:write).',
+                        'Your browser opens sign-in (OIDC SSO or instance token) and presents an explicit consent screen for read (mcp:read) and optional write (mcp:write) scopes.'
                       )}
                     </MetadataListItem>
                     <MetadataListItem
@@ -427,8 +427,8 @@ export function McpWorkspace({
                     <ListItem
                       label="list_recordings · get_recording · get_transcript · export_protocol · list_calendar_events"
                       description={tr(
-                        'Volltextsuche über Titel, gebundene Sprechernamen und Wortprotokolle, Sprecher- und Zeitfilter, Markdown/VTT/JSON-Export sowie 24h-Audio-Snippets.',
-                        'Full-text search across titles, bound speaker names, and verbatim transcripts, speaker/time filters, Markdown/VTT/JSON exports, and 24h audio snippet paths.'
+                        'Volltextsuche über Titel, gebundene Sprecher, Wortprotokolle & Chat-Marker (#decision / #todo), Pausenfenster (#pause), Bildschirm-Folien (wortlaut://…/keyframes/…) sowie Markdown/VTT/JSON-Exporte.',
+                        'Full-text search across titles, bound speakers, verbatim transcripts & chat markers (#decision / #todo), pause windows (#pause), slide keyframes (wortlaut://…/keyframes/…), and Markdown/VTT/JSON exports.'
                       )}
                       endContent={
                         <Token size="sm" color="green" label="mcp:read" />

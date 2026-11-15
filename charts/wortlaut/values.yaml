@@ -14,6 +14,10 @@ providers:
   zoomLocale: en-US
   enableWebexBrowser: false
 
+keyframes:
+  # Settled screen-share slide snapshots (<= 1280x720 PNG); participant camera feeds are never recorded.
+  enabled: true
+
 oidc:
   issuer: ""
   clientId: wortlaut
@@ -36,6 +40,7 @@ asr:
   # Qwen3-ASR 1.7B (Transformers), constrained by default to German,English (`*` for all 30 languages).
   modelRepo: Qwen/Qwen3-ASR-1.7B-hf
   languages: German,English
+  glossary: ""
   storageClassName: ""
   cacheSize: 20Gi
 

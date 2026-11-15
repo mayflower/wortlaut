@@ -66,10 +66,10 @@ Alle vier Plattformen laufen parallel in derselben `wortlaut`-Instanz:
 
 | Plattform | Beitritt & Funktionsumfang |
 | :--- | :--- |
-| **Google Meet** | Beitritt als Gast oder mit hinterlegtem Google-Konto ([meet.ts](worker/runtime/meet.ts), [meet-page.ts](worker/src/meet-page.ts), [capture.ts](worker/src/capture.ts)); getrennte WebRTC-Einzelspuren, Teilnehmer-Zuordnung, Bildschirmfreigabe-Keyframes (`a=content:slides` + Screencast-DOM, Kameraspuren ausgeschlossen) und Live-Chat-Opt-out. |
-| **Microsoft Teams** | Beitritt als Gast mit deutscher/englischer Steuerung ([teams-browser.ts](worker/runtime/teams-browser.ts)); getrennte WebRTC-Empfangsspuren, CSI-Sprecher-Bindung, `applicationsharing-video`-Folien-Keyframes und Live-Chat-Opt-out. |
-| **Cisco Webex** | Beitritt als Browser-Gast ([webex-browser.ts](worker/runtime/webex-browser.ts)) oder per Service-App-SDK; Multistream-`AUDIO-MAIN`-Erfassung, `activeSpeakerNotification`-Zuordnung, `VIDEO`/`SLIDES`-Folien-Keyframes im Browser-Modus (`"unsupported"` im Guest-Issuer-SDK-Modus) und Live-Chat-Opt-out. |
-| **Zoom** | Beitritt über den Zoom Web-Client als Gast oder mit hinterlegter Sitzung ([zoom-browser.ts](worker/runtime/zoom-browser.ts), [zoom-url.ts](worker/src/zoom-url.ts)); Warteraum-Unterstützung, Opus-Audio-Erfassung, `.sharing-layout-container`-/`#sharee-container-canvas`-Folien-Keyframes bei eindeutiger Teilnehmer-Zuordnung und Live-Chat-Opt-out. |
+| **Google Meet** | Beitritt als Gast oder mit hinterlegtem Google-Konto ([meet.ts](worker/runtime/meet.ts), [meet-page.ts](worker/src/meet-page.ts), [capture.ts](worker/src/capture.ts)); getrennte WebRTC-Einzelspuren, Teilnehmer-Zuordnung, `1280×720`-Live-Videokachel ([video-tile.ts](worker/runtime/video-tile.ts)), Bildschirmfreigabe-Keyframes (`a=content:slides` + Screencast-DOM, Kameraspuren ausgeschlossen) und Live-Steuerung im Chat (`nein`/`opt out`, `#pause`/`#resume`, `#decision`, `#todo`). |
+| **Microsoft Teams** | Beitritt als Gast mit deutscher/englischer Steuerung ([teams-browser.ts](worker/runtime/teams-browser.ts)); getrennte WebRTC-Empfangsspuren, CSI-Sprecher-Bindung, `1280×720`-Live-Videokachel, `applicationsharing-video`-Folien-Keyframes und Live-Steuerung im Chat (`nein`/`opt out`, `#pause`/`#resume`, `#decision`, `#todo`). |
+| **Cisco Webex** | Beitritt als Browser-Gast ([webex-browser.ts](worker/runtime/webex-browser.ts)) oder per Service-App-SDK; Multistream-`AUDIO-MAIN`-Erfassung, `activeSpeakerNotification`-Zuordnung, `1280×720`-Live-Videokachel + `VIDEO`/`SLIDES`-Folien-Keyframes im Browser-Modus (`"unsupported"` im Guest-Issuer-SDK-Modus) und Live-Steuerung im Chat (`nein`/`opt out`, `#pause`/`#resume`, `#decision`, `#todo`). |
+| **Zoom** | Beitritt über den Zoom Web-Client als Gast oder mit hinterlegter Sitzung ([zoom-browser.ts](worker/runtime/zoom-browser.ts), [zoom-url.ts](worker/src/zoom-url.ts)); Warteraum-Unterstützung, Opus-Audio-Erfassung, `1280×720`-Live-Videokachel, `.sharing-layout-container`-/`#sharee-container-canvas`-Folien-Keyframes bei eindeutiger Teilnehmer-Zuordnung und Live-Steuerung im Chat (`nein`/`opt out`, `#pause`/`#resume`, `#decision`, `#todo`). |
 
 *(Kann eine Tonspur vom Konferenzanbieter nicht eindeutig einer Teilnehmersitzung zugeordnet werden, weist `wortlaut` dies im Protokoll transparent als `attribution_unknown: true` aus, statt Namen zu erraten.)*
 
@@ -124,9 +124,9 @@ helm upgrade --install wortlaut oci://ghcr.io/mayflower/charts/wortlaut \
 
 ## Spracherkennungsmodell (Qwen3-ASR, 30 Sprachen)
 
-Der `wortlaut-asr`-Dienst ([services/asr/app.py](services/asr/app.py)) lädt [`Qwen/Qwen3-ASR-1.7B-hf`](https://huggingface.co/Qwen/Qwen3-ASR-1.7B-hf) in einer festen Revision über Hugging Face Transformers (`WORTLAUT_ASR_MODEL_REPO` und `WORTLAUT_ASR_MODEL_REVISION` überschreiben beides). Die Sprache wird pro Segment erkannt; unterstützt: Chinesisch, Englisch, Kantonesisch, Arabisch, Deutsch, Französisch, Spanisch, Portugiesisch, Indonesisch, Italienisch, Koreanisch, Russisch, Thai, Vietnamesisch, Japanisch, Türkisch, Hindi, Malaiisch, Niederländisch, Schwedisch, Dänisch, Finnisch, Polnisch, Tschechisch, Filipino, Persisch, Griechisch, Ungarisch, Mazedonisch, Rumänisch.
+Der `wortlaut-asr`-Dienst ([services/asr/app.py](services/asr/app.py)) lädt [`Qwen/Qwen3-ASR-1.7B-hf`](https://huggingface.co/Qwen/Qwen3-ASR-1.7B-hf) in einer festen Revision über Hugging Face Transformers (`WORTLAUT_ASR_MODEL_REPO` und `WORTLAUT_ASR_MODEL_REVISION` überschreiben beides). `WORTLAUT_ASR_LANGUAGES` begrenzt die automatische Spracherkennung pro Segment auf die erwarteten Konferenzsprachen (Standard `German,English`; mit `*` werden alle 30 Sprachen freigeschaltet: Chinesisch, Englisch, Kantonesisch, Arabisch, Deutsch, Französisch, Spanisch, Portugiesisch, Indonesisch, Italienisch, Koreanisch, Russisch, Thai, Vietnamesisch, Japanisch, Türkisch, Hindi, Malaiisch, Niederländisch, Schwedisch, Dänisch, Finnisch, Polnisch, Tschechisch, Filipino, Persisch, Griechisch, Ungarisch, Mazedonisch, Rumänisch).
 
-Das Modell liefert keine Wort-Zeitstempel. Jeder ASR-Job bekommt deshalb nur seinen eigenen, überlappungsfreien Audioabschnitt, und Transkriptsegmente tragen Zeiten auf Segmentebene. Die Wortkonfidenz ist die mittlere Wahrscheinlichkeit der erzeugten Tokens. Stille und Rauschen ergeben ein leeres Transkript; eine Ausgabe, die das Generierungsbudget ohne Endmarker erreicht, wird als Decoder-Schleife verworfen.
+Das Modell liefert keine Wort-Zeitstempel. Jeder ASR-Job bekommt deshalb nur seinen eigenen, überlappungsfreien Audioabschnitt, und Transkriptsegmente tragen Zeiten auf Segmentebene. Die Wortkonfidenz ist die mittlere Wahrscheinlichkeit der erzeugten Tokens. Stille und Rauschen ergeben ein leeres Transkript; eine Ausgabe, die das Generierungsbudget ohne Endmarker erreicht, wird als Decoder-Schleife verworfen. Über `WORTLAUT_ASR_GLOSSARY="BegriffA, BegriffB"` (kommagetrennt oder JSON-Array) lassen sich eigene Fachbegriffe und Produktnamen neben Meeting-Titel und bestätigten Teilnehmernamen in den System-Kontext von `Qwen3-ASR` einbinden. Überzieht eine aktive Besprechung ihre geplante Endzeit (`ends_at`), verlängert `wortlaut` das Aufnahmefenster automatisch in 15-Minuten-Schritten bis maximal `WORTLAUT_MAX_OVERTIME_SECONDS` (Standard `3600` = 60 Minuten).
 
 Für eine komplett englischsprachige Standard-Oberfläche samt englischem Bot-Chathinweis genügt zusätzlich `WORTLAUT_DEFAULT_LOCALE=en`.
 
@@ -157,7 +157,7 @@ claude mcp add --transport http wortlaut https://wortlaut.example.org/mcp
 ```dotenv
 WORTLAUT_ENABLE_LLM_SUMMARY=true
 WORTLAUT_OLLAMA_URL=http://ollama.ollama.svc.cluster.local:11434
-WORTLAUT_OLLAMA_MODEL=qwen3:32b
+WORTLAUT_OLLAMA_MODEL=qwen3.8:latest
 ```
 
 ### E-Mail-Einladungen (IMAP) & Ergebnisversand (SMTP)
@@ -185,7 +185,27 @@ WORTLAUT_SMTP_FROM=bot@example.org
 * **Browser-Worker** ([worker](worker)) — TypeScript, Playwright und gesandboxtes Chromium; ein kurzlebiger Job/Container pro Besprechung.
 * **ASR-Dienst** ([services/asr](services/asr), [services/asr/app.py](services/asr/app.py)) — Gemeinsam genutztes lokales **Qwen3-ASR**-Spracherkennungsmodell (`WORTLAUT_ASR_MODEL_REPO`, `WORTLAUT_ASR_MODEL_REVISION`, `WORTLAUT_ASR_ALLOW_CPU`).
 
-Vollständige interaktive OpenAPI-Dokumentation unter `/docs`.
+### Zentrale REST- & MCP-Endpunkte (Interaktive OpenAPI-Dokumentation unter `/docs`)
+
+| Endpunkt | Funktion |
+| :--- | :--- |
+| `POST /v1/recordings` | Besprechungsaufnahme planen oder sofort starten (unterstützt `Idempotency-Key`) |
+| `GET /v1/recordings` | Aufnahmen auflisten & Volltext/Sprechernamen durchsuchen (`?q=`) |
+| `GET /v1/recordings/{id}` | Aufnahmestatus, Spur-Diagnose (`live_status`, `live_status.paused`) und `opted_out_speakers` |
+| `POST /v1/recordings/{id}/cancel` / `/rejoin` | Laufende/geplante Aufnahme beenden oder frischen Worker zum Wiederbeitritt starten |
+| `PATCH /v1/recordings/{id}` | Titel, Notizen, `speaker_overrides`, `term_replacements`, Aufgaben oder `opted_out_speakers` aktualisieren |
+| `DELETE /v1/recordings/{id}` | Aufnahme, Transkript, S3-Audioschnipsel und Folien-Keyframes sofort löschen |
+| `GET /v1/recordings/{id}/transcript` | Sprechergebundene Segmente, Wortkonfidenzen, `keyframes`, `chat_markers` und `pause_windows` abrufen |
+| `GET /v1/recordings/{id}/exports/{format}` | Protokoll als `md`, `txt`, `vtt` oder `json` herunterladen |
+| `GET /v1/recordings/{id}/audio-snippet` | Isolierten WAV-Ausschnitt zur Zitatprüfung abrufen (24-h-Fenster) |
+| `GET /v1/recordings/{id}/keyframes/{kf_id}.png` (`DELETE …/{kf_id}`) | Statisches Bildschirmfreigabe-Standbild abrufen (`Authorization: Bearer`) oder dauerhaft löschen |
+| `POST /v1/recordings/{id}/summary` | Lokale KI-Zusammenfassung & Aufgabenliste über Ollama erzeugen |
+| `POST /v1/recordings/{id}/calendar-link` | Protokoll-Link in den verknüpften Google-Calendar- oder M365-Termin schreiben |
+| `POST /v1/recordings/{id}/reader-token` | Schreibgeschützten `wortlaut-read-…`-Freigabelink ausstellen |
+| `POST /v1/calendar/messages` | `.ics`- oder RFC822-`.eml`-Kalendereinladungen importieren |
+| `GET /v1/calendar` | Verbundene OAuth2-Kalender, synchronisierte Termine und `.ics`-Einladungen abrufen |
+| `POST /mcp` (`GET/DELETE /v1/mcp/grants`) | Authentifizierter MCP-Streamable-HTTP-Server (OAuth 2.1 `mcp:read` / `mcp:write`) & Client-Widerruf |
+| `GET /privacy` / `GET /metrics` | Öffentlicher Datenschutz- & Transparenzhinweis (`?lang=de` / `?lang=en`) und Prometheus-Metriken |
 
 ---
 
@@ -194,7 +214,8 @@ Vollständige interaktive OpenAPI-Dokumentation unter `/docs`.
 Externe Mitwirkende benötigen lokal lediglich Python 3.12 (`uv`), Node.js 22+ und Docker — **kein Kubernetes-Cluster erforderlich** (siehe [CONTRIBUTING.md](CONTRIBUTING.md)):
 
 ```sh
-make setup-local   # Python- & Node-Abhängigkeiten installieren + Bundles bauen
+make setup-local   # Python- & Node-Abhängigkeiten installieren, Bundles bauen & Git-QA-Hooks einrichten
+make qa            # Schnelle Secret-, Lint-, Typecheck- & Helm/Workflow-Prüfungen ausführen
 make test-local    # Linter + vollständige PostgreSQL-, S3- & Worker-Tests in Einweg-Containern
 ```
 

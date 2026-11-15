@@ -341,6 +341,7 @@ def _build_instance_info() -> dict:
                 "teams": True,
                 "webex": False,
                 "zoom": False,
+                "zoom_auth_session": False,
             },
             "mail": {
                 "imapEnabled": False,
@@ -372,6 +373,8 @@ def _build_instance_info() -> dict:
             },
             "privacyUrl": "/privacy",
             "enable_keyframes": True,
+            "llmSummaryEnabled": False,
+            "llmModel": "",
         }
 
     bot_email: str | None = None
@@ -635,8 +638,9 @@ def render_privacy(lang: str | None = None) -> str:
         )
         optout_de = (
             f"{escaped_name} erkennt dies automatisch, verwirft Ihre Audiospur sowie etwaige "
-            "Bildschirmfreigaben und löscht auch bereits während des Calls erfasste Redebeiträge "
-            "und Bildschirm-Standbilder Ihrer Person vollständig aus dem Protokoll."
+            "Bildschirmfreigaben und löscht auch bereits während des Calls erfasste Redebeiträge, "
+            "Chat-Marker (#decision/#todo) und Bildschirm-Standbilder Ihrer Person vollständig aus "
+            "dem Protokoll."
         )
         video_title_en = "No Voiceprints &amp; Zero Camera Video"
         video_body_en = (
@@ -653,8 +657,8 @@ def render_privacy(lang: str | None = None) -> str:
         )
         optout_en = (
             f"{escaped_name} immediately discards your audio track and screen share and purges "
-            "any statements and screen-share snapshots already captured from you while continuing "
-            "the transcript for everyone else."
+            "any statements, chat markers (#decision/#todo), and screen-share snapshots already "
+            "captured from you while continuing the transcript for everyone else."
         )
     else:
         video_title_de = "Keine Stimmprofile &amp; kein Video"
@@ -671,8 +675,8 @@ def render_privacy(lang: str | None = None) -> str:
         )
         optout_de = (
             f"{escaped_name} erkennt dies automatisch, verwirft Ihre Audiospur und löscht auch "
-            "bereits während des Calls erfasste Redebeiträge Ihrer Person vollständig aus dem "
-            "Protokoll."
+            "bereits während des Calls erfasste Redebeiträge und Chat-Marker (#decision/#todo) "
+            "Ihrer Person vollständig aus dem Protokoll."
         )
         video_title_en = "No Voiceprints &amp; No Video"
         video_body_en = (
@@ -686,7 +690,8 @@ def render_privacy(lang: str | None = None) -> str:
         )
         optout_en = (
             f"{escaped_name} immediately discards your audio track and purges any statements "
-            "already captured from you while continuing the transcript for everyone else."
+            "and chat markers (#decision/#todo) already captured from you while continuing the "
+            "transcript for everyone else."
         )
     template = PRIVACY_HTML_EN if effective_lang.startswith("en") else PRIVACY_HTML
     return (

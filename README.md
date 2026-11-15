@@ -66,10 +66,10 @@ All four platforms work side-by-side in the same `wortlaut` deployment:
 
 | Platform | Join Mode & Capabilities |
 | :--- | :--- |
-| **Google Meet** | Joins as guest or with a saved Google session ([meet.ts](worker/runtime/meet.ts), [meet-page.ts](worker/src/meet-page.ts), [capture.ts](worker/src/capture.ts)); isolated WebRTC receiver tracks, participant binding, settled screen-share keyframes (`a=content:slides` + screencast DOM, camera tracks excluded), and live chat opt-out. |
-| **Microsoft Teams** | Joins via Teams web client in English or German ([teams-browser.ts](worker/runtime/teams-browser.ts)); isolated WebRTC receiver capture, CSI speaker binding, `applicationsharing-video` screen-share keyframes, and live chat opt-out. |
-| **Cisco Webex** | Joins as browser guest ([webex-browser.ts](worker/runtime/webex-browser.ts)) or via Service App SDK; multistream `AUDIO-MAIN` capture, `activeSpeakerNotification` binding, `VIDEO`/`SLIDES` screen-share keyframes in browser mode (`"unsupported"` in Guest-Issuer SDK mode), and live chat opt-out. |
-| **Zoom** | Joins via Zoom Web Client as guest or authenticated session ([zoom-browser.ts](worker/runtime/zoom-browser.ts), [zoom-url.ts](worker/src/zoom-url.ts)); waiting-room handling, Opus capture, `.sharing-layout-container` / `#sharee-container-canvas` screen-share keyframes bound to a unique roster presenter, and live chat opt-out. |
+| **Google Meet** | Joins as guest or with a saved Google session ([meet.ts](worker/runtime/meet.ts), [meet-page.ts](worker/src/meet-page.ts), [capture.ts](worker/src/capture.ts)); isolated WebRTC receiver tracks, participant binding, `1280×720` live transcript/instruction video tile ([video-tile.ts](worker/runtime/video-tile.ts)), settled screen-share keyframes (`a=content:slides` + screencast DOM, camera tracks excluded), and live chat controls (`opt out`, `#pause`/`#resume`, `#decision`, `#todo`). |
+| **Microsoft Teams** | Joins via Teams web client in English or German ([teams-browser.ts](worker/runtime/teams-browser.ts)); isolated WebRTC receiver capture, CSI speaker binding, `1280×720` live video tile, `applicationsharing-video` screen-share keyframes, and live chat controls (`opt out`, `#pause`/`#resume`, `#decision`, `#todo`). |
+| **Cisco Webex** | Joins as browser guest ([webex-browser.ts](worker/runtime/webex-browser.ts)) or via Service App SDK; multistream `AUDIO-MAIN` capture, `activeSpeakerNotification` binding, `1280×720` live video tile + `VIDEO`/`SLIDES` screen-share keyframes in browser mode (`"unsupported"` in Guest-Issuer SDK mode), and live chat controls (`opt out`, `#pause`/`#resume`, `#decision`, `#todo`). |
+| **Zoom** | Joins via Zoom Web Client as guest or authenticated session ([zoom-browser.ts](worker/runtime/zoom-browser.ts), [zoom-url.ts](worker/src/zoom-url.ts)); waiting-room handling, Opus capture, `1280×720` live video tile, `.sharing-layout-container` / `#sharee-container-canvas` screen-share keyframes bound to a unique roster presenter, and live chat controls (`opt out`, `#pause`/`#resume`, `#decision`, `#todo`). |
 
 *(Whenever a conference provider does not expose a verified participant binding for a stream, `wortlaut` surfaces `attribution_unknown: true` transparently instead of guessing speaker names.)*
 
@@ -160,7 +160,7 @@ Point `wortlaut` at a self-hosted **Ollama** instance to generate structured sum
 ```dotenv
 WORTLAUT_ENABLE_LLM_SUMMARY=true
 WORTLAUT_OLLAMA_URL=http://ollama.ollama.svc.cluster.local:11434
-WORTLAUT_OLLAMA_MODEL=qwen3:32b
+WORTLAUT_OLLAMA_MODEL=qwen3.8:latest
 ```
 
 ### Email Invitations (IMAP) & Protocol Delivery (SMTP)
@@ -198,16 +198,18 @@ WORTLAUT_SMTP_FROM=bot@example.org
 | :--- | :--- |
 | `POST /v1/recordings` | Schedule or immediately start a meeting recording (with `Idempotency-Key`) |
 | `GET /v1/recordings` | List recordings & search full text or speaker names (`?q=`) |
-| `GET /v1/recordings/{id}` | Recording status, track diagnostics (`live_status`), and `opted_out_speakers` |
-| `PATCH /v1/recordings/{id}` | Update title, notes, `speaker_overrides`, `term_replacements`, or `opted_out_speakers` |
-| `DELETE /v1/recordings/{id}` | Immediately purge recording, transcript, and S3 audio chunks |
-| `GET /v1/recordings/{id}/transcript` | Retrieve live or completed speaker-attributed transcript |
+| `GET /v1/recordings/{id}` | Recording status, track diagnostics (`live_status`, `live_status.paused`), and `opted_out_speakers` |
+| `POST /v1/recordings/{id}/cancel` / `/rejoin` | Stop an active/scheduled recording or dispatch a fresh worker to rejoin an ongoing meeting |
+| `PATCH /v1/recordings/{id}` | Update title, notes, `speaker_overrides`, `term_replacements`, action items, or `opted_out_speakers` |
+| `DELETE /v1/recordings/{id}` | Immediately purge recording, transcript, S3 audio chunks, and slide keyframes |
+| `GET /v1/recordings/{id}/transcript` | Retrieve speaker-attributed segments, word confidences, `keyframes`, `chat_markers`, and `pause_windows` |
 | `GET /v1/recordings/{id}/exports/{format}` | Download protocol as `md`, `txt`, `vtt`, or `json` |
-| `GET /v1/recordings/{id}/audio-snippet` | Stream isolated WAV snippet for statement verification |
+| `GET /v1/recordings/{id}/audio-snippet` | Stream isolated WAV snippet for statement verification (24h window) |
 | `GET /v1/recordings/{id}/keyframes/{kf_id}.png` (`DELETE …/{kf_id}`) | Fetch (`Authorization: Bearer`) or permanently delete a settled screen-share slide PNG |
 | `POST /v1/recordings/{id}/summary` | Generate local LLM executive summary & action items via Ollama |
 | `POST /v1/recordings/{id}/calendar-link` | Write protocol link into the linked Google Calendar / M365 event |
 | `POST /v1/recordings/{id}/reader-token` | Issue scoped read-only `wortlaut-read-…` share token |
+| `POST /v1/calendar/messages` | Import `.ics` or RFC822 `.eml` calendar invitations |
 | `GET /v1/calendar` | List connected OAuth2 calendars, synced events, and `.ics` invitations |
 | `POST /v1/calendar/oauth/exchange` | Connect Google Calendar (`calendar.events`) or M365 (`Calendars.ReadWrite`) via PKCE |
 | `POST /v1/calendar/oauth/events/{id}/toggle` | Enable or disable auto-recording for a synced calendar event |
@@ -237,7 +239,8 @@ curl --fail-with-body "http://127.0.0.1:34601/v1/recordings/$RECORDING_ID/export
 External contributors only need Python 3.12 (`uv`), Node.js 22+, and Docker — **no Kubernetes cluster required** (see [CONTRIBUTING.md](CONTRIBUTING.md)):
 
 ```sh
-make setup-local   # Install Python & Node dependencies and build frontend/worker bundles
+make setup-local   # Install Python & Node dependencies, build bundles, and install git QA hooks
+make qa            # Run fast secret, lint, typecheck, and Helm/workflow QA checks
 make test-local    # Run linters + full PostgreSQL, S3, and worker integration tests in disposable containers
 ```
 

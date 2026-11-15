@@ -1,6 +1,6 @@
 # wortlaut Helm Chart
 
-Deploys `wortlaut` (`meeting` control plane + Web-UI, ephemeral `worker` Jobs, and local GPU `asr` service) on Kubernetes.
+Deploys `wortlaut` (`meeting` control plane + Web-UI + OAuth 2.1 MCP server at `/mcp`, ephemeral `worker` Jobs, and local GPU/CPU `asr` service) on Kubernetes.
 
 ## Mode A: Zero-Dependency Single-Command Install (`bundled.enabled=true`)
 
@@ -54,6 +54,18 @@ helm upgrade --install wortlaut ./charts/wortlaut \
   --set oidc.issuer=https://auth.example.org \
   --set asr.modelRepo=Qwen/Qwen3-ASR-1.7B-hf
 ```
+
+### Key Chart Values (`values.yaml`)
+
+| Value | Default | Description |
+| --- | --- | --- |
+| `host` | `wortlaut.example.org` | Public HTTPS hostname for `/ui`, `/privacy`, `/docs`, `/mcp`, and OAuth2 callbacks |
+| `defaultLocale` | `de` | Default language (`de` or `en`) for Web-UI, `/privacy`, live video tile, and chat intro |
+| `keyframes.enabled` | `true` | Capture settled screen-share slide snapshots (`<= 1280×720` PNG; participant cameras never recorded) |
+| `asr.modelRepo` | `Qwen/Qwen3-ASR-1.7B-hf` | Hugging Face model ID loaded by `wortlaut-asr` |
+| `asr.languages` | `German,English` | Allowed ASR languages (`*` enables all 30 languages) |
+| `asr.glossary` | `""` | Optional comma-separated domain vocabulary / acronyms passed to Qwen3-ASR |
+| `llmSummary.enabled` | `false` | Enable optional local Ollama executive summaries & action items |
 
 ### Optional Secret Keys (`wortlaut-runtime`)
 

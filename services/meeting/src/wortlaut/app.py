@@ -189,7 +189,18 @@ async def lifespan(app: FastAPI):
         await asyncio.gather(*tasks)
 
 
-app = FastAPI(title="wortlaut", lifespan=lifespan)
+app = FastAPI(
+    title="wortlaut",
+    version="0.1.0",
+    description=(
+        "Self-hosted, pre-mix WebRTC speaker-isolated meeting transcription and protocol API "
+        "for Google Meet, Microsoft Teams, Cisco Webex, and Zoom — including OAuth2 calendar "
+        "sync & writeback, settled screen-share keyframes, live in-call chat controls "
+        "(`opt out`, `#pause`/`#resume`, `#decision`, `#todo`), and an authenticated OAuth 2.1 "
+        "Model Context Protocol (MCP) Streamable HTTP server at `/mcp`."
+    ),
+    lifespan=lifespan,
+)
 if get_settings().sdk_directory.is_dir():
     app.mount("/sdk", StaticFiles(directory=get_settings().sdk_directory, html=True), name="sdk")
 if get_settings().site_directory.is_dir():

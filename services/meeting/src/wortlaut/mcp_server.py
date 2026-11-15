@@ -192,8 +192,9 @@ MCP_TOOLS: list[dict[str, Any]] = [
         "name": "get_recording",
         "required_scope": "mcp:read",
         "description": (
-            "Retrieve metadata, live capture status, executive summary, action items, notes, "
-            "speaker list, and raw-audio retention availability for a specific recording."
+            "Retrieve metadata, live capture/pause status, executive summary, action items, notes, "
+            "speaker list, screen-share keyframes, live chat markers (#decision / #todo), "
+            "off-the-record pause windows, and raw-audio retention availability for a recording."
         ),
         "annotations": {
             "title": "Get Recording Details & Summary",
@@ -217,8 +218,10 @@ MCP_TOOLS: list[dict[str, Any]] = [
         "name": "get_transcript",
         "required_scope": "mcp:read",
         "description": (
-            "Read speaker-attributed verbatim transcript segments for a recording, with optional "
-            "speaker, keyword, and timestamp filters plus isolated audio-snippet verification."
+            "Read speaker-attributed verbatim transcript segments, settled screen-share keyframes "
+            "(wortlaut://recordings/{recording_id}/keyframes/{keyframe_id}.png), human-pinned "
+            "chat markers (#decision / #todo), and off-the-record pause windows for a recording, "
+            "with optional speaker, keyword, and timestamp filters plus isolated audio snippets."
         ),
         "annotations": {
             "title": "Read Speaker-Attributed Transcript",
@@ -236,12 +239,16 @@ MCP_TOOLS: list[dict[str, Any]] = [
                 "speaker": {
                     "type": "string",
                     "description": (
-                        "Optional case-insensitive substring filter on speaker name or speaker_id."
+                        "Optional case-insensitive substring filter on speaker name or speaker_id "
+                        "(filters transcript segments, keyframes, and chat markers)."
                     ),
                 },
                 "query": {
                     "type": "string",
-                    "description": "Optional case-insensitive substring filter on segment text.",
+                    "description": (
+                        "Optional case-insensitive substring filter on segment and "
+                        "chat-marker text."
+                    ),
                 },
                 "start_seconds": {
                     "type": "number",
@@ -276,7 +283,8 @@ MCP_TOOLS: list[dict[str, Any]] = [
         "required_scope": "mcp:read",
         "description": (
             "Render the formatted meeting protocol in Markdown (md), plain text (txt), "
-            "WebVTT (vtt), or JSON."
+            "WebVTT (vtt), or JSON (including executive summary, action items, chat-pinned "
+            "decisions/to-dos, off-the-record pause windows, and screen-share slide references)."
         ),
         "annotations": {
             "title": "Export Formatted Protocol",
@@ -1292,9 +1300,11 @@ def _dispatch_rpc_method(
                 },
                 "instructions": (
                     "wortlaut provides pre-mix WebRTC speaker-isolated meeting transcripts "
-                    "(Google Meet, Microsoft Teams, Cisco Webex, Zoom). All results are scoped "
-                    "to the authenticated user. Prefer get_transcript with pagination or filters "
-                    "for detailed verbatim statements and speaker attribution."
+                    "(Google Meet, Microsoft Teams, Cisco Webex, Zoom) scoped to the authenticated "
+                    "user. Prefer get_transcript with pagination or filters for verbatim speaker "
+                    "statements, human-pinned chat_markers (#decision / #todo), off-the-record "
+                    "pause_windows (#pause / #resume), and settled screen-share keyframes "
+                    "(readable as image/png via wortlaut://recordings/{id}/keyframes/{kf_id}.png)."
                 ),
             },
             extra_headers,
@@ -1502,8 +1512,10 @@ def _dispatch_rpc_method(
                                 "text": (
                                     f"Call `get_recording` and `get_transcript` for `{rec_id}`. "
                                     "Produce a concise follow-up note with: (1) key decisions "
-                                    "attributed to exact bound speakers, (2) concrete action "
-                                    "items with owners, and (3) open questions."
+                                    "attributed to exact bound speakers (prioritizing human-pinned "
+                                    "`chat_markers` of kind `decision`), (2) concrete action items "
+                                    "with owners (incorporating `chat_markers` of kind `todo`), "
+                                    "and (3) open questions or off-the-record `pause_windows`."
                                 ),
                             },
                         }
@@ -1524,8 +1536,10 @@ def _dispatch_rpc_method(
                                 "type": "text",
                                 "text": (
                                     f"Inspect `{rec_id}` using `get_transcript`{topic_clause}. "
-                                    "Quote exact verbatim statements with `[MM:SS]` timestamps "
-                                    "and bound speaker names, noting any `attribution_unknown`."
+                                    "Quote exact verbatim statements and any human-pinned "
+                                    "`chat_markers` (`#decision` / `#todo`) with `[MM:SS]` "
+                                    "timestamps and bound speaker names, noting any "
+                                    "`attribution_unknown` or `pause_windows`."
                                 ),
                             },
                         }

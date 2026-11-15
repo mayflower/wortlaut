@@ -12,7 +12,7 @@
       cta_github: "GitHub",
       cta_install: "Get Started",
 
-      hero_badge: "Open Source (AGPL-3.0) · 100% Self-Hosted · 25 Languages · GDPR-Ready",
+      hero_badge: "Open Source (AGPL-3.0) · 100% Self-Hosted · 30 Languages · GDPR-Ready",
       hero_title_html:
         'Speaker-accurate transcripts for your meetings.<br><span class="highlight">100% on your own infrastructure.</span>',
       hero_subtitle:
@@ -52,9 +52,9 @@
       step1_title: "1. Connect calendar, paste link, or invite",
       step1_desc:
         "Link your Google Workspace or Microsoft 365 calendar once via OAuth2, paste a live meeting URL on the home screen, or invite your bot email address like a regular attendee.",
-      step2_title: "2. Transparent join & live chat opt-out",
+      step2_title: "2. Transparent join & live chat controls",
       step2_desc:
-        "wortlaut joins as a passive audio listener displaying the inviter’s name, posts a privacy link in chat, and lets any individual attendee type “opt out” or “no” in chat to exclude their stream on the spot.",
+        "wortlaut joins displaying the inviter’s name with on-screen chat commands on its live video tile: type “opt out” to exclude your voice, “#pause” / “#resume” to go off the record, or “#decision” & “#todo” to pin markers.",
       step3_title: "3. Calendar writeback, verify & export",
       step3_desc:
         "Right after the call, wortlaut writes the read-only protocol link directly into your calendar event, emails the transcript, and lets you verify 24h audio snippets, edit terms, or export Markdown.",
@@ -66,7 +66,7 @@
 
       ftab1_title: "Calendar & Writeback",
       ftab1_sub: "Google & Microsoft 365",
-      ftab2_title: "Ad-hoc & 25 Languages",
+      ftab2_title: "Ad-hoc & 30 Languages",
       ftab2_sub: "Join in ~15s · Local Qwen3-ASR",
       ftab3_title: "Verify, Edit & Summarize",
       ftab3_sub: "Snippets, Ollama AI & Exports",
@@ -120,11 +120,11 @@
       f3_li2:
         "Optional local AI summaries (Ollama): generate structured executive summaries, topic breakdowns, and action items on your own server with zero external API calls.",
       f3_li3:
-        "Scoped read-only links (wortlaut-read-…), automatic email delivery, and open exports (.md, .txt, .vtt, .json) plus an idempotent REST API (/docs).",
+        "Scoped read-only links (wortlaut-read-…), automatic email delivery, open exports (.md, .txt, .vtt, .json), an OAuth 2.1 MCP server (/mcp), and OpenAPI (/docs).",
       f3_exp_md_desc: "Ready for Notion, Confluence, GitHub, GitLab & Jira",
       f3_exp_ai_desc: "Opt-in executive summary, topics & action items on your GPU",
       f3_exp_vtt_desc: "Time-aligned .vtt captions & clean .txt email protocols",
-      f3_exp_json_desc: "Structured segments, track diagnostics & OpenAPI (/docs)",
+      f3_exp_json_desc: "OAuth 2.1 MCP (/mcp), slide keyframes & OpenAPI (/docs)",
 
       f4_title: "Clean speaker attribution before audio mixing — with zero biometric voiceprints",
       f4_lead:
@@ -146,9 +146,9 @@
       trust1_title: "100% Self-Hosted (Zero Cloud Leakage)",
       trust1_desc:
         "Sandboxed browser workers, Qwen3-ASR speech recognition, and optional Ollama summaries all run inside your own cluster or server. Not a single second of audio leaves your infrastructure.",
-      trust2_title: "Live In-Call Chat Opt-Out",
+      trust2_title: "Live Chat Opt-Out & Off-the-Record",
       trust2_desc:
-        "wortlaut joins as “wortlaut (Inviter Name)”, never records video or screen shares, and lets any participant type “opt out”, “no”, or “nein” in chat to immediately discard their stream and purge prior quotes.",
+        "wortlaut joins as “wortlaut (Inviter Name)”, never records participant cameras, and lets anyone type “opt out” / “nein” to purge their stream or “#pause” / “#resume” to go off the record instantly.",
       trust3_title: "24h Audio Window & Auto-Expiry",
       trust3_desc:
         "Isolated audio chunks are deleted automatically from S3 after 24 hours; transcripts expire after 30 days by default and can be purged permanently at any moment with a single click.",
@@ -170,7 +170,7 @@
       comp_r6_w: "Type “opt out” / “nein” in chat — only that speaker is excluded & purged",
       comp_r3_c: "Camera & screen recording",
       comp_r3_cloud: "Frequently records full video & screen shares",
-      comp_r3_w: "Strictly passive audio — camera & screen capture blocked",
+      comp_r3_w: "Participant cameras blocked fail-closed; optional static screen-share slide snapshots only",
       comp_r4_c: "Supported platforms",
       comp_r4_cloud: "Often restricted or billed per seat & platform",
       comp_r5_c: "License & cost",
@@ -287,9 +287,9 @@ make test-local`,
       step1_title: "1. Kalender verbinden, Link einfügen oder einladen",
       step1_desc:
         "Verknüpfe einmalig deinen Google- oder Microsoft-365-Kalender per OAuth2, füge spontan einen Meeting-Link auf der Startseite ein oder lade die Bot-E-Mail-Adresse wie einen normalen Gast ein.",
-      step2_title: "2. Transparenter Beitritt & Live-Opt-Out im Chat",
+      step2_title: "2. Transparenter Beitritt & Live-Steuerung im Chat",
       step2_desc:
-        "wortlaut tritt als passiver Audio-Zuhörer mit dem Namen der einladenden Person bei, postet den Datenschutz-Link im Chat und erlaubt jeder Person, sich per „nein“ oder „opt out“ im Chat sofort auszunehmen.",
+        "wortlaut tritt mit dem Namen der einladenden Person bei und zeigt alle Chat-Befehle direkt auf seiner Live-Videokachel: „nein“ zum eigenen Ausnehmen, „#pause“ / „#weiter“ für Off-the-Record oder „#decision“ & „#todo“ für Marker.",
       step3_title: "3. Kalender-Link, Audio-Check & Export",
       step3_desc:
         "Direkt nach Gesprächsende trägt wortlaut den Lese-Link automatisch in deinen Kalendereintrag ein, versendet das Protokoll per E-Mail und erlaubt Audio-Snippet-Prüfung (24 h), Korrekturen und Markdown-Export.",
@@ -355,11 +355,11 @@ make test-local`,
       f3_li2:
         "Optionale lokale KI-Zusammenfassung (Ollama): Erzeuge Kurzfassungen, Themenblöcke und Aufgabenlisten auf deinem eigenen Server – ohne externe Cloud-APIs.",
       f3_li3:
-        "Geschützte Lese-Links (wortlaut-read-…), automatischer E-Mail-Versand sowie Exporte als .md, .txt, .vtt, .json und idempotente REST-API (/docs).",
+        "Geschützte Lese-Links (wortlaut-read-…), automatischer E-Mail-Versand, Exporte als .md, .txt, .vtt, .json, OAuth-2.1-MCP-Server (/mcp) und OpenAPI (/docs).",
       f3_exp_md_desc: "Direkt für Notion, Confluence, GitHub, GitLab & Jira",
       f3_exp_ai_desc: "Optionale Zusammenfassung, Themen & Aufgaben auf eigener GPU",
       f3_exp_vtt_desc: "Zeitgenaue .vtt-Untertitel & saubere .txt-Protokolle",
-      f3_exp_json_desc: "Strukturierte Segmente, Spur-Diagnose & OpenAPI (/docs)",
+      f3_exp_json_desc: "OAuth-2.1-MCP (/mcp), Folien-Keyframes & OpenAPI (/docs)",
 
       f4_title: "Saubere Sprecherzuordnung vor dem Mischen – ganz ohne biometrische Stimmprofile",
       f4_lead:
@@ -381,9 +381,9 @@ make test-local`,
       trust1_title: "100 % Self-Hosted (Kein Cloud-Abfluss)",
       trust1_desc:
         "Isolierte Browser-Worker, Qwen3-ASR-Spracherkennung und optionale Ollama-Zusammenfassungen laufen komplett auf euren eigenen Servern. Keine Sekunde Audio verlässt eure Infrastruktur.",
-      trust2_title: "Individueller Live-Opt-Out im Chat",
+      trust2_title: "Live-Opt-Out & Off-the-Record im Chat",
       trust2_desc:
-        "wortlaut tritt als „wortlaut (Name der einladenden Person)“ bei, zeichnet niemals Video auf und erlaubt jeder Person im Call, per „nein“ oder „opt out“ im Chat ihre Spur und bisherige Zitate sofort zu löschen.",
+        "wortlaut tritt als „wortlaut (Name der einladenden Person)“ bei, zeichnet niemals Teilnehmer-Kamerabilder auf und erlaubt jederzeit „nein“ / „opt out“ zum sofortigen Löschen der eigenen Spur oder „#pause“ / „#weiter“ für Off-the-Record.",
       trust3_title: "24-h-Audiofenster & automatische Löschfristen",
       trust3_desc:
         "Isolierte Roh-Audioschnipsel werden nach 24 Stunden automatisch aus S3 gelöscht, Protokolle standardmäßig nach 30 Tagen – oder jederzeit sofort per 1-Klick-Löschung.",
@@ -405,7 +405,7 @@ make test-local`,
       comp_r6_w: "„nein“ / „opt out“ im Chat tippen – nur diese Person wird sofort ausgenommen",
       comp_r3_c: "Kamera- & Bildschirmaufnahme",
       comp_r3_cloud: "Häufig kompletter Video- & Bildschirm-Mitschnitt",
-      comp_r3_w: "Rein passives Audio – Kamera- & Screen-Aufnahme gesperrt",
+      comp_r3_w: "Kameras strikt gesperrt; optional nur statische Standbilder aktiver Bildschirmfreigaben",
       comp_r4_c: "Unterstützte Plattformen",
       comp_r4_cloud: "Oft eingeschränkt oder pro Sitzplatz & Plattform lizenziert",
       comp_r5_c: "Lizenz & Kosten",

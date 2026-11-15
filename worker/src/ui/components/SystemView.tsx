@@ -228,7 +228,7 @@ export function SystemView({
                     `How ${instance.assistantName} works in daily meetings`
                   )}
                 </Heading>
-                <MetadataList columns={3}>
+                <MetadataList columns={2}>
                   <MetadataListItem
                     label={tr(
                       '1. Einladen & Warteraum',
@@ -236,30 +236,46 @@ export function SystemView({
                     )}
                   >
                     {tr(
-                      `Der Bot tritt automatisch zum geplanten Termin oder nach Link-Eingabe als Gast „${instance.assistantName}“ bei. Bitte lassen Sie ihn im Konferenzfenster aus dem Warteraum zu.`,
-                      `The assistant joins automatically at the scheduled time or via URL as “${instance.assistantName}”. Please admit it from the conference lobby.`
+                      `Der Bot tritt automatisch zum geplanten Termin oder nach Link-Eingabe als „${instance.assistantName}“ (mit Einladernamen) bei und zeigt Live-Transkript sowie Chat-Befehle direkt auf seiner 1280×720-Videokachel.`,
+                      `The assistant joins automatically at the scheduled time or via URL as “${instance.assistantName}” (with inviter name) and displays live turns plus chat commands directly on its 1280×720 video tile.`
                     )}
                   </MetadataListItem>
                   <MetadataListItem
                     label={tr(
-                      '2. Echte Sprechertrennung',
-                      '2. True Speaker Attribution'
+                      '2. Echte Sprechertrennung & Folien',
+                      '2. True Speaker Attribution & Slides'
+                    )}
+                  >
+                    {instance.enable_keyframes !== false
+                      ? tr(
+                          'Jede Teilnehmerspur wird vor dem Konferenz-Mix getrennt über WebRTC erfasst (keine Stimmprofile, niemals Teilnehmer-Kameravideo; nur statische Standbilder aktiver Bildschirmfreigaben).',
+                          'Every participant audio track is captured before mixing via WebRTC (zero biometric voiceprints, never camera video; settled snapshots of active screen shares only).'
+                        )
+                      : tr(
+                          'Jede empfangene Teilnehmerspur wird direkt über die WebRTC-Sitzung getrennt erfasst (keine Stimmprofile / Voiceprints, keinerlei Video- oder Bildschirmaufnahme).',
+                          'Every participant audio stream is captured directly from the WebRTC session before mixing (no biometric voiceprints, no camera or screen recording).'
+                        )}
+                  </MetadataListItem>
+                  <MetadataListItem
+                    label={tr(
+                      '3. Live-Steuerung im Konferenz-Chat',
+                      '3. In-Call Chat Controls'
                     )}
                   >
                     {tr(
-                      'Jede empfangene Teilnehmerspur wird direkt über die WebRTC-Sitzung getrennt erfasst (keine Stimmprofile / Voiceprints, keine Videoaufzeichnung).',
-                      'Every participant audio stream is captured directly from the WebRTC session before mixing (no biometric voiceprints, no video recording).'
+                      'Direkt im Meeting-Chat steuerbar: „nein“ / „opt out“ löscht sofort die eigene Spur, „#pause“ / „#weiter“ („#resume“) pausiert Off-the-Record, und „#decision <Text>“ sowie „#todo <Text>“ setzen Protokollmarker.',
+                      'Control right from the meeting chat: “opt out” / “no” purges your own track, “#pause” / “#resume” toggles off-the-record mode, and “#decision <text>” or “#todo <text>” pins live protocol markers.'
                     )}
                   </MetadataListItem>
                   <MetadataListItem
                     label={tr(
-                      '3. 100 % Self-Hosted & Löschfristen',
-                      '3. 100% Self-Hosted & Retention'
+                      '4. 100 % Self-Hosted & Löschfristen',
+                      '4. 100% Self-Hosted & Retention'
                     )}
                   >
                     {tr(
-                      `Die Spracherkennung (lokales Qwen3-ASR-Modell) läuft im eigenen Cluster. Roh-Audio wird nach ${instance.retention.audioHours}h, Protokolle nach ${instance.retention.transcriptDays}d gelöscht.`,
-                      `Speech recognition (local Qwen3-ASR GPU model) runs on your infrastructure. Raw audio is purged after ${instance.retention.audioHours}h, transcripts after ${instance.retention.transcriptDays}d.`
+                      `Spracherkennung (lokales Qwen3-ASR, 30 Sprachen) und optionale Ollama-Zusammenfassungen laufen lokal. Roh-Audio wird nach ${instance.retention.audioHours}h, Protokolle & Folien nach ${instance.retention.transcriptDays}d gelöscht.`,
+                      `Speech recognition (local Qwen3-ASR, 30 languages) and optional Ollama summaries run on your infrastructure. Raw audio expires after ${instance.retention.audioHours}h, transcripts & slides after ${instance.retention.transcriptDays}d.`
                     )}
                   </MetadataListItem>
                 </MetadataList>
@@ -421,8 +437,8 @@ export function SystemView({
                 <VStack gap={2}>
                   <Heading level={3}>
                     {tr(
-                      'Kalender-Synchronisation & E-Mail',
-                      'Calendar Sync & Email'
+                      'Integrationen & Laufzeit-Funktionen',
+                      'Integrations & Runtime Capabilities'
                     )}
                   </Heading>
                   <MetadataList columns="single">
@@ -447,6 +463,32 @@ export function SystemView({
                     <MetadataListItem label="IMAP / SMTP">
                       IMAP: {instance.mail.imapEnabled ? tr('Aktiv', 'On') : tr('Aus', 'Off')} ·
                       SMTP: {instance.mail.smtpEnabled ? tr('Aktiv', 'On') : tr('Aus', 'Off')}
+                    </MetadataListItem>
+                    <MetadataListItem
+                      label={tr(
+                        'Bildschirmfreigabe-Keyframes',
+                        'Screen-share keyframes'
+                      )}
+                    >
+                      {instance.enable_keyframes !== false
+                        ? tr(
+                            'Aktiviert (nur Folien-Standbilder, keine Kamera)',
+                            'Enabled (settled slides only, zero camera)'
+                          )
+                        : tr('Deaktiviert', 'Disabled')}
+                    </MetadataListItem>
+                    <MetadataListItem
+                      label={tr('Lokale KI-Zusammenfassung', 'Local AI summary')}
+                    >
+                      {instance.llmSummaryEnabled
+                        ? tr(
+                            `Aktiviert (${instance.llmModel || 'Ollama'})`,
+                            `Enabled (${instance.llmModel || 'Ollama'})`
+                          )
+                        : tr('Deaktiviert', 'Disabled')}
+                    </MetadataListItem>
+                    <MetadataListItem label="MCP Server (OAuth 2.1)">
+                      {tr('Aktiv unter /mcp', 'Active at /mcp')}
                     </MetadataListItem>
                     <MetadataListItem
                       label={tr(

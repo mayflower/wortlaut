@@ -1,6 +1,6 @@
 # Configuration & Integration Guide
 
-This guide walks through configuring optional authentication, calendar OAuth2 writeback, and conference provider sessions for a self-hosted `wortlaut` instance.
+This guide walks through configuring authentication, calendar OAuth2 writeback, conference provider sessions, screen-share keyframes, in-call chat controls, Model Context Protocol (MCP) clients, and speech/summary models for a self-hosted `wortlaut` instance.
 
 ---
 
@@ -94,4 +94,66 @@ Key operational interactions:
 - **Provider support**: Active in browser capture modes for **Google Meet**, **Microsoft Teams**, **Cisco Webex Browser** (`WORTLAUT_ENABLE_WEBEX_BROWSER=true`), and **Zoom Web Client**; reports `capability: "unsupported"` when running in headless Webex Guest-Issuer SDK mode.
 - **Transparency (`/privacy` & `WORTLAUT_ENABLE_CHAT_INTRO`)**: When `WORTLAUT_ENABLE_KEYFRAMES=true`, both the public `/privacy` notice (`DE`/`EN`) and the in-call chat introduction (`WORTLAUT_ENABLE_CHAT_INTRO=true`) explicitly state that participant camera video is never recorded and only settled screen-share snapshots are stored. Setting `WORTLAUT_ENABLE_KEYFRAMES=false` restores audio-only wording automatically.
 - **Live Opt-Out & Single-Slide Deletion**: Typing `no` / `nein` / `opt out` in the meeting chat (or updating `opted_out_speakers`) stops further snapshots from that presenter and synchronously purges their already-uploaded keyframes from S3 and PostgreSQL. Operators and recording owners can also delete individual slides via the Web-UI or `DELETE /v1/recordings/{id}/keyframes/{keyframe_id}`.
-- **Retention & Storage Quota (`WORTLAUT_TRANSCRIPT_RETENTION_DAYS` & `WORTLAUT_MAX_STORED_AUDIO_BYTES`)**: Stored under `keyframes/{recording_id}/` in `WORTLAUT1`-framed S3 objects, slide keyframes survive the 24-hour raw-audio purge (`WORTLAUT_AUDIO_RETENTION_HOURS`) so 30-day protocols retain their visual slide context, and are automatically purged alongside transcripts when `WORTLAUT_TRANSCRIPT_RETENTION_DAYS` expires or `DELETE /v1/recordings/{id}` is called. Active keyframe bytes count toward `WORTLAUT_MAX_STORED_AUDIO_BYTES`.
+- **Retention & Storage Quota (`WORTLAUT_TRANSCRIPT_RETENTION_DAYS` & `WORTLAUT_MAX_STORED_AUDIO_BYTES`)**: Stored under `keyframes/{recording_id}/` in `WORTLAUT1`-framed S3 objects, slide keyframes survive the 24-hour raw-audio purge (`WORTLAUT_RAW_AUDIO_RETENTION_HOURS`) so 30-day protocols retain their visual slide context, and are automatically purged alongside transcripts when `WORTLAUT_TRANSCRIPT_RETENTION_DAYS` expires or `DELETE /v1/recordings/{id}` is called. Active keyframe bytes count toward `WORTLAUT_MAX_STORED_AUDIO_BYTES`.
+
+---
+
+## 5. In-Call Chat Controls, Live Video Tile & Transparency (`/privacy`)
+
+During browser-captured calls (**Google Meet**, **Microsoft Teams**, **Cisco Webex Browser**, and **Zoom**), `wortlaut` transmits a `1280 × 720` WebRTC video tile displaying recent speaker-attributed turns, recording status, and available chat commands (`WORTLAUT_ASSISTANT_NAME`, default `wortlaut`).
+
+```dotenv
+WORTLAUT_ASSISTANT_NAME=wortlaut
+WORTLAUT_DEFAULT_LOCALE=en          # "en" or "de" for UI, /privacy, video tile & chat intro
+WORTLAUT_ENABLE_CHAT_INTRO=true     # Post concise transparency + command notice in meeting chat
+WORTLAUT_PRIVACY_URL=               # Defaults to <WORTLAUT_API_URL>/privacy
+```
+
+Participants can control `wortlaut` directly from the conference chat without opening `/ui`:
+
+| Chat Command | Effect |
+| --- | --- |
+| `opt out`, `optout`, `no`, `nein`, `stop`, `widerspruch` | Immediately halts audio and screen-share capture for that participant and purges their prior transcript segments, slide keyframes, and chat markers from PostgreSQL and S3. |
+| `#pause`, `/pause`, `!pause`, `#off-the-record`, `#pausieren` | Zeroes audio samples in worker RAM, suspends slide keyframe sampling, records a `pause_windows` entry, and switches the video tile to an amber **OFF THE RECORD** banner. |
+| `#resume`, `/resume`, `!resume`, `#weiter`, `#fortsetzen` | Ends the off-the-record pause and resumes normal capture without leaving the room. |
+| `#decision <text>`, `#beschluss <text>` | Pins a timestamped, speaker-attributed decision marker onto the video tile, Web-UI timeline, `.md`/`.txt`/`.json` exports, MCP tools, and Ollama summary context. |
+| `#todo <text>`, `#aufgabe <text>`, `#action <text>` | Pins a timestamped, speaker-attributed action-item marker across the video tile, Web-UI, exports, MCP, and Ollama summary context. |
+
+---
+
+## 6. Model Context Protocol (MCP) Server & OAuth 2.1 (`/mcp`)
+
+`wortlaut` exposes a built-in **MCP Streamable HTTP** server at `POST /mcp` (`GET /mcp`, `DELETE /mcp`) with zero extra containers required:
+
+- **OAuth 2.1 Auto-Discovery (`mcp auth`)**: Serves RFC 9728 Protected Resource Metadata (`/.well-known/oauth-protected-resource/mcp`), RFC 8414 Authorization Server Metadata (`/.well-known/oauth-authorization-server`), and RFC 7591 Dynamic Client Registration (`/oauth/register`) with mandatory PKCE (`S256`) and an explicit browser consent screen (`/oauth/authorize`).
+- **Scopes & Tenant Isolation**: `mcp:read` grants read access to the authenticated user’s own/invited recordings, transcripts, `chat_markers`, `pause_windows`, exports, calendar events, and binary slide keyframes (`wortlaut://recordings/{recording_id}/keyframes/{keyframe_id}.png`). `mcp:write` additionally enables scheduling/cancelling recordings, editing protocol metadata, generating Ollama summaries, and toggling/linking calendar events.
+- **Connecting Clients**:
+  ```sh
+  claude mcp add --transport http wortlaut https://<your-wortlaut-domain>/mcp
+  ```
+  *(Headless scripts may also pass `Authorization: Bearer <WORTLAUT_API_TOKEN>` directly to `POST /mcp`.)*
+- **Revocation**: Users and operators can inspect and revoke active MCP client grants anytime at `/ui#view=mcp` (`GET /v1/mcp/grants`, `DELETE /v1/mcp/grants/{grant_id}`).
+
+---
+
+## 7. Speech-to-Text (`wortlaut-asr`), Glossary, Local Summaries & Retention
+
+```dotenv
+# --- wortlaut-asr service ---
+WORTLAUT_ASR_MODEL_REPO=Qwen/Qwen3-ASR-1.7B-hf
+WORTLAUT_ASR_LANGUAGES=German,English   # Comma-separated language names, or "*" for all 30 languages
+WORTLAUT_ASR_ALLOW_CPU=false            # Set true when running without an NVIDIA GPU
+
+# --- wortlaut-meeting service ---
+WORTLAUT_ASR_GLOSSARY=                  # Optional comma-separated or JSON list of domain terms/acronyms
+WORTLAUT_MAX_OVERTIME_SECONDS=3600      # Auto-extend active meetings past ends_at (15m steps, up to 60m)
+WORTLAUT_ENABLE_LLM_SUMMARY=false       # Enable local Ollama executive summaries & action items
+WORTLAUT_OLLAMA_URL=http://ollama:11434
+WORTLAUT_OLLAMA_MODEL=qwen3.8:latest
+WORTLAUT_RAW_AUDIO_RETENTION_HOURS=24   # Purge raw S3 audio chunks 24h after meeting end
+WORTLAUT_TRANSCRIPT_RETENTION_DAYS=30   # Purge transcripts & slide keyframes after 30 days
+WORTLAUT_MAX_ACTIVE_MEETINGS=15
+WORTLAUT_MAX_STORED_AUDIO_BYTES=8589934592
+```
+
+*(See [`services/meeting/src/wortlaut/settings.py`](../services/meeting/src/wortlaut/settings.py) for the complete typed settings schema and defaults.)*
