@@ -2057,3 +2057,476 @@ def test_calendar_protocol_block_injection_and_writeback(monkeypatch):
     assert html3.count("📝 wortlaut Wortprotokoll") == 1
     assert "Dritte HTML-Fassung" in html3
     assert "Aktualisierte HTML-Kurzfassung" not in html3
+
+
+def test_in_call_pause_windows_and_chat_markers_end_to_end(client, database, monkeypatch):
+    from types import SimpleNamespace
+
+    from wortlaut import exports as exports_module
+    from wortlaut.app import build_chat_intro
+    from wortlaut.asr import finalize_processing
+    from wortlaut.settings import get_settings
+
+    # 1. /privacy page documents #pause/#resume and #decision/#todo in both DE and EN
+    priv_de = client.get("/privacy?lang=de").text
+    priv_en = client.get("/privacy?lang=en").text
+    for page_html in (priv_de, priv_en):
+        assert "#pause" in page_html
+        assert "#resume" in page_html
+        assert "#decision" in page_html
+        assert "#todo" in page_html
+
+    # 2. Worker status reports paused=True, pause_windows & chat_markers -> exports & LLM summary
+    t0 = datetime.now(UTC).replace(microsecond=0)
+    recording = create(
+        client,
+        key="pause-markers-e2e",
+        body={
+            "meeting_url": "https://example.webex.com/meet/off-the-record",
+            "starts_at": t0.isoformat(),
+            "ends_at": (t0 + timedelta(minutes=30)).isoformat(),
+            "title": "Architecture Review",
+        },
+    )
+    attempt, headers = prepare(client, recording)
+    client.post(f"/v1/attempts/{attempt}/claim", headers=headers, json={"worker_id": "owner"})
+    owner = {**headers, "X-Worker-ID": "owner"}
+
+    with Session(database) as db:
+        rec_row = db.get(Recording, uuid.UUID(recording))
+        assert rec_row is not None
+        intro_de = build_chat_intro(
+            "wortlaut",
+            "johann.hartmann@mayflower.de",
+            rec_row,
+            SimpleNamespace(
+                enable_chat_intro=True,
+                api_url="https://wortlaut.data.mayflower.tech",
+                privacy_url="",
+                enable_keyframes=True,
+                default_locale="de",
+            ),
+        )
+        intro_en = build_chat_intro(
+            "wortlaut",
+            "johann.hartmann@mayflower.de",
+            rec_row,
+            SimpleNamespace(
+                enable_chat_intro=True,
+                api_url="https://wortlaut.data.mayflower.tech",
+                privacy_url="",
+                enable_keyframes=True,
+                default_locale="en",
+            ),
+        )
+    for intro in (intro_de, intro_en):
+        assert intro is not None
+        assert len(intro) < 500, f"Chat intro exceeds 500-char Meet limit ({len(intro)}): {intro}"
+        assert "opt out" in intro
+        assert "#pause" in intro
+        assert "#resume" in intro
+        assert "#decision" in intro
+        assert "#todo" in intro
+        assert "/privacy" in intro
+
+    paused_status = client.post(
+        f"/v1/attempts/{attempt}/status",
+        headers=owner,
+        json={
+            "participation": "capturing",
+            "streams": 1,
+            "audio_samples": 80000,
+            "participant_sources": {
+                "available": True,
+                "total": 2,
+                "truncated": False,
+                "paused": True,
+                "sources": [
+                    {
+                        "participant_id": "alice-1",
+                        "participant_name": "Alice Old",
+                        "audio_csis": [101],
+                        "share_audio_csis": [],
+                    },
+                    {
+                        "participant_id": "bob-2",
+                        "participant_name": "Bob Ops",
+                        "audio_csis": [102],
+                        "share_audio_csis": [],
+                    },
+                ],
+                "pause_windows": [
+                    {
+                        "started_at": (t0 + timedelta(seconds=30)).isoformat(),
+                        "ended_at": None,
+                        "by": "Alice Old",
+                    }
+                ],
+                "chat_markers": [
+                    {
+                        "id": "m-dec-1",
+                        "kind": "decision",
+                        "text": "Migrate legacy DB on Friday",
+                        "author": "Alice Old",
+                        "participant_id": "alice-1",
+                        "captured_at": (t0 + timedelta(seconds=20)).isoformat(),
+                    },
+                    {
+                        "id": "m-todo-1",
+                        "kind": "todo",
+                        "text": "Prepare legacy rollback checklist",
+                        "author": "Bob Ops",
+                        "participant_id": "bob-2",
+                        "captured_at": (t0 + timedelta(seconds=25)).isoformat(),
+                    },
+                ],
+            },
+        },
+    )
+    assert paused_status.status_code == 200, paused_status.text
+    status_body = paused_status.json()
+    assert len(status_body["live_markers"]) == 2
+    assert status_body["live_markers"][0]["kind"] == "decision"
+    assert status_body["live_markers"][1]["kind"] == "todo"
+
+    detail_paused = client.get(f"/v1/recordings/{recording}", headers=API).json()
+    assert detail_paused["live_status"]["is_active"] is True
+    assert detail_paused["live_status"]["paused"] is True
+
+    # Resume recording and finish cleanly
+    resumed_status = client.post(
+        f"/v1/attempts/{attempt}/status",
+        headers=owner,
+        json={
+            "participation": "ended",
+            "reason": "normal",
+            "ended": True,
+            "drained": True,
+            "streams": 0,
+            "audio_samples": 160000,
+            "participant_sources": {
+                "available": True,
+                "total": 2,
+                "truncated": False,
+                "sources": [
+                    {
+                        "participant_id": "alice-1",
+                        "participant_name": "Alice Old",
+                        "audio_csis": [101],
+                        "share_audio_csis": [],
+                    },
+                    {
+                        "participant_id": "bob-2",
+                        "participant_name": "Bob Ops",
+                        "audio_csis": [102],
+                        "share_audio_csis": [],
+                    },
+                ],
+                "pause_windows": [
+                    {
+                        "started_at": (t0 + timedelta(seconds=30)).isoformat(),
+                        "ended_at": (t0 + timedelta(seconds=95)).isoformat(),
+                        "by": "Alice Old",
+                    }
+                ],
+                "chat_markers": [
+                    {
+                        "id": "m-dec-1",
+                        "kind": "decision",
+                        "text": "Migrate legacy DB on Friday",
+                        "author": "Alice Old",
+                        "participant_id": "alice-1",
+                        "captured_at": (t0 + timedelta(seconds=20)).isoformat(),
+                    },
+                    {
+                        "id": "m-todo-1",
+                        "kind": "todo",
+                        "text": "Prepare legacy rollback checklist",
+                        "author": "Bob Ops",
+                        "participant_id": "bob-2",
+                        "captured_at": (t0 + timedelta(seconds=25)).isoformat(),
+                    },
+                ],
+            },
+        },
+    )
+    assert resumed_status.status_code == 200
+    detail_ended = client.get(f"/v1/recordings/{recording}", headers=API).json()
+    assert detail_ended["live_status"]["paused"] is False
+    finalize_processing(database)
+
+    # Apply speaker override + term replacement and verify transcript JSON, Markdown & TXT exports
+    patch_res = client.patch(
+        f"/v1/recordings/{recording}",
+        headers=API,
+        json={
+            "speaker_overrides": {"Alice Old": "Dr. Alice Lead"},
+            "term_replacements": {"legacy": "v1"},
+        },
+    )
+    assert patch_res.status_code == 200
+    tx = patch_res.json()
+    assert len(tx["chat_markers"]) == 2
+    assert tx["chat_markers"][0]["author"] == "Dr. Alice Lead"
+    assert tx["chat_markers"][0]["participant_id"] == "alice-1"
+    assert tx["chat_markers"][0]["text"] == "Migrate v1 DB on Friday"
+    assert tx["chat_markers"][1]["text"] == "Prepare v1 rollback checklist"
+    assert len(tx["pause_windows"]) == 1
+    assert tx["pause_windows"][0]["by"] == "Dr. Alice Lead"
+    assert tx["pause_windows"][0]["offset_seconds"] == 10.0
+    assert tx["pause_windows"][0]["end_offset_seconds"] == 75.0
+
+    md_text = client.get(f"/v1/recordings/{recording}/exports/md", headers=API).text
+    assert "## Im Chat markierte Beschlüsse & Aufgaben" in md_text
+    assert "- **Beschluss:** Migrate v1 DB on Friday _(Dr. Alice Lead," in md_text
+    assert "- [ ] **Aufgabe:** Prepare v1 rollback checklist _(Bob Ops," in md_text
+    assert "- **Off-the-Record-Pausen:** 1" in md_text
+    assert "> **[00:10 – 01:15] Off-the-Record-Pause:**" in md_text
+
+    txt_text = client.get(f"/v1/recordings/{recording}/exports/txt", headers=API).text
+    assert "IM CHAT MARKIERTE BESCHLÜSSE & AUFGABEN" in txt_text
+    assert "[Beschluss] Migrate v1 DB on Friday (Dr. Alice Lead," in txt_text
+    assert "[ ] [Aufgabe] Prepare v1 rollback checklist (Bob Ops," in txt_text
+    assert "[00:10 – 01:15] OFF-THE-RECORD-PAUSE" in txt_text
+
+    # Verify Ollama summary prompt receives human-verified chat markers even with 0 ASR segments
+    monkeypatch.setenv("WORTLAUT_ENABLE_LLM_SUMMARY", "true")
+    get_settings.cache_clear()
+    captured_prompts: list[str] = []
+
+    class FakeMarkerOllamaResponse:
+        status_code = 200
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {
+                "message": {
+                    "content": (
+                        '{"summary": "Datenbank-Migration beschlossen.", '
+                        '"topics": [{"title": "DB-Migration", "details": "Freitag geplant."}], '
+                        '"action_items": [{"owner": "Bob Ops", '
+                        '"task": "Prepare v1 rollback checklist"}]}'
+                    )
+                }
+            }
+
+    def capture_ollama_post(*args, **kwargs):
+        messages = kwargs.get("json", {}).get("messages", [])
+        captured_prompts.append(messages[-1]["content"] if messages else "")
+        return FakeMarkerOllamaResponse()
+
+    monkeypatch.setattr(exports_module.httpx, "post", capture_ollama_post)
+    sum_res = client.post(f"/v1/recordings/{recording}/summary", headers=API)
+    assert sum_res.status_code == 200, sum_res.text
+    assert len(captured_prompts) == 1
+    assert "BESCHLUSS (Dr. Alice Lead): Migrate v1 DB on Friday" in captured_prompts[0]
+    assert "AUFGABE (Bob Ops): Prepare v1 rollback checklist" in captured_prompts[0]
+
+    # Opting out Alice suppresses her chat markers while keeping Bob's marker intact
+    opt_res = client.patch(
+        f"/v1/recordings/{recording}",
+        headers=API,
+        json={"opted_out_speakers": ["alice-1"]},
+    )
+    assert opt_res.status_code == 200
+    opt_tx = opt_res.json()
+    assert len(opt_tx["chat_markers"]) == 1
+    assert opt_tx["chat_markers"][0]["author"] == "Bob Ops"
+    assert opt_tx["pause_windows"][0]["by"] is None
+
+
+def test_chat_markers_and_pause_windows_validation_rejoin_merge_and_anomaly_guard(client, database):
+    t0 = datetime.now(UTC).replace(microsecond=0)
+    recording = create(
+        client,
+        key="markers-validation-rejoin",
+        body={
+            "meeting_url": "https://example.webex.com/meet/rejoin-markers",
+            "starts_at": t0.isoformat(),
+            "ends_at": (t0 + timedelta(minutes=45)).isoformat(),
+            "title": "Security & Rejoin Sync",
+        },
+    )
+    attempt1, headers1 = prepare(client, recording)
+    client.post(f"/v1/attempts/{attempt1}/claim", headers=headers1, json={"worker_id": "owner-1"})
+    owner1 = {**headers1, "X-Worker-ID": "owner-1"}
+
+    # 1. Schema validation rejects invalid marker kind, oversize text (>500), and bad timestamps
+    bad_payloads = [
+        {
+            "chat_markers": [
+                {
+                    "id": "bad-kind",
+                    "kind": "note",
+                    "text": "Invalid kind",
+                    "captured_at": t0.isoformat(),
+                }
+            ]
+        },
+        {
+            "chat_markers": [
+                {
+                    "id": "oversize",
+                    "kind": "decision",
+                    "text": "x" * 501,
+                    "captured_at": t0.isoformat(),
+                }
+            ]
+        },
+        {
+            "chat_markers": [
+                {
+                    "id": "empty-txt",
+                    "kind": "todo",
+                    "text": "",
+                    "captured_at": t0.isoformat(),
+                }
+            ]
+        },
+        {
+            "pause_windows": [
+                {
+                    "started_at": "not-an-iso-timestamp",
+                    "ended_at": None,
+                }
+            ]
+        },
+    ]
+    for bad_part in bad_payloads:
+        bad_res = client.post(
+            f"/v1/attempts/{attempt1}/status",
+            headers=owner1,
+            json={
+                "participation": "capturing",
+                "streams": 1,
+                "audio_samples": 16000,
+                "participant_sources": {
+                    "available": True,
+                    "total": 1,
+                    "truncated": False,
+                    "sources": [],
+                    **bad_part,
+                },
+            },
+        )
+        assert bad_res.status_code == 422, f"Expected 422 for {bad_part}, got {bad_res.status_code}"
+
+    # 2. Attempt 1 records Decision #1 and Pause Window #1, then ends with room_empty (0 segments)
+    end1 = client.post(
+        f"/v1/attempts/{attempt1}/status",
+        headers=owner1,
+        json={
+            "participation": "ended",
+            "reason": "room_empty",
+            "ended": True,
+            "drained": True,
+            "streams": 0,
+            "audio_samples": 0,
+            "participant_sources": {
+                "available": True,
+                "total": 2,
+                "dom_participants": 2,
+                "truncated": False,
+                "sources": [
+                    {
+                        "participant_id": "p-clara",
+                        "display_name": "Clara Sec",
+                        "audio_csis": [301],
+                        "share_audio_csis": [],
+                    }
+                ],
+                "pause_windows": [
+                    {
+                        "started_at": (t0 + timedelta(seconds=10)).isoformat(),
+                        "ended_at": (t0 + timedelta(seconds=40)).isoformat(),
+                        "by": "Clara Sec",
+                    }
+                ],
+                "chat_markers": [
+                    {
+                        "id": "att1-dec",
+                        "kind": "decision",
+                        "text": "Keep session off the record except formal decisions",
+                        "author": "Clara Sec",
+                        "participant_id": "p-clara",
+                        "captured_at": (t0 + timedelta(seconds=15)).isoformat(),
+                    }
+                ],
+            },
+        },
+    )
+    assert end1.status_code == 200
+    tx_after_att1 = client.get(f"/v1/recordings/{recording}/transcript", headers=API).json()
+    # Because the call was explicitly paused & marked, capture_anomaly must be False!
+    assert tx_after_att1["quality"]["capture_anomaly"] is False
+    assert len(tx_after_att1["chat_markers"]) == 1
+    assert len(tx_after_att1["pause_windows"]) == 1
+
+    # 3. Rejoin resets recording so prepare() creates Attempt 2; Attempt 2 merges & deduplicates
+    rejoin = client.post(f"/v1/recordings/{recording}/rejoin", headers=API)
+    assert rejoin.status_code == 200
+    attempt2, headers2 = prepare(client, recording)
+    client.post(f"/v1/attempts/{attempt2}/claim", headers=headers2, json={"worker_id": "owner-2"})
+    owner2 = {**headers2, "X-Worker-ID": "owner-2"}
+
+    end2 = client.post(
+        f"/v1/attempts/{attempt2}/status",
+        headers=owner2,
+        json={
+            "participation": "ended",
+            "reason": "normal",
+            "ended": True,
+            "drained": True,
+            "streams": 0,
+            "audio_samples": 0,
+            "participant_sources": {
+                "available": True,
+                "total": 1,
+                "truncated": False,
+                "sources": [],
+                "pause_windows": [
+                    {
+                        "started_at": (t0 + timedelta(seconds=120)).isoformat(),
+                        "ended_at": (t0 + timedelta(seconds=150)).isoformat(),
+                        "by": "Marco Infra",
+                    }
+                ],
+                "chat_markers": [
+                    {
+                        "id": "att1-dec",
+                        "kind": "decision",
+                        "text": "Keep session off the record except formal decisions",
+                        "author": "Clara Sec",
+                        "participant_id": "p-clara",
+                        "captured_at": (t0 + timedelta(seconds=15)).isoformat(),
+                    },
+                    {
+                        "id": "att2-todo",
+                        "kind": "todo",
+                        "text": "Rotate mTLS leaf certs next Tuesday",
+                        "author": "Marco Infra",
+                        "captured_at": (t0 + timedelta(seconds=135)).isoformat(),
+                    },
+                ],
+            },
+        },
+    )
+    assert end2.status_code == 200
+
+    merged_tx = client.get(f"/v1/recordings/{recording}/transcript", headers=API).json()
+    assert [m["id"] for m in merged_tx["chat_markers"]] == ["att1-dec", "att2-todo"]
+    assert merged_tx["chat_markers"][0]["participant_id"] == "p-clara"
+    assert len(merged_tx["pause_windows"]) == 2
+    assert merged_tx["pause_windows"][0]["offset_seconds"] == 0.0
+    assert merged_tx["pause_windows"][1]["offset_seconds"] == 110.0
+
+    # Opt-out by participant_id ('p-clara') suppresses att1-dec without participant_name in sources
+    id_opt = client.patch(
+        f"/v1/recordings/{recording}",
+        headers=API,
+        json={"opted_out_speakers": ["p-clara"]},
+    )
+    assert id_opt.status_code == 200
+    assert [m["id"] for m in id_opt.json()["chat_markers"]] == ["att2-todo"]

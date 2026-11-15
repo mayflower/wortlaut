@@ -28,12 +28,17 @@ export class AudioCapture {
   private modules!: Promise<void>;
   private useWorkerFallback = false;
   private closed = false;
+  private muted = false;
 
   constructor(private readonly worklets: {
     resampler: string;
     pcm: string;
     createWorker?: (sampleRate: number) => Worker;
   }) {}
+
+  setMuted(muted: boolean) {
+    this.muted = muted;
+  }
 
   async initialize() {
     await this.context.resume();
@@ -269,7 +274,10 @@ export class AudioCapture {
               gapEnd -= rest; flushGap(); gapEnd += rest;
             }
           } else {
-            flushGap(); chunker.append(new Uint8Array(data.bytes), data.start_sample);
+            const pcmBytes = this.muted
+              ? new Uint8Array(data.bytes.byteLength)
+              : new Uint8Array(data.bytes);
+            flushGap(); chunker.append(pcmBytes, data.start_sample);
             if (pendingBinding) applyPendingBind();
           }
         }

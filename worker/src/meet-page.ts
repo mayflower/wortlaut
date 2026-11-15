@@ -9,7 +9,7 @@ import encodedObserverSource from '../public/encoded-audio-observer.js?raw';
 
 export type MeetCaptureConfig = {meeting_id: string; attempt_id: string; meeting_url: string;
   provider?: 'google_meet' | 'webex' | 'teams' | 'zoom'; teams_origins?: string[];
-  enable_keyframes?: boolean};
+  enable_keyframes?: boolean; bot_display_name?: string | null};
 export type MeetBridgeMessage = {attempt_id: string; type: 'control' | 'chunk' | 'keyframe';
   metadata: Record<string, unknown>; pcm?: string; png?: string};
 
@@ -36,12 +36,30 @@ declare global {
   }
 }
 
+type ChatMarkerState = {
+  id: string;
+  kind: 'decision' | 'todo';
+  text: string;
+  author?: string | null;
+  participant_id?: string | null;
+  captured_at: string;
+};
+
+type PauseWindowState = {
+  started_at: string;
+  ended_at: string | null;
+  by?: string | null;
+};
+
 type ParticipantSourcesState = {
   available: boolean;
   total: number;
   truncated: boolean;
   dom_participants?: number;
   opted_out?: string[];
+  paused?: boolean;
+  pause_windows?: PauseWindowState[];
+  chat_markers?: ChatMarkerState[];
   sources: {participant_id: string; participant_name?: string | null; audio_csis: number[]; share_audio_csis: number[]}[];
 };
 
@@ -222,6 +240,14 @@ function install(config: MeetCaptureConfig) {
   const unmuteHookedTracks = new WeakSet<MediaStreamTrack>();
   const ignoredParticipantIds = new Set<string>();
   const optedOutParticipants = new Set<string>();
+  const sessionStartedMs = performance.now();
+  let capturePaused = false;
+  const pauseWindows: PauseWindowState[] = [];
+  const chatMarkers: ChatMarkerState[] = [];
+  const markerStartSecById = new Map<string, number>();
+  const recentMarkerKeys = new Map<string, number>();
+  const seenDomChatElements = new WeakMap<Element, string>();
+  let markerSequence = 0;
   let liveDomCount = 0;
   let everSawDomParticipants = false;
   const NOTETAKER_BOT_RE =
@@ -230,26 +256,211 @@ function install(config: MeetCaptureConfig) {
     /^(wortlaut(?:\b.*)?|you|sie|ich)$/i;
   const UI_CHROME_TEXT_RE =
     /(vollständigen videofeed|full video|bildausschnitt|reframing)/i;
+  const BOT_INTRO_OR_URL_RE =
+    /https?:\/\/|Protokoll:|Transcript:|Datenschutz-Info:|Privacy Notice:|Schreib(?:e|en Sie) einfach|simply type "no"/i;
   const CHAT_OPT_OUT_EXACT_RE =
     /^[/!]?(?:opt[\s_-]*out|no|nein|stop|stopp|widerspruch|keine\s+(?:aufnahme|aufzeichnung|protokollierung|transkription)|nicht\s+(?:aufnehmen|aufzeichnen|protokollieren|transkribieren)|do\s+not\s+(?:record|transcribe)|don['’]?t\s+(?:record|transcribe))(?:[\s.!?,;:]+(?:bitte|please|danke|thanks|thank\s+you))?$/i;
   const CHAT_OPT_OUT_PHRASE_RE =
     /\b(?:[/!]?opt[\s_-]*out|ich\s+widerspreche|keine\s+(?:aufnahme|aufzeichnung|protokollierung|transkription)|nicht\s+(?:aufnehmen|aufzeichnen|protokollieren|transkribieren)|do\s+not\s+(?:record|transcribe)|don['’]?t\s+(?:record|transcribe))\b/i;
 
-  function isChatOptOutMessage(rawText: unknown, allowBareShortTokens = true): boolean {
-    if (typeof rawText !== 'string') return false;
+  const HOST_SUFFIX_RE = /\s*\((?:Host|Co-host|Gastgeber|Co-Gastgeber|Organizer|Organisator)\)\s*$/i;
+
+  function normalizeChatCommandInput(
+    rawText: unknown,
+    maxLen: number,
+  ): {hasMention: boolean; stripped: string} | null {
+    if (typeof rawText !== 'string') return null;
     const cleaned = rawText.trim().replace(/\s+/g, ' ');
-    if (!cleaned || cleaned.length > 240) return false;
-    if (/https?:\/\/|Protokoll:|Datenschutz-Info:|Schreib(?:e|en Sie) einfach/i.test(cleaned)) return false;
-    const hasMentionPrefix = /^[@#]?wortlaut\b/i.test(cleaned);
+    if (!cleaned || cleaned.length > maxLen || BOT_INTRO_OR_URL_RE.test(cleaned)) return null;
+    const hasMention = /^[@#]?wortlaut\b/i.test(cleaned);
     const stripped = cleaned.replace(/^[@#]?wortlaut(?:\s*\([^)]*\))?[\s,:;-]*/i, '').trim();
-    if (!stripped) return false;
-    const core = stripped.replace(/^[.!?,;:"'„“”‚‘’()[\]\s-]+|[.!?,;:"'„“”‚‘’()[\]\s-]+$/g, '').trim();
+    return stripped ? {hasMention, stripped} : null;
+  }
+
+  function isChatOptOutMessage(rawText: unknown, allowBareShortTokens = true): boolean {
+    const norm = normalizeChatCommandInput(rawText, 240);
+    if (!norm) return false;
+    const core = norm.stripped
+      .replace(/^[.!?,;:"'„“”‚‘’()[\]\s-]+|[.!?,;:"'„“”‚‘’()[\]\s-]+$/g, '')
+      .trim();
     if (!core) return false;
-    if (!allowBareShortTokens && !hasMentionPrefix && /^(?:no|stop)$/i.test(core)) {
+    if (!allowBareShortTokens && !norm.hasMention && /^(?:no|stop)$/i.test(core)) {
       return false;
     }
     if (CHAT_OPT_OUT_EXACT_RE.test(core)) return true;
     return core.length <= 140 && CHAT_OPT_OUT_PHRASE_RE.test(core);
+  }
+
+  function parseChatPauseCommand(rawText: unknown): 'pause' | 'resume' | null {
+    const norm = normalizeChatCommandInput(rawText, 160);
+    if (!norm) return null;
+    const core = norm.stripped
+      .replace(/^[.,;:"'„“”‚‘’()[\]\s]+|[.!?,;:"'„“”‚‘’()[\]\s]+$/g, '')
+      .trim();
+    if (!core) return null;
+    if (
+      /^(?:[#\/!](?:pause|pausieren|off[-_\s]*the[-_\s]*record|otr)|off\s+the\s+record)(?:[\s.!?,;:]+(?:bitte|please|jetzt|now))?$/i.test(
+        core,
+      ) ||
+      (norm.hasMention && /^(?:pause|pausieren)(?:[\s.!?,;:]+(?:bitte|please|jetzt|now))?$/i.test(core))
+    ) {
+      return 'pause';
+    }
+    if (
+      /^(?:[#\/!](?:resume|weiter|continue|fortsetzen|on[-_\s]*the[-_\s]*record)|back\s+on\s+(?:the\s+)?record)(?:[\s.!?,;:]+(?:bitte|please|jetzt|now))?$/i.test(
+        core,
+      ) ||
+      (norm.hasMention &&
+        /^(?:resume|weiter|continue|fortsetzen)(?:[\s.!?,;:]+(?:bitte|please|jetzt|now))?$/i.test(core))
+    ) {
+      return 'resume';
+    }
+    return null;
+  }
+
+  function parseChatMarker(rawText: unknown): {kind: 'decision' | 'todo'; text: string} | null {
+    const norm = normalizeChatCommandInput(rawText, 360);
+    if (!norm) return null;
+    const match = (
+      norm.hasMention
+        ? /^(?:[#\/!]?(decision|beschluss|entscheidung|todo|to-do|action|aufgabe))\b[\s,:;—–-]*(.+)$/i
+        : /^(?:[#\/!](decision|beschluss|entscheidung|todo|to-do|action|aufgabe))\b[\s,:;—–-]*(.+)$/i
+    ).exec(norm.stripped);
+    if (!match) return null;
+    const rawTag = match[1].toLowerCase();
+    const body = match[2].trim().slice(0, 280);
+    if (!body || /^<(?:text|beschreibung)>$/i.test(body)) return null;
+    const kind: 'decision' | 'todo' =
+      rawTag === 'decision' || rawTag === 'beschluss' || rawTag === 'entscheidung'
+        ? 'decision'
+        : 'todo';
+    return {kind, text: body};
+  }
+
+  function resolveChatSender(
+    senderId?: string | null,
+    senderName?: string | null,
+  ): {rejected: boolean; cleanId: string; cleanName: string; authorName: string | null} {
+    const cleanId = typeof senderId === 'string' ? senderId.trim() : '';
+    const cleanName = typeof senderName === 'string' ? senderName.replace(HOST_SUFFIX_RE, '').trim() : '';
+    if (
+      (cleanName && isIgnoredParticipantName(cleanName)) ||
+      (cleanId && (cleanId === webexSelfParticipantId || ignoredParticipantIds.has(cleanId)))
+    ) {
+      return {rejected: true, cleanId, cleanName, authorName: null};
+    }
+    const resolvedName =
+      cleanName ||
+      (cleanId
+        ? (domNames.get(cleanId) ??
+          protoNames.get(cleanId) ??
+          participants.get(cleanId)?.participant_name ??
+          '')
+        : '');
+    if (resolvedName && isIgnoredParticipantName(resolvedName)) {
+      return {rejected: true, cleanId, cleanName, authorName: null};
+    }
+    return {
+      rejected: false,
+      cleanId,
+      cleanName,
+      authorName: resolvedName ? resolvedName.slice(0, 120) : null,
+    };
+  }
+
+  function syncVideoTileFromChat() {
+    window.wortlautVideoTile?.update({
+      paused: capturePaused,
+      markers: chatMarkers.slice(-8).map((m) => ({
+        kind: m.kind,
+        text: m.text,
+        author: m.author ?? null,
+        start: markerStartSecById.get(m.id) ?? 0,
+      })),
+    });
+  }
+
+  function applyPauseState(nextPaused: boolean, senderId?: string | null, senderName?: string | null): boolean {
+    const sender = resolveChatSender(senderId, senderName);
+    if (sender.rejected) return false;
+    if (nextPaused === capturePaused) return false;
+    capturePaused = nextPaused;
+    capture.setMuted(nextPaused);
+    const nowIso = capture.nowUtc();
+    if (nextPaused) {
+      if (pauseWindows.length < 64) {
+        pauseWindows.push({
+          started_at: nowIso,
+          ended_at: null,
+          ...(sender.authorName ? {by: sender.authorName} : {}),
+        });
+      }
+      teardownProbeVideo();
+      state.keyframes.active_share = false;
+    } else {
+      for (let i = pauseWindows.length - 1; i >= 0; i--) {
+        if (pauseWindows[i].ended_at === null) {
+          pauseWindows[i].ended_at = nowIso;
+          break;
+        }
+      }
+    }
+    syncVideoTileFromChat();
+    return true;
+  }
+
+  function recordChatMarker(
+    kind: 'decision' | 'todo',
+    text: string,
+    senderId?: string | null,
+    senderName?: string | null,
+  ): boolean {
+    const sender = resolveChatSender(senderId, senderName);
+    if (sender.rejected) return false;
+    if (isParticipantOptedOut(senderId, sender.authorName ?? senderName)) return false;
+    const dedupeKey = `${kind}::${text.trim().toLowerCase()}`;
+    const nowMs = performance.now();
+    const lastMs = recentMarkerKeys.get(dedupeKey);
+    if (lastMs !== undefined && nowMs - lastMs < 20_000) return false;
+    if (chatMarkers.length >= 128) return false;
+    recentMarkerKeys.set(dedupeKey, nowMs);
+    const id = `${config.attempt_id}:marker:${++markerSequence}`;
+    const elapsedSec = Math.max(0, Math.round(((nowMs - sessionStartedMs) / 1000) * 100) / 100);
+    markerStartSecById.set(id, elapsedSec);
+    const cleanPid = typeof senderId === 'string' && senderId.trim() ? senderId.trim().slice(0, 200) : null;
+    chatMarkers.push({
+      id,
+      kind,
+      text,
+      ...(sender.authorName ? {author: sender.authorName} : {}),
+      ...(cleanPid ? {participant_id: cleanPid} : {}),
+      captured_at: capture.nowUtc(),
+    });
+    syncVideoTileFromChat();
+    return true;
+  }
+
+  function purgeOptedOutChatArtifacts(): boolean {
+    if (!optedOutParticipants.size) return false;
+    let scrubbed = false;
+    for (let i = chatMarkers.length - 1; i >= 0; i--) {
+      const m = chatMarkers[i];
+      if (isParticipantOptedOut(m.participant_id, m.author)) {
+        markerStartSecById.delete(m.id);
+        chatMarkers.splice(i, 1);
+        scrubbed = true;
+      }
+    }
+    for (const w of pauseWindows) {
+      if (w.by && isParticipantOptedOut(null, w.by)) {
+        delete w.by;
+        scrubbed = true;
+      }
+    }
+    if (scrubbed) {
+      syncVideoTileFromChat();
+    }
+    return scrubbed;
   }
 
   function syncOptOutCrossLinks(): boolean {
@@ -289,26 +500,34 @@ function install(config: MeetCaptureConfig) {
         }
       }
     }
+    if (purgeOptedOutChatArtifacts()) added = true;
     return added;
   }
 
   function recordOptOutAuthor(senderId?: string | null, senderName?: string | null): boolean {
+    const sender = resolveChatSender(senderId, senderName);
+    if (sender.rejected) return false;
     let added = false;
-    const cleanId = typeof senderId === 'string' ? senderId.trim() : '';
-    const cleanName = typeof senderName === 'string'
-      ? senderName.replace(/\s*\((?:Host|Co-host|Gastgeber|Co-Gastgeber|Organizer|Organisator)\)\s*$/i, '').trim()
-      : '';
-    if (cleanName && SELF_OR_UI_TEXT_RE.test(cleanName)) return false;
-    if (cleanId && (cleanId === webexSelfParticipantId || ignoredParticipantIds.has(cleanId))) return false;
-    if (cleanId && cleanId.length <= 200 && !optedOutParticipants.has(cleanId) && optedOutParticipants.size < 256) {
-      optedOutParticipants.add(cleanId);
+    if (
+      sender.cleanId &&
+      sender.cleanId.length <= 200 &&
+      !optedOutParticipants.has(sender.cleanId) &&
+      optedOutParticipants.size < 256
+    ) {
+      optedOutParticipants.add(sender.cleanId);
       added = true;
     }
-    if (cleanName && cleanName.length <= 200 && !optedOutParticipants.has(cleanName) && optedOutParticipants.size < 256) {
-      optedOutParticipants.add(cleanName);
+    if (
+      sender.cleanName &&
+      sender.cleanName.length <= 200 &&
+      !optedOutParticipants.has(sender.cleanName) &&
+      optedOutParticipants.size < 256
+    ) {
+      optedOutParticipants.add(sender.cleanName);
       added = true;
     }
     if (syncOptOutCrossLinks()) added = true;
+    if (purgeOptedOutChatArtifacts()) added = true;
     return added;
   }
 
@@ -339,6 +558,8 @@ function install(config: MeetCaptureConfig) {
     if (!name) return false;
     const trimmed = name.trim();
     if (!trimmed) return false;
+    const customBotName = config.bot_display_name?.trim().toLowerCase();
+    if (customBotName && trimmed.toLowerCase() === customBotName) return true;
     return (
       NOTETAKER_BOT_RE.test(trimmed) ||
       SELF_OR_UI_TEXT_RE.test(trimmed) ||
@@ -823,6 +1044,35 @@ function install(config: MeetCaptureConfig) {
   function scanDomChatOptOut(): boolean {
     if (!document.body) return false;
     let updated = false;
+
+    const handleDomChatEntry = (
+      el: Element,
+      candidateText: string,
+      rawText: string,
+      authorId: string | null,
+      authorName: string | null,
+    ) => {
+      if (isChatOptOutMessage(candidateText) || isChatOptOutMessage(rawText)) {
+        if (recordOptOutAuthor(authorId, authorName)) updated = true;
+      }
+      const prevSeen = seenDomChatElements.get(el);
+      if (prevSeen === candidateText) return;
+      seenDomChatElements.set(el, candidateText);
+
+      const pauseCmd = parseChatPauseCommand(candidateText) ?? parseChatPauseCommand(rawText);
+      if (pauseCmd) {
+        if (applyPauseState(pauseCmd === 'pause', authorId, authorName)) {
+          updated = true;
+        }
+      }
+      const marker = parseChatMarker(candidateText) ?? parseChatMarker(rawText);
+      if (marker) {
+        if (recordChatMarker(marker.kind, marker.text, authorId, authorName)) {
+          updated = true;
+        }
+      }
+    };
+
     const chatItems = document.querySelectorAll(
       '[data-message-text], [data-sender-name], ' +
       '[data-tid="chat-pane-item"], [data-tid="chat-pane-message"], ' +
@@ -841,10 +1091,22 @@ function install(config: MeetCaptureConfig) {
         el.closest('[data-sender-id], [data-participant-id]')?.getAttribute('data-participant-id') ??
         ''
       ).trim() || null;
-      const senderNode = el.querySelector(
+      const senderSelector =
         '[data-sender-name], [data-tid="message-author-name"], [data-tid="chat-message-author"], ' +
-        '.chat-item__sender, .new-chat-message__sender, [class*="sender-name"], [class*="senderName"], [class*="author-name"]'
-      );
+        '.chat-item__sender, .new-chat-message__sender, [class*="sender-name"], [class*="senderName"], [class*="author-name"]';
+      const itemContainer =
+        el.parentElement?.closest(
+          '[data-tid="chat-pane-item"], .chat-item__container, .chat-item__chat-info, .new-chat-message__container, ' +
+          '[class*="chat-message"], [class*="chatMessage"], [class*="message-item"]'
+        ) ??
+        (el.parentElement &&
+        el.parentElement !== document.body &&
+        el.parentElement.querySelectorAll(
+          '[data-tid="chat-pane-message"], .chat-message__text-box, .chat-message__text-content, [data-message-text]'
+        ).length <= 1
+          ? el.parentElement
+          : null);
+      const senderNode = el.querySelector(senderSelector) ?? itemContainer?.querySelector(senderSelector) ?? null;
       const explicitSenderName = (
         el.getAttribute('data-sender-name') ??
         el.closest('[data-sender-name]')?.getAttribute('data-sender-name') ??
@@ -852,10 +1114,7 @@ function install(config: MeetCaptureConfig) {
         senderNode?.textContent ??
         ''
       ).trim() || null;
-      if (
-        (explicitSenderName && SELF_OR_UI_TEXT_RE.test(explicitSenderName)) ||
-        (explicitSenderId && (explicitSenderId === webexSelfParticipantId || ignoredParticipantIds.has(explicitSenderId)))
-      ) {
+      if (resolveChatSender(explicitSenderId, explicitSenderName).rejected) {
         lastKnownSenderName = null;
         lastKnownSenderId = null;
         continue;
@@ -883,9 +1142,7 @@ function install(config: MeetCaptureConfig) {
       if (authorName && candidateText.startsWith(authorName)) {
         candidateText = candidateText.slice(authorName.length).replace(/^[\s•·:,-]+/, '').replace(/^\d{1,2}:\d{2}(?:\s*[AP]M)?[\s•·:,-]*/i, '').trim();
       }
-      if (isChatOptOutMessage(candidateText) || isChatOptOutMessage(rawText)) {
-        if (recordOptOutAuthor(authorId, authorName)) updated = true;
-      }
+      handleDomChatEntry(el, candidateText, rawText, authorId, authorName);
     }
     for (const msgEl of Array.from(document.querySelectorAll('[data-message-id]')).slice(0, 128)) {
       const msgText = (
@@ -893,7 +1150,14 @@ function install(config: MeetCaptureConfig) {
         msgEl.textContent ??
         ''
       ).trim();
-      if (!msgText || !isChatOptOutMessage(msgText)) continue;
+      if (
+        !msgText ||
+        (!isChatOptOutMessage(msgText) &&
+          !parseChatPauseCommand(msgText) &&
+          !parseChatMarker(msgText))
+      ) {
+        continue;
+      }
       let senderName: string | null = null;
       let cur: Element | null = msgEl.parentElement;
       for (let depth = 0; depth < 5 && cur && cur !== document.body; depth++) {
@@ -911,8 +1175,8 @@ function install(config: MeetCaptureConfig) {
         }
         cur = cur.parentElement;
       }
-      if (senderName && SELF_OR_UI_TEXT_RE.test(senderName)) continue;
-      if (recordOptOutAuthor(null, senderName)) updated = true;
+      if (senderName && isIgnoredParticipantName(senderName)) continue;
+      handleDomChatEntry(msgEl, msgText, msgText, null, senderName);
     }
     for (const toastEl of Array.from(document.querySelectorAll('[data-key^="notification-"]')).slice(0, 32)) {
       for (const pair of Array.from(toastEl.querySelectorAll('div'))) {
@@ -923,10 +1187,8 @@ function install(config: MeetCaptureConfig) {
         ) {
           const senderName = (pair.children[0].textContent ?? '').trim();
           const msgText = (pair.children[1].textContent ?? '').trim();
-          if (!senderName || !msgText || SELF_OR_UI_TEXT_RE.test(senderName)) continue;
-          if (isChatOptOutMessage(msgText)) {
-            if (recordOptOutAuthor(null, senderName)) updated = true;
-          }
+          if (!senderName || !msgText || isIgnoredParticipantName(senderName)) continue;
+          handleDomChatEntry(pair, msgText, msgText, null, senderName);
         }
       }
     }
@@ -1403,23 +1665,36 @@ function install(config: MeetCaptureConfig) {
         const chatBodyCandidate = explicitChatText ?? record.text ??
           record.content ?? record.msg ??
           (typeof record.body === 'string' && !record.body.startsWith('{') && !record.body.startsWith('[') && !record.body.startsWith('H4sI') ? record.body : undefined);
-        if (typeof chatBodyCandidate === 'string' && isChatOptOutMessage(chatBodyCandidate, explicitChatText !== undefined)) {
-          const fromObj = record.from && typeof record.from === 'object' ? (record.from as Record<string, unknown>) : undefined;
-          const senderObj = record.sender && typeof record.sender === 'object' ? (record.sender as Record<string, unknown>) : undefined;
-          const userObj = (fromObj?.user && typeof fromObj.user === 'object' ? (fromObj.user as Record<string, unknown>) : undefined) ??
-            (senderObj?.user && typeof senderObj.user === 'object' ? (senderObj.user as Record<string, unknown>) : undefined);
-          const sId = [
-            record.senderId, record.sender_id, record.participantId, record.participant_id,
-            record.authorId, record.author_id, record.userId, record.user_id, record.fromId,
-            fromObj?.id, senderObj?.id, userObj?.id,
-          ].find((v) => (typeof v === 'string' && v.trim()) || (typeof v === 'number' && Number.isFinite(v)));
-          const sName = [
-            record.senderName, record.sender_name, record.displayName, record.display_name,
-            record.authorName, record.author_name, record.userName, record.user_name, record.imDisplayName,
-            fromObj?.name, fromObj?.displayName, senderObj?.name, senderObj?.displayName, userObj?.displayName,
-          ].find((v): v is string => typeof v === 'string' && Boolean(v.trim()));
-          if (recordOptOutAuthor(sId !== undefined ? String(sId) : null, sName ?? null)) {
-            updated = true;
+        if (typeof chatBodyCandidate === 'string') {
+          const isOptOut = isChatOptOutMessage(chatBodyCandidate, explicitChatText !== undefined);
+          const pauseCmd = parseChatPauseCommand(chatBodyCandidate);
+          const markerCmd = parseChatMarker(chatBodyCandidate);
+          if (isOptOut || pauseCmd || markerCmd) {
+            const fromObj = record.from && typeof record.from === 'object' ? (record.from as Record<string, unknown>) : undefined;
+            const senderObj = record.sender && typeof record.sender === 'object' ? (record.sender as Record<string, unknown>) : undefined;
+            const userObj = (fromObj?.user && typeof fromObj.user === 'object' ? (fromObj.user as Record<string, unknown>) : undefined) ??
+              (senderObj?.user && typeof senderObj.user === 'object' ? (senderObj.user as Record<string, unknown>) : undefined);
+            const sId = [
+              record.senderId, record.sender_id, record.participantId, record.participant_id,
+              record.authorId, record.author_id, record.userId, record.user_id, record.fromId,
+              fromObj?.id, senderObj?.id, userObj?.id,
+            ].find((v) => (typeof v === 'string' && v.trim()) || (typeof v === 'number' && Number.isFinite(v)));
+            const sName = [
+              record.senderName, record.sender_name, record.displayName, record.display_name,
+              record.authorName, record.author_name, record.userName, record.user_name, record.imDisplayName,
+              fromObj?.name, fromObj?.displayName, senderObj?.name, senderObj?.displayName, userObj?.displayName,
+            ].find((v): v is string => typeof v === 'string' && Boolean(v.trim()));
+            const resolvedId = sId !== undefined ? String(sId) : null;
+            const resolvedName = sName ?? null;
+            if (isOptOut && recordOptOutAuthor(resolvedId, resolvedName)) {
+              updated = true;
+            }
+            if (pauseCmd && applyPauseState(pauseCmd === 'pause', resolvedId, resolvedName)) {
+              updated = true;
+            }
+            if (markerCmd && recordChatMarker(markerCmd.kind, markerCmd.text, resolvedId, resolvedName)) {
+              updated = true;
+            }
           }
         }
         for (const b64Key of ['message', 'body'] as const) {
@@ -1601,17 +1876,32 @@ function install(config: MeetCaptureConfig) {
         !/^[a-z]{2}(?:-[A-Z]{2})?$/.test(s) &&
         !/^[A-Za-z0-9+/=_-]{20,}$/.test(s);
       const optOutStr = strings.find((s) => isChatOptOutMessage(s, false));
-      if (optOutStr && matchedIds.length <= 1) {
+      const pauseStr = strings.find((s) => parseChatPauseCommand(s) !== null);
+      const markerStr = strings.find((s) => parseChatMarker(s) !== null);
+      const chatCommandStr = optOutStr ?? pauseStr ?? markerStr;
+      if (chatCommandStr && matchedIds.length <= 1) {
         const senderNameCandidate = (matchedId
           ? (domNames.get(matchedId) ?? protoNames.get(matchedId) ?? participants.get(matchedId)?.participant_name)
           : null) ??
-          strings.find((s) => isNameCandidate(s, optOutStr, matchedId)) ?? null;
-        if (recordOptOutAuthor(matchedId, senderNameCandidate)) {
+          strings.find((s) => isNameCandidate(s, chatCommandStr, matchedId)) ?? null;
+        if (optOutStr && recordOptOutAuthor(matchedId, senderNameCandidate)) {
           updated = true;
+        }
+        if (pauseStr) {
+          const cmd = parseChatPauseCommand(pauseStr);
+          if (cmd && applyPauseState(cmd === 'pause', matchedId, senderNameCandidate)) {
+            updated = true;
+          }
+        }
+        if (markerStr) {
+          const parsedMarker = parseChatMarker(markerStr);
+          if (parsedMarker && recordChatMarker(parsedMarker.kind, parsedMarker.text, matchedId, senderNameCandidate)) {
+            updated = true;
+          }
         }
       }
       if (matchedId && !ignoredParticipantIds.has(matchedId)) {
-        const protoName = strings.find((s) => isNameCandidate(s, matchedId, optOutStr)) ?? null;
+        const protoName = strings.find((s) => isNameCandidate(s, matchedId, chatCommandStr)) ?? null;
         if (protoName && isIgnoredParticipantName(protoName)) {
           if (!domNames.has(matchedId) && !protoNames.has(matchedId)) {
             ignoredParticipantIds.add(matchedId);
@@ -1928,7 +2218,8 @@ function install(config: MeetCaptureConfig) {
     chunk: (metadata: Chunk, pcm: Uint8Array) => {
       // Five-second blocks, not one RPC per AudioWorklet render quantum.
       const optedOut = isParticipantOptedOut(metadata.participant_id ?? metadata.speaker_id, metadata.participant_name);
-      const effectivePcm = optedOut ? new Uint8Array(pcm.length) : pcm;
+      const silenceChunk = optedOut || capturePaused;
+      const effectivePcm = silenceChunk ? new Uint8Array(pcm.length) : pcm;
       let raw = '';
       for (let offset = 0; offset < effectivePcm.length; offset += 8192) {
         raw += String.fromCharCode(...effectivePcm.subarray(offset, offset + 8192));
@@ -1937,7 +2228,7 @@ function install(config: MeetCaptureConfig) {
       send({attempt_id: config.attempt_id, type: 'chunk', metadata, pcm: encoded}, encoded.length + 8192);
       state.audio_samples += metadata.sample_count;
       let chunkActive = false;
-      if (!optedOut) {
+      if (!silenceChunk) {
         const view = new DataView(pcm.buffer, pcm.byteOffset, pcm.byteLength);
         for (let i = 0; i + 1 < pcm.byteLength; i += 2) {
           if (Math.abs(view.getInt16(i, true)) >= 200) {
@@ -1949,7 +2240,7 @@ function install(config: MeetCaptureConfig) {
       }
       for (const source of sources.values()) {
         if (source.id === metadata.provider_source_id) {
-          source.silentSamples = chunkActive || optedOut ? 0 : (source.silentSamples ?? 0) + metadata.sample_count;
+          source.silentSamples = chunkActive || silenceChunk ? 0 : (source.silentSamples ?? 0) + metadata.sample_count;
           break;
         }
       }
@@ -2540,6 +2831,7 @@ function install(config: MeetCaptureConfig) {
 
   const sampler = new ScreenShareKeyframeSampler(
     (metadata, base64Png, byteLength) => {
+      if (capturePaused) return;
       send(
         {
           attempt_id: config.attempt_id,
@@ -2563,6 +2855,12 @@ function install(config: MeetCaptureConfig) {
       await initialized;
       if (stopping || state.reason || sampler.isHalted) return;
       scanDomParticipants();
+      if (capturePaused) {
+        teardownProbeVideo();
+        state.keyframes.active_share = false;
+        await sampler.tick(null);
+        return;
+      }
 
       if (config.provider === 'zoom') {
         teardownProbeVideo();
@@ -2746,6 +3044,9 @@ function install(config: MeetCaptureConfig) {
         truncated: totalParticipants > 256,
         ...(everSawDomParticipants || domNames.size > 0 ? {dom_participants: liveDomCount} : {}),
         ...(optedOutParticipants.size > 0 ? {opted_out: [...optedOutParticipants].slice(0, 64)} : {}),
+        ...(capturePaused ? {paused: true} : {}),
+        ...(pauseWindows.length > 0 ? {pause_windows: pauseWindows.slice(0, 64).map((w) => ({...w}))} : {}),
+        ...(chatMarkers.length > 0 ? {chat_markers: chatMarkers.slice(0, 128).map((m) => ({...m}))} : {}),
         sources: [...participants.values()].slice(0, 256).map((p) => ({
           participant_id: p.participant_id,
           ...(p.participant_name ? {participant_name: p.participant_name} : {}),
@@ -2781,6 +3082,16 @@ function install(config: MeetCaptureConfig) {
       clearInterval(interval);
       if (keyframeInterval !== undefined) clearInterval(keyframeInterval);
       clearInterval(statsInterval);
+      if (capturePaused) {
+        const stopIso = capture.nowUtc();
+        for (let i = pauseWindows.length - 1; i >= 0; i--) {
+          if (pauseWindows[i].ended_at === null) {
+            pauseWindows[i].ended_at = stopIso;
+            break;
+          }
+        }
+        capturePaused = false;
+      }
       teardownProbeVideo();
       state.keyframes.active_share = false;
       await initialized;

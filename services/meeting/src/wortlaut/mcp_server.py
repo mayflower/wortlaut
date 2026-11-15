@@ -767,15 +767,21 @@ def _execute_tool(
         transcript_info: dict[str, Any] = {
             "segment_count": 0,
             "keyframe_count": 0,
+            "chat_marker_count": 0,
+            "pause_window_count": 0,
             "speakers": [],
         }
         keyframes_out: list[dict[str, Any]] = []
+        chat_markers_out: list[dict[str, Any]] = []
+        pause_windows_out: list[dict[str, Any]] = []
         if rec.transcript_deleted_at is None:
             exp = export_data(db, rec)
             segs = exp.get("segments") or []
             keyframes_out = [
                 _mcp_keyframe_item(rec.id, kf) for kf in (exp.get("keyframes") or [])
             ]
+            chat_markers_out = list(exp.get("chat_markers") or [])
+            pause_windows_out = list(exp.get("pause_windows") or [])
             speakers = sorted(
                 {
                     str(s.get("speaker_label") or s.get("speaker_name") or "Unknown")
@@ -785,6 +791,8 @@ def _execute_tool(
             transcript_info = {
                 "segment_count": len(segs),
                 "keyframe_count": len(keyframes_out),
+                "chat_marker_count": len(chat_markers_out),
+                "pause_window_count": len(pause_windows_out),
                 "speakers": speakers,
                 "opted_out_speakers": exp.get("opted_out_speakers") or [],
             }
@@ -807,6 +815,8 @@ def _execute_tool(
             "term_replacements": meta.get("term_replacements") or {},
             "transcript": transcript_info,
             "keyframes": keyframes_out,
+            "chat_markers": chat_markers_out,
+            "pause_windows": pause_windows_out,
             "ui_url": f"{origin}/ui#view=meetings&id={rec.id}",
         }
         return _tool_result(json.dumps(payload, ensure_ascii=False, indent=2), payload)
@@ -819,6 +829,8 @@ def _execute_tool(
         exp = export_data(db, rec)
         all_segments: list[dict[str, Any]] = list(exp.get("segments") or [])
         all_keyframes: list[dict[str, Any]] = list(exp.get("keyframes") or [])
+        all_markers: list[dict[str, Any]] = list(exp.get("chat_markers") or [])
+        all_pauses: list[dict[str, Any]] = list(exp.get("pause_windows") or [])
 
         speaker_filter = str(arguments.get("speaker") or "").strip().lower()
         query_filter = str(arguments.get("query") or "").strip().lower()
@@ -863,6 +875,33 @@ def _execute_tool(
                 continue
             out_keyframes.append(_mcp_keyframe_item(rec.id, kf))
 
+        out_markers = []
+        for mk in all_markers:
+            mk_author = str(mk.get("author") or "").lower()
+            mk_pid = str(mk.get("participant_id") or "").lower()
+            mk_txt = str(mk.get("text") or "").lower()
+            mk_offset = float(mk.get("offset_seconds") or 0.0)
+            if speaker_filter and speaker_filter not in mk_author and speaker_filter not in mk_pid:
+                continue
+            if query_filter and query_filter not in mk_txt and query_filter not in mk_author:
+                continue
+            if start_sec is not None and mk_offset < float(start_sec):
+                continue
+            if end_sec is not None and mk_offset > float(end_sec):
+                continue
+            out_markers.append(mk)
+
+        out_pauses = []
+        for pw in all_pauses:
+            if speaker_filter or query_filter:
+                continue
+            pw_offset = float(pw.get("offset_seconds") or 0.0)
+            if start_sec is not None and pw_offset < float(start_sec):
+                continue
+            if end_sec is not None and pw_offset > float(end_sec):
+                continue
+            out_pauses.append(pw)
+
         total_matching = len(filtered)
         page = filtered[offset : offset + limit]
         audio_available = rec.audio_deleted_at is None
@@ -898,6 +937,23 @@ def _execute_tool(
             out_segments.append(item)
             md_lines.append(f"[{item['timestamp']}] **{speaker_label}**: {item['text']}")
 
+        if out_markers:
+            md_lines.append("\nChat-marked decisions & action items:")
+            for mk in out_markers:
+                ts = short_timestamp(float(mk.get("offset_seconds") or 0.0))
+                badge = "DECISION" if mk.get("kind") == "decision" else "TODO"
+                author = f" ({mk.get('author')})" if mk.get("author") else ""
+                md_lines.append(f"- [{ts}] **[{badge}]{author}**: {mk.get('text')}")
+
+        if out_pauses:
+            md_lines.append("\nOff-the-record pause windows:")
+            for pw in out_pauses:
+                s_ts = short_timestamp(float(pw.get("offset_seconds") or 0.0))
+                end_off = pw.get("end_offset_seconds")
+                e_ts = short_timestamp(float(end_off)) if end_off is not None else "ongoing"
+                by = f" ({pw.get('by')})" if pw.get("by") else ""
+                md_lines.append(f"- [{s_ts}-{e_ts}] **OFF THE RECORD{by}**")
+
         if out_keyframes:
             md_lines.append("\nScreen-share keyframes:")
             for kf in out_keyframes:
@@ -917,6 +973,8 @@ def _execute_tool(
             "ui_url": f"{origin}/ui#view=meetings&id={rec.id}",
             "segments": out_segments,
             "keyframes": out_keyframes,
+            "chat_markers": out_markers,
+            "pause_windows": out_pauses,
         }
         return _tool_result("\n".join(md_lines), structured)
 

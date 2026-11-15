@@ -59,6 +59,7 @@ export interface RecordingSummary {
 
 export interface LiveStatus {
   is_active: boolean;
+  paused?: boolean;
   participation: ParticipationState;
   processing: ProcessingState;
   active_streams: number;
@@ -180,6 +181,24 @@ export interface ProtocolSummary {
   generated_at?: string;
 }
 
+export interface ChatMarker {
+  id: string;
+  kind: 'decision' | 'todo';
+  text: string;
+  author?: string | null;
+  participant_id?: string | null;
+  captured_at: string;
+  offset_seconds: number;
+}
+
+export interface PauseWindow {
+  started_at: string;
+  ended_at: string | null;
+  offset_seconds: number;
+  end_offset_seconds: number | null;
+  by?: string | null;
+}
+
 export interface TranscriptExport {
   recording_id: string;
   provider: Provider;
@@ -214,6 +233,8 @@ export interface TranscriptExport {
   sources_summary: SourceSummary[];
   segments: TranscriptSegment[];
   keyframes?: RecordingKeyframe[];
+  chat_markers?: ChatMarker[];
+  pause_windows?: PauseWindow[];
 }
 
 export interface CalendarEvent {

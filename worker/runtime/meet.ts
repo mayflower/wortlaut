@@ -50,7 +50,15 @@ const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 
 export async function installMeetCapture(
   page: Page,
-  bootstrap: Pick<MeetBootstrap, 'meeting_id' | 'attempt_id' | 'meeting_url' | 'enable_keyframes'>,
+  bootstrap: Pick<MeetBootstrap, 'meeting_id' | 'attempt_id' | 'meeting_url' | 'enable_keyframes'> & {
+    chat_intro?: string | null;
+    bot_display_name?: string | null;
+    meet?: {display_name?: string};
+    teams?: {display_name?: string};
+    webex?: {display_name?: string};
+    webex_browser?: {display_name?: string};
+    zoom?: {display_name?: string};
+  },
   sink: CaptureSink,
   assets = new URL('../../dist/meet/', import.meta.url),
   provider: 'google_meet' | 'webex' | 'teams' | 'zoom' = 'google_meet',
@@ -165,9 +173,17 @@ export async function installMeetCapture(
       sink.chunk(metadata as Chunk, pcm);
     } else throw new MeetError('browser_bridge_rejected');
   });
+  const botDisplayName =
+    bootstrap.bot_display_name ??
+    bootstrap.meet?.display_name ??
+    bootstrap.teams?.display_name ??
+    bootstrap.webex_browser?.display_name ??
+    bootstrap.webex?.display_name ??
+    bootstrap.zoom?.display_name ??
+    null;
   const config: MeetCaptureConfig = {meeting_id: bootstrap.meeting_id, attempt_id: bootstrap.attempt_id,
     meeting_url: bootstrap.meeting_url, provider, teams_origins: teamsOrigins,
-    enable_keyframes: bootstrap.enable_keyframes};
+    enable_keyframes: bootstrap.enable_keyframes, bot_display_name: botDisplayName};
   // Only the small native hook belongs in every new document. The local WASM
   // bundle is loaded once in the main Meet document, before clicking join.
   await page.addInitScript((config: MeetCaptureConfig) => {

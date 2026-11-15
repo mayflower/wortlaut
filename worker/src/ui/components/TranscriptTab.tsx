@@ -40,13 +40,16 @@ import {
   generateRecordingSummary,
   getInstanceInfo,
   getSourceFilterKey,
+  matchesChatMarkerSourceFilter,
   matchesKeyframeSourceFilter,
   matchesSourceFilter,
   updateRecordingProtocol,
 } from '../api';
 import { KEYFRAME_STRINGS, localizeAttributionStatus, useI18n } from '../i18n';
 import type {
+  ChatMarker,
   ParticipationState,
+  PauseWindow,
   ProcessingState,
   ProtocolSummary,
   RecordingKeyframe,
@@ -83,6 +86,8 @@ export interface TranscriptTabProps {
   termReplacements?: Record<string, string>;
   segments: TranscriptSegment[];
   keyframes?: RecordingKeyframe[];
+  chatMarkers?: ChatMarker[];
+  pauseWindows?: PauseWindow[];
   sources: SourceSummary[];
   selectedSourceFilter: string;
   onSelectedSourceFilterChange: (sourceId: string) => void;
@@ -112,7 +117,9 @@ interface GroupedTurn {
 
 type TimelineItem =
   | { kind: 'turn'; offset: number; turn: GroupedTurn }
-  | { kind: 'keyframe'; offset: number; keyframe: RecordingKeyframe };
+  | { kind: 'keyframe'; offset: number; keyframe: RecordingKeyframe }
+  | { kind: 'marker'; offset: number; marker: ChatMarker }
+  | { kind: 'pause'; offset: number; pause: PauseWindow; index: number };
 
 interface KeyframeTimelineCardProps {
   keyframe: RecordingKeyframe;
@@ -270,6 +277,8 @@ export function TranscriptTab({
   termReplacements = {},
   segments,
   keyframes = [],
+  chatMarkers = [],
+  pauseWindows = [],
   sources,
   selectedSourceFilter,
   onSelectedSourceFilterChange,
@@ -543,6 +552,30 @@ export function TranscriptTab({
     return turns;
   }, [filteredSegments]);
 
+  const filteredChatMarkers = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    return chatMarkers.filter((m) => {
+      if (!matchesChatMarkerSourceFilter(m, selectedSourceFilter, sources)) {
+        return false;
+      }
+      if (!q) return true;
+      const hay =
+        `${m.author || ''} ${m.text} ${m.kind === 'decision' ? 'beschluss entscheidung decision' : 'aufgabe todo to-do action'}`.toLowerCase();
+      return hay.includes(q);
+    });
+  }, [chatMarkers, selectedSourceFilter, searchQuery, sources]);
+
+  const filteredPauseWindows = useMemo(() => {
+    if (selectedSourceFilter && selectedSourceFilter !== 'all') return [];
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return pauseWindows;
+    return pauseWindows.filter((pw) => {
+      const hay =
+        `${pw.by || ''} pause off the record off-the-record pausiert`.toLowerCase();
+      return hay.includes(q);
+    });
+  }, [pauseWindows, selectedSourceFilter, searchQuery]);
+
   const timelineItems = useMemo<TimelineItem[]>(() => {
     const items: TimelineItem[] = [
       ...groupedTurns.map(
@@ -555,14 +588,39 @@ export function TranscriptTab({
           keyframe: kf,
         })
       ),
+      ...filteredChatMarkers.map(
+        (marker): TimelineItem => ({
+          kind: 'marker',
+          offset: marker.offset_seconds,
+          marker,
+        })
+      ),
+      ...filteredPauseWindows.map(
+        (pause, index): TimelineItem => ({
+          kind: 'pause',
+          offset: pause.offset_seconds,
+          pause,
+          index,
+        })
+      ),
     ];
+    const kindRank: Record<TimelineItem['kind'], number> = {
+      pause: 0,
+      keyframe: 1,
+      marker: 2,
+      turn: 3,
+    };
     items.sort((a, b) => {
       if (a.offset !== b.offset) return a.offset - b.offset;
-      if (a.kind === b.kind) return 0;
-      return a.kind === 'keyframe' ? -1 : 1;
+      return kindRank[a.kind] - kindRank[b.kind];
     });
     return items;
-  }, [groupedTurns, filteredKeyframes]);
+  }, [
+    groupedTurns,
+    filteredKeyframes,
+    filteredChatMarkers,
+    filteredPauseWindows,
+  ]);
 
   const handleCopyTurn = async (turn: GroupedTurn) => {
     if (!navigator.clipboard) return;
@@ -1326,7 +1384,7 @@ export function TranscriptTab({
 
       {/* Editorial Transcript Stream */}
       <div id="transcript-view">
-        {groupedTurns.length === 0 && filteredKeyframes.length === 0 ? (
+        {timelineItems.length === 0 ? (
           <EmptyState
             icon={
               participation === 'capturing' ? (
@@ -1336,7 +1394,10 @@ export function TranscriptTab({
               )
             }
             title={
-              segments.length === 0 && keyframes.length === 0
+              segments.length === 0 &&
+              keyframes.length === 0 &&
+              chatMarkers.length === 0 &&
+              pauseWindows.length === 0
                 ? participation === 'capturing'
                   ? tr(
                       'Hört zu — warte auf erste gesprochene Sätze…',
@@ -1357,7 +1418,10 @@ export function TranscriptTab({
                   )
             }
             description={
-              segments.length === 0 && keyframes.length === 0
+              segments.length === 0 &&
+              keyframes.length === 0 &&
+              chatMarkers.length === 0 &&
+              pauseWindows.length === 0
                 ? tr(
                     'Sobald im Gespräch gesprochen wird, erscheinen die Wortbeiträge hier automatisch nach Sprechern getrennt.',
                     'As soon as participants speak, statements appear here automatically separated by speaker.'
@@ -1384,6 +1448,105 @@ export function TranscriptTab({
         ) : (
           <div className="divide-y divide-[var(--color-border)]">
             {timelineItems.map((item) => {
+              if (item.kind === 'pause') {
+                const pw = item.pause;
+                const startLbl = formatWallClockTime(
+                  pw.offset_seconds,
+                  timeOriginUtc
+                );
+                const endLbl =
+                  pw.end_offset_seconds != null
+                    ? formatWallClockTime(pw.end_offset_seconds, timeOriginUtc)
+                    : tr('laufend', 'ongoing');
+                return (
+                  <div
+                    key={`pause-${item.index}-${pw.started_at}`}
+                    className="wl-turn-row wl-fade-in"
+                  >
+                    <HStack gap={3} vAlign="start">
+                      <span className="mt-0.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400">
+                        <Pause className="h-3.5 w-3.5" />
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <HStack gap={2} vAlign="center" wrap="wrap">
+                          <Token
+                            size="sm"
+                            color="orange"
+                            label={tr(
+                              'Off-the-Record-Pause',
+                              'Off-the-Record Pause'
+                            )}
+                          />
+                          <Text
+                            type="supporting"
+                            color="secondary"
+                            hasTabularNumbers
+                          >
+                            {startLbl} – {endLbl}
+                          </Text>
+                          {pw.by && (
+                            <Text type="supporting" color="secondary">
+                              · {pw.by}
+                            </Text>
+                          )}
+                        </HStack>
+                        <Text type="supporting" color="secondary">
+                          {tr(
+                            'Aufnahme im Konferenz-Chat pausiert — weder Audio noch Bildschirmfreigaben wurden in diesem Zeitraum erfasst.',
+                            'Recording paused via meeting chat — neither audio nor screen-share slides were captured during this interval.'
+                          )}
+                        </Text>
+                      </div>
+                    </HStack>
+                  </div>
+                );
+              }
+              if (item.kind === 'marker') {
+                const m = item.marker;
+                const isDecision = m.kind === 'decision';
+                const authorLabel =
+                  m.author || tr('Konferenz-Chat', 'Meeting Chat');
+                return (
+                  <div
+                    key={`marker-${m.id}`}
+                    id={`marker-${m.id}`}
+                    className="wl-turn-row wl-fade-in"
+                  >
+                    <HStack gap={3} vAlign="start">
+                      <Avatar size="sm" shape="circle" name={authorLabel} />
+                      <div className="min-w-0 flex-1">
+                        <HStack gap={2} vAlign="center" wrap="wrap">
+                          <span className="font-semibold text-sm text-[var(--color-text-primary)]">
+                            {authorLabel}
+                          </span>
+                          <Text
+                            type="supporting"
+                            color="secondary"
+                            hasTabularNumbers
+                          >
+                            {formatWallClockTime(
+                              m.offset_seconds,
+                              timeOriginUtc
+                            )}
+                          </Text>
+                          <Token
+                            size="sm"
+                            color={isDecision ? 'green' : 'blue'}
+                            label={
+                              isDecision
+                                ? tr('Chat-Beschluss', 'Chat Decision')
+                                : tr('Chat-Aufgabe', 'Chat To-Do')
+                            }
+                          />
+                        </HStack>
+                        <p className="mt-1 text-sm font-medium text-[var(--color-text-primary)] leading-relaxed">
+                          {renderHighlightedText(m.text, searchQuery)}
+                        </p>
+                      </div>
+                    </HStack>
+                  </div>
+                );
+              }
               if (item.kind === 'keyframe') {
                 const kf = item.keyframe;
                 const kfFilterKey = kf.participant_id

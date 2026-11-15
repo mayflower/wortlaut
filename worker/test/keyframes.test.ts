@@ -110,7 +110,39 @@ test('shouldStopForEmptyRoom treats active presenter-bound screen share as room 
     rtpAdvanced: false,
     activeShare: true,
   });
-  assert.equal(emptiedExpired.shouldStop, true);
+  // Off-the-record pause (#pause) resets emptySinceMs while participants remain in the room,
+  // even when audio samples are zeroed and no screen share is active.
+  const pausedWithParticipants = shouldStopForEmptyRoom({
+    nowMs: 600_000,
+    emptySinceMs: 1000,
+    configuredTimeoutSeconds: 60,
+    currentDomParticipants: 2,
+    maxDomParticipants: 2,
+    streams: 1,
+    activeSamples: 0,
+    lastActiveSamples: 0,
+    rtpAdvanced: false,
+    activeShare: false,
+    paused: true,
+  });
+  assert.equal(pausedWithParticipants.emptySinceMs, undefined);
+  assert.equal(pausedWithParticipants.shouldStop, false);
+
+  // If everyone leaves while paused (currentDomParticipants === 0 after >= 1), still stop cleanly after 15s!
+  const pausedDomEmptied = shouldStopForEmptyRoom({
+    nowMs: 26_000,
+    emptySinceMs: 10_000,
+    configuredTimeoutSeconds: 300,
+    currentDomParticipants: 0,
+    maxDomParticipants: 2,
+    streams: 0,
+    activeSamples: 0,
+    lastActiveSamples: 0,
+    rtpAdvanced: false,
+    activeShare: false,
+    paused: true,
+  });
+  assert.equal(pausedDomEmptied.shouldStop, true);
 });
 
 test('KeyframeTransport retries 503, halts without retry on 409 limit, and bounds queue size', async () => {

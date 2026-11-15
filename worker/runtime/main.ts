@@ -198,6 +198,7 @@ async function run(api: string, credential: string) {
           lastActiveSamples,
           rtpAdvanced,
           activeShare: Boolean(state.keyframes?.active_share),
+          paused: Boolean(state.participant_sources?.paused),
         });
         maxDomParticipants = evalRes.maxDomParticipants;
         lastActiveSamples = evalRes.lastActiveSamples;
@@ -236,6 +237,12 @@ async function run(api: string, credential: string) {
         await meet?.updateVideoTile({
           participation: state.participation,
           segments: reported.live_transcript,
+          ...(Array.isArray(reported.live_markers)
+            ? {
+                markers: reported.live_markers,
+                expectedLocalMarkers: state.participant_sources?.chat_markers?.length ?? 0,
+              }
+            : {}),
         });
       }
       if (reported.stop_requested) {

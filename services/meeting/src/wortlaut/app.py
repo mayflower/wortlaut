@@ -398,6 +398,37 @@ class ParticipantSourceEvidence(BaseModel):
         return data
 
 
+class ChatMarkerEvidence(BaseModel):
+    id: str = Field(min_length=1, max_length=256)
+    kind: Literal["decision", "todo"]
+    text: str = Field(min_length=1, max_length=300)
+    author: str | None = Field(default=None, max_length=200)
+    participant_id: str | None = Field(default=None, max_length=200)
+    captured_at: AwareDatetime
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler):
+        data = handler(self)
+        if data.get("author") is None:
+            data.pop("author", None)
+        if data.get("participant_id") is None:
+            data.pop("participant_id", None)
+        return data
+
+
+class PauseWindowEvidence(BaseModel):
+    started_at: AwareDatetime
+    ended_at: AwareDatetime | None = None
+    by: str | None = Field(default=None, max_length=200)
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler):
+        data = handler(self)
+        if data.get("by") is None:
+            data.pop("by", None)
+        return data
+
+
 class ParticipantEvidence(BaseModel):
     available: bool = False
     total: int = Field(default=0, ge=0)
@@ -407,6 +438,9 @@ class ParticipantEvidence(BaseModel):
     opted_out: list[Annotated[str, Field(min_length=1, max_length=200)]] = Field(
         default_factory=list, max_length=64
     )
+    paused: bool = False
+    pause_windows: list[PauseWindowEvidence] = Field(default_factory=list, max_length=64)
+    chat_markers: list[ChatMarkerEvidence] = Field(default_factory=list, max_length=128)
 
     @model_serializer(mode="wrap")
     def _serialize(self, handler):
@@ -415,6 +449,12 @@ class ParticipantEvidence(BaseModel):
             data.pop("dom_participants", None)
         if not data.get("opted_out"):
             data.pop("opted_out", None)
+        if not data.get("paused"):
+            data.pop("paused", None)
+        if not data.get("pause_windows"):
+            data.pop("pause_windows", None)
+        if not data.get("chat_markers"):
+            data.pop("chat_markers", None)
         return data
 
 
@@ -1505,6 +1545,7 @@ def get_recording(
         or recording.processing not in ("completed", "failed"),
         "participation": recording.participation,
         "processing": recording.processing,
+        "paused": bool(part_sources.get("paused")),
         "active_streams": diag.get("streams", 0),
         "audio_seconds": round(samples / RATE, 1),
         "active_audio_seconds": round(diag.get("active_audio_samples", 0) / RATE, 1),
@@ -2251,36 +2292,29 @@ def build_chat_intro(
     bot_label = display_name.strip() or "wortlaut"
     keyframes_on = bool(getattr(settings, "enable_keyframes", True))
     if getattr(settings, "default_locale", "de") == "en":
-        who_en = inviter.strip() if inviter and inviter.strip() else "a participant"
+        who_en = (inviter.strip() if inviter and inviter.strip() else "a participant")[:48]
         if keyframes_on:
             return (
-                f"Hello! I am {bot_label}, invited by {who_en} to transcribe this meeting "
-                f"(including static snapshots of shared screens; cameras are never recorded). "
-                f"If you do not want your statements or screen shares recorded, "
-                f'simply type "no" or "opt out" in chat. '
-                f"Transcript: {recording_url} | Privacy Notice: {privacy_url}?lang=en"
+                f"{bot_label} ({who_en}) transcribes this call (+ slide snapshots, no cameras). "
+                f'Chat: "no"/"opt out" | #pause/#resume | #decision/#todo. '
+                f"Transcript: {recording_url} | Info: {privacy_url}?lang=en"
             )
         return (
-            f"Hello! I am {bot_label}, invited by {who_en} to transcribe this meeting. "
-            f'If you do not want your statements recorded, simply type "no" or "opt out" in chat. '
-            f"Transcript: {recording_url} | Privacy Notice: {privacy_url}?lang=en"
+            f"{bot_label} ({who_en}) transcribes this call. "
+            f'Chat: "no"/"opt out" | #pause/#resume | #decision/#todo. '
+            f"Transcript: {recording_url} | Info: {privacy_url}?lang=en"
         )
-    who = inviter.strip() if inviter and inviter.strip() else "einem Teilnehmenden"
+    who = (inviter.strip() if inviter and inviter.strip() else "einem Teilnehmenden")[:48]
     if keyframes_on:
         return (
-            f"Hallo! Ich bin {bot_label} und wurde von {who} eingeladen, "
-            f"dieses Meeting zu protokollieren (inkl. einzelner Standbilder geteilter "
-            f"Bildschirme; Kameras werden nie aufgezeichnet). "
-            f"Wenn deine Aussagen oder Bildschirmfreigaben nicht protokolliert werden sollen, "
-            f"schreibe einfach „nein“ oder „opt out“ in den Chat. "
-            f"Protokoll: {recording_url} | Datenschutz-Info: {privacy_url}"
+            f"{bot_label} ({who}) protokolliert (+ Folien-Standbilder, keine Kameras). "
+            f"Chat: „nein“/„opt out“ | #pause/#resume | #decision/#todo. "
+            f"Protokoll: {recording_url} | Info: {privacy_url}"
         )
     return (
-        f"Hallo! Ich bin {bot_label} und wurde von {who} eingeladen, "
-        f"dieses Meeting zu protokollieren. "
-        f"Wenn deine Aussagen nicht protokolliert werden sollen, "
-        f"schreibe einfach „nein“ oder „opt out“ in den Chat. "
-        f"Protokoll: {recording_url} | Datenschutz-Info: {privacy_url}"
+        f"{bot_label} ({who}) protokolliert dieses Meeting. "
+        f"Chat: „nein“/„opt out“ | #pause/#resume | #decision/#todo. "
+        f"Protokoll: {recording_url} | Info: {privacy_url}"
     )
 
 
@@ -2505,9 +2539,19 @@ def worker_status(
     db.commit()
     record_worker_status_telemetry(recording, attempt, body)
     live_transcript: list[dict] = []
+    live_markers: list[dict] = []
     if body.participation == "capturing" and not transcript_deleted:
         is_en = settings.default_locale == "en"
         exported = export_data(db, recording, tail_segments_limit=48)
+        for m in (exported.get("chat_markers") or [])[-8:]:
+            live_markers.append(
+                {
+                    "kind": m["kind"],
+                    "text": str(m["text"])[:280],
+                    "author": m.get("author"),
+                    "start": round(float(m.get("offset_seconds") or 0.0), 2),
+                }
+            )
         last_spk_key: tuple[str, str] | None = None
         for seg in exported["segments"][-24:]:
             if seg.get("attribution_unknown") and seg.get("source_kind") != "share_audio":
@@ -2549,6 +2593,7 @@ def worker_status(
         "stop_reason": stop_reason,
         "deadline": effective_deadline,
         "live_transcript": live_transcript,
+        "live_markers": live_markers,
     }
 
 

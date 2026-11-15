@@ -1623,6 +1623,38 @@ try {
     assert.equal(rendered.snap.activeTracks, 1);
     assert.ok(rendered.nonDarkPixels > 50);
 
+    // Verify in-call #pause / #decision / #todo / #resume on MeetBrowser + video tile
+    await tileFixture.page.evaluate(() => {
+      for (const [author, text] of [
+        ['Bob Remote', '#pause'],
+        ['Bob Remote', '#decision Release am Freitag freigegeben'],
+        ['Bob Remote', '#todo Monitoring-Dashboard ergänzen'],
+      ]) {
+        const bubble = document.createElement('div');
+        bubble.setAttribute('data-sender-name', author);
+        bubble.setAttribute('data-message-text', text);
+        document.body.append(bubble);
+      }
+    });
+    const pausedInspect = await tileFixture.meet.inspect();
+    assert.equal(pausedInspect.participant_sources.paused, true);
+    assert.equal(pausedInspect.participant_sources.chat_markers?.length, 2);
+    const pausedTileSnap = await tileFixture.page.evaluate(() => window.wortlautVideoTile?.getSnapshot());
+    assert.equal(pausedTileSnap?.paused, true);
+    assert.equal(pausedTileSnap?.markerCount, 2);
+
+    await tileFixture.page.evaluate(() => {
+      const resumeBubble = document.createElement('div');
+      resumeBubble.setAttribute('data-sender-name', 'Bob Remote');
+      resumeBubble.setAttribute('data-message-text', '#resume');
+      document.body.append(resumeBubble);
+    });
+    const resumedInspect = await tileFixture.meet.inspect();
+    assert.equal(resumedInspect.participant_sources.paused ?? false, false);
+    assert.ok(typeof resumedInspect.participant_sources.pause_windows?.[0]?.ended_at === 'string');
+    const resumedTileSnap = await tileFixture.page.evaluate(() => window.wortlautVideoTile?.getSnapshot());
+    assert.equal(resumedTileSnap?.paused, false);
+
     await tileFixture.meet.stop('cancelled');
     const afterStopSnap = await tileFixture.page.evaluate(() => window.wortlautVideoTile?.getSnapshot());
     assert.equal(afterStopSnap?.activeTracks, 0);

@@ -7,9 +7,19 @@ export type VideoTileSegment = {
   start: number;
 };
 
+export type VideoTileMarker = {
+  kind: 'decision' | 'todo';
+  text: string;
+  author?: string | null;
+  start: number;
+};
+
 export type VideoTilePatch = {
   participation?: string;
+  paused?: boolean;
   segments?: VideoTileSegment[];
+  markers?: VideoTileMarker[];
+  expectedLocalMarkers?: number;
 };
 
 export type VideoTileMetadata = {
@@ -35,7 +45,9 @@ declare global {
       getSnapshot: () => {
         frameCount: number;
         participation: string;
+        paused: boolean;
         segmentCount: number;
+        markerCount: number;
         lastRenderedText: string;
         activeTracks: number;
       };
@@ -94,7 +106,9 @@ export async function installVideoTile(
     const ctx = canvas.getContext('2d');
 
     let participation = 'joining';
+    let paused = false;
     let segments: VideoTileSegment[] = [];
+    let markers: VideoTileMarker[] = [];
     let frameCount = 0;
     let lastRenderedText = '';
     const liveTracks = new Set<MediaStreamTrack>();
@@ -206,11 +220,11 @@ export async function installVideoTile(
       roundRect(ctx, cardX, cardY, cardW, cardH, 22);
       ctx.clip();
       ctx.fillStyle = 'rgba(255, 255, 255, 0.02)';
-      ctx.fillRect(cardX, cardY, cardW, 100);
+      ctx.fillRect(cardX, cardY, cardW, 92);
 
       // Brand icon badge (AudioLines mark)
       const logoX = 96;
-      const logoY = 54;
+      const logoY = 50;
       const logoSize = 54;
       roundRect(ctx, logoX, logoY, logoSize, logoSize, 14);
       ctx.fillStyle = 'rgba(37, 99, 235, 0.20)';
@@ -238,7 +252,7 @@ export async function installVideoTile(
       ctx.fillStyle = '#f8fafc';
       ctx.font = `700 30px ${FONT_SANS}`;
       ctx.textBaseline = 'alphabetic';
-      ctx.fillText('wortlaut', titleX, 78);
+      ctx.fillText('wortlaut', titleX, 74);
 
       let subtitle = '';
       if (cfg.invitedBy) {
@@ -250,53 +264,57 @@ export async function installVideoTile(
       }
       ctx.font = `500 18px ${FONT_SANS}`;
       ctx.fillStyle = '#94a3b8';
-      ctx.fillText(truncateText(ctx, subtitle, 610), titleX, 104);
+      ctx.fillText(truncateText(ctx, subtitle, 590), titleX, 100);
 
       // Status pill (top right)
       const isJoining = participation === 'joining' || participation === 'preparing';
       const inLobby = participation === 'waiting_admission';
       const isPendingEntry = isJoining || inLobby;
+      const isPausedActive = paused && !isPendingEntry;
+      const isAmberPill = isPendingEntry || isPausedActive;
       const statusText = inLobby
         ? (isEn ? 'Waiting in lobby' : 'Wartet im Warteraum')
         : isJoining
           ? (isEn ? 'Joining meeting…' : 'Tritt Konferenz bei…')
-          : (isEn ? 'Live Transcript Active' : 'Wortprotokoll aktiv');
+          : isPausedActive
+            ? (isEn ? 'Paused · Off the Record' : 'Pausiert · Off the Record')
+            : (isEn ? 'Live Transcript Active' : 'Wortprotokoll aktiv');
       ctx.font = `600 19px ${FONT_SANS}`;
       const statusTextW = ctx.measureText(statusText).width;
       const pillW = statusTextW + 48;
       const pillH = 42;
       const pillX = cardX + cardW - 28 - pillW;
-      const pillY = 60;
+      const pillY = 56;
 
       roundRect(ctx, pillX, pillY, pillW, pillH, 21);
-      ctx.fillStyle = isPendingEntry ? 'rgba(245, 158, 11, 0.16)' : 'rgba(16, 185, 129, 0.16)';
+      ctx.fillStyle = isAmberPill ? 'rgba(245, 158, 11, 0.18)' : 'rgba(16, 185, 129, 0.16)';
       ctx.fill();
       ctx.lineWidth = 1.5;
-      ctx.strokeStyle = isPendingEntry ? 'rgba(251, 191, 36, 0.48)' : 'rgba(52, 211, 153, 0.48)';
+      ctx.strokeStyle = isAmberPill ? 'rgba(251, 191, 36, 0.55)' : 'rgba(52, 211, 153, 0.48)';
       ctx.stroke();
 
       const dotX = pillX + 21;
       const dotY = pillY + pillH / 2;
       ctx.beginPath();
       ctx.arc(dotX, dotY, 7.5, 0, Math.PI * 2);
-      ctx.fillStyle = isPendingEntry
+      ctx.fillStyle = isAmberPill
         ? `rgba(251, 191, 36, ${(0.28 * pulse).toFixed(2)})`
         : `rgba(52, 211, 153, ${(0.28 * pulse).toFixed(2)})`;
       ctx.fill();
       ctx.beginPath();
       ctx.arc(dotX, dotY, 4.8, 0, Math.PI * 2);
-      ctx.fillStyle = isPendingEntry ? '#fbbf24' : '#34d399';
+      ctx.fillStyle = isAmberPill ? '#fbbf24' : '#34d399';
       ctx.fill();
 
-      ctx.fillStyle = isPendingEntry ? '#fde68a' : '#d1fae5';
+      ctx.fillStyle = isAmberPill ? '#fef3c7' : '#d1fae5';
       ctx.fillText(statusText, pillX + 35, pillY + 27);
 
-      // Opt-out info strip
-      const stripY = 132;
-      const stripH = 46;
-      ctx.fillStyle = '#1e2536';
+      // On-screen instructions strip (opt-out, off-the-record #pause/#resume, #decision/#todo markers)
+      const stripY = 124;
+      const stripH = 68;
+      ctx.fillStyle = isPausedActive ? 'rgba(245, 158, 11, 0.13)' : '#1c2333';
       ctx.fillRect(cardX, stripY, cardW, stripH);
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.09)';
+      ctx.strokeStyle = isPausedActive ? 'rgba(251, 191, 36, 0.42)' : 'rgba(255, 255, 255, 0.09)';
       ctx.lineWidth = 1;
       ctx.beginPath();
       ctx.moveTo(cardX, stripY);
@@ -305,27 +323,166 @@ export async function installVideoTile(
       ctx.lineTo(cardX + cardW, stripY + stripH);
       ctx.stroke();
 
-      ctx.beginPath();
-      ctx.arc(104, stripY + stripH / 2, 4.5, 0, Math.PI * 2);
-      ctx.fillStyle = '#60a5fa';
-      ctx.fill();
+      const CHIP_STYLES = {
+        amber: {fill: 'rgba(245, 158, 11, 0.20)', stroke: 'rgba(251, 191, 36, 0.45)', fg: '#fde68a'},
+        emerald: {fill: 'rgba(16, 185, 129, 0.18)', stroke: 'rgba(52, 211, 153, 0.42)', fg: '#a7f3d0'},
+        blue: {fill: 'rgba(59, 130, 246, 0.18)', stroke: 'rgba(96, 165, 250, 0.42)', fg: '#bfdbfe'},
+      } as const;
 
-      const optOutText = isEn
-        ? 'Opt out anytime in meeting chat: type "opt out" — your statements will not be recorded'
-        : 'Widerspruch jederzeit im Konferenz-Chat: „nein“ oder „opt out“ schreiben (keine Speicherung Ihrer Beiträge)';
-      ctx.font = `500 17.5px ${FONT_SANS}`;
-      ctx.fillStyle = '#cbd5e1';
-      ctx.fillText(truncateText(ctx, optOutText, cardW - 64), 118, stripY + 29);
+      const drawInstructionRow = (rowY: number, dotColor: string, items: string[]) => {
+        ctx.beginPath();
+        ctx.arc(104, rowY - 5.5, 4, 0, Math.PI * 2);
+        ctx.fillStyle = dotColor;
+        ctx.fill();
+
+        let curX = 118;
+        const maxRight = cardX + cardW - 24;
+        for (const raw of items) {
+          if (curX >= maxRight) break;
+          const chipMatch = /^\[(amber|emerald|blue):(.+)\]$/.exec(raw);
+          if (chipMatch) {
+            const palette = CHIP_STYLES[chipMatch[1] as keyof typeof CHIP_STYLES];
+            const label = chipMatch[2];
+            ctx.font = `600 15px ${FONT_MONO}`;
+            const chipW = ctx.measureText(label).width + 14;
+            if (curX + chipW > maxRight) break;
+            roundRect(ctx, curX, rowY - 17, chipW, 22, 6);
+            ctx.fillStyle = palette.fill;
+            ctx.fill();
+            ctx.strokeStyle = palette.stroke;
+            ctx.lineWidth = 1;
+            ctx.stroke();
+            ctx.fillStyle = palette.fg;
+            ctx.fillText(label, curX + 7, rowY - 1);
+            curX += chipW + 6;
+          } else {
+            const bold = raw.startsWith('*') && raw.endsWith('*') && raw.length > 2;
+            const text = bold ? raw.slice(1, -1) : raw;
+            ctx.font = `${bold ? 600 : 500} 16px ${FONT_SANS}`;
+            ctx.fillStyle = bold ? '#f8fafc' : '#cbd5e1';
+            const clipped = truncateText(ctx, text, maxRight - curX);
+            ctx.fillText(clipped, curX, rowY);
+            curX += ctx.measureText(clipped).width + 6;
+          }
+        }
+      };
+
+      if (isPausedActive) {
+        drawInstructionRow(
+          stripY + 26,
+          '#fbbf24',
+          isEn
+            ? ['*OFF THE RECORD — Capture paused.*', 'Type', '[amber:#resume]', 'in meeting chat to continue recording.']
+            : ['*OFF THE RECORD — Aufnahme pausiert.*', 'Im Chat', '[amber:#resume]', 'oder', '[amber:#weiter]', 'schreiben zum Fortsetzen.'],
+        );
+        drawInstructionRow(
+          stripY + 54,
+          '#60a5fa',
+          isEn
+            ? ['Other chat controls:', '[blue:opt out]', 'exclude yourself  ·', '[amber:#decision …]', 'decision  ·', '[emerald:#todo …]', 'action item']
+            : ['Weitere Chat-Befehle:', '[blue:nein / opt out]', 'Widerspruch  ·', '[amber:#decision …]', 'Beschluss  ·', '[emerald:#todo …]', 'Aufgabe'],
+        );
+      } else {
+        drawInstructionRow(
+          stripY + 26,
+          '#60a5fa',
+          isEn
+            ? ['*Chat controls:*', '[blue:opt out]', 'exclude yourself  ·', '[amber:#pause]', '/', '[amber:#resume]', 'off-the-record pause']
+            : ['*Chat-Befehle:*', '[blue:nein / opt out]', 'Widerspruch  ·', '[amber:#pause]', '/', '[amber:#resume]', 'Off-the-Record-Pause'],
+        );
+        drawInstructionRow(
+          stripY + 54,
+          '#34d399',
+          isEn
+            ? ['*Live markers:*', '[amber:#decision <text>]', 'pin decision  ·', '[emerald:#todo <text>]', 'add action item to protocol']
+            : ['*Protokoll-Marker:*', '[amber:#decision <Text>]', 'Beschluss  ·', '[emerald:#todo <Text>]', 'Aufgabe ins Protokoll übernehmen'],
+        );
+      }
 
       // Transcript viewport (leaves bottom safe margin for conference client nameplates)
-      const bodyTop = 192;
+      const bodyTop = 204;
       const bodyBottom = 620;
       const bodyLeft = 96;
       const bodyWidth = cardW - 56;
 
-      if (segments.length === 0) {
+      type RenderEntry =
+        | {kind: 'segment'; start: number; seg: VideoTileSegment}
+        | {kind: 'marker'; start: number; marker: VideoTileMarker};
+
+      const entries: RenderEntry[] = [
+        ...segments.map((seg) => ({kind: 'segment' as const, start: seg.start, seg})),
+        ...markers.map((marker) => ({kind: 'marker' as const, start: marker.start, marker})),
+      ]
+        .sort((a, b) => a.start - b.start)
+        .slice(-8);
+
+      if (isPausedActive) {
+        const boxX = cardX + 64;
+        const boxY = 232;
+        const boxW = cardW - 128;
+        const boxH = 348;
+        roundRect(ctx, boxX, boxY, boxW, boxH, 20);
+        ctx.fillStyle = 'rgba(245, 158, 11, 0.08)';
+        ctx.fill();
+        ctx.lineWidth = 1.5;
+        ctx.strokeStyle = 'rgba(251, 191, 36, 0.38)';
+        ctx.stroke();
+
         const centerX = WIDTH / 2;
-        const centerY = (bodyTop + bodyBottom) / 2 - 14;
+        const badgeSize = 64;
+        const badgeX = centerX - badgeSize / 2;
+        const badgeY = boxY + 34;
+        roundRect(ctx, badgeX, badgeY, badgeSize, badgeSize, 18);
+        ctx.fillStyle = 'rgba(245, 158, 11, 0.20)';
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(251, 191, 36, 0.55)';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+
+        // Pause icon bars (||)
+        ctx.fillStyle = '#fbbf24';
+        roundRect(ctx, centerX - 12, badgeY + 18, 8, 28, 3);
+        ctx.fill();
+        roundRect(ctx, centerX + 4, badgeY + 18, 8, 28, 3);
+        ctx.fill();
+
+        ctx.textAlign = 'center';
+        ctx.font = `700 27px ${FONT_SANS}`;
+        ctx.fillStyle = '#fef3c7';
+        const pausedHeadline = isEn
+          ? 'OFF THE RECORD — Recording Paused'
+          : 'OFF THE RECORD — Aufnahme pausiert';
+        ctx.fillText(pausedHeadline, centerX, badgeY + badgeSize + 44);
+
+        ctx.font = `400 19px ${FONT_SANS}`;
+        ctx.fillStyle = '#cbd5e1';
+        const pausedBody = isEn
+          ? 'Spoken audio and shared screens are discarded in memory and never stored.'
+          : 'Gesprochenes Audio und geteilte Bildschirme werden sofort verworfen und nicht gespeichert.';
+        ctx.fillText(pausedBody, centerX, badgeY + badgeSize + 80);
+
+        const resumeHint = isEn
+          ? 'Type "#resume" in meeting chat to resume transcription'
+          : 'Im Konferenz-Chat „#resume“ oder „#weiter“ schreiben, um fortzufahren';
+        ctx.font = `600 18px ${FONT_SANS}`;
+        const hintW = ctx.measureText(resumeHint).width + 44;
+        const hintH = 42;
+        const hintX = centerX - hintW / 2;
+        const hintY = boxY + boxH - 68;
+        roundRect(ctx, hintX, hintY, hintW, hintH, 21);
+        ctx.fillStyle = 'rgba(245, 158, 11, 0.18)';
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(251, 191, 36, 0.48)';
+        ctx.lineWidth = 1.2;
+        ctx.stroke();
+        ctx.fillStyle = '#fde68a';
+        ctx.fillText(resumeHint, centerX, hintY + 27);
+
+        ctx.textAlign = 'left';
+        lastRenderedText = pausedHeadline;
+      } else if (entries.length === 0) {
+        const centerX = WIDTH / 2;
+        const centerY = (bodyTop + bodyBottom) / 2 - 10;
         // Subtle animated listening waveform
         const eqBars = [10, 18, 26, 16, 28, 14, 10];
         ctx.strokeStyle = isPendingEntry ? 'rgba(251, 191, 36, 0.55)' : 'rgba(96, 165, 250, 0.65)';
@@ -375,16 +532,18 @@ export async function installVideoTile(
         let overflowedTop = false;
         const lineHeight = 30;
         const headerHeight = 26;
-        const turnGap = 16;
-        const textMaxW = bodyWidth - 26;
+        const turnGap = 15;
+        const textMaxW = bodyWidth - 32;
 
-        for (let idx = segments.length - 1; idx >= 0; idx--) {
-          const seg = segments[idx];
+        for (let idx = entries.length - 1; idx >= 0; idx--) {
+          const entry = entries[idx];
+          const entryText = entry.kind === 'segment' ? entry.seg.text : entry.marker.text;
           ctx.font = `400 22px ${FONT_SANS}`;
-          const lines = wrapLines(ctx, seg.text, textMaxW, 4);
+          const lines = wrapLines(ctx, entryText, textMaxW, entry.kind === 'marker' ? 2 : 4);
           if (lines.length === 0) continue;
 
-          const blockH = headerHeight + lines.length * lineHeight;
+          const extraPad = entry.kind === 'marker' ? 12 : 0;
+          const blockH = headerHeight + lines.length * lineHeight + extraPad;
           const blockTop = cursorY - blockH;
 
           if (blockTop < bodyTop - lineHeight * 2) {
@@ -395,26 +554,69 @@ export async function installVideoTile(
             overflowedTop = true;
           }
 
-          const accent = speakerColor(seg.speaker || 'Teilnehmer');
-          roundRect(ctx, bodyLeft, blockTop + 4, 4, blockH - 6, 2);
-          ctx.fillStyle = accent;
-          ctx.fill();
+          if (entry.kind === 'marker') {
+            const isDecision = entry.marker.kind === 'decision';
+            const accent = isDecision ? '#fbbf24' : '#34d399';
+            roundRect(ctx, bodyLeft, blockTop, bodyWidth, blockH, 10);
+            ctx.fillStyle = isDecision ? 'rgba(245, 158, 11, 0.10)' : 'rgba(16, 185, 129, 0.10)';
+            ctx.fill();
+            roundRect(ctx, bodyLeft, blockTop + 4, 4, blockH - 8, 2);
+            ctx.fillStyle = accent;
+            ctx.fill();
 
-          const ts = formatTimestamp(seg.start);
-          ctx.font = `500 16px ${FONT_MONO}`;
-          ctx.fillStyle = '#64748b';
-          ctx.fillText(ts, bodyLeft + 16, blockTop + 19);
-          const tsW = ctx.measureText(ts).width;
+            const ts = formatTimestamp(entry.marker.start);
+            ctx.font = `500 16px ${FONT_MONO}`;
+            ctx.fillStyle = '#94a3b8';
+            ctx.fillText(ts, bodyLeft + 16, blockTop + 23);
+            const tsW = ctx.measureText(ts).width;
 
-          ctx.font = `700 19.5px ${FONT_SANS}`;
-          ctx.fillStyle = accent;
-          const spkLabel = truncateText(ctx, seg.speaker || 'Teilnehmer', 480);
-          ctx.fillText(spkLabel, bodyLeft + 16 + tsW + 12, blockTop + 19);
+            const badgeLabel = isDecision
+              ? (isEn ? 'DECISION' : 'BESCHLUSS')
+              : (isEn ? 'TODO' : 'AUFGABE');
+            ctx.font = `700 14px ${FONT_MONO}`;
+            const bw = ctx.measureText(badgeLabel).width + 14;
+            const bx = bodyLeft + 16 + tsW + 10;
+            roundRect(ctx, bx, blockTop + 8, bw, 20, 5);
+            ctx.fillStyle = isDecision ? 'rgba(245, 158, 11, 0.24)' : 'rgba(16, 185, 129, 0.24)';
+            ctx.fill();
+            ctx.fillStyle = isDecision ? '#fde68a' : '#a7f3d0';
+            ctx.fillText(badgeLabel, bx + 7, blockTop + 22);
 
-          ctx.font = `400 22px ${FONT_SANS}`;
-          ctx.fillStyle = '#f1f5f9';
-          for (let l = 0; l < lines.length; l++) {
-            ctx.fillText(lines[l], bodyLeft + 16, blockTop + headerHeight + 22 + l * lineHeight);
+            if (entry.marker.author) {
+              ctx.font = `600 18px ${FONT_SANS}`;
+              ctx.fillStyle = '#e2e8f0';
+              const authorLabel = truncateText(ctx, entry.marker.author, 380);
+              ctx.fillText(authorLabel, bx + bw + 10, blockTop + 23);
+            }
+
+            ctx.font = `500 21.5px ${FONT_SANS}`;
+            ctx.fillStyle = isDecision ? '#fef3c7' : '#ecfdf5';
+            for (let l = 0; l < lines.length; l++) {
+              ctx.fillText(lines[l], bodyLeft + 16, blockTop + headerHeight + 25 + l * lineHeight);
+            }
+          } else {
+            const seg = entry.seg;
+            const accent = speakerColor(seg.speaker || 'Teilnehmer');
+            roundRect(ctx, bodyLeft, blockTop + 4, 4, blockH - 6, 2);
+            ctx.fillStyle = accent;
+            ctx.fill();
+
+            const ts = formatTimestamp(seg.start);
+            ctx.font = `500 16px ${FONT_MONO}`;
+            ctx.fillStyle = '#64748b';
+            ctx.fillText(ts, bodyLeft + 16, blockTop + 19);
+            const tsW = ctx.measureText(ts).width;
+
+            ctx.font = `700 19.5px ${FONT_SANS}`;
+            ctx.fillStyle = accent;
+            const spkLabel = truncateText(ctx, seg.speaker || 'Teilnehmer', 480);
+            ctx.fillText(spkLabel, bodyLeft + 16 + tsW + 12, blockTop + 19);
+
+            ctx.font = `400 22px ${FONT_SANS}`;
+            ctx.fillStyle = '#f1f5f9';
+            for (let l = 0; l < lines.length; l++) {
+              ctx.fillText(lines[l], bodyLeft + 16, blockTop + headerHeight + 22 + l * lineHeight);
+            }
           }
 
           cursorY = blockTop - turnGap;
@@ -428,8 +630,17 @@ export async function installVideoTile(
           ctx.fillRect(cardX + 4, bodyTop, cardW - 8, 34);
         }
         ctx.restore();
-        const latest = segments[segments.length - 1];
-        lastRenderedText = `${latest.speaker}: ${latest.text}`;
+        const latest = entries[entries.length - 1];
+        if (latest.kind === 'segment') {
+          lastRenderedText = `${latest.seg.speaker}: ${latest.seg.text}`;
+        } else {
+          const prefix =
+            latest.marker.kind === 'decision'
+              ? (isEn ? '[DECISION]' : '[BESCHLUSS]')
+              : (isEn ? '[TODO]' : '[AUFGABE]');
+          const authorPrefix = latest.marker.author ? `${latest.marker.author}: ` : '';
+          lastRenderedText = `${prefix} ${authorPrefix}${latest.marker.text}`;
+        }
       }
 
       ctx.restore();
@@ -560,6 +771,9 @@ export async function installVideoTile(
         if (typeof patch.participation === 'string' && patch.participation) {
           participation = patch.participation;
         }
+        if (typeof patch.paused === 'boolean') {
+          paused = patch.paused;
+        }
         if (Array.isArray(patch.segments)) {
           segments = patch.segments.slice(-8).map((s) => ({
             speaker: String(s?.speaker ?? '').slice(0, 80),
@@ -567,7 +781,18 @@ export async function installVideoTile(
             start: typeof s?.start === 'number' && Number.isFinite(s.start) ? s.start : 0,
           }));
         }
-        const sig = `${participation}::${JSON.stringify(segments)}`;
+        if (Array.isArray(patch.markers)) {
+          markers = patch.markers
+            .filter((m) => m && (m.kind === 'decision' || m.kind === 'todo') && String(m.text ?? '').trim())
+            .slice(-8)
+            .map((m) => ({
+              kind: m.kind === 'decision' ? 'decision' : 'todo',
+              text: String(m.text ?? '').trim().slice(0, 280),
+              author: m.author ? String(m.author).trim().slice(0, 80) : null,
+              start: typeof m.start === 'number' && Number.isFinite(m.start) ? m.start : 0,
+            }));
+        }
+        const sig = `${participation}::${paused ? '1' : '0'}::${JSON.stringify(segments)}::${JSON.stringify(markers)}`;
         if (sig !== lastSignature) {
           lastSignature = sig;
           flushFrameBurst();
@@ -590,7 +815,9 @@ export async function installVideoTile(
         return {
           frameCount,
           participation,
+          paused,
           segmentCount: segments.length,
+          markerCount: markers.length,
           lastRenderedText,
           activeTracks: [...liveTracks].filter((t) => t.readyState === 'live').length,
         };
@@ -602,7 +829,16 @@ export async function installVideoTile(
     const targetFrame = resolveFrame ? resolveFrame() : page.mainFrame();
     if (!targetFrame) return;
     await targetFrame
-      .evaluate((p: VideoTilePatch) => {
+      .evaluate((rawPatch: VideoTilePatch) => {
+        let p = rawPatch;
+        if (
+          typeof p.expectedLocalMarkers === 'number' &&
+          (window as unknown as {wortlautMeet?: {inspect?: () => {participant_sources?: {chat_markers?: unknown[]}}}}).wortlautMeet &&
+          (((window as unknown as {wortlautMeet?: {inspect?: () => {participant_sources?: {chat_markers?: unknown[]}}}}).wortlautMeet?.inspect?.()?.participant_sources?.chat_markers?.length) ?? 0) !==
+            p.expectedLocalMarkers
+        ) {
+          p = {...p, markers: undefined};
+        }
         window.wortlautVideoTile?.update(p);
       }, patch)
       .catch(() => {});

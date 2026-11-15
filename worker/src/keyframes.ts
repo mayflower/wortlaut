@@ -352,6 +352,7 @@ export type EmptyRoomEvaluationInput = {
   lastActiveSamples: number;
   rtpAdvanced: boolean;
   activeShare: boolean;
+  paused?: boolean;
 };
 
 export type EmptyRoomEvaluationResult = {
@@ -367,8 +368,9 @@ export function shouldStopForEmptyRoom(input: EmptyRoomEvaluationInput): EmptyRo
   const audioAdvanced = input.activeSamples > input.lastActiveSamples && input.streams > 0;
   const rtpActive = !domEmptied && input.rtpAdvanced;
   const shareActive = !domEmptied && input.activeShare === true;
+  const pauseActive = !domEmptied && input.paused === true;
 
-  if (audioAdvanced || rtpActive || shareActive) {
+  if (audioAdvanced || rtpActive || shareActive || pauseActive) {
     return {
       shouldStop: false,
       emptySinceMs: undefined,

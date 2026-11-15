@@ -387,6 +387,145 @@ def speaker_label(segment, participant_names: dict[str, str] | None = None):
     return resolved_name or f"Sprecher {segment['speaker_id']}"
 
 
+def _parse_iso_utc(raw: object) -> datetime | None:
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    try:
+        dt = datetime.fromisoformat(raw.strip())
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=UTC)
+        return dt.astimezone(UTC)
+    except ValueError:
+        return None
+
+
+def _collect_raw_chat_artifacts(attempts: list[Attempt]) -> tuple[list[dict], list[dict]]:
+    raw_markers: list[dict] = []
+    seen_marker_ids: set[str] = set()
+    pauses_by_start: dict[str, dict] = {}
+    for attempt in attempts:
+        ps = (attempt.diagnostics or {}).get("participant_sources")
+        if not isinstance(ps, dict):
+            continue
+        for item in ps.get("chat_markers") or []:
+            if not isinstance(item, dict):
+                continue
+            mid = str(item.get("id") or "").strip()
+            kind = str(item.get("kind") or "").strip()
+            text = _single_line(item.get("text"))
+            cap_dt = _parse_iso_utc(item.get("captured_at"))
+            if not mid or kind not in ("decision", "todo") or not text or cap_dt is None:
+                continue
+            if mid in seen_marker_ids or len(raw_markers) >= 128:
+                continue
+            seen_marker_ids.add(mid)
+            raw_markers.append(
+                {
+                    "id": mid,
+                    "kind": kind,
+                    "text": text[:300],
+                    "author": _single_line(item.get("author"))[:200] or None,
+                    "participant_id": _single_line(item.get("participant_id"))[:200] or None,
+                    "captured_dt": cap_dt,
+                }
+            )
+        for item in ps.get("pause_windows") or []:
+            if not isinstance(item, dict):
+                continue
+            start_dt = _parse_iso_utc(item.get("started_at"))
+            if start_dt is None:
+                continue
+            end_dt = _parse_iso_utc(item.get("ended_at"))
+            if end_dt is not None and end_dt < start_dt:
+                end_dt = start_dt
+            key = start_dt.isoformat()
+            by_val = _single_line(item.get("by"))[:200] or None
+            existing = pauses_by_start.get(key)
+            if existing is None:
+                if len(pauses_by_start) < 64:
+                    pauses_by_start[key] = {
+                        "started_dt": start_dt,
+                        "ended_dt": end_dt,
+                        "by": by_val,
+                    }
+            else:
+                if existing["ended_dt"] is None and end_dt is not None:
+                    existing["ended_dt"] = end_dt
+                if not existing["by"] and by_val:
+                    existing["by"] = by_val
+
+    raw_markers.sort(key=lambda m: (m["captured_dt"], m["id"]))
+    raw_pauses = sorted(pauses_by_start.values(), key=lambda w: w["started_dt"])
+    return raw_markers, raw_pauses
+
+
+def _format_chat_artifacts(
+    raw_markers: list[dict],
+    raw_pauses: list[dict],
+    origin_utc_dt: datetime,
+    speaker_overrides: dict[str, str],
+    term_replacements: dict[str, str],
+    opted_out_norm: set[str],
+) -> tuple[list[dict], list[dict]]:
+    def _resolve_label(raw_name: str | None, pid: str | None = None) -> str | None:
+        override = (speaker_overrides.get(pid) if pid else None) or (
+            speaker_overrides.get(raw_name) if raw_name else None
+        )
+        return _single_line(override) or raw_name
+
+    chat_markers: list[dict] = []
+    for m in raw_markers:
+        raw_author = m["author"]
+        pid = m.get("participant_id")
+        author = _resolve_label(raw_author, pid)
+        if (raw_author or pid) and is_speaker_opted_out(
+            opted_out_norm,
+            participant_id=pid,
+            participant_name=raw_author,
+            speaker_label=author,
+        ):
+            continue
+        offset = round(max(0.0, (m["captured_dt"] - origin_utc_dt).total_seconds()), 3)
+        chat_markers.append(
+            {
+                "id": m["id"],
+                "kind": m["kind"],
+                "text": _apply_text_replacements(m["text"], term_replacements),
+                "author": author,
+                "participant_id": pid,
+                "captured_at": m["captured_dt"].isoformat(),
+                "offset_seconds": offset,
+            }
+        )
+
+    pause_windows: list[dict] = []
+    for w in raw_pauses:
+        raw_by = w["by"]
+        by_label = _resolve_label(raw_by)
+        if raw_by and is_speaker_opted_out(
+            opted_out_norm,
+            participant_name=raw_by,
+            speaker_label=by_label,
+        ):
+            by_label = None
+        start_offset = round(max(0.0, (w["started_dt"] - origin_utc_dt).total_seconds()), 3)
+        end_offset = (
+            round(max(start_offset, (w["ended_dt"] - origin_utc_dt).total_seconds()), 3)
+            if w["ended_dt"] is not None
+            else None
+        )
+        pause_windows.append(
+            {
+                "started_at": w["started_dt"].isoformat(),
+                "ended_at": w["ended_dt"].isoformat() if w["ended_dt"] is not None else None,
+                "offset_seconds": start_offset,
+                "end_offset_seconds": end_offset,
+                "by": by_label,
+            }
+        )
+    return chat_markers, pause_windows
+
+
 def export_data(
     db: Session,
     recording: Recording,
@@ -394,11 +533,10 @@ def export_data(
     tail_segments_limit: int | None = None,
 ):
     attempts = db.scalars(select(Attempt).where(Attempt.recording_id == recording.id)).all()
+    raw_markers, raw_pauses = _collect_raw_chat_artifacts(attempts)
     streams = db.scalars(
         select(AudioStream).where(AudioStream.attempt_id.in_([a.id for a in attempts]))
     ).all()
-    if tail_segments_limit is not None and not streams:
-        return {"segments": [], "opted_out_speakers": []}
     participant_names: dict[str, str] = {}
     for attempt in attempts:
         for p in attempt.diagnostics.get("participant_sources", {}).get("sources", []):
@@ -440,12 +578,14 @@ def export_data(
     protected_segment_ids = {
         str(k) for k, v in segment_edits.items() if isinstance(v, str) and v.strip()
     }
-    seg_query = (
-        select(TranscriptSegment)
-        .join(AsrJob)
-        .where(AsrJob.stream_id.in_([s.id for s in streams]))
-    )
-    if tail_segments_limit is not None:
+    if not streams:
+        seg_rows = []
+    elif tail_segments_limit is not None:
+        seg_query = (
+            select(TranscriptSegment)
+            .join(AsrJob)
+            .where(AsrJob.stream_id.in_([s.id for s in streams]))
+        )
         non_empty_text = (
             func.trim(func.coalesce(TranscriptSegment.result["text"].as_string(), "")) != ""
         )
@@ -473,10 +613,12 @@ def export_data(
                 ).all()
             )
         )
-        if not seg_rows:
-            return {"segments": [], "opted_out_speakers": []}
     else:
-        seg_rows = db.scalars(seg_query).all()
+        seg_rows = db.scalars(
+            select(TranscriptSegment)
+            .join(AsrJob)
+            .where(AsrJob.stream_id.in_([s.id for s in streams]))
+        ).all()
     segments = [dict(s.result) for s in seg_rows]
     for seg in segments:
         pid = seg.get("participant_id") or seg.get("speaker_id")
@@ -511,6 +653,11 @@ def export_data(
         origin = min(anchors)
     elif keyframe_rows:
         origin = min(kf.captured_at.astimezone(UTC) for kf in keyframe_rows)
+    elif raw_markers or raw_pauses:
+        chat_dts = [m["captured_dt"] for m in raw_markers] + [
+            w["started_dt"] for w in raw_pauses
+        ]
+        origin = min(chat_dts)
     else:
         origin = recording.starts_at
     unambiguous_stream_bindings: dict[tuple[str, str], tuple[str, str | None, str]] = {}
@@ -743,12 +890,21 @@ def export_data(
             continue
         filtered_segments.append(seg)
     segments = filtered_segments
+    origin_utc_dt = origin.astimezone(UTC)
+    chat_markers, pause_windows = _format_chat_artifacts(
+        raw_markers,
+        raw_pauses,
+        origin_utc_dt,
+        speaker_overrides,
+        term_replacements,
+        opted_out_norm,
+    )
     if tail_segments_limit is not None:
         return {
             "segments": segments,
             "opted_out_speakers": opted_out_list,
+            "chat_markers": chat_markers,
         }
-    origin_utc_dt = origin.astimezone(UTC)
     keyframes: list[dict] = []
     for kf in keyframe_rows:
         raw_name = kf.participant_name or participant_names.get(kf.participant_id)
@@ -866,6 +1022,8 @@ def export_data(
                 not segments
                 and not keyframes
                 and not opted_out_list
+                and not pause_windows
+                and not chat_markers
                 and recording.participation_reason
                 not in ("lobby_timeout", "admission_denied", "prejoin_denied")
                 and any(
@@ -913,6 +1071,8 @@ def export_data(
         ),
         "segments": segments,
         "keyframes": keyframes,
+        "chat_markers": chat_markers,
+        "pause_windows": pause_windows,
     }
 
 
@@ -1223,6 +1383,14 @@ def render_export(data, format):
         for a in ((summary_data.get("action_items") if summary_data else None) or [])
         if isinstance(a, dict) and _single_line(a.get("task"))
     ]
+    chat_markers_list = [
+        m
+        for m in (data.get("chat_markers") or [])
+        if isinstance(m, dict) and _single_line(m.get("text"))
+    ]
+    pause_windows_list = [
+        w for w in (data.get("pause_windows") or []) if isinstance(w, dict)
+    ]
     has_summary_content = bool(summary_text or topics or actions)
     if format == "md":
         lines = [
@@ -1233,6 +1401,8 @@ def render_export(data, format):
         ]
         if total_speech > 0:
             lines.append(f"- **Erfasste Sprechzeit:** {format_duration_de(total_speech)}")
+        if pause_windows_list:
+            lines.append(f"- **Off-the-Record-Pausen:** {len(pause_windows_list)}")
         lines.append("")
         if summary_text or topics:
             lines.extend(["## Zusammenfassung", ""])
@@ -1259,6 +1429,18 @@ def render_export(data, format):
             else:
                 lines.append("_Keine offenen Aufgaben vereinbart._")
             lines.append("")
+        if chat_markers_list:
+            lines.extend(["## Im Chat markierte Beschlüsse & Aufgaben", ""])
+            for m in chat_markers_list:
+                ts = short_timestamp(float(m.get("offset_seconds") or 0.0))
+                m_text = _single_line(m.get("text"))
+                m_author = _single_line(m.get("author"))
+                who_suffix = f" _({m_author}, {ts})_" if m_author else f" _({ts})_"
+                if m.get("kind") == "decision":
+                    lines.append(f"- **Beschluss:** {m_text}{who_suffix}")
+                else:
+                    lines.append(f"- [ ] **Aufgabe:** {m_text}{who_suffix}")
+            lines.append("")
         if notes_text:
             lines.extend(["## Notizen", "", notes_text, ""])
         if sources:
@@ -1282,7 +1464,12 @@ def render_export(data, format):
             lines.append("")
         lines.extend(["## Transkript", ""])
         keyframes_list = data.get("keyframes") or []
-        if not data["segments"] and not keyframes_list:
+        if (
+            not data["segments"]
+            and not keyframes_list
+            and not chat_markers_list
+            and not pause_windows_list
+        ):
             lines.append("_Keine Transkriptsegmente vorhanden._")
         else:
             ui_url = f"{get_settings().api_url.rstrip('/')}/ui"
@@ -1292,9 +1479,17 @@ def render_export(data, format):
                 timeline_items.append(
                     (float(kf.get("offset_seconds") or 0.0), 0, idx, "keyframe", kf)
                 )
+            for idx, pw in enumerate(pause_windows_list):
+                timeline_items.append(
+                    (float(pw.get("offset_seconds") or 0.0), 1, idx, "pause", pw)
+                )
+            for idx, cm in enumerate(chat_markers_list):
+                timeline_items.append(
+                    (float(cm.get("offset_seconds") or 0.0), 2, idx, "marker", cm)
+                )
             for idx, segment in enumerate(data["segments"]):
                 timeline_items.append(
-                    (float(segment.get("start") or 0.0), 1, idx, "segment", segment)
+                    (float(segment.get("start") or 0.0), 3, idx, "segment", segment)
                 )
             timeline_items.sort(key=lambda item: (item[0], item[1], item[2]))
             for _, _, _, kind, item in timeline_items:
@@ -1305,6 +1500,26 @@ def render_export(data, format):
                         f"> **[{ts}] Screen share ({pres}):** "
                         f"[{protocol_link}]({protocol_link})"
                     )
+                    lines.append("")
+                elif kind == "pause":
+                    ts_start = short_timestamp(float(item.get("offset_seconds") or 0.0))
+                    end_off = item.get("end_offset_seconds")
+                    span_label = (
+                        f"{ts_start} – {short_timestamp(float(end_off))}"
+                        if isinstance(end_off, (int, float))
+                        else f"ab {ts_start}"
+                    )
+                    lines.append(
+                        f"> **[{span_label}] Off-the-Record-Pause:** "
+                        f"_Audio- und Bildschirmerfassung vorübergehend pausiert._"
+                    )
+                    lines.append("")
+                elif kind == "marker":
+                    ts = short_timestamp(float(item.get("offset_seconds") or 0.0))
+                    m_label = "Beschluss" if item.get("kind") == "decision" else "Aufgabe"
+                    m_author = _single_line(item.get("author"))
+                    m_head = f"{m_label} · {m_author}" if m_author else m_label
+                    lines.append(f"> **[{ts}] {m_head}:** {_single_line(item.get('text'))}")
                     lines.append("")
                 else:
                     text = " ".join(item["text"].split())
@@ -1345,6 +1560,28 @@ def render_export(data, format):
                     lines.append(f"[ ] {owner}: {task}{suffix}")
             else:
                 lines.append("Keine offenen Aufgaben vereinbart.")
+            lines.append("")
+        if chat_markers_list:
+            lines.extend(["IM CHAT MARKIERTE BESCHLÜSSE & AUFGABEN", "-" * 72])
+            for m in chat_markers_list:
+                ts = short_timestamp(float(m.get("offset_seconds") or 0.0))
+                m_text = _single_line(m.get("text"))
+                m_author = _single_line(m.get("author"))
+                who_suffix = f" ({m_author}, {ts})" if m_author else f" ({ts})"
+                prefix = "[Beschluss]" if m.get("kind") == "decision" else "[ ] [Aufgabe]"
+                lines.append(f"{prefix} {m_text}{who_suffix}")
+            lines.append("")
+        if pause_windows_list:
+            lines.extend(["OFF-THE-RECORD-PAUSEN", "-" * 72])
+            for pw in pause_windows_list:
+                ts_start = short_timestamp(float(pw.get("offset_seconds") or 0.0))
+                end_off = pw.get("end_offset_seconds")
+                span_label = (
+                    f"{ts_start} – {short_timestamp(float(end_off))}"
+                    if isinstance(end_off, (int, float))
+                    else f"ab {ts_start}"
+                )
+                lines.append(f"[{span_label}] OFF-THE-RECORD-PAUSE")
             lines.append("")
         if notes_text:
             lines.extend(["NOTIZEN", "-" * 72, notes_text, ""])
@@ -1398,6 +1635,7 @@ def generate_protocol_summary(db: Session, recording_id: uuid.UUID) -> dict:
     db.rollback()
 
     segments = data.get("segments") or []
+    chat_markers = data.get("chat_markers") or []
     origin_utc = data.get("time_origin_utc")
     transcript_lines: list[str] = []
     known_speakers: list[str] = []
@@ -1418,7 +1656,7 @@ def generate_protocol_summary(db: Session, recording_id: uuid.UUID) -> dict:
             seen_speakers.add(spk.lower())
             known_speakers.append(spk)
         transcript_lines.append(f"[{t0}] {spk}: {txt}")
-    if not transcript_lines:
+    if not transcript_lines and not chat_markers:
         raise ValueError("Kein Transkript für die KI-Zusammenfassung vorhanden.")
 
     transcript_text = "\n".join(transcript_lines)
@@ -1466,6 +1704,17 @@ def generate_protocol_summary(db: Session, recording_id: uuid.UUID) -> dict:
             merged_glossary.append(term)
     if merged_glossary:
         meta_lines.append(f"Fachbegriffe / Glossar: {', '.join(merged_glossary)}")
+    if chat_markers:
+        marker_lines = []
+        for cm in chat_markers[:64]:
+            t0 = wall_clock_time_de(origin_utc, float(cm.get("offset_seconds") or 0.0))
+            kind_de = "BESCHLUSS" if cm.get("kind") == "decision" else "AUFGABE"
+            who = f" ({cm['author']})" if cm.get("author") else ""
+            marker_lines.append(f"- [{t0}] {kind_de}{who}: {_single_line(cm.get('text'))}")
+        meta_lines.append(
+            "Im Konferenz-Chat explizit markierte Beschlüsse & Aufgaben (verbindlich übernehmen):\n"
+            + "\n".join(marker_lines)
+        )
     user_prompt = "\n".join(meta_lines) + f"\n\nWortprotokoll:\n{transcript_text}"
 
     url = settings.ollama_url.rstrip("/") + "/api/chat"

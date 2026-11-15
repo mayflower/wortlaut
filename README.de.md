@@ -45,10 +45,12 @@ Kommerzielle Meeting-Bots (*Fireflies, Otter, Fathom, Read.ai*) leiten Gespräch
 
 ![wortlaut Kalender-Synchronisation für Google Calendar und Microsoft 365](docs/assets/calendar-view.png)
 
-### 2. Transparente Teilnahme & Live-Widerspruch im Call
+### 2. Transparente Teilnahme, On-Screen-Anleitung & Live-Steuerung im Chat
 
-* Beim Beitritt erscheint `wortlaut` klar erkennbar mit dem Namen der einladenden Person – z. B. **`wortlaut (Elena Rostova)`** – und postet im Meeting-Chat einen kurzen Hinweis (`DE` oder `EN`) samt Link zur [Datenschutz-Information (`/privacy`)](services/meeting/src/wortlaut/ui.py) (inklusive explizitem Hinweis bei `WORTLAUT_ENABLE_KEYFRAMES=true`, dass niemals Kameravideos aufgezeichnet werden, sondern lediglich statische Standbilder aktiver Bildschirmfreigaben; siehe [`./docs/configuration.md`](./docs/configuration.md)).
+* Beim Beitritt erscheint `wortlaut` klar erkennbar mit dem Namen der einladenden Person – z. B. **`wortlaut (Elena Rostova)`** –, zeigt alle verfügbaren **Chat-Befehle direkt auf seiner Live-Videokachel (`1280×720`)** ([video-tile.ts](worker/runtime/video-tile.ts)) und postet im Meeting-Chat einen kurzen Hinweis (`DE` oder `EN`) samt Link zur [Datenschutz-Information (`/privacy`)](services/meeting/src/wortlaut/ui.py) (inklusive explizitem Hinweis bei `WORTLAUT_ENABLE_KEYFRAMES=true`, dass niemals Kameravideos aufgezeichnet werden, sondern lediglich statische Standbilder aktiver Bildschirmfreigaben; siehe [`./docs/configuration.md`](./docs/configuration.md)).
 * **Live-Chat-Opt-out:** Schreibt eine teilnehmende Person im Meeting-Chat `nein`, `no`, `opt out`, `optout`, `stop` oder `widerspruch`, werden Tonspur und Folien-Erfassung dieser Person sofort gestoppt und bereits transkribierte Sätze sowie gespeicherte Bildschirmfreigabe-Folien rückstandslos aus PostgreSQL und S3 gelöscht ([meet-page.ts](worker/src/meet-page.ts), [processing.py](services/meeting/src/wortlaut/processing.py)).
+* **Off-the-Record-Pause (`#pause` / `#resume` / `#weiter`):** Mit `#pause` (oder `/pause`, `!pause`, `#pausieren`, `#off-the-record`) im Konferenz-Chat wird die Audio-Erfassung sofort im Worker-RAM genullt, die Folien-Erfassung ausgesetzt und die Videokachel deutlich sichtbar auf **OFF THE RECORD — Aufnahme pausiert** umgeschaltet. `#resume` oder `#weiter` setzt die Aufnahme lückenlos fort ([capture.ts](worker/src/capture.ts), [meet-page.ts](worker/src/meet-page.ts)).
+* **Live-Protokollmarker (`#decision` & `#todo`):** Mit `#decision <Text>` (`#beschluss <Text>`) oder `#todo <Text>` (`#aufgabe <Text>`) verankern Teilnehmende verbindliche Beschlüsse und Aufgaben samt Zeitstempel und Autor direkt auf der Live-Videokachel, in der Web-UI-Timeline, in allen Exporten (`.md`, `.txt`, `.json`), über MCP sowie in der optionalen Ollama-Zusammenfassung ([exports.py](services/meeting/src/wortlaut/exports.py)).
 
 ### 3. Nachbereiten, Prüfen & Teilen
 

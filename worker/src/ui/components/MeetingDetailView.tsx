@@ -6,6 +6,7 @@ import {
   Edit3,
   FolderOpen,
   Link2,
+  Pause,
   RotateCcw,
   Share2,
   Square,
@@ -226,6 +227,28 @@ export function MeetingDetailView({
         }
         mdLines.push('');
       }
+      const markers = transcript.chat_markers || [];
+      if (markers.length > 0) {
+        mdLines.push(
+          `## ${tr('Im Chat markierte Beschlüsse & Aufgaben', 'Chat-Marked Decisions & Action Items')}`,
+          ''
+        );
+        for (const m of markers) {
+          const ts = formatWallClockTime(m.offset_seconds, timeOriginUtc);
+          const authorPart = singleLine(m.author);
+          const authorSuffix = authorPart ? ` _(${authorPart}, ${ts})_` : ` _(${ts})_`;
+          if (m.kind === 'decision') {
+            mdLines.push(
+              `- **${tr('Beschluss', 'Decision')}:** ${singleLine(m.text)}${authorSuffix}`
+            );
+          } else {
+            mdLines.push(
+              `- [ ] **${tr('Aufgabe', 'To-Do')}:** ${singleLine(m.text)}${authorSuffix}`
+            );
+          }
+        }
+        mdLines.push('');
+      }
       const notesVal = (transcript.notes || '').trim();
       if (notesVal) {
         mdLines.push(`## ${tr('Notizen', 'Notes')}`, '', notesVal, '');
@@ -233,7 +256,13 @@ export function MeetingDetailView({
       mdLines.push(`## ${tr('Transkript', 'Transcript')}`, '');
       const segs = transcript.segments || [];
       const kfs = transcript.keyframes || [];
-      if (segs.length === 0 && kfs.length === 0) {
+      const pauses = transcript.pause_windows || [];
+      if (
+        segs.length === 0 &&
+        kfs.length === 0 &&
+        markers.length === 0 &&
+        pauses.length === 0
+      ) {
         mdLines.push(
           tr(
             '_Noch keine transkribierten Segmente vorhanden._',
@@ -242,52 +271,45 @@ export function MeetingDetailView({
         );
       } else {
         const protocolViewUrl = `${window.location.origin}/ui#view=meetings&id=${encodeURIComponent(recording.id)}`;
-        type MdEntry =
-          | { kind: 'kf'; offset: number; presenter: string }
-          | {
-              kind: 'seg';
-              offset: number;
-              speaker: string;
-              start: number;
-              end: number;
-              text: string;
+        const timeline = [
+          ...pauses.map((pw) => {
+            const startLbl = formatWallClockTime(pw.offset_seconds, timeOriginUtc);
+            const endLbl =
+              pw.end_offset_seconds != null
+                ? formatWallClockTime(pw.end_offset_seconds, timeOriginUtc)
+                : tr('laufend', 'ongoing');
+            const bySuffix = singleLine(pw.by) ? ` (${singleLine(pw.by)})` : '';
+            return {
+              offset: pw.offset_seconds,
+              rank: 0,
+              line: `> **[${startLbl} – ${endLbl}] ${tr('Off-the-Record-Pause', 'Off-the-Record Pause')}${bySuffix}:** ${tr('Aufnahme im Chat pausiert.', 'Recording paused via chat.')}`,
             };
-        const entries: MdEntry[] = [
-          ...kfs.map(
-            (kf): MdEntry => ({
-              kind: 'kf',
-              offset: kf.offset_seconds,
-              presenter: kf.presenter,
-            })
-          ),
-          ...segs.map(
-            (s): MdEntry => ({
-              kind: 'seg',
-              offset: s.start,
-              speaker: s.speaker_label,
-              start: s.start,
-              end: s.end,
-              text: s.text,
-            })
-          ),
-        ];
-        entries.sort((a, b) => {
-          if (a.offset !== b.offset) return a.offset - b.offset;
-          if (a.kind === b.kind) return 0;
-          return a.kind === 'kf' ? -1 : 1;
-        });
-        for (const entry of entries) {
-          if (entry.kind === 'kf') {
-            mdLines.push(
-              `> **[${formatWallClockTime(entry.offset, timeOriginUtc)}] ${tr('Bildschirmfreigabe', 'Screen share')} (${singleLine(entry.presenter)}):** [${protocolViewUrl}](${protocolViewUrl})`,
-              ''
-            );
-          } else {
-            mdLines.push(
-              `**${singleLine(entry.speaker)}** (\`${formatWallClockTime(entry.start, timeOriginUtc)} – ${formatWallClockTime(entry.end, timeOriginUtc)}\`): ${singleLine(entry.text)}`,
-              ''
-            );
-          }
+          }),
+          ...kfs.map((kf) => ({
+            offset: kf.offset_seconds,
+            rank: 1,
+            line: `> **[${formatWallClockTime(kf.offset_seconds, timeOriginUtc)}] ${tr('Bildschirmfreigabe', 'Screen share')} (${singleLine(kf.presenter)}):** [${protocolViewUrl}](${protocolViewUrl})`,
+          })),
+          ...markers.map((m) => {
+            const badge =
+              m.kind === 'decision'
+                ? tr('Beschluss', 'Decision')
+                : tr('Aufgabe', 'To-Do');
+            const authorPart = singleLine(m.author);
+            return {
+              offset: m.offset_seconds,
+              rank: 2,
+              line: `> **[${formatWallClockTime(m.offset_seconds, timeOriginUtc)}] ${badge}${authorPart ? ` (${authorPart})` : ''}:** ${singleLine(m.text)}`,
+            };
+          }),
+          ...segs.map((s) => ({
+            offset: s.start,
+            rank: 3,
+            line: `**${singleLine(s.speaker_label)}** (\`${formatWallClockTime(s.start, timeOriginUtc)} – ${formatWallClockTime(s.end, timeOriginUtc)}\`): ${singleLine(s.text)}`,
+          })),
+        ].sort((a, b) => a.offset - b.offset || a.rank - b.rank);
+        for (const item of timeline) {
+          mdLines.push(item.line, '');
         }
       }
       body = mdLines.join('\n').trimEnd() + '\n';
@@ -823,22 +845,41 @@ export function MeetingDetailView({
               )}
 
               {live?.is_active && recording.participation === 'capturing' && (
-                <div id="live-status-banner" className="wl-live-card p-3.5 wl-fade-in">
+                <div
+                  id="live-status-banner"
+                  className={`${live.paused ? 'wl-lobby-card' : 'wl-live-card'} p-3.5 wl-fade-in`}
+                >
                   <HStack justify="between" vAlign="center" wrap="wrap" gap={3}>
-                    <HStack gap={2} vAlign="center" wrap="wrap">
-                      <LiveWaveform />
+                    <HStack gap={live.paused ? 3 : 2} vAlign="center" wrap="wrap">
+                      {live.paused ? (
+                        <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400">
+                          <Pause className="h-4 w-4" />
+                        </span>
+                      ) : (
+                        <LiveWaveform />
+                      )}
                       <VStack gap={0.5}>
                         <Text type="body" weight="bold">
-                          {tr(
-                            'Live-Aufnahme läuft — Wortprotokoll aktualisiert sich automatisch',
-                            'Recording live — transcript updates automatically'
-                          )}
+                          {live.paused
+                            ? tr(
+                                'Off the Record — Aufnahme im Konferenz-Chat pausiert',
+                                'Off the Record — Recording paused via meeting chat'
+                              )
+                            : tr(
+                                'Live-Aufnahme läuft — Wortprotokoll aktualisiert sich automatisch',
+                                'Recording live — transcript updates automatically'
+                              )}
                         </Text>
                         <Text type="supporting" color="secondary">
-                          {tr(
-                            `Erkannte Teilnehmende: ${live.dom_or_signaled_participants ?? 0} · Zugeordnete Sprecher: ${live.bound_named_receivers ?? 0}/${live.total_receivers ?? 0} · Erfasste Sprache: ${formatDurationHuman(live.active_audio_seconds || 0)} (${formatDurationHuman(live.audio_seconds || 0)} gesamt)`,
-                            `Participants: ${live.dom_or_signaled_participants ?? 0} · Bound speakers: ${live.bound_named_receivers ?? 0}/${live.total_receivers ?? 0} · Speech: ${formatDurationHuman(live.active_audio_seconds || 0)} (${formatDurationHuman(live.audio_seconds || 0)} total)`
-                          )}
+                          {live.paused
+                            ? tr(
+                                'Es werden aktuell weder Audio noch Bildschirmfreigaben erfasst. Im Konferenz-Chat „#resume“ oder „#weiter“ senden, um fortzufahren.',
+                                'No audio or screen-share slides are being captured. Type "#resume" in the meeting chat to continue recording.'
+                              )
+                            : tr(
+                                `Erkannte Teilnehmende: ${live.dom_or_signaled_participants ?? 0} · Zugeordnete Sprecher: ${live.bound_named_receivers ?? 0}/${live.total_receivers ?? 0} · Erfasste Sprache: ${formatDurationHuman(live.active_audio_seconds || 0)} (${formatDurationHuman(live.audio_seconds || 0)} gesamt)`,
+                                `Participants: ${live.dom_or_signaled_participants ?? 0} · Bound speakers: ${live.bound_named_receivers ?? 0}/${live.total_receivers ?? 0} · Speech: ${formatDurationHuman(live.active_audio_seconds || 0)} (${formatDurationHuman(live.audio_seconds || 0)} total)`
+                              )}
                         </Text>
                       </VStack>
                     </HStack>
@@ -895,6 +936,8 @@ export function MeetingDetailView({
                   termReplacements={transcript.term_replacements}
                   segments={transcript.segments || []}
                   keyframes={transcript.keyframes ?? []}
+                  chatMarkers={transcript.chat_markers ?? []}
+                  pauseWindows={transcript.pause_windows ?? []}
                   sources={transcript.sources_summary || []}
                   selectedSourceFilter={selectedSourceFilter}
                   onSelectedSourceFilterChange={setSelectedSourceFilter}

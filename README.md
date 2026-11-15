@@ -45,10 +45,12 @@ Commercial meeting bots (*Fireflies, Otter, Fathom, Read.ai*) route confidential
 
 ![wortlaut calendar workspace with connected Google Calendar and Microsoft 365 accounts and 1-click auto-record toggles](docs/assets/calendar-view.png)
 
-### 2. Transparent Presence & Live In-Call Chat Opt-Out
+### 2. Transparent Presence, On-Screen Instructions & Live Chat Controls
 
-* Upon joining, `wortlaut` displays the inviting person’s name — e.g. **`wortlaut (Elena Rostova)`** — and posts a concise notice in the meeting chat with a link to your instance’s [Privacy & Transparency Notice (`/privacy`)](services/meeting/src/wortlaut/ui.py) (explicitly noting when `WORTLAUT_ENABLE_KEYFRAMES=true` that participant camera video is never recorded and only settled screen-share snapshots are captured; see [`./docs/configuration.md`](./docs/configuration.md)).
+* Upon joining, `wortlaut` displays the inviting person’s name — e.g. **`wortlaut (Elena Rostova)`** — renders live **on-screen chat instructions** directly on its `1280×720` WebRTC video tile ([video-tile.ts](worker/runtime/video-tile.ts)), and posts a concise notice in the meeting chat with a link to your instance’s [Privacy & Transparency Notice (`/privacy`)](services/meeting/src/wortlaut/ui.py) (explicitly noting when `WORTLAUT_ENABLE_KEYFRAMES=true` that participant camera video is never recorded and only settled screen-share snapshots are captured; see [`./docs/configuration.md`](./docs/configuration.md)).
 * **Live Chat Opt-Out:** If any participant writes `opt out`, `optout`, `no`, `nein`, or `stop` in the meeting chat during the call, their audio stream and screen-share sampler are halted on the spot and any already-transcribed segments and uploaded screen-share keyframes from that participant are purged immediately from PostgreSQL and S3 ([meet-page.ts](worker/src/meet-page.ts), [processing.py](services/meeting/src/wortlaut/processing.py)).
+* **Off-the-Record Pause (`#pause` / `#resume`):** Typing `#pause` (or `/pause`, `!pause`, `#off-the-record`, `#pausieren`) in the meeting chat immediately zeroes audio capture in worker RAM and suspends screen-share keyframe sampling while switching `wortlaut`’s video tile to a high-visibility amber **OFF THE RECORD** indicator. Typing `#resume` (or `#weiter`, `/resume`) resumes recording without leaving the room ([capture.ts](worker/src/capture.ts), [meet-page.ts](worker/src/meet-page.ts)).
+* **Human-Verified Chat Markers (`#decision` & `#todo`):** Typing `#decision <text>` (`#beschluss <text>`) or `#todo <text>` (`#aufgabe <text>`, `#action <text>`) pins timestamped decisions and action items directly onto the live video tile, the Web-UI timeline, protocol exports (`.md`, `.txt`, `.json`), MCP tools, and optional Ollama summaries ([exports.py](services/meeting/src/wortlaut/exports.py)).
 
 ### 3. Review, Search, Edit & Share
 

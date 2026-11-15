@@ -3,6 +3,7 @@ import type {
   CalendarConnectionInfo,
   CalendarEvent,
   CalendarSyncedEventInfo,
+  ChatMarker,
   InstanceInfo,
   McpGrantsResponse,
   ProtocolSummary,
@@ -1115,6 +1116,30 @@ export function matchesKeyframeSourceFilter(
     return kf.provider_source_id === filterKey.slice('source:'.length);
   }
   return kf.provider_source_id === filterKey;
+}
+
+export function matchesChatMarkerSourceFilter(
+  marker: ChatMarker,
+  filterKey: string,
+  sources: SourceSummary[] = []
+): boolean {
+  if (!filterKey || filterKey === 'all') return true;
+  if (filterKey.startsWith('participant:')) {
+    if (marker.participant_id === filterKey.slice('participant:'.length)) {
+      return true;
+    }
+  } else if (filterKey.startsWith('name:') || filterKey.startsWith('speaker:')) {
+    const target = filterKey.slice(filterKey.indexOf(':') + 1);
+    if (marker.author === target) return true;
+  }
+  const authorNorm = marker.author?.trim().toLowerCase();
+  if (!authorNorm) return false;
+  return sources.some(
+    (src) =>
+      getSourceFilterKey(src) === filterKey &&
+      (src.participant_name?.trim().toLowerCase() === authorNorm ||
+        src.speaker_label?.trim().toLowerCase() === authorNorm)
+  );
 }
 
 export function formatDurationHuman(seconds: number): string {

@@ -284,6 +284,13 @@ PRIVACY_HTML = """<!DOCTYPE html>
         Schreiben Sie während des laufenden Calls einfach <strong>„opt out“</strong>,
         <strong>„optout“</strong>, <strong>„nein“</strong> oder <strong>„no“</strong> in den
         Meeting-Chat. __OPTOUT_EFFECT_DE__<br><br>
+        <strong>Off-the-Record-Pause &amp; Live-Marker im Chat:</strong>
+        Mit <strong>„#pause“</strong> im Konferenz-Chat pausieren Sie die Audio- und
+        Bildschirmerfassung sofort (Anzeige „OFF THE RECORD“ auf der Videokachel; verworfene Daten
+        werden nicht gespeichert), bis <strong>„#resume“</strong> oder <strong>„#weiter“</strong>
+        geschrieben wird. Mit <strong>„#decision …“</strong> (Beschluss) und
+        <strong>„#todo …“</strong> (Aufgabe) heften Sie geprüfte Protokollpunkte direkt an die
+        Zeitleiste.<br><br>
         <strong>Gesamte Aufzeichnung beenden:</strong> Der Bot <strong>__ASSISTANT_NAME__</strong>
         kann jederzeit direkt über die Teilnehmerliste von Google Meet, Microsoft Teams, Zoom
         oder Cisco Webex aus dem Raum entfernt oder durch die einladende Person in der
@@ -579,6 +586,12 @@ PRIVACY_HTML_EN = """<!DOCTYPE html>
         Simply type <strong>"opt out"</strong>, <strong>"optout"</strong>, <strong>"no"</strong>,
         or <strong>"nein"</strong> in the meeting chat at any point during the call.
         __OPTOUT_EFFECT_EN__<br><br>
+        <strong>Off-the-record pause &amp; live chat markers:</strong>
+        Type <strong>"#pause"</strong> in the meeting chat to immediately pause audio and screen
+        capture (the bot's video tile switches to "OFF THE RECORD" and drops media in memory) until
+        <strong>"#resume"</strong> is sent. Use <strong>"#decision …"</strong> and
+        <strong>"#todo …"</strong> to pin human-verified decisions and action items directly into
+        the protocol.<br><br>
         <strong>Stop the entire recording:</strong> Remove <strong>__ASSISTANT_NAME__</strong> from
         the call roster or cancel/delete the recording in the <a href="/ui">wortlaut Web-UI</a>.
       </p>

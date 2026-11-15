@@ -329,8 +329,72 @@ test('video tile trust gating & localization across Google Meet, Microsoft Teams
       });
       const snap = await page.evaluate(() => window.wortlautVideoTile?.getSnapshot());
       assert.equal(snap?.participation, 'capturing');
+      assert.equal(snap?.paused, false);
       assert.equal(snap?.segmentCount, 1);
       assert.equal(snap?.lastRenderedText, localeCase.expectedText);
+
+      // Verify on-screen instructions strip (y: 124..192) renders visible pill ink in both EN and DE
+      const stripInk = await page.evaluate(() => {
+        const ctx2d = window.wortlautVideoTile!.canvas.getContext('2d')!;
+        const data = ctx2d.getImageData(48, 124, 1184, 68).data;
+        let bright = 0;
+        for (let i = 0; i < data.length; i += 16) {
+          if (data[i] > 110 || data[i + 1] > 110 || data[i + 2] > 110) bright += 1;
+        }
+        return bright;
+      });
+      assert.ok(stripInk > 40, `Expected visible on-screen instructions strip ink (${localeCase.locale})`);
+
+      // Verify live chat markers (#decision & #todo) render inline on the video tile
+      await update({
+        participation: 'capturing',
+        markers: [
+          {
+            kind: 'decision',
+            text: localeCase.locale === 'en-US' ? 'Ship v2 on Friday' : 'Release v2 am Freitag',
+            author: 'Alice',
+            start: 18,
+          },
+          {
+            kind: 'todo',
+            text: localeCase.locale === 'en-US' ? 'Update runbook' : 'Runbook aktualisieren',
+            author: 'Bob',
+            start: 22,
+          },
+        ],
+      });
+      const markerSnap = await page.evaluate(() => window.wortlautVideoTile?.getSnapshot());
+      assert.equal(markerSnap?.markerCount, 2);
+      assert.equal(
+        markerSnap?.lastRenderedText,
+        localeCase.locale === 'en-US'
+          ? '[TODO] Bob: Update runbook'
+          : '[AUFGABE] Bob: Runbook aktualisieren',
+      );
+
+      // Verify #pause Off-the-Record state switches the viewport to amber OFF THE RECORD screen
+      await update({paused: true});
+      const pausedState = await page.evaluate(() => {
+        const tile = window.wortlautVideoTile!;
+        const s = tile.getSnapshot();
+        const ctx2d = tile.canvas.getContext('2d')!;
+        // Sample centered pause card region for warm amber pixels (R > B + 60)
+        const cardData = ctx2d.getImageData(280, 320, 720, 220).data;
+        let amberPixels = 0;
+        for (let i = 0; i < cardData.length; i += 16) {
+          if (cardData[i] > 160 && cardData[i + 1] > 90 && cardData[i] - cardData[i + 2] > 60) {
+            amberPixels += 1;
+          }
+        }
+        return {s, amberPixels};
+      });
+      assert.equal(pausedState.s.paused, true);
+      assert.ok(pausedState.s.lastRenderedText.startsWith('OFF THE RECORD'));
+      assert.ok(pausedState.amberPixels > 20, `Expected amber Off-the-Record card pixels (${localeCase.locale})`);
+
+      await update({paused: false});
+      assert.equal((await page.evaluate(() => window.wortlautVideoTile?.getSnapshot()))?.paused, false);
+
       await page.evaluate(() => window.wortlautVideoTile?.stop());
       await ctx.close();
     }
