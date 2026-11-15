@@ -1686,4 +1686,3 @@ def extract_audio_snippet_wav(
         wf.setframerate(RATE)
         wf.writeframes(pcm_bytes)
     return buf.getvalue()
-

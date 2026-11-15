@@ -2057,8 +2057,3 @@ def test_calendar_protocol_block_injection_and_writeback(monkeypatch):
     assert html3.count("📝 wortlaut Wortprotokoll") == 1
     assert "Dritte HTML-Fassung" in html3
     assert "Aktualisierte HTML-Kurzfassung" not in html3
-
-
-
-
-

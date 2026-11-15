@@ -1,0 +1,5 @@
+ignored:
+  # Base images run `apt-get upgrade -y` intentionally to pull latest OS security patches
+  - DL3008
+  # Playwright runtime base image defines and maintains `pwuser`
+  - DL3066

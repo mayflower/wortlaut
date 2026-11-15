@@ -1,0 +1,18 @@
+title = "wortlaut gitleaks configuration"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Ignore local scratch/runtime dirs and non-secret Kubernetes secretKeyRef key names"
+paths = [
+  '''^\.dev/''',
+  '''^worker/node_modules/''',
+  '''^worker/dist(-worker)?/''',
+  '''^services/meeting/\.venv/''',
+]
+regexTarget = "line"
+regexes = [
+  # Kubernetes secretKeyRef env key name (references a Secret key, not a secret value)
+  '''^\s*key:\s*WORTLAUT_[A-Z0-9_]+_KEY\s*$''',
+]

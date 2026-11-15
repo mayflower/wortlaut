@@ -22,4 +22,14 @@ test "$(kubectl --kubeconfig .dev/kubeconfig config current-context)" = data
 uv sync --project services/meeting
 npm --prefix worker ci
 npm --prefix worker run build
+if [ -d .git ]; then
+  if command -v pre-commit >/dev/null 2>&1 && pre-commit --version >/dev/null 2>&1; then
+    pre-commit install --hook-type pre-commit --hook-type commit-msg --hook-type pre-push >/dev/null
+  elif command -v mise >/dev/null 2>&1 && mise x pre-commit@latest -- pre-commit --version >/dev/null 2>&1; then
+    mise x pre-commit@latest -- pre-commit install --hook-type pre-commit --hook-type commit-msg --hook-type pre-push >/dev/null
+  else
+    uv tool install pre-commit >/dev/null 2>&1 || true
+    uvx pre-commit install --hook-type pre-commit --hook-type commit-msg --hook-type pre-push >/dev/null
+  fi
+fi
 printf 'wortlaut ready for make dev (context data; no workloads started by setup).\n'

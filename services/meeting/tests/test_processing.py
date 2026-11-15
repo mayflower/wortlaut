@@ -1166,7 +1166,3 @@ def test_timeline_coalesces_same_speaker_chunks_when_participant_name_resolves(
         assert runs[0].start == 0 and runs[0].end == 64000
         assert runs[0].binding["speaker_id"] == "spaces/room/devices/192"
         assert runs[0].binding["participant_name"] == "Johann Peter Hartmann"
-
-
-
-

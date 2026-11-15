@@ -6,7 +6,7 @@ import {createServer} from 'node:http';
 import {createRequire} from 'node:module';
 import {test} from 'node:test';
 import {fileURLToPath} from 'node:url';
-import {chromium, type Frame, type Page} from 'playwright';
+import {chromium, type Browser, type Frame, type Page} from 'playwright';
 import {build} from 'vite';
 import {MeetBrowser, type MeetBootstrap} from '../runtime/meet';
 import {TeamsBrowser, type TeamsBootstrap} from '../runtime/teams-browser';
@@ -170,16 +170,22 @@ async function readDecodedReceiverMetrics(target: Page | Frame) {
 
     let nonBlackPixels = 0;
     let brightPixels = 0;
+    let lowerTranscriptInk = 0;
     // Sample transcript body region (y: 44..160, x: 16..304 in 320x180 scaled coords)
     const bodySignature: number[] = [];
-    for (let y = 0; y < 180; y += 4) {
-      for (let x = 0; x < 320; x += 4) {
+    for (let y = 0; y < 180; y += 2) {
+      for (let x = 0; x < 320; x += 2) {
         const idx = (y * 320 + x) * 4;
         const luma = Math.round(0.299 * rgba[idx] + 0.587 * rgba[idx + 1] + 0.114 * rgba[idx + 2]);
-        if (luma > 8) nonBlackPixels += 1;
-        if (luma > 90) brightPixels += 1;
-        if (y >= 44 && y <= 160 && x >= 16 && x <= 304) {
-          bodySignature.push(luma);
+        if (x % 4 === 0 && y % 4 === 0) {
+          if (luma > 8) nonBlackPixels += 1;
+          if (luma > 90) brightPixels += 1;
+          if (y >= 44 && y <= 160 && x >= 16 && x <= 304) {
+            bodySignature.push(luma);
+          }
+        }
+        if (y >= 132 && y <= 162 && x >= 24 && x <= 220 && luma > 85) {
+          lowerTranscriptInk += 1;
         }
       }
     }
@@ -201,6 +207,7 @@ async function readDecodedReceiverMetrics(target: Page | Frame) {
       bytesReceived,
       nonBlackPixels,
       brightPixels,
+      lowerTranscriptInk,
       bodySignature,
       zoomCanvasNonBlack,
       previewTrackState: fx.previewTrackState,
@@ -375,13 +382,14 @@ test('all 4 provider drivers display live transcript video to remote receivers w
   const apiUrl = `http://127.0.0.1:${(server.address() as {port: number}).port}`;
 
   const activeStops: Array<() => Promise<unknown>> = [];
-  const browser = await chromium.launch({
-    headless: true,
-    chromiumSandbox: true,
-    args: ['--autoplay-policy=no-user-gesture-required'],
-  });
+  let browser: Browser | undefined;
 
   try {
+    browser = await chromium.launch({
+      headless: true,
+      chromiumSandbox: true,
+      args: ['--autoplay-policy=no-user-gesture-required'],
+    });
     // =========================================================================
     // 1. GOOGLE MEET (MeetBrowser)
     // =========================================================================
@@ -464,6 +472,7 @@ test('all 4 provider drivers display live transcript video to remote receivers w
       assert.ok(beforeSegments.framesDecoded > 0, 'Expected decoded WebRTC video frames on Meet receiver');
       assert.ok(beforeSegments.nonBlackPixels > 200);
       assert.ok(beforeSegments.brightPixels > 20);
+      assert.equal(beforeSegments.lowerTranscriptInk, 0);
       assert.equal(beforeSegments.audioRejected, true);
       assert.equal(beforeSegments.previewTrackState, 'ended');
       assert.equal(beforeSegments.callTrackState, 'live');
@@ -492,6 +501,7 @@ test('all 4 provider drivers display live transcript video to remote receivers w
         countChangedSamples(beforeSegments.bodySignature, afterSegments.bodySignature) >= 8,
         'Expected decoded remote Meet video pixels to visibly change when transcript segments arrive',
       );
+      assert.ok(afterSegments.lowerTranscriptInk >= 10, 'Expected decoded Meet transcript lines in lower tile viewport');
 
       // Wait >1.0s so keyframe sampler evaluates at least one 1s tick: self video tile must emit 0 keyframes!
       await page.waitForTimeout(1050);
@@ -587,6 +597,7 @@ test('all 4 provider drivers display live transcript video to remote receivers w
       assert.equal(beforeSegments.videoWidth, 1280);
       assert.equal(beforeSegments.videoHeight, 720);
       assert.ok(beforeSegments.framesDecoded > 0);
+      assert.equal(beforeSegments.lowerTranscriptInk, 0);
       assert.equal(beforeSegments.audioRejected, true);
 
       await teams.updateVideoTile({
@@ -601,6 +612,7 @@ test('all 4 provider drivers display live transcript video to remote receivers w
         countChangedSamples(beforeSegments.bodySignature, afterSegments.bodySignature) >= 6,
         'Expected decoded remote Teams video pixels to update after live_transcript push',
       );
+      assert.ok(afterSegments.lowerTranscriptInk >= 10, 'Expected decoded Teams transcript lines in lower tile viewport');
 
       await page.waitForTimeout(1050);
       const afterTicks = await teams.inspect();
@@ -705,6 +717,7 @@ test('all 4 provider drivers display live transcript video to remote receivers w
       assert.equal(beforeSegments.videoWidth, 1280);
       assert.equal(beforeSegments.videoHeight, 720);
       assert.ok(beforeSegments.framesDecoded > 0);
+      assert.equal(beforeSegments.lowerTranscriptInk, 0);
       assert.equal(beforeSegments.audioRejected, true);
 
       await webex.updateVideoTile({
@@ -723,6 +736,7 @@ test('all 4 provider drivers display live transcript video to remote receivers w
         countChangedSamples(beforeSegments.bodySignature, afterSegments.bodySignature) >= 6,
         'Expected decoded remote Webex video pixels to update inside cross-origin meeting iframe',
       );
+      assert.ok(afterSegments.lowerTranscriptInk >= 10, 'Expected decoded Webex transcript lines in lower tile viewport');
 
       await page.waitForTimeout(1050);
       const afterTicks = await webex.inspect();
@@ -822,6 +836,7 @@ test('all 4 provider drivers display live transcript video to remote receivers w
       assert.equal(beforeSegments.videoWidth, 1280);
       assert.equal(beforeSegments.videoHeight, 720);
       assert.ok(beforeSegments.framesDecoded > 0);
+      assert.equal(beforeSegments.lowerTranscriptInk, 0);
       assert.ok(beforeSegments.zoomCanvasNonBlack > 50, 'Expected Zoom gallery <canvas> to render non-black bot video');
       assert.equal(beforeSegments.audioRejected, true);
 
@@ -837,6 +852,7 @@ test('all 4 provider drivers display live transcript video to remote receivers w
         countChangedSamples(beforeSegments.bodySignature, afterSegments.bodySignature) >= 6,
         'Expected decoded Zoom video/canvas pixels to visibly update when transcript segments arrive',
       );
+      assert.ok(afterSegments.lowerTranscriptInk >= 10, 'Expected decoded Zoom transcript lines in lower tile viewport');
 
       // Even with a live gallery <canvas> present in Zoom DOM, sampler must NOT emit keyframes without share banner!
       await page.waitForTimeout(1050);
@@ -852,7 +868,7 @@ test('all 4 provider drivers display live transcript video to remote receivers w
     assert.equal(uploadedKeyframes.length, 0, 'Zero self-video keyframes may ever be uploaded across all 4 providers');
   } finally {
     await Promise.allSettled(activeStops.map((fn) => fn()));
-    await browser.close();
+    await browser?.close();
     for (const client of sockets.clients) {
       client.terminate();
     }

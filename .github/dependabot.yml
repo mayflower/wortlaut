@@ -4,14 +4,23 @@ updates:
     directory: "/services/meeting"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
     groups:
       python-meeting:
         patterns: ["*"]
+    ignore:
+      # kubernetes >=37.0.2 requires python-dateutil>=3.0.0, which conflicts with
+      # recurring-ical-events==3.8.2 (python-dateutil>=2.8.1,<3.0.0).
+      - dependency-name: "kubernetes"
+        versions: [">= 37.0.2"]
 
   - package-ecosystem: "npm"
     directory: "/worker"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
     groups:
       worker-npm:
         patterns: ["*"]
@@ -20,6 +29,8 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
     groups:
       github-actions:
         patterns: ["*"]
@@ -28,8 +39,19 @@ updates:
     directory: "/services/meeting"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
 
   - package-ecosystem: "docker"
     directory: "/services/worker"
     schedule:
       interval: "weekly"
+    cooldown:
+      default-days: 7
+
+  - package-ecosystem: "docker"
+    directory: "/services/asr"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7

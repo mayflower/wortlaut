@@ -419,4 +419,3 @@ def test_zoom_bootstrap_and_calendar_invite(client, database, monkeypatch):
     event = imported(client, mail(link=raw_url))
     assert event["status"] == "accepted"
     assert event["provider"] == "zoom"
-

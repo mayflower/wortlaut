@@ -1250,4 +1250,3 @@ def publish_protocol_link_to_calendar_events(
         "error": last_error or "calendar_update_failed",
         "protocol_url": protocol_url,
     }
-

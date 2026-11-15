@@ -690,4 +690,3 @@ def render_privacy(lang: str | None = None) -> str:
         .replace("__TRANSCRIPT_DAYS__", str(transcript_days))
         .replace("__ASSET_VERSION__", _asset_version())
     )
-

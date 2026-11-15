@@ -14,6 +14,54 @@ permissions:
   contents: read
 
 jobs:
+  static-qa:
+    name: Static QA, lint & manifest schemas
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: 0.12.23
+          python-version: '3.12'
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '26'
+      - name: Install locked dependencies
+        run: |
+          uv lock --directory services/meeting --check
+          uv sync --directory services/meeting --locked
+          npm --prefix worker ci --no-audit --no-fund
+      - name: Audit GitHub Actions workflows (actionlint & zizmor)
+        run: |
+          docker run --rm -v "${PWD}:/repo:ro" -w /repo \
+            docker.io/rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
+          uvx zizmor==1.32.0 .github/workflows
+      - name: Lint shell scripts & Dockerfiles
+        run: |
+          shellcheck scripts/*.sh
+          docker run --rm -v "${PWD}:/work:ro" -w /work \
+            ghcr.io/hadolint/hadolint:v2.15.1@sha256:32dac94127fd60b7b7e3fbfc65e1383b9b5e25c9bfd7b8536de7a539fe68a12d \
+            hadolint services/asr/Dockerfile services/meeting/Dockerfile services/worker/Dockerfile
+      - name: Lint Python & TypeScript
+        run: make lint
+      - name: Validate Helm, Kustomize & Compose schemas
+        run: |
+          helm lint charts/wortlaut
+          helm lint charts/wortlaut --set bundled.enabled=true
+          helm template wortlaut charts/wortlaut --namespace wortlaut | \
+            docker run --rm -i ghcr.io/yannh/kubeconform:v0.8.0@sha256:faffaf43f95aa6425306e1ab8d6fcad72acb9049158f38e574c085ea1ec0f64e \
+              -strict -summary
+          helm template wortlaut charts/wortlaut --namespace wortlaut --set bundled.enabled=true | \
+            docker run --rm -i ghcr.io/yannh/kubeconform:v0.8.0@sha256:faffaf43f95aa6425306e1ab8d6fcad72acb9049158f38e574c085ea1ec0f64e \
+              -strict -summary
+          kubectl kustomize deploy/dev | \
+            docker run --rm -i ghcr.io/yannh/kubeconform:v0.8.0@sha256:faffaf43f95aa6425306e1ab8d6fcad72acb9049158f38e574c085ea1ec0f64e \
+              -strict -summary
+          docker compose config --quiet
+
   checks:
     name: PostgreSQL, S3 and browser fixtures
     runs-on: ubuntu-24.04
@@ -37,12 +85,12 @@ jobs:
       WORTLAUT_TEST_S3_ENDPOINT: http://127.0.0.1:24609
       WORTLAUT_S3_ACCESS_KEY: fixture-s3-user
       WORTLAUT_S3_SECRET_KEY: fixture-s3-password
-      PYTEST_ADDOPTS: --tb=line -ra
+      PYTEST_ADDOPTS: --tb=line -ra --cov=wortlaut --cov-branch --cov-report=term-missing:skip-covered --cov-report=markdown:/tmp/pytest-coverage.md
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           version: 0.12.23
           python-version: '3.12'
@@ -53,6 +101,14 @@ jobs:
         run: |
           uv sync --directory services/meeting --locked
           npm --prefix worker ci --no-audit --no-fund
+      - name: Build browser capture & UI bundles
+        run: npm --prefix worker run build
+      - name: Install pinned Chromium
+        working-directory: worker
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends xdotool
+          npx playwright install --with-deps chromium
       - name: Start disposable S3 fixture
         run: |
           docker run --detach --name wortlaut-test-s3 \
@@ -63,23 +119,15 @@ jobs:
             rustfs/rustfs:1.0.4@sha256:ed9210d6411d77ffceb70d94b964a3cb7d225983368bc25bebe01e995293dcc2 /data
           curl --fail --retry 30 --retry-delay 1 --retry-all-errors \
             http://127.0.0.1:24609/health/ready
-      - name: Lint and behavior tests with PostgreSQL/S3
+      - name: Behavior & integration tests with PostgreSQL/S3
         run: |
-          make lint
-          helm lint charts/wortlaut
-          helm lint charts/wortlaut --set bundled.enabled=true
-          helm template wortlaut charts/wortlaut --namespace wortlaut >/dev/null
-          helm template wortlaut charts/wortlaut --namespace wortlaut --set bundled.enabled=true >/dev/null
-          docker compose config --quiet
           make test
-      - name: Build both browser capture bundles
-        run: npm --prefix worker run build
-      - name: Install pinned Chromium
-        working-directory: worker
-        run: |
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          sudo apt-get update && sudo apt-get install -y --no-install-recommends xdotool
-          npx playwright install --with-deps chromium
+          if [[ -f /tmp/pytest-coverage.md ]]; then
+            {
+              echo "## Meeting Service Test Coverage"
+              cat /tmp/pytest-coverage.md
+            } >> "${GITHUB_STEP_SUMMARY}"
+          fi
       - name: Native browser fixtures (no real provider identity proof)
         working-directory: worker
         run: |

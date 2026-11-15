@@ -640,4 +640,3 @@ def ingest_keyframe(
     db.add(kf)
     db.commit()
     return kf, False
-

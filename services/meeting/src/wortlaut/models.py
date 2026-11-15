@@ -408,5 +408,3 @@ class RecordingKeyframe(Base):
     sha256: Mapped[str] = mapped_column(String(64))
     object_key: Mapped[str] = mapped_column(String(512))
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-
-

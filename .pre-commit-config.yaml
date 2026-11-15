@@ -1,0 +1,147 @@
+minimum_pre_commit_version: "3.6.0"
+default_install_hook_types:
+  - pre-commit
+  - commit-msg
+  - pre-push
+default_stages:
+  - pre-commit
+
+exclude: ^(worker/dist(-worker)?/|worker/src/vendor/|services/meeting/\.venv/|\.dev/)
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-merge-conflict
+      - id: check-case-conflict
+      - id: check-symlinks
+      - id: destroyed-symlinks
+      - id: check-executables-have-shebangs
+      - id: check-shebang-scripts-are-executable
+      - id: check-json
+      - id: check-toml
+      - id: check-yaml
+        args: [--allow-multiple-documents]
+        exclude: ^charts/.*/templates/
+      - id: check-added-large-files
+        args: [--maxkb=2500]
+      - id: detect-private-key
+      - id: end-of-file-fixer
+        exclude: ^(worker/package-lock\.json|services/meeting/uv\.lock)$
+      - id: trailing-whitespace
+        args: [--markdown-linebreak-ext=md]
+        exclude: ^(worker/package-lock\.json|services/meeting/uv\.lock)$
+
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
+        name: gitleaks (staged secrets)
+        stages: [pre-commit]
+      - id: gitleaks
+        alias: gitleaks-repo
+        name: gitleaks (commit history secrets)
+        entry: gitleaks git --redact --no-banner
+        pass_filenames: false
+        stages: [pre-push]
+
+  - repo: https://github.com/woodruffw/zizmor-pre-commit
+    rev: v1.32.0
+    hooks:
+      - id: zizmor
+
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.11.0.1
+    hooks:
+      - id: shellcheck
+
+  - repo: https://github.com/compilerla/conventional-pre-commit
+    rev: v4.5.0
+    hooks:
+      - id: conventional-pre-commit
+        stages: [commit-msg]
+        args:
+          - feat
+          - fix
+          - docs
+          - style
+          - refactor
+          - perf
+          - test
+          - build
+          - ci
+          - chore
+          - revert
+
+  - repo: local
+    hooks:
+      - id: actionlint
+        name: actionlint (GitHub Actions workflows)
+        language: system
+        entry: sh -c 'SC_BIN=""; if command -v shellcheck >/dev/null 2>&1 && shellcheck --version >/dev/null 2>&1; then SC_BIN="shellcheck"; elif command -v mise >/dev/null 2>&1 && mise x shellcheck@latest -- shellcheck --version >/dev/null 2>&1; then SC_BIN="$(mise x shellcheck@latest -- which shellcheck)"; fi; if command -v actionlint >/dev/null 2>&1 && actionlint -version >/dev/null 2>&1; then exec actionlint -shellcheck="$SC_BIN" "$@"; elif command -v mise >/dev/null 2>&1 && mise x actionlint@latest -- actionlint -version >/dev/null 2>&1; then exec mise x actionlint@latest -- actionlint -shellcheck="$SC_BIN" "$@"; else exec docker run --rm -v "$PWD:/repo:ro" -w /repo docker.io/rhysd/actionlint:1.7.12 actionlint "$@"; fi' --
+        files: ^\.github/workflows/.*\.ya?ml$
+      - id: hadolint
+        name: hadolint (Dockerfiles)
+        language: system
+        entry: sh -c 'if command -v hadolint >/dev/null 2>&1 && hadolint --version >/dev/null 2>&1; then exec hadolint "$@"; elif command -v mise >/dev/null 2>&1 && mise x hadolint@latest -- hadolint --version >/dev/null 2>&1; then exec mise x hadolint@latest -- hadolint "$@"; else exec docker run --rm -v "$PWD:/work:ro" -w /work ghcr.io/hadolint/hadolint:v2.15.1 hadolint "$@"; fi' --
+        files: (^|/)Dockerfile$
+
+      - id: ruff-check
+        name: ruff check (meeting & asr)
+        language: system
+        entry: sh -c 'uv run --directory services/meeting ruff check src tests ../../services/asr'
+        pass_filenames: false
+        files: ^services/(meeting|asr)/.*\.py$
+
+      - id: worker-typecheck
+        name: tsc typecheck (worker & UI)
+        language: system
+        entry: npm --prefix worker run typecheck
+        pass_filenames: false
+        files: ^worker/(src|runtime|test|tsconfig.*|package\.json|vite\..*)\.(ts|tsx|mts|mjs|json)$
+
+      - id: helm-lint
+        name: helm lint (standard & bundled)
+        language: system
+        entry: sh -c 'helm lint charts/wortlaut && helm lint charts/wortlaut --set bundled.enabled=true'
+        pass_filenames: false
+        files: ^charts/wortlaut/
+
+      - id: compose-config
+        name: docker compose config
+        language: system
+        entry: docker compose config --quiet
+        pass_filenames: false
+        files: ^docker-compose\.ya?ml$
+
+      - id: pre-push-uv-lock
+        name: uv lockfile consistency check
+        language: system
+        entry: uv lock --directory services/meeting --check
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]
+
+      - id: pre-push-k8s-manifests
+        name: Kubernetes manifest & schema validation
+        language: system
+        entry: sh -c 'helm template wortlaut charts/wortlaut --namespace wortlaut >/dev/null && helm template wortlaut charts/wortlaut --namespace wortlaut --set bundled.enabled=true >/dev/null && kubectl kustomize deploy/dev >/dev/null && if command -v kubeconform >/dev/null 2>&1 && kubeconform -v >/dev/null 2>&1; then helm template wortlaut charts/wortlaut --namespace wortlaut | kubeconform -strict -summary >/dev/null && helm template wortlaut charts/wortlaut --namespace wortlaut --set bundled.enabled=true | kubeconform -strict -summary >/dev/null && kubectl kustomize deploy/dev | kubeconform -strict -summary >/dev/null; fi'
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]
+
+      - id: pre-push-vuln-gate
+        name: Lockfile vulnerability gate (HIGH/CRITICAL)
+        language: system
+        entry: sh -c 'if command -v trivy >/dev/null 2>&1 && trivy --version >/dev/null 2>&1; then exec trivy fs --scanners vuln --skip-dirs .dev --skip-dirs worker/node_modules --skip-dirs services/meeting/.venv --severity HIGH,CRITICAL --quiet --exit-code 1 .; elif command -v mise >/dev/null 2>&1 && mise x trivy@latest -- trivy --version >/dev/null 2>&1; then exec mise x trivy@latest -- trivy fs --scanners vuln --skip-dirs .dev --skip-dirs worker/node_modules --skip-dirs services/meeting/.venv --severity HIGH,CRITICAL --quiet --exit-code 1 .; else exec npm --prefix worker audit --omit=dev --audit-level=high; fi'
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]
+
+      - id: pre-push-fast-qa
+        name: Pre-push lint & fast worker unit tests
+        language: system
+        entry: sh -c 'make lint && (cd worker && node --import tsx --test --test-concurrency=1 test/chunker.test.ts test/main.test.ts test/transport.test.ts test/webex-evidence.test.ts)'
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]

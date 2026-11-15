@@ -909,4 +909,3 @@ def test_calendar_status_orders_upcoming_first_and_prevents_past_crowding(
     assert len(ext_ids) == 3 + 50
     assert ext_ids[3] == "past-59"
     assert ext_ids[-1] == "past-10"
-

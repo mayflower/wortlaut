@@ -317,9 +317,9 @@ export async function installVideoTile(
       ctx.fillStyle = '#cbd5e1';
       ctx.fillText(truncateText(ctx, optOutText, cardW - 64), 118, stripY + 29);
 
-      // Transcript viewport
+      // Transcript viewport (leaves bottom safe margin for conference client nameplates)
       const bodyTop = 192;
-      const bodyBottom = 648;
+      const bodyBottom = 620;
       const bodyLeft = 96;
       const bodyWidth = cardW - 56;
 
@@ -436,8 +436,36 @@ export async function installVideoTile(
     };
 
     let lastSignature = '';
+    let masterStream: MediaStream | null = null;
+    let baseTrack: CanvasCaptureMediaStreamTrack | null = null;
+    const burstTimers = new Set<number>();
+
+    const emitFrame = () => {
+      renderFrame();
+      baseTrack?.requestFrame?.();
+    };
+
+    const clearBurstTimers = () => {
+      for (const timer of burstTimers) {
+        window.clearTimeout(timer);
+      }
+      burstTimers.clear();
+    };
+
+    const flushFrameBurst = () => {
+      clearBurstTimers();
+      emitFrame();
+      for (const delay of [80, 180, 340]) {
+        const timer = window.setTimeout(() => {
+          burstTimers.delete(timer);
+          emitFrame();
+        }, delay);
+        burstTimers.add(timer);
+      }
+    };
+
     renderFrame();
-    const intervalId = window.setInterval(renderFrame, 2000);
+    const intervalId = window.setInterval(emitFrame, 1000);
 
     const decorateVirtualVideoTrack = (track: MediaStreamTrack): MediaStreamTrack => {
       const tagged = track as MediaStreamTrack & {__wortlautVirtualVideo?: boolean};
@@ -455,7 +483,7 @@ export async function installVideoTile(
         width: WIDTH,
         height: HEIGHT,
         aspectRatio: WIDTH / HEIGHT,
-        frameRate: 2,
+        frameRate: 5,
         facingMode: 'user',
       });
       track.getCapabilities = () =>
@@ -480,8 +508,6 @@ export async function installVideoTile(
       return track;
     };
 
-    let baseTrack: CanvasCaptureMediaStreamTrack | null = null;
-
     const virtualCamDevice = {
       deviceId: 'wortlaut-virtual-camera',
       kind: 'videoinput' as MediaDeviceKind,
@@ -504,13 +530,12 @@ export async function installVideoTile(
         throw new DOMException('Requested device not found', 'NotFoundError');
       }
       if (!baseTrack || baseTrack.readyState !== 'live') {
-        const master = canvas.captureStream(2);
-        baseTrack = master.getVideoTracks()[0] as CanvasCaptureMediaStreamTrack;
+        masterStream = canvas.captureStream(5);
+        baseTrack = masterStream.getVideoTracks()[0] as CanvasCaptureMediaStreamTrack;
       }
       const cloned = decorateVirtualVideoTrack(baseTrack.clone());
       const stream = new MediaStream([cloned]);
-      renderFrame();
-      baseTrack.requestFrame();
+      flushFrameBurst();
       return stream;
     };
 
@@ -545,12 +570,12 @@ export async function installVideoTile(
         const sig = `${participation}::${JSON.stringify(segments)}`;
         if (sig !== lastSignature) {
           lastSignature = sig;
-          renderFrame();
-          baseTrack?.requestFrame();
+          flushFrameBurst();
         }
       },
       stop() {
         window.clearInterval(intervalId);
+        clearBurstTimers();
         for (const t of [...liveTracks]) {
           t.stop();
         }
@@ -559,6 +584,7 @@ export async function installVideoTile(
           baseTrack.stop();
           baseTrack = null;
         }
+        masterStream = null;
       },
       getSnapshot() {
         return {
