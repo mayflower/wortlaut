@@ -221,6 +221,115 @@ export function localizeAttributionStatus(
   return fallbackDe[status] || status;
 }
 
+export const QWEN_ASR_LANGUAGE_META: ReadonlyArray<{
+  id: string;
+  de: string;
+  en: string;
+  native: string;
+}> = [
+  { id: 'German', de: 'Deutsch', en: 'German', native: 'Deutsch' },
+  { id: 'English', de: 'Englisch', en: 'English', native: 'English' },
+  { id: 'French', de: 'Französisch', en: 'French', native: 'Français' },
+  { id: 'Spanish', de: 'Spanisch', en: 'Spanish', native: 'Español' },
+  { id: 'Italian', de: 'Italienisch', en: 'Italian', native: 'Italiano' },
+  { id: 'Portuguese', de: 'Portugiesisch', en: 'Portuguese', native: 'Português' },
+  { id: 'Dutch', de: 'Niederländisch', en: 'Dutch', native: 'Nederlands' },
+  { id: 'Polish', de: 'Polnisch', en: 'Polish', native: 'Polski' },
+  { id: 'Czech', de: 'Tschechisch', en: 'Czech', native: 'Čeština' },
+  { id: 'Danish', de: 'Dänisch', en: 'Danish', native: 'Dansk' },
+  { id: 'Swedish', de: 'Schwedisch', en: 'Swedish', native: 'Svenska' },
+  { id: 'Finnish', de: 'Finnisch', en: 'Finnish', native: 'Suomi' },
+  { id: 'Hungarian', de: 'Ungarisch', en: 'Hungarian', native: 'Magyar' },
+  { id: 'Romanian', de: 'Rumänisch', en: 'Romanian', native: 'Română' },
+  { id: 'Greek', de: 'Griechisch', en: 'Greek', native: 'Ελληνικά' },
+  { id: 'Macedonian', de: 'Mazedonisch', en: 'Macedonian', native: 'Македонски' },
+  { id: 'Russian', de: 'Russisch', en: 'Russian', native: 'Русский' },
+  { id: 'Turkish', de: 'Türkisch', en: 'Turkish', native: 'Türkçe' },
+  { id: 'Arabic', de: 'Arabisch', en: 'Arabic', native: 'العربية' },
+  { id: 'Persian', de: 'Persisch', en: 'Persian', native: 'فارسی' },
+  { id: 'Hindi', de: 'Hindi', en: 'Hindi', native: 'हिन्दी' },
+  { id: 'Chinese', de: 'Chinesisch', en: 'Chinese', native: '中文' },
+  { id: 'Cantonese', de: 'Kantonesisch', en: 'Cantonese', native: '粵語' },
+  { id: 'Japanese', de: 'Japanisch', en: 'Japanese', native: '日本語' },
+  { id: 'Korean', de: 'Koreanisch', en: 'Korean', native: '한국어' },
+  { id: 'Thai', de: 'Thailändisch', en: 'Thai', native: 'ไทย' },
+  { id: 'Vietnamese', de: 'Vietnamesisch', en: 'Vietnamese', native: 'Tiếng Việt' },
+  { id: 'Indonesian', de: 'Indonesisch', en: 'Indonesian', native: 'Bahasa Indonesia' },
+  { id: 'Malay', de: 'Malaiisch', en: 'Malay', native: 'Bahasa Melayu' },
+  { id: 'Filipino', de: 'Filipino', en: 'Filipino', native: 'Tagalog' },
+];
+
+const ASR_META_BY_ID = new Map(QWEN_ASR_LANGUAGE_META.map((m) => [m.id, m]));
+
+export function buildAsrLanguageOptions(
+  lang: UiLang,
+  currentValue?: string | null
+): Array<{ value: string; label: string }> {
+  const options: Array<{ value: string; label: string }> = [
+    {
+      value: 'auto',
+      label:
+        lang === 'en'
+          ? 'Auto-detect (all 30 languages)'
+          : 'Automatisch (alle 30 Sprachen)',
+    },
+    {
+      value: 'German,English',
+      label:
+        lang === 'en'
+          ? 'German + English (Bilingual)'
+          : 'Deutsch + Englisch (Zweisprachig)',
+    },
+    ...QWEN_ASR_LANGUAGE_META.map((item) => {
+      const localName = lang === 'en' ? item.en : item.de;
+      const label =
+        localName === item.native
+          ? localName
+          : `${localName} (${item.native})`;
+      return { value: item.id, label };
+    }),
+  ];
+  const cleanCur = (currentValue || '').trim();
+  if (
+    cleanCur &&
+    cleanCur !== '*' &&
+    !options.some((o) => o.value === cleanCur)
+  ) {
+    options.splice(2, 0, {
+      value: cleanCur,
+      label: formatAsrLanguageLabel(cleanCur, lang),
+    });
+  }
+  return options;
+}
+
+export function formatAsrLanguageLabel(
+  raw: string | null | undefined,
+  lang: UiLang,
+  compact = false
+): string {
+  const clean = (raw || '').trim();
+  if (!clean || clean === 'auto' || clean === '*') {
+    if (compact) {
+      return lang === 'en' ? 'Auto (30)' : 'Auto (30)';
+    }
+    return lang === 'en'
+      ? 'Auto (all 30 languages)'
+      : 'Automatisch (alle 30 Sprachen)';
+  }
+  const parts = clean
+    .split(',')
+    .map((p) => p.trim())
+    .filter(Boolean);
+  return parts
+    .map((p) => {
+      const meta = ASR_META_BY_ID.get(p);
+      if (!meta) return p;
+      return lang === 'en' ? meta.en : meta.de;
+    })
+    .join(' + ');
+}
+
 export function localizeKeyframeCapability(
   capability: string,
   lang: UiLang,

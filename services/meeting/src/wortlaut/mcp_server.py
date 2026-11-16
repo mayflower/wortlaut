@@ -32,6 +32,11 @@ from wortlaut.exports import (
     short_timestamp,
 )
 from wortlaut.ingest import capacity_reached
+from wortlaut.languages import (
+    QWEN_ASR_LANGUAGES,
+    effective_recording_language,
+    normalize_asr_language,
+)
 from wortlaut.mcp_oauth import (
     McpAuthContext,
     McpAuthError,
@@ -193,8 +198,8 @@ MCP_TOOLS: list[dict[str, Any]] = [
         "required_scope": "mcp:read",
         "description": (
             "Retrieve metadata, live capture/pause status, executive summary, action items, notes, "
-            "speaker list, screen-share keyframes, live chat markers (#decision / #todo), "
-            "off-the-record pause windows, and raw-audio retention availability for a recording."
+            "speaker list, screen-share keyframes, off-the-record pause windows, and raw-audio "
+            "retention availability for a recording."
         ),
         "annotations": {
             "title": "Get Recording Details & Summary",
@@ -219,9 +224,9 @@ MCP_TOOLS: list[dict[str, Any]] = [
         "required_scope": "mcp:read",
         "description": (
             "Read speaker-attributed verbatim transcript segments, settled screen-share keyframes "
-            "(wortlaut://recordings/{recording_id}/keyframes/{keyframe_id}.png), human-pinned "
-            "chat markers (#decision / #todo), and off-the-record pause windows for a recording, "
-            "with optional speaker, keyword, and timestamp filters plus isolated audio snippets."
+            "(wortlaut://recordings/{recording_id}/keyframes/{keyframe_id}.png), and "
+            "off-the-record pause windows for a recording, with optional speaker, keyword, and "
+            "timestamp filters plus isolated audio snippets."
         ),
         "annotations": {
             "title": "Read Speaker-Attributed Transcript",
@@ -383,6 +388,14 @@ MCP_TOOLS: list[dict[str, Any]] = [
                     "type": "string",
                     "description": "Optional bot display name override.",
                 },
+                "language": {
+                    "type": "string",
+                    "description": (
+                        "Optional Qwen3-ASR transcription language ('auto' for all 30 languages, "
+                        "or one/comma-separated names/ISO codes such as 'English', 'German', "
+                        "'French', 'Japanese', 'Chinese', 'Spanish', 'German,English')."
+                    ),
+                },
             },
             "required": ["meeting_url"],
             "additionalProperties": False,
@@ -414,8 +427,9 @@ MCP_TOOLS: list[dict[str, Any]] = [
         "name": "update_protocol",
         "required_scope": "mcp:write",
         "description": (
-            "Update a recording's title, human meeting notes, speaker display-name overrides, "
-            "or glossary term replacements."
+            "Update a recording's title, transcription language (all 30 Qwen3-ASR languages or "
+            "'auto'), human meeting notes, speaker display-name overrides, or glossary term "
+            "replacements."
         ),
         "annotations": {
             "title": "Update Protocol Metadata & Replacements",
@@ -433,6 +447,13 @@ MCP_TOOLS: list[dict[str, Any]] = [
                 "title": {
                     "type": "string",
                     "description": "Optional updated meeting title.",
+                },
+                "language": {
+                    "type": "string",
+                    "description": (
+                        "Optional Qwen3-ASR transcription language ('auto' for all 30 languages, "
+                        f"or any of: {', '.join(QWEN_ASR_LANGUAGES)})."
+                    ),
                 },
                 "notes": {
                     "type": "string",
@@ -775,20 +796,19 @@ def _execute_tool(
         transcript_info: dict[str, Any] = {
             "segment_count": 0,
             "keyframe_count": 0,
-            "chat_marker_count": 0,
             "pause_window_count": 0,
             "speakers": [],
         }
         keyframes_out: list[dict[str, Any]] = []
-        chat_markers_out: list[dict[str, Any]] = []
         pause_windows_out: list[dict[str, Any]] = []
+        detected_langs: list[str] = []
         if rec.transcript_deleted_at is None:
             exp = export_data(db, rec)
             segs = exp.get("segments") or []
+            detected_langs = list(exp.get("detected_languages") or [])
             keyframes_out = [
                 _mcp_keyframe_item(rec.id, kf) for kf in (exp.get("keyframes") or [])
             ]
-            chat_markers_out = list(exp.get("chat_markers") or [])
             pause_windows_out = list(exp.get("pause_windows") or [])
             speakers = sorted(
                 {
@@ -799,15 +819,17 @@ def _execute_tool(
             transcript_info = {
                 "segment_count": len(segs),
                 "keyframe_count": len(keyframes_out),
-                "chat_marker_count": len(chat_markers_out),
                 "pause_window_count": len(pause_windows_out),
                 "speakers": speakers,
+                "detected_languages": detected_langs,
                 "opted_out_speakers": exp.get("opted_out_speakers") or [],
             }
         payload = {
             "id": str(rec.id),
             "title": rec.title,
             "provider": rec.provider,
+            "language": effective_recording_language(rec, get_settings()),
+            "detected_languages": detected_langs,
             "owner_email": rec.owner_email,
             "starts_at": rec.starts_at.isoformat(),
             "ends_at": rec.ends_at.isoformat(),
@@ -823,7 +845,6 @@ def _execute_tool(
             "term_replacements": meta.get("term_replacements") or {},
             "transcript": transcript_info,
             "keyframes": keyframes_out,
-            "chat_markers": chat_markers_out,
             "pause_windows": pause_windows_out,
             "ui_url": f"{origin}/ui#view=meetings&id={rec.id}",
         }
@@ -837,7 +858,6 @@ def _execute_tool(
         exp = export_data(db, rec)
         all_segments: list[dict[str, Any]] = list(exp.get("segments") or [])
         all_keyframes: list[dict[str, Any]] = list(exp.get("keyframes") or [])
-        all_markers: list[dict[str, Any]] = list(exp.get("chat_markers") or [])
         all_pauses: list[dict[str, Any]] = list(exp.get("pause_windows") or [])
 
         speaker_filter = str(arguments.get("speaker") or "").strip().lower()
@@ -882,22 +902,6 @@ def _execute_tool(
             if end_sec is not None and kf_offset > float(end_sec):
                 continue
             out_keyframes.append(_mcp_keyframe_item(rec.id, kf))
-
-        out_markers = []
-        for mk in all_markers:
-            mk_author = str(mk.get("author") or "").lower()
-            mk_pid = str(mk.get("participant_id") or "").lower()
-            mk_txt = str(mk.get("text") or "").lower()
-            mk_offset = float(mk.get("offset_seconds") or 0.0)
-            if speaker_filter and speaker_filter not in mk_author and speaker_filter not in mk_pid:
-                continue
-            if query_filter and query_filter not in mk_txt and query_filter not in mk_author:
-                continue
-            if start_sec is not None and mk_offset < float(start_sec):
-                continue
-            if end_sec is not None and mk_offset > float(end_sec):
-                continue
-            out_markers.append(mk)
 
         out_pauses = []
         for pw in all_pauses:
@@ -945,14 +949,6 @@ def _execute_tool(
             out_segments.append(item)
             md_lines.append(f"[{item['timestamp']}] **{speaker_label}**: {item['text']}")
 
-        if out_markers:
-            md_lines.append("\nChat-marked decisions & action items:")
-            for mk in out_markers:
-                ts = short_timestamp(float(mk.get("offset_seconds") or 0.0))
-                badge = "DECISION" if mk.get("kind") == "decision" else "TODO"
-                author = f" ({mk.get('author')})" if mk.get("author") else ""
-                md_lines.append(f"- [{ts}] **[{badge}]{author}**: {mk.get('text')}")
-
         if out_pauses:
             md_lines.append("\nOff-the-record pause windows:")
             for pw in out_pauses:
@@ -974,6 +970,8 @@ def _execute_tool(
         structured = {
             "recording_id": str(rec.id),
             "title": rec.title,
+            "language": exp.get("language") or effective_recording_language(rec, get_settings()),
+            "detected_languages": list(exp.get("detected_languages") or []),
             "total_matching": total_matching,
             "offset": offset,
             "returned": len(out_segments),
@@ -981,7 +979,6 @@ def _execute_tool(
             "ui_url": f"{origin}/ui#view=meetings&id={rec.id}",
             "segments": out_segments,
             "keyframes": out_keyframes,
-            "chat_markers": out_markers,
             "pause_windows": out_pauses,
         }
         return _tool_result("\n".join(md_lines), structured)
@@ -1095,6 +1092,13 @@ def _execute_tool(
         ends_at = starts_at + timedelta(minutes=duration_min)
         title = " ".join(str(arguments.get("title") or "").split())[:200] or None
         guest_name = " ".join(str(arguments.get("guest_name") or "").split())[:120] or None
+        raw_lang = arguments.get("language")
+        norm_lang: str | None = None
+        if raw_lang is not None and str(raw_lang).strip():
+            try:
+                norm_lang = normalize_asr_language(str(raw_lang))
+            except ValueError as exc:
+                return _tool_error(str(exc))
 
         if capacity_reached(db):
             return _tool_error("Recording capacity limit reached on this wortlaut instance.")
@@ -1111,11 +1115,15 @@ def _execute_tool(
             digest_payload["title"] = title
         if guest_name is not None:
             digest_payload["guest_name"] = guest_name
+        if norm_lang is not None:
+            digest_payload["language"] = norm_lang
         digest = hashlib.sha256(json.dumps(digest_payload, sort_keys=True).encode()).hexdigest()
 
         meta: dict[str, Any] = {}
         if principal.name and principal.name.strip():
             meta["owner_name"] = " ".join(principal.name.split())[:120]
+        if norm_lang is not None:
+            meta["asr_language"] = norm_lang
 
         rec = Recording(
             idempotency_key=idempotency_key,
@@ -1141,6 +1149,7 @@ def _execute_tool(
             "id": str(rec.id),
             "provider": rec.provider,
             "title": rec.title,
+            "language": effective_recording_language(rec, get_settings()),
             "starts_at": rec.starts_at.isoformat(),
             "ends_at": rec.ends_at.isoformat(),
             "participation": rec.participation,
@@ -1182,6 +1191,19 @@ def _execute_tool(
         if "title" in arguments and arguments["title"] is not None:
             rec.title = " ".join(str(arguments["title"]).split())[:200] or None
         meta = dict(rec.protocol_meta or {})
+        if "language" in arguments and arguments["language"] is not None:
+            raw_lang = str(arguments["language"]).strip()
+            if not raw_lang:
+                meta.pop("asr_language", None)
+            else:
+                try:
+                    norm_lang = normalize_asr_language(raw_lang)
+                except ValueError as exc:
+                    return _tool_error(str(exc))
+                if norm_lang:
+                    meta["asr_language"] = norm_lang
+                else:
+                    meta.pop("asr_language", None)
         if "notes" in arguments and arguments["notes"] is not None:
             meta["notes"] = str(arguments["notes"])[:20000]
         if isinstance(arguments.get("speaker_overrides"), dict):
@@ -1213,6 +1235,7 @@ def _execute_tool(
         out = {
             "id": str(rec.id),
             "title": rec.title,
+            "language": effective_recording_language(rec, get_settings()),
             "notes": meta.get("notes") or "",
             "speaker_overrides": meta.get("speaker_overrides") or {},
             "term_replacements": meta.get("term_replacements") or {},
@@ -1302,9 +1325,9 @@ def _dispatch_rpc_method(
                     "wortlaut provides pre-mix WebRTC speaker-isolated meeting transcripts "
                     "(Google Meet, Microsoft Teams, Cisco Webex, Zoom) scoped to the authenticated "
                     "user. Prefer get_transcript with pagination or filters for verbatim speaker "
-                    "statements, human-pinned chat_markers (#decision / #todo), off-the-record "
-                    "pause_windows (#pause / #resume), and settled screen-share keyframes "
-                    "(readable as image/png via wortlaut://recordings/{id}/keyframes/{kf_id}.png)."
+                    "statements, off-the-record pause_windows (#pause / #resume), and settled "
+                    "screen-share keyframes (readable as image/png via "
+                    "wortlaut://recordings/{id}/keyframes/{kf_id}.png)."
                 ),
             },
             extra_headers,
@@ -1512,10 +1535,9 @@ def _dispatch_rpc_method(
                                 "text": (
                                     f"Call `get_recording` and `get_transcript` for `{rec_id}`. "
                                     "Produce a concise follow-up note with: (1) key decisions "
-                                    "attributed to exact bound speakers (prioritizing human-pinned "
-                                    "`chat_markers` of kind `decision`), (2) concrete action items "
-                                    "with owners (incorporating `chat_markers` of kind `todo`), "
-                                    "and (3) open questions or off-the-record `pause_windows`."
+                                    "attributed to exact bound speakers, (2) concrete action items "
+                                    "with owners, and (3) open questions or off-the-record "
+                                    "`pause_windows`."
                                 ),
                             },
                         }
@@ -1536,10 +1558,9 @@ def _dispatch_rpc_method(
                                 "type": "text",
                                 "text": (
                                     f"Inspect `{rec_id}` using `get_transcript`{topic_clause}. "
-                                    "Quote exact verbatim statements and any human-pinned "
-                                    "`chat_markers` (`#decision` / `#todo`) with `[MM:SS]` "
-                                    "timestamps and bound speaker names, noting any "
-                                    "`attribution_unknown` or `pause_windows`."
+                                    "Quote exact verbatim statements with `[MM:SS]` timestamps and "
+                                    "bound speaker names, noting any `attribution_unknown` or "
+                                    "`pause_windows`."
                                 ),
                             },
                         }

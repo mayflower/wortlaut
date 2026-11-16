@@ -72,6 +72,10 @@ from wortlaut.ingest import (
     ingest_keyframe,
     verify_owner,
 )
+from wortlaut.languages import (
+    effective_recording_language,
+    normalize_asr_language,
+)
 from wortlaut.mail import FAILURE_REASONS, delivery_json, smtp_pass
 from wortlaut.mcp_oauth import (
     authorization_server_metadata,
@@ -196,7 +200,7 @@ app = FastAPI(
         "Self-hosted, pre-mix WebRTC speaker-isolated meeting transcription and protocol API "
         "for Google Meet, Microsoft Teams, Cisco Webex, and Zoom — including OAuth2 calendar "
         "sync & writeback, settled screen-share keyframes, live in-call chat controls "
-        "(`opt out`, `#pause`/`#resume`, `#decision`, `#todo`), and an authenticated OAuth 2.1 "
+        "(`opt out`, `#pause`/`#resume`, `#lang`), and an authenticated OAuth 2.1 "
         "Model Context Protocol (MCP) Streamable HTTP server at `/mcp`."
     ),
     lifespan=lifespan,
@@ -272,6 +276,7 @@ class RecordingRequest(BaseModel):
     ends_at: datetime
     title: str | None = Field(default=None, max_length=200)
     guest_name: str | None = Field(default=None, max_length=120)
+    language: str | None = Field(default=None, max_length=200)
 
     @model_validator(mode="after")
     def valid(self):
@@ -289,6 +294,8 @@ class RecordingRequest(BaseModel):
             self.title = " ".join(self.title.split()) or None
         if self.guest_name is not None:
             self.guest_name = " ".join(self.guest_name.split()) or None
+        if self.language is not None:
+            self.language = normalize_asr_language(self.language)
         return self
 
 
@@ -409,24 +416,6 @@ class ParticipantSourceEvidence(BaseModel):
         return data
 
 
-class ChatMarkerEvidence(BaseModel):
-    id: str = Field(min_length=1, max_length=256)
-    kind: Literal["decision", "todo"]
-    text: str = Field(min_length=1, max_length=300)
-    author: str | None = Field(default=None, max_length=200)
-    participant_id: str | None = Field(default=None, max_length=200)
-    captured_at: AwareDatetime
-
-    @model_serializer(mode="wrap")
-    def _serialize(self, handler):
-        data = handler(self)
-        if data.get("author") is None:
-            data.pop("author", None)
-        if data.get("participant_id") is None:
-            data.pop("participant_id", None)
-        return data
-
-
 class PauseWindowEvidence(BaseModel):
     started_at: AwareDatetime
     ended_at: AwareDatetime | None = None
@@ -451,7 +440,8 @@ class ParticipantEvidence(BaseModel):
     )
     paused: bool = False
     pause_windows: list[PauseWindowEvidence] = Field(default_factory=list, max_length=64)
-    chat_markers: list[ChatMarkerEvidence] = Field(default_factory=list, max_length=128)
+    asr_language: str | None = Field(default=None, max_length=200)
+    asr_language_seq: int | None = Field(default=None, ge=0)
 
     @model_serializer(mode="wrap")
     def _serialize(self, handler):
@@ -464,8 +454,10 @@ class ParticipantEvidence(BaseModel):
             data.pop("paused", None)
         if not data.get("pause_windows"):
             data.pop("pause_windows", None)
-        if not data.get("chat_markers"):
-            data.pop("chat_markers", None)
+        if data.get("asr_language") is None:
+            data.pop("asr_language", None)
+        if data.get("asr_language_seq") is None:
+            data.pop("asr_language_seq", None)
         return data
 
 
@@ -562,6 +554,7 @@ def recording_json(recording: Recording) -> dict:
         "provider": recording.provider,
         "title": recording.title,
         "guest_name": recording.guest_name,
+        "language": effective_recording_language(recording, get_settings()),
         "owner_email": recording.owner_email,
         "starts_at": recording.starts_at,
         "ends_at": recording.ends_at,
@@ -839,6 +832,8 @@ def create_recording(
         payload.pop("title", None)
     if body.guest_name is None:
         payload.pop("guest_name", None)
+    if body.language is None:
+        payload.pop("language", None)
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
     existing = db.scalar(select(Recording).where(Recording.idempotency_key == idempotency_key))
     if existing:
@@ -850,13 +845,15 @@ def create_recording(
     meta: dict = {}
     if principal.name and principal.name.strip():
         meta["owner_name"] = " ".join(principal.name.split())[:120]
+    if body.language is not None:
+        meta["asr_language"] = body.language
     recording = Recording(
         idempotency_key=idempotency_key,
         request_digest=digest,
         owner_sub=principal.sub,
         owner_email=principal.email.lower() if principal.email else None,
         protocol_meta=meta,
-        **body.model_dump(),
+        **body.model_dump(exclude={"language"}),
     )
     db.add(recording)
     try:
@@ -1822,6 +1819,7 @@ class ProtocolSummaryInput(BaseModel):
 
 class ProtocolUpdateRequest(BaseModel):
     title: str | None = Field(default=None, max_length=200)
+    language: str | None = Field(default=None, max_length=200)
     notes: str | None = Field(default=None, max_length=20000)
     summary: ProtocolSummaryInput | None = None
     speaker_overrides: dict[str, str] | None = None
@@ -1846,6 +1844,19 @@ def update_recording_protocol(
         cleaned_title = body.title.strip()
         recording.title = cleaned_title or None
     meta = dict(recording.protocol_meta or {})
+    if body.language is not None:
+        raw_lang = body.language.strip()
+        if not raw_lang:
+            meta.pop("asr_language", None)
+        else:
+            try:
+                norm_lang = normalize_asr_language(raw_lang)
+            except ValueError as exc:
+                raise HTTPException(422, str(exc)) from None
+            if norm_lang:
+                meta["asr_language"] = norm_lang
+            else:
+                meta.pop("asr_language", None)
     if body.notes is not None:
         meta["notes"] = body.notes[:20000]
     if body.summary is not None:
@@ -2307,24 +2318,24 @@ def build_chat_intro(
         if keyframes_on:
             return (
                 f"{bot_label} ({who_en}) transcribes this call (+ slide snapshots, no cameras). "
-                f'Chat: "no"/"opt out" | #pause/#resume | #decision/#todo. '
+                f'Chat: "no"/"opt out" | #pause/#resume | #lang. '
                 f"Transcript: {recording_url} | Info: {privacy_url}?lang=en"
             )
         return (
             f"{bot_label} ({who_en}) transcribes this call. "
-            f'Chat: "no"/"opt out" | #pause/#resume | #decision/#todo. '
+            f'Chat: "no"/"opt out" | #pause/#resume | #lang. '
             f"Transcript: {recording_url} | Info: {privacy_url}?lang=en"
         )
     who = (inviter.strip() if inviter and inviter.strip() else "einem Teilnehmenden")[:48]
     if keyframes_on:
         return (
             f"{bot_label} ({who}) protokolliert (+ Folien-Standbilder, keine Kameras). "
-            f"Chat: „nein“/„opt out“ | #pause/#resume | #decision/#todo. "
+            f"Chat: „nein“/„opt out“ | #pause/#resume | #lang. "
             f"Protokoll: {recording_url} | Info: {privacy_url}"
         )
     return (
         f"{bot_label} ({who}) protokolliert dieses Meeting. "
-        f"Chat: „nein“/„opt out“ | #pause/#resume | #decision/#todo. "
+        f"Chat: „nein“/„opt out“ | #pause/#resume | #lang. "
         f"Protokoll: {recording_url} | Info: {privacy_url}"
     )
 
@@ -2365,6 +2376,7 @@ def bootstrap(
         "invited_by_name": inviter_name,
         "meeting_title": recording.title,
         "default_locale": settings.default_locale,
+        "asr_language": effective_recording_language(recording, settings),
         "enable_keyframes": settings.enable_keyframes,
         "chat_intro": chat_intro,
     }
@@ -2396,7 +2408,7 @@ def bootstrap(
                 "auth_mode": "account" if settings.zoom_storage_state_secret else "guest",
             },
         }
-    if settings.enable_webex_browser:
+    if settings.enable_webex_browser and not settings.webex_service_token:
         return {**common, "webex_browser": {"display_name": display_name}}
     issued_request_started = datetime.now(UTC)
     try:
@@ -2458,11 +2470,25 @@ def worker_status(
         raise HTTPException(409, "Attempt has already ended")
     now = datetime.now(UTC)
     prev_diag = attempt.diagnostics if isinstance(attempt.diagnostics, dict) else {}
+    prev_ps = prev_diag.get("participant_sources")
+    prev_lang_seq = int(prev_ps.get("asr_language_seq") or 0) if isinstance(prev_ps, dict) else 0
     prev_active_samples = int(prev_diag.get("active_audio_samples") or 0)
     prev_audio_samples = int(prev_diag.get("audio_samples") or 0)
     attempt.last_heartbeat_at = now
     # Status is evidence about the current worker, not a provider acceptance test.
     attempt.diagnostics = body.model_dump(mode="json", exclude={"participation"})
+    if (
+        body.participant_sources.asr_language
+        and (body.participant_sources.asr_language_seq or 0) > prev_lang_seq
+    ):
+        try:
+            chat_lang = normalize_asr_language(body.participant_sources.asr_language)
+        except ValueError:
+            chat_lang = None
+        if chat_lang:
+            meta = dict(recording.protocol_meta or {})
+            meta["asr_language"] = chat_lang
+            recording.protocol_meta = meta
     if body.participant_sources.opted_out:
         meta = dict(recording.protocol_meta or {})
         cur_opted = list(meta.get("opted_out_speakers") or [])
@@ -2546,23 +2572,14 @@ def worker_status(
     effective_deadline = min(
         recording.ends_at, attempt.credential_expires_at - timedelta(seconds=30)
     )
+    current_asr_lang = effective_recording_language(recording, settings)
     transcript_deleted = recording.transcript_deleted_at is not None
     db.commit()
     record_worker_status_telemetry(recording, attempt, body)
     live_transcript: list[dict] = []
-    live_markers: list[dict] = []
     if body.participation == "capturing" and not transcript_deleted:
         is_en = settings.default_locale == "en"
         exported = export_data(db, recording, tail_segments_limit=48)
-        for m in (exported.get("chat_markers") or [])[-8:]:
-            live_markers.append(
-                {
-                    "kind": m["kind"],
-                    "text": str(m["text"])[:280],
-                    "author": m.get("author"),
-                    "start": round(float(m.get("offset_seconds") or 0.0), 2),
-                }
-            )
         last_spk_key: tuple[str, str] | None = None
         for seg in exported["segments"][-24:]:
             if seg.get("attribution_unknown") and seg.get("source_kind") != "share_audio":
@@ -2603,8 +2620,8 @@ def worker_status(
         "stop_requested": stop_requested,
         "stop_reason": stop_reason,
         "deadline": effective_deadline,
+        "asr_language": current_asr_lang,
         "live_transcript": live_transcript,
-        "live_markers": live_markers,
     }
 
 

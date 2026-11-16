@@ -15,7 +15,40 @@ from starlette.concurrency import run_in_threadpool
 
 DEFAULT_MODEL_REPO = "Qwen/Qwen3-ASR-1.7B-hf"
 DEFAULT_MODEL_REVISION = "bcd2b5b7f32b480ab5790554cfa8347f246a14f3"
-DEFAULT_ASR_LANGUAGES = "German,English"
+DEFAULT_ASR_LANGUAGES = "*"
+QWEN_ASR_LANGUAGES: tuple[str, ...] = (
+    "Chinese",
+    "English",
+    "Cantonese",
+    "Arabic",
+    "German",
+    "French",
+    "Spanish",
+    "Portuguese",
+    "Indonesian",
+    "Italian",
+    "Korean",
+    "Russian",
+    "Thai",
+    "Vietnamese",
+    "Japanese",
+    "Turkish",
+    "Hindi",
+    "Malay",
+    "Dutch",
+    "Swedish",
+    "Danish",
+    "Finnish",
+    "Polish",
+    "Czech",
+    "Filipino",
+    "Persian",
+    "Greek",
+    "Hungarian",
+    "Macedonian",
+    "Romanian",
+)
+_CANONICAL_LANG_BY_LOWER = {lang.lower(): lang for lang in QWEN_ASR_LANGUAGES}
 MODEL_REPO = os.environ.get("WORTLAUT_ASR_MODEL_REPO", "").strip() or DEFAULT_MODEL_REPO
 MODEL_REVISION = os.environ.get("WORTLAUT_ASR_MODEL_REVISION", "").strip() or DEFAULT_MODEL_REVISION
 RATE = 16000
@@ -38,20 +71,26 @@ LATIN_SCRIPT_LANGUAGES = frozenset(
         "English",
         "French",
         "Spanish",
-        "Italian",
-        "Dutch",
         "Portuguese",
-        "Danish",
+        "Indonesian",
+        "Italian",
+        "Vietnamese",
+        "Turkish",
+        "Malay",
+        "Dutch",
         "Swedish",
-        "Norwegian",
+        "Danish",
+        "Finnish",
         "Polish",
         "Czech",
-        "Turkish",
+        "Filipino",
+        "Hungarian",
+        "Romanian",
     }
 )
 _ASCII_BPE_TOKEN_RE = re.compile(r"^[\x21-\x7e\u0120\u010a]+$")
 _DISALLOWED_SCRIPT_RE = re.compile(
-    r"[\u0400-\u052f\u0600-\u06ff\u0900-\u0dff\u0e00-\u0eff"
+    r"[\u0370-\u052f\u0600-\u06ff\u0900-\u0dff\u0e00-\u0eff"
     r"\u1100-\u11ff\u3000-\u30ff\u3130-\u318f\u3400-\u4dbf"
     r"\u4e00-\u9fff\uac00-\ud7af\uf900-\ufaff\uff01-\uffef]"
 )
@@ -64,8 +103,19 @@ def parse_allowed_languages(raw: str | None) -> tuple[str, ...] | None:
     value = DEFAULT_ASR_LANGUAGES if raw is None else raw.strip()
     if not value or value.lower() in ("*", "all", "auto"):
         return None
-    langs = tuple(dict.fromkeys(part.strip() for part in value.split(",") if part.strip()))
-    return langs or None
+    resolved: list[str] = []
+    for part in value.split(","):
+        cleaned = part.strip()
+        if not cleaned:
+            continue
+        if cleaned.lower() in ("*", "all", "auto"):
+            return None
+        canon = _CANONICAL_LANG_BY_LOWER.get(cleaned.lower())
+        if canon is None:
+            raise ValueError(f"Unsupported ASR language: {cleaned}")
+        if canon not in resolved:
+            resolved.append(canon)
+    return tuple(resolved) or None
 
 
 def apply_language_step_gate(
@@ -161,14 +211,16 @@ def assemble_words(tokens: list[str], probs: list[float], to_text) -> list[dict]
         groups[-1][1].append(prob)
     words = []
     for group_tokens, group_probs in groups:
-        text = to_text(group_tokens).strip()
-        if not text:
+        pieces = to_text(group_tokens).split()
+        if not pieces:
             continue
         valid = [p for p in (_clamp_confidence(p) for p in group_probs) if p is not None]
-        item = {"word": text}
-        if valid:
-            item["confidence"] = round(sum(valid) / len(valid), 4)
-        words.append(item)
+        conf = round(sum(valid) / len(valid), 4) if valid else None
+        for piece in pieces:
+            item = {"word": piece}
+            if conf is not None:
+                item["confidence"] = conf
+            words.append(item)
     return words
 
 
@@ -185,11 +237,17 @@ class QwenASR:
         self.allowed_languages = parse_allowed_languages(raw_langs)
         self.language_token_id = self._language_marker_token_id()
         self.none_token_id = self._first_lang_token_id("None")
+        self.all_lang_ids = {
+            lang: tid
+            for lang in QWEN_ASR_LANGUAGES
+            if (tid := self._first_lang_token_id(lang)) is not None
+        }
         self.allowed_lang_ids = (
             {
                 lang: tid
                 for lang in self.allowed_languages
-                if (tid := self._first_lang_token_id(lang)) is not None
+                if (tid := self.all_lang_ids.get(lang) or self._first_lang_token_id(lang))
+                is not None
             }
             if self.allowed_languages
             else {}
@@ -199,13 +257,20 @@ class QwenASR:
                 tid
                 for kin in ("Dutch", "Danish")
                 if kin not in self.allowed_lang_ids
-                and (tid := self._first_lang_token_id(kin)) is not None
+                and (tid := self.all_lang_ids.get(kin) or self._first_lang_token_id(kin))
+                is not None
             )
             if "German" in self.allowed_lang_ids
             else ()
         )
         self.end_token_id = self._end_marker_token_id()
-        self.forbidden_script_token_ids = self._build_forbidden_script_token_ids()
+        self._latin_forbidden_token_ids = self._scan_non_latin_script_token_ids()
+        self.forbidden_script_token_ids = (
+            list(self._latin_forbidden_token_ids)
+            if self.allowed_languages
+            and all(lang in LATIN_SCRIPT_LANGUAGES for lang in self.allowed_languages)
+            else []
+        )
         self._forbidden_tensor_cache: dict[str, object] = {}
 
     def _end_marker_token_id(self) -> int | None:
@@ -214,12 +279,9 @@ class QwenASR:
             return tid if isinstance(tid, int) and tid >= 0 else None
         return None
 
-    def _build_forbidden_script_token_ids(self) -> list[int]:
-        if (
-            not self.allowed_languages
-            or not all(lang in LATIN_SCRIPT_LANGUAGES for lang in self.allowed_languages)
-            or not hasattr(self.tokenizer, "get_vocab")
-            or not hasattr(self.tokenizer, "convert_tokens_to_string")
+    def _scan_non_latin_script_token_ids(self) -> list[int]:
+        if not hasattr(self.tokenizer, "get_vocab") or not hasattr(
+            self.tokenizer, "convert_tokens_to_string"
         ):
             return []
         forbidden: list[int] = []
@@ -241,6 +303,42 @@ class QwenASR:
             ):
                 forbidden.append(tid)
         return sorted(set(forbidden))
+
+    def _resolve_gate_params(
+        self, allowed_languages
+    ) -> tuple[dict[str, int], tuple[int, ...], list[int]]:
+        if allowed_languages is ...:
+            req_langs = self.allowed_languages
+        else:
+            req_langs = parse_allowed_languages(allowed_languages)
+        if req_langs is None:
+            if len(self.all_lang_ids) == len(QWEN_ASR_LANGUAGES):
+                return self.all_lang_ids, (), []
+            return {}, (), []
+        if req_langs == self.allowed_languages:
+            return self.allowed_lang_ids, self.germanic_kin_ids, self.forbidden_script_token_ids
+        req_ids = {
+            lang: tid
+            for lang in req_langs
+            if (tid := self.all_lang_ids.get(lang) or self._first_lang_token_id(lang)) is not None
+        }
+        kin_ids = (
+            tuple(
+                tid
+                for kin in ("Dutch", "Danish")
+                if kin not in req_ids
+                and (tid := self.all_lang_ids.get(kin) or self._first_lang_token_id(kin))
+                is not None
+            )
+            if "German" in req_ids
+            else ()
+        )
+        forb_ids = (
+            self._latin_forbidden_token_ids
+            if all(lang in LATIN_SCRIPT_LANGUAGES for lang in req_langs)
+            else []
+        )
+        return req_ids, kin_ids, forb_ids
 
     def _first_lang_token_id(self, lang: str) -> int | None:
         if hasattr(self.tokenizer, "encode"):
@@ -266,6 +364,7 @@ class QwenASR:
         *,
         context_prompt: str | None = None,
         primary_language: str | None = None,
+        allowed_languages=...,
     ) -> dict:
         import numpy as np
         import torch
@@ -273,6 +372,7 @@ class QwenASR:
         duration = len(audio) / RATE
         budget = PREFIX_TOKENS + math.ceil(duration * TOKENS_PER_SECOND)
         clean_prompt = " ".join((context_prompt or "").split())[:600] or None
+        allowed_ids, kin_ids, forbidden_ids = self._resolve_gate_params(allowed_languages)
         # 0.3 s of silence on each boundary prevents Qwen3-ASR's Conv2d audio
         # frontend from clipping segment-initial or segment-final words.
         padded = np.pad(audio, (PAD_SAMPLES, PAD_SAMPLES)) if len(audio) else audio
@@ -309,13 +409,10 @@ class QwenASR:
 
         prompt_len = inputs["input_ids"].shape[1]
         gen_kwargs = {}
-        if self.allowed_lang_ids or self.forbidden_script_token_ids:
+        if allowed_ids or forbidden_ids:
             lang_marker_id = self.language_token_id
-            allowed_ids = self.allowed_lang_ids
             none_id = self.none_token_id
-            kin_ids = self.germanic_kin_ids
             end_id = self.end_token_id
-            forbidden_ids = self.forbidden_script_token_ids
 
             def gate_step(input_ids, scores):
                 step_pos = input_ids.shape[1] - prompt_len
@@ -448,7 +545,13 @@ def ready():
         raise HTTPException(503, "GPU unavailable; process restart required")
     if model is None:
         raise HTTPException(503, "Model loading")
-    return {"status": "ready", "model": MODEL_REPO, "model_revision": MODEL_REVISION}
+    return {
+        "status": "ready",
+        "model": MODEL_REPO,
+        "model_revision": MODEL_REVISION,
+        "supported_languages": list(QWEN_ASR_LANGUAGES),
+        "default_languages": os.environ.get("WORTLAUT_ASR_LANGUAGES", DEFAULT_ASR_LANGUAGES),
+    }
 
 
 @app.get("/health/live")
@@ -463,6 +566,7 @@ def infer(
     identifier,
     context_prompt: str | None = None,
     primary_language: str | None = None,
+    allowed_languages=...,
 ):
     import numpy as np
     import torch
@@ -477,10 +581,12 @@ def infer(
         # The lock belongs to the synchronous inference thread. Disconnecting
         # the HTTP client never releases it while CUDA is still working.
         audio = np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768.0
+        extra = {} if allowed_languages is ... else {"allowed_languages": allowed_languages}
         result = model.transcribe(
             audio,
             context_prompt=context_prompt,
             primary_language=primary_language,
+            **extra,
         )
         return {"job_id": identifier, "pcm_sha256": hashlib.sha256(pcm).hexdigest(), **result}
     except torch.AcceleratorError:
@@ -517,6 +623,7 @@ async def transcribe(
     x_job_id: str = Header(min_length=64, max_length=64),
     x_asr_context_b64: str | None = Header(default=None, max_length=2048),
     x_primary_language: str | None = Header(default=None, max_length=64),
+    x_asr_languages: str | None = Header(default=None, max_length=512),
 ):
     token = os.environ.get("WORTLAUT_ASR_TOKEN", "")
     if not token or not secrets.compare_digest(authorization or "", "Bearer " + token):
@@ -525,6 +632,13 @@ async def transcribe(
         raise HTTPException(400, "Invalid job identifier")
     context_prompt = _decode_context_header(x_asr_context_b64)
     primary_lang = (x_primary_language or "").strip()[:64] or None
+    req_languages = ...
+    if x_asr_languages is not None and x_asr_languages.strip():
+        try:
+            parse_allowed_languages(x_asr_languages)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from None
+        req_languages = x_asr_languages.strip()
     pcm = bytearray()
     async for part in request.stream():
         pcm.extend(part)
@@ -533,5 +647,5 @@ async def transcribe(
     if not pcm or len(pcm) % 2:
         raise HTTPException(400, "Expected mono PCM16/16kHz")
     return await run_in_threadpool(
-        infer, bytes(pcm), x_job_id, context_prompt, primary_lang
+        infer, bytes(pcm), x_job_id, context_prompt, primary_lang, req_languages
     )

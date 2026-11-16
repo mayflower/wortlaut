@@ -5,6 +5,7 @@ import {
   Download,
   Edit3,
   FolderOpen,
+  Globe,
   Link2,
   Pause,
   RotateCcw,
@@ -26,6 +27,7 @@ import { HStack } from '@astryxdesign/core/HStack';
 import { VStack } from '@astryxdesign/core/VStack';
 import { Button } from '@astryxdesign/core/Button';
 import { TextInput } from '@astryxdesign/core/TextInput';
+import { Selector } from '@astryxdesign/core/Selector';
 import { DropdownMenu } from '@astryxdesign/core/DropdownMenu';
 import { MoreMenu } from '@astryxdesign/core/MoreMenu';
 import { AlertDialog } from '@astryxdesign/core/AlertDialog';
@@ -49,7 +51,11 @@ import {
   retryMailDelivery,
   updateRecordingProtocol,
 } from '../api';
-import { useI18n } from '../i18n';
+import {
+  buildAsrLanguageOptions,
+  formatAsrLanguageLabel,
+  useI18n,
+} from '../i18n';
 import {
   formatBotDisplayName,
   type AuthMode,
@@ -83,7 +89,7 @@ export function MeetingDetailView({
   onBackToOverview,
   onNavigateHome,
 }: MeetingDetailViewProps) {
-  const { tr } = useI18n();
+  const { lang, tr } = useI18n();
   const [activeTab, setActiveTab] = useState<
     'transcript' | 'sources' | 'diagnostics'
   >('transcript');
@@ -227,28 +233,6 @@ export function MeetingDetailView({
         }
         mdLines.push('');
       }
-      const markers = transcript.chat_markers || [];
-      if (markers.length > 0) {
-        mdLines.push(
-          `## ${tr('Im Chat markierte Beschlüsse & Aufgaben', 'Chat-Marked Decisions & Action Items')}`,
-          ''
-        );
-        for (const m of markers) {
-          const ts = formatWallClockTime(m.offset_seconds, timeOriginUtc);
-          const authorPart = singleLine(m.author);
-          const authorSuffix = authorPart ? ` _(${authorPart}, ${ts})_` : ` _(${ts})_`;
-          if (m.kind === 'decision') {
-            mdLines.push(
-              `- **${tr('Beschluss', 'Decision')}:** ${singleLine(m.text)}${authorSuffix}`
-            );
-          } else {
-            mdLines.push(
-              `- [ ] **${tr('Aufgabe', 'To-Do')}:** ${singleLine(m.text)}${authorSuffix}`
-            );
-          }
-        }
-        mdLines.push('');
-      }
       const notesVal = (transcript.notes || '').trim();
       if (notesVal) {
         mdLines.push(`## ${tr('Notizen', 'Notes')}`, '', notesVal, '');
@@ -260,7 +244,6 @@ export function MeetingDetailView({
       if (
         segs.length === 0 &&
         kfs.length === 0 &&
-        markers.length === 0 &&
         pauses.length === 0
       ) {
         mdLines.push(
@@ -290,21 +273,9 @@ export function MeetingDetailView({
             rank: 1,
             line: `> **[${formatWallClockTime(kf.offset_seconds, timeOriginUtc)}] ${tr('Bildschirmfreigabe', 'Screen share')} (${singleLine(kf.presenter)}):** [${protocolViewUrl}](${protocolViewUrl})`,
           })),
-          ...markers.map((m) => {
-            const badge =
-              m.kind === 'decision'
-                ? tr('Beschluss', 'Decision')
-                : tr('Aufgabe', 'To-Do');
-            const authorPart = singleLine(m.author);
-            return {
-              offset: m.offset_seconds,
-              rank: 2,
-              line: `> **[${formatWallClockTime(m.offset_seconds, timeOriginUtc)}] ${badge}${authorPart ? ` (${authorPart})` : ''}:** ${singleLine(m.text)}`,
-            };
-          }),
           ...segs.map((s) => ({
             offset: s.start,
-            rank: 3,
+            rank: 2,
             line: `**${singleLine(s.speaker_label)}** (\`${formatWallClockTime(s.start, timeOriginUtc)} – ${formatWallClockTime(s.end, timeOriginUtc)}\`): ${singleLine(s.text)}`,
           })),
         ].sort((a, b) => a.offset - b.offset || a.rank - b.rank);
@@ -320,6 +291,22 @@ export function MeetingDetailView({
       setTimeout(() => setCopiedTranscript(false), 1800);
     } catch (err) {
       setActionError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const handleSwitchAsrLanguage = async (nextLang: string) => {
+    if (!token || !nextLang) return;
+    setActionError(null);
+    setBusyAction('language');
+    try {
+      await updateRecordingProtocol(token, recording.id, {
+        language: nextLang,
+      });
+      onRefresh();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusyAction(null);
     }
   };
 
@@ -606,6 +593,54 @@ export function MeetingDetailView({
                     processing={recording.processing}
                     hasError={hasError}
                   />
+                  {isOperator ? (
+                    <div
+                      id="recording-asr-language-switcher"
+                      className="w-56"
+                      title={tr(
+                        'Transkriptionssprache wechseln (wirkt sofort auf kommende Audio-Segmente & Zusammenfassung)',
+                        'Switch transcription language (applies immediately to upcoming segments & summary)'
+                      )}
+                    >
+                      <Selector
+                        size="sm"
+                        label={tr(
+                          'Transkriptionssprache',
+                          'Transcription language'
+                        )}
+                        isLabelHidden
+                        isDisabled={busyAction === 'language'}
+                        options={buildAsrLanguageOptions(
+                          lang,
+                          transcript.language || recording.language || 'auto'
+                        )}
+                        value={
+                          transcript.language || recording.language || 'auto'
+                        }
+                        onChange={handleSwitchAsrLanguage}
+                      />
+                    </div>
+                  ) : (
+                    <Token
+                      size="sm"
+                      icon={<Globe className="h-3 w-3" />}
+                      label={formatAsrLanguageLabel(
+                        transcript.language || recording.language || 'auto',
+                        lang,
+                        true
+                      )}
+                    />
+                  )}
+                  {transcript.detected_languages &&
+                    transcript.detected_languages.length > 0 && (
+                      <Token
+                        size="sm"
+                        color="blue"
+                        label={`${tr('Erkannt', 'Detected')}: ${transcript.detected_languages
+                          .map((dl) => formatAsrLanguageLabel(dl, lang, true))
+                          .join(', ')}`}
+                      />
+                    )}
                   {transcript.calendar_link_synced_at && (
                     <Token
                       size="sm"
@@ -936,7 +971,6 @@ export function MeetingDetailView({
                   termReplacements={transcript.term_replacements}
                   segments={transcript.segments || []}
                   keyframes={transcript.keyframes ?? []}
-                  chatMarkers={transcript.chat_markers ?? []}
                   pauseWindows={transcript.pause_windows ?? []}
                   sources={transcript.sources_summary || []}
                   selectedSourceFilter={selectedSourceFilter}

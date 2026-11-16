@@ -6,6 +6,7 @@ import json
 from functools import lru_cache
 from pathlib import Path
 
+from wortlaut.languages import QWEN_ASR_LANGUAGES, effective_recording_language
 from wortlaut.mail import FAILURE_REASONS
 from wortlaut.settings import get_settings
 
@@ -284,13 +285,13 @@ PRIVACY_HTML = """<!DOCTYPE html>
         Schreiben Sie während des laufenden Calls einfach <strong>„opt out“</strong>,
         <strong>„optout“</strong>, <strong>„nein“</strong> oder <strong>„no“</strong> in den
         Meeting-Chat. __OPTOUT_EFFECT_DE__<br><br>
-        <strong>Off-the-Record-Pause &amp; Live-Marker im Chat:</strong>
+        <strong>Off-the-Record-Pause &amp; Sprachwechsel im Chat:</strong>
         Mit <strong>„#pause“</strong> im Konferenz-Chat pausieren Sie die Audio- und
         Bildschirmerfassung sofort (Anzeige „OFF THE RECORD“ auf der Videokachel; verworfene Daten
         werden nicht gespeichert), bis <strong>„#resume“</strong> oder <strong>„#weiter“</strong>
-        geschrieben wird. Mit <strong>„#decision …“</strong> (Beschluss) und
-        <strong>„#todo …“</strong> (Aufgabe) heften Sie geprüfte Protokollpunkte direkt an die
-        Zeitleiste.<br><br>
+        geschrieben wird. Mit <strong>„#lang &lt;Sprache&gt;“</strong> (z.&nbsp;B.
+        <code>#lang auto</code>, <code>#lang en</code>, <code>#lang Japanese</code>) wechseln Sie
+        die Transkriptionssprache (alle 30 Qwen3-ASR-Sprachen).<br><br>
         <strong>Gesamte Aufzeichnung beenden:</strong> Der Bot <strong>__ASSISTANT_NAME__</strong>
         kann jederzeit direkt über die Teilnehmerliste von Google Meet, Microsoft Teams, Zoom
         oder Cisco Webex aus dem Raum entfernt oder durch die einladende Person in der
@@ -339,8 +340,8 @@ def _build_instance_info() -> dict:
                 "google_meet": True,
                 "google_meet_auth_session": False,
                 "teams": True,
-                "webex": False,
-                "zoom": False,
+                "webex": True,
+                "zoom": True,
                 "zoom_auth_session": False,
             },
             "mail": {
@@ -375,6 +376,8 @@ def _build_instance_info() -> dict:
             "enable_keyframes": True,
             "llmSummaryEnabled": False,
             "llmModel": "",
+            "asrLanguages": list(QWEN_ASR_LANGUAGES),
+            "defaultAsrLanguage": "auto",
         }
 
     bot_email: str | None = None
@@ -429,6 +432,8 @@ def _build_instance_info() -> dict:
         "enable_keyframes": bool(s.enable_keyframes),
         "llmSummaryEnabled": bool(s.enable_llm_summary and s.ollama_url),
         "llmModel": s.ollama_model if s.enable_llm_summary else "",
+        "asrLanguages": list(QWEN_ASR_LANGUAGES),
+        "defaultAsrLanguage": effective_recording_language(None, s),
     }
 
 
@@ -589,12 +594,12 @@ PRIVACY_HTML_EN = """<!DOCTYPE html>
         Simply type <strong>"opt out"</strong>, <strong>"optout"</strong>, <strong>"no"</strong>,
         or <strong>"nein"</strong> in the meeting chat at any point during the call.
         __OPTOUT_EFFECT_EN__<br><br>
-        <strong>Off-the-record pause &amp; live chat markers:</strong>
+        <strong>Off-the-record pause &amp; language switch:</strong>
         Type <strong>"#pause"</strong> in the meeting chat to immediately pause audio and screen
         capture (the bot's video tile switches to "OFF THE RECORD" and drops media in memory) until
-        <strong>"#resume"</strong> is sent. Use <strong>"#decision …"</strong> and
-        <strong>"#todo …"</strong> to pin human-verified decisions and action items directly into
-        the protocol.<br><br>
+        <strong>"#resume"</strong> is sent. Type <strong>"#lang &lt;language&gt;"</strong> (e.g.
+        <code>#lang auto</code>, <code>#lang fr</code>, <code>#lang Japanese</code>) to switch
+        transcription across all 30 Qwen3-ASR languages.<br><br>
         <strong>Stop the entire recording:</strong> Remove <strong>__ASSISTANT_NAME__</strong> from
         the call roster or cancel/delete the recording in the <a href="/ui">wortlaut Web-UI</a>.
       </p>
@@ -638,9 +643,8 @@ def render_privacy(lang: str | None = None) -> str:
         )
         optout_de = (
             f"{escaped_name} erkennt dies automatisch, verwirft Ihre Audiospur sowie etwaige "
-            "Bildschirmfreigaben und löscht auch bereits während des Calls erfasste Redebeiträge, "
-            "Chat-Marker (#decision/#todo) und Bildschirm-Standbilder Ihrer Person vollständig aus "
-            "dem Protokoll."
+            "Bildschirmfreigaben und löscht auch bereits während des Calls erfasste Redebeiträge "
+            "und Bildschirm-Standbilder Ihrer Person vollständig aus dem Protokoll."
         )
         video_title_en = "No Voiceprints &amp; Zero Camera Video"
         video_body_en = (
@@ -657,8 +661,8 @@ def render_privacy(lang: str | None = None) -> str:
         )
         optout_en = (
             f"{escaped_name} immediately discards your audio track and screen share and purges "
-            "any statements, chat markers (#decision/#todo), and screen-share snapshots already "
-            "captured from you while continuing the transcript for everyone else."
+            "any statements and screen-share snapshots already captured from you while continuing "
+            "the transcript for everyone else."
         )
     else:
         video_title_de = "Keine Stimmprofile &amp; kein Video"
@@ -675,8 +679,8 @@ def render_privacy(lang: str | None = None) -> str:
         )
         optout_de = (
             f"{escaped_name} erkennt dies automatisch, verwirft Ihre Audiospur und löscht auch "
-            "bereits während des Calls erfasste Redebeiträge und Chat-Marker (#decision/#todo) "
-            "Ihrer Person vollständig aus dem Protokoll."
+            "bereits während des Calls erfasste Redebeiträge Ihrer Person vollständig aus dem "
+            "Protokoll."
         )
         video_title_en = "No Voiceprints &amp; No Video"
         video_body_en = (
@@ -690,8 +694,7 @@ def render_privacy(lang: str | None = None) -> str:
         )
         optout_en = (
             f"{escaped_name} immediately discards your audio track and purges any statements "
-            "and chat markers (#decision/#todo) already captured from you while continuing the "
-            "transcript for everyone else."
+            "already captured from you while continuing the transcript for everyone else."
         )
     template = PRIVACY_HTML_EN if effective_lang.startswith("en") else PRIVACY_HTML
     return (

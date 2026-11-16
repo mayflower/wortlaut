@@ -53,7 +53,11 @@ import {
   toggleCalendarSyncedEvent,
 } from '../api';
 import { isPastCalendarSlot } from './CalendarWorkspace';
-import { useI18n, type UiLang } from '../i18n';
+import {
+  buildAsrLanguageOptions,
+  useI18n,
+  type UiLang,
+} from '../i18n';
 import {
   formatBotDisplayName,
   type CalendarConnectionInfo,
@@ -184,6 +188,11 @@ export function RecordingSidebar({
   const [meetingUrl, setMeetingUrl] = useState('');
   const [title, setTitle] = useState('');
   const [quickDurationMin, setQuickDurationMin] = useState<number>(60);
+  const [quickAsrLanguage, setQuickAsrLanguage] = useState<string>(() =>
+    instance.defaultAsrLanguage && instance.defaultAsrLanguage !== '*'
+      ? instance.defaultAsrLanguage
+      : 'auto'
+  );
   const [submitting, setSubmitting] = useState(false);
   const [quickJoinError, setQuickJoinError] = useState<string | null>(null);
   const [copiedMail, setCopiedMail] = useState(false);
@@ -318,6 +327,7 @@ export function RecordingSidebar({
         ends_at: endIso,
         title: title.trim() || null,
         guest_name: null,
+        language: quickAsrLanguage || 'auto',
       });
       setMeetingUrl('');
       setTitle('');
@@ -741,7 +751,7 @@ export function RecordingSidebar({
                           hasClear
                         />
                       </div>
-                      <div className="w-56">
+                      <div className="w-52">
                         <TextInput
                           type="text"
                           size="sm"
@@ -754,6 +764,19 @@ export function RecordingSidebar({
                             'Title (optional, e.g. Weekly Sync)'
                           )}
                           startIcon={<Tag className="h-3.5 w-3.5" />}
+                        />
+                      </div>
+                      <div className="w-56" id="quick-asr-language-wrap">
+                        <Selector
+                          size="sm"
+                          label={tr(
+                            'Transkriptionssprache',
+                            'Transcription language'
+                          )}
+                          isLabelHidden
+                          options={buildAsrLanguageOptions(lang, quickAsrLanguage)}
+                          value={quickAsrLanguage}
+                          onChange={setQuickAsrLanguage}
                         />
                       </div>
                       <Button

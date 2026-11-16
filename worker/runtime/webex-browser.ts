@@ -9,7 +9,7 @@ export type WebexBrowserBootstrap = {provider: 'webex'; meeting_id: string; atte
   empty_room_timeout_seconds?: number; chat_intro?: string | null;
   enable_keyframes?: boolean;
   invited_by: string | null; invited_by_name: string | null; meeting_title: string | null;
-  default_locale: string;
+  default_locale: string; asr_language?: string;
   webex_browser: {display_name: string}};
 
 // Webex's join-service page embeds the web meeting client at this exact origin.
@@ -65,6 +65,7 @@ export class WebexBrowser {
         locale: this.bootstrap.default_locale,
         invitedBy: this.bootstrap.invited_by_name ?? this.bootstrap.invited_by,
         meetingTitle: this.bootstrap.meeting_title,
+        asrLanguage: this.bootstrap.asr_language ?? null,
       },
       () => this.frame(),
     );

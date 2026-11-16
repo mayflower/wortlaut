@@ -687,3 +687,191 @@ def test_cjk_token_masking_none_suppression_and_context_prompt_header(monkeypatc
         "role": "system",
         "content": [{"type": "text", "text": ctx_str}],
     }
+
+
+def test_all_30_qwen_asr_languages_and_per_request_language_switching(monkeypatch):
+    service = load_service("multilingual_switch_fixture")
+    assert len(service.QWEN_ASR_LANGUAGES) == 30
+    assert service.DEFAULT_ASR_LANGUAGES == "*"
+    assert service.parse_allowed_languages(None) is None
+    assert service.parse_allowed_languages("japanese, english") == ("Japanese", "English")
+
+    # Fullwidth whitespace (\u3000) in CJK/Japanese tokens splits cleanly and keeps confidence.
+    cjk_words = service.assemble_words(
+        ["你好", "\u3000世界", "<|im_end|>"],
+        [0.9, 0.8, 1.0],
+        lambda grp: "".join(grp),
+    )
+    assert cjk_words == [
+        {"word": "你好", "confidence": 0.85},
+        {"word": "世界", "confidence": 0.85},
+    ]
+
+    class FakeTensor:
+        def __init__(self, arr, floating=True):
+            self.arr = np.array(arr, dtype=np.float64 if floating else np.int64)
+            self._floating = floating
+
+        @property
+        def shape(self):
+            return self.arr.shape
+
+        def is_floating_point(self):
+            return self._floating
+
+        def to(self, device=None, dtype=None):
+            return self
+
+        def float(self):
+            return self
+
+        def clone(self):
+            return FakeTensor(self.arr.copy(), self._floating)
+
+        def __getitem__(self, idx):
+            val = self.arr[idx]
+            if np.ndim(val) == 0:
+                return float(val) if self._floating else int(val)
+            return FakeTensor(val, self._floating)
+
+        def __setitem__(self, idx, value):
+            self.arr[idx] = value.arr if isinstance(value, FakeTensor) else value
+
+    monkeypatch.setitem(
+        sys.modules,
+        "torch",
+        SimpleNamespace(
+            AcceleratorError=RuntimeError,
+            OutOfMemoryError=MemoryError,
+            inference_mode=nullcontext,
+            softmax=lambda t, dim=-1: FakeTensor(
+                np.exp(t.arr) / np.sum(np.exp(t.arr), axis=dim, keepdims=True)
+            ),
+            full_like=lambda t, v: FakeTensor(np.full_like(t.arr, v, dtype=np.float64)),
+        ),
+    )
+
+    vocab: dict[str, int] = {"language": 10, " None": 11, "<asr_text>": 50, "<|im_end|>": 51}
+    for idx, lang in enumerate(service.QWEN_ASR_LANGUAGES, start=12):
+        vocab[" " + lang] = idx
+    vocab["ĠBonjour"] = 52
+    vocab["こんにちは"] = 53
+    vocab["Ελληνικά"] = 54
+
+    class Tokenizer:
+        def get_vocab(self):
+            return vocab
+
+        def encode(self, text, add_special_tokens=False):
+            return [vocab[text]] if text in vocab else []
+
+        def convert_tokens_to_ids(self, tok):
+            return vocab.get(tok, -1)
+
+        def convert_ids_to_tokens(self, generated):
+            rev = {v: k for k, v in vocab.items()}
+            return [rev.get(i, "?") for i in generated]
+
+        def convert_tokens_to_string(self, group):
+            return "".join(group).replace("Ġ", " ")
+
+    observed: dict[str, object] = {}
+
+    class Processor:
+        tokenizer = Tokenizer()
+        target_lang = "Japanese"
+        target_text = "こんにちは"
+        target_tok = 53
+
+        def apply_chat_template(self, conversations, tokenize, add_generation_prompt):
+            return "<prompt>"
+
+        def __call__(self, text, audio, return_tensors):
+            return {
+                "input_ids": FakeTensor([[1, 2, 3]], floating=False),
+                "input_features": FakeTensor([[0.1, 0.2]], floating=True),
+            }
+
+        def decode(self, generated, return_format):
+            return [{"language": self.target_lang, "transcription": self.target_text}]
+
+    class Network:
+        device, dtype = "cpu", "fp32"
+
+        def generate(self, **kwargs):
+            gate = kwargs["logits_processor"][0]
+            lang_id = vocab[" " + Processor.target_lang]
+            step1_scores = FakeTensor(np.zeros((1, 60)))
+            step1_scores.arr[0, lang_id] = 2.0
+            gated_step1 = gate(FakeTensor([[1, 2, 3, 10]], floating=False), step1_scores)
+            observed["step1_allowed"] = [
+                i for i in range(60) if gated_step1.arr[0, i] > float("-inf")
+            ]
+            step2_scores = FakeTensor(np.zeros((1, 60)))
+            gated_step2 = gate(
+                FakeTensor([[1, 2, 3, 10, lang_id, 50]], floating=False), step2_scores
+            )
+            observed["jp_token_allowed"] = bool(gated_step2.arr[0, 53] > float("-inf"))
+            observed["greek_token_allowed"] = bool(gated_step2.arr[0, 54] > float("-inf"))
+            seq = np.array([[1, 2, 3, 10, lang_id, 50, Processor.target_tok, 51]])
+            return SimpleNamespace(sequences=seq, scores=None)
+
+        def compute_transition_scores(self, sequences, scores, normalize_logits):
+            vals = [0.92] * (sequences.shape[1] - 3)
+            return [SimpleNamespace(exp=lambda: SimpleNamespace(tolist=lambda: vals))]
+
+    proc = Processor()
+    asr = service.QwenASR(proc, Network())
+    monkeypatch.setenv("WORTLAUT_ASR_TOKEN", "lang-switch-token")
+    service.model = asr
+    client = TestClient(service.app)
+
+    ready = client.get("/health/ready").json()
+    assert len(ready["supported_languages"]) == 30
+    assert "Japanese" in ready["supported_languages"]
+    assert "Macedonian" in ready["supported_languages"]
+
+    pcm = np.zeros(8000, dtype="<i2").tobytes()
+    base_headers = {"Authorization": "Bearer lang-switch-token", "X-Job-ID": "d" * 64}
+
+    # 1. Default / Auto (`*`): all 30 Qwen3-ASR languages + None allowed, CJK/Greek unmasked!
+    res_auto = client.post(
+        "/v1/transcribe", content=pcm, headers={**base_headers, "X-ASR-Languages": "*"}
+    )
+    assert res_auto.status_code == 200
+    assert res_auto.json()["language"] == "Japanese"
+    assert res_auto.json()["text"] == "こんにちは"
+    assert len(observed["step1_allowed"]) == 31  # 30 languages + None
+    assert observed["jp_token_allowed"] is True
+    assert observed["greek_token_allowed"] is True
+
+    # 2. Switch live to French (Latin script): only French + None allowed, CJK & Greek masked!
+    Processor.target_lang = "French"
+    Processor.target_text = "Bonjour"
+    Processor.target_tok = 52
+    res_fr = client.post(
+        "/v1/transcribe", content=pcm, headers={**base_headers, "X-ASR-Languages": "French"}
+    )
+    assert res_fr.status_code == 200
+    assert res_fr.json()["language"] == "French"
+    assert observed["step1_allowed"] == sorted([vocab[" French"], vocab[" None"]])
+    assert observed["jp_token_allowed"] is False
+    assert observed["greek_token_allowed"] is False
+
+    # 3. Switch live to Greek (non-Latin script): Greek + None allowed, Greek unmasked!
+    Processor.target_lang = "Greek"
+    Processor.target_text = "Ελληνικά"
+    Processor.target_tok = 54
+    res_el = client.post(
+        "/v1/transcribe", content=pcm, headers={**base_headers, "X-ASR-Languages": "Greek"}
+    )
+    assert res_el.status_code == 200
+    assert res_el.json()["language"] == "Greek"
+    assert observed["step1_allowed"] == sorted([vocab[" Greek"], vocab[" None"]])
+    assert observed["greek_token_allowed"] is True
+
+    # 4. Unsupported language header rejected with HTTP 400
+    bad = client.post(
+        "/v1/transcribe", content=pcm, headers={**base_headers, "X-ASR-Languages": "Klingon"}
+    )
+    assert bad.status_code == 400

@@ -345,33 +345,6 @@ test('video tile trust gating & localization across Google Meet, Microsoft Teams
       });
       assert.ok(stripInk > 40, `Expected visible on-screen instructions strip ink (${localeCase.locale})`);
 
-      // Verify live chat markers (#decision & #todo) render inline on the video tile
-      await update({
-        participation: 'capturing',
-        markers: [
-          {
-            kind: 'decision',
-            text: localeCase.locale === 'en-US' ? 'Ship v2 on Friday' : 'Release v2 am Freitag',
-            author: 'Alice',
-            start: 18,
-          },
-          {
-            kind: 'todo',
-            text: localeCase.locale === 'en-US' ? 'Update runbook' : 'Runbook aktualisieren',
-            author: 'Bob',
-            start: 22,
-          },
-        ],
-      });
-      const markerSnap = await page.evaluate(() => window.wortlautVideoTile?.getSnapshot());
-      assert.equal(markerSnap?.markerCount, 2);
-      assert.equal(
-        markerSnap?.lastRenderedText,
-        localeCase.locale === 'en-US'
-          ? '[TODO] Bob: Update runbook'
-          : '[AUFGABE] Bob: Runbook aktualisieren',
-      );
-
       // Verify #pause Off-the-Record state switches the viewport to amber OFF THE RECORD screen
       await update({paused: true});
       const pausedState = await page.evaluate(() => {

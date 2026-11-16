@@ -13,6 +13,7 @@ export WORTLAUT_SDK_PAGE_URL="${WORTLAUT_SDK_PAGE_URL:-http://127.0.0.1:34601/sd
 export WORTLAUT_ENABLE_GOOGLE_MEET="${WORTLAUT_ENABLE_GOOGLE_MEET:-true}"
 export WORTLAUT_ENABLE_TEAMS="${WORTLAUT_ENABLE_TEAMS:-true}"
 export WORTLAUT_ENABLE_ZOOM="${WORTLAUT_ENABLE_ZOOM:-true}"
+export WORTLAUT_ENABLE_WEBEX_BROWSER="${WORTLAUT_ENABLE_WEBEX_BROWSER:-true}"
 
 npm --prefix worker run build
 uv run --directory services/meeting alembic upgrade head

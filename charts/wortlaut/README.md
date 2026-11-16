@@ -61,9 +61,13 @@ helm upgrade --install wortlaut ./charts/wortlaut \
 | --- | --- | --- |
 | `host` | `wortlaut.example.org` | Public HTTPS hostname for `/ui`, `/privacy`, `/docs`, `/mcp`, and OAuth2 callbacks |
 | `defaultLocale` | `de` | Default language (`de` or `en`) for Web-UI, `/privacy`, live video tile, and chat intro |
+| `providers.enableGoogleMeet` | `true` | Enable Google Meet browser capture |
+| `providers.enableTeams` | `true` | Enable Microsoft Teams browser capture |
+| `providers.enableZoom` | `true` | Enable Zoom Web Client capture |
+| `providers.enableWebexBrowser` | `true` | Enable Cisco Webex browser capture (or Guest Issuer when `WORTLAUT_WEBEX_SERVICE_TOKEN` is supplied) |
 | `keyframes.enabled` | `true` | Capture settled screen-share slide snapshots (`<= 1280×720` PNG; participant cameras never recorded) |
 | `asr.modelRepo` | `Qwen/Qwen3-ASR-1.7B-hf` | Hugging Face model ID loaded by `wortlaut-asr` |
-| `asr.languages` | `German,English` | Allowed ASR languages (`*` enables all 30 languages) |
+| `asr.languages` | `"*"` | Default ASR languages (`*` = all 30 languages, or e.g. `German,English`; switchable per recording) |
 | `asr.glossary` | `""` | Optional comma-separated domain vocabulary / acronyms passed to Qwen3-ASR |
 | `llmSummary.enabled` | `false` | Enable optional local Ollama executive summaries & action items |
 

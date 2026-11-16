@@ -14,6 +14,15 @@ os.environ.setdefault("WORTLAUT_DATABASE_URL", "postgresql+psycopg://unused@loca
 os.environ.setdefault("WORTLAUT_ENABLE_PROCESSING", "false")
 
 
+@pytest.fixture(autouse=True)
+def reset_settings_cache():
+    from wortlaut.settings import get_settings
+
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
 @pytest.fixture
 def database(monkeypatch):
     """Real PostgreSQL, separate schema; never truncate application tables."""

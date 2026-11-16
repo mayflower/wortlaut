@@ -31,6 +31,8 @@ test('Web-UI renders live Off-the-Record paused banner, inline chat markers & pa
 
   const recordingId = randomUUID();
   let livePaused = true;
+  let recordingLanguage = 'auto';
+  const languagePatches: string[] = [];
 
   const bootPayload = {
     failureReasons: {},
@@ -100,6 +102,66 @@ test('Web-UI renders live Off-the-Record paused banner, inline chat markers & pa
       }
       return;
     }
+    if (u.pathname === '/health/ready') {
+      res.writeHead(200, {'Content-Type': 'application/json'});
+      res.end(JSON.stringify({status: 'ready'}));
+      return;
+    }
+    if (u.pathname === '/v1/mcp/grants') {
+      res.writeHead(200, {'Content-Type': 'application/json'});
+      res.end(JSON.stringify({endpoint: 'http://127.0.0.1/mcp', grants: []}));
+      return;
+    }
+    if (u.pathname === '/v1/calendar') {
+      res.writeHead(200, {'Content-Type': 'application/json'});
+      res.end(JSON.stringify({events: [], connections: [], synced_events: []}));
+      return;
+    }
+    if (u.pathname === '/v1/recordings' && req.method === 'GET') {
+      res.writeHead(200, {'Content-Type': 'application/json'});
+      res.end(
+        JSON.stringify({
+          items: [
+            {
+              id: recordingId,
+              provider: 'google_meet',
+              title: 'Architektur-Runde Q4',
+              guest_name: 'wortlaut',
+              language: recordingLanguage,
+              owner_email: 'elena.rostova@example.org',
+              starts_at: '2026-11-15T10:00:00Z',
+              ends_at: '2026-11-15T10:30:00Z',
+              participation: 'capturing',
+              processing: 'processing',
+              processing_error: null,
+              participation_reason: null,
+              cancelled_at: null,
+              audio_deleted_at: null,
+              transcript_deleted_at: null,
+              metadata_deleted_at: null,
+              active_attempt_id: randomUUID(),
+              calendar_entry_id: null,
+              calendar_conflict: false,
+              recurrence_key: null,
+            },
+          ],
+          next_cursor: null,
+        }),
+      );
+      return;
+    }
+    if (u.pathname === `/v1/recordings/${recordingId}` && req.method === 'PATCH') {
+      const chunks: Buffer[] = [];
+      for await (const ch of req) chunks.push(Buffer.from(ch));
+      const body = JSON.parse(Buffer.concat(chunks).toString('utf-8')) as {language?: string};
+      if (typeof body.language === 'string') {
+        recordingLanguage = body.language;
+        languagePatches.push(body.language);
+      }
+      res.writeHead(200, {'Content-Type': 'application/json'});
+      res.end(JSON.stringify({recording_id: recordingId, language: recordingLanguage, segments: []}));
+      return;
+    }
     if (u.pathname === `/v1/recordings/${recordingId}`) {
       res.writeHead(200, {'Content-Type': 'application/json'});
       res.end(
@@ -108,6 +170,7 @@ test('Web-UI renders live Off-the-Record paused banner, inline chat markers & pa
           provider: 'google_meet',
           title: 'Architektur-Runde Q4',
           guest_name: 'wortlaut',
+          language: recordingLanguage,
           starts_at: '2026-11-15T10:00:00Z',
           ends_at: '2026-11-15T10:30:00Z',
           participation: 'capturing',
@@ -157,6 +220,8 @@ test('Web-UI renders live Off-the-Record paused banner, inline chat markers & pa
           provider: 'google_meet',
           title: 'Architektur-Runde Q4',
           guest_name: 'wortlaut',
+          language: recordingLanguage,
+          detected_languages: ['German', 'Japanese'],
           participation: 'capturing',
           participation_reason: null,
           processing: 'processing',
@@ -239,26 +304,6 @@ test('Web-UI renders live Off-the-Record paused banner, inline chat markers & pa
             },
           ],
           keyframes: [],
-          chat_markers: [
-            {
-              id: 'mk-dec-1',
-              kind: 'decision',
-              text: 'PostgreSQL 17 Partitionierung am Freitag ausrollen',
-              author: 'Elena Rostova',
-              participant_id: null,
-              captured_at: '2026-11-15T10:00:22Z',
-              offset_seconds: 22,
-            },
-            {
-              id: 'mk-todo-1',
-              kind: 'todo',
-              text: 'Rollback-Checkliste für Staging dokumentieren',
-              author: 'Marcus Chen',
-              participant_id: 'bob-2',
-              captured_at: '2026-11-15T10:01:30Z',
-              offset_seconds: 90,
-            },
-          ],
           pause_windows: [
             {
               started_at: '2026-11-15T10:00:35Z',
@@ -299,48 +344,32 @@ test('Web-UI renders live Off-the-Record paused banner, inline chat markers & pa
     assert.ok(bannerTextDe.includes('#resume'));
 
     // 2. Verify inline chronological order in #transcript-view:
-    //    seg-1 (10s) -> mk-dec-1 (22s) -> pause-0 (35s) -> seg-2 (80s) -> mk-todo-1 (90s)
+    //    seg-1 (10s) -> pause-0 (35s) -> seg-2 (80s)
     const txView = page.locator('#transcript-view');
     await txView.waitFor({state: 'visible', timeout: 10000});
     const txText = await txView.innerText();
-    assert.ok(txText.includes('Chat-Beschluss'));
-    assert.ok(txText.includes('Chat-Aufgabe'));
     assert.ok(txText.includes('Off-the-Record-Pause'));
 
     const idxSeg1 = txText.indexOf('Willkommen zur Architektur-Runde.');
-    const idxDec = txText.indexOf('PostgreSQL 17 Partitionierung am Freitag ausrollen');
     const idxPause = txText.indexOf('Off-the-Record-Pause');
     const idxSeg2 = txText.indexOf('Nach der Pause machen wir weiter.');
-    const idxTodo = txText.indexOf('Rollback-Checkliste für Staging dokumentieren');
     assert.ok(
-      idxSeg1 >= 0 && idxSeg1 < idxDec && idxDec < idxPause && idxPause < idxSeg2 && idxSeg2 < idxTodo,
-      `Expected chronological ordering seg1 < decision < pause < seg2 < todo, indices: ${[idxSeg1, idxDec, idxPause, idxSeg2, idxTodo].join(', ')}`,
+      idxSeg1 >= 0 && idxSeg1 < idxPause && idxPause < idxSeg2,
+      `Expected chronological ordering seg1 < pause < seg2, indices: ${[idxSeg1, idxPause, idxSeg2].join(', ')}`,
     );
 
-    // 3. Verify live Markdown copy includes Chat-Marked Decisions & Action Items + Off-the-Record-Pause
+    // 3. Verify live Markdown copy includes Off-the-Record-Pause
     await page.getByRole('button', {name: 'Markdown kopieren'}).click();
     await page.getByRole('button', {name: 'Markdown kopiert!'}).waitFor({timeout: 3000});
     const copiedMd = await page.evaluate(() => navigator.clipboard.readText());
-    assert.ok(copiedMd.includes('## Im Chat markierte Beschlüsse & Aufgaben'));
-    assert.ok(copiedMd.includes('- **Beschluss:** PostgreSQL 17 Partitionierung am Freitag ausrollen'));
-    assert.ok(copiedMd.includes('- [ ] **Aufgabe:** Rollback-Checkliste für Staging dokumentieren'));
     assert.ok(copiedMd.includes('Off-the-Record-Pause (Elena Rostova):'));
 
-    // 4. Verify search filtering + <mark class="wl-search-hit"> highlighting on chat marker text
+    // 4. Verify search filtering + <mark class="wl-search-hit"> highlighting on transcript turns
     const searchInput = page.locator('input[type="search"], input[placeholder*="suchen"], input[placeholder*="Search"]').first();
-    await searchInput.fill('Rollback-Checkliste');
-    assert.equal(await page.locator('#marker-mk-todo-1 mark.wl-search-hit').innerText(), 'Rollback-Checkliste');
-    assert.equal(await page.locator('#marker-mk-dec-1').count(), 0);
+    await searchInput.fill('Architektur-Runde');
+    assert.equal(await page.locator('#seg-seg-1 mark.wl-search-hit').innerText(), 'Architektur-Runde');
+    assert.equal(await page.locator('#seg-seg-2').count(), 0);
     await searchInput.fill('');
-
-    // 4b. Verify speaker filter ('participant:alice-1') matches DOM-authored marker (participant_id: null, author: 'Elena Rostova')
-    await page.getByRole('combobox', {name: 'Sprecher filtern'}).click();
-    await page.getByRole('option', {name: 'Elena Rostova (1)'}).click();
-    assert.equal(await page.locator('#marker-mk-dec-1').count(), 1);
-    assert.equal(await page.locator('#marker-mk-todo-1').count(), 0);
-    await page.getByRole('combobox', {name: 'Sprecher filtern'}).click();
-    await page.getByRole('option', {name: /Alle Sprecher/}).click();
-    assert.equal(await page.locator('#marker-mk-todo-1').count(), 1);
 
     // 5. Switch livePaused -> false and verify next poll transitions banner back to active live recording!
     livePaused = false;
@@ -352,6 +381,20 @@ test('Web-UI renders live Off-the-Record paused banner, inline chat markers & pa
       undefined,
       {timeout: 8000},
     );
+
+    // 6. Operator mode: verify ASR language switcher displays all 30 Qwen3-ASR languages + detected languages
+    //    and PATCHes /v1/recordings/{id} live when switched to Japanese!
+    const opPage = await context.newPage();
+    await opPage.goto(`${baseUrl}/ui#token=operator-secret-token`);
+    await opPage.getByRole('button', {name: 'Architektur-Runde Q4'}).click();
+    const langWrap = opPage.locator('#recording-asr-language-switcher');
+    await langWrap.waitFor({state: 'visible', timeout: 10000});
+    await opPage.getByText('Erkannt: Deutsch, Japanisch').waitFor({state: 'visible', timeout: 10000});
+    await langWrap.getByRole('combobox').click();
+    await opPage.getByRole('option', {name: /Japanisch \(日本語\)/}).click();
+    await opPage.waitForFunction(() => document.getElementById('recording-asr-language-switcher')?.innerText.includes('Japanisch'));
+    assert.deepEqual(languagePatches, ['Japanese']);
+    await opPage.close();
 
     await context.close();
   } finally {

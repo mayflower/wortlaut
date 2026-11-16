@@ -38,6 +38,7 @@ export interface RecordingSummary {
   provider: Provider;
   title: string | null;
   guest_name: string | null;
+  language?: string;
   owner_email?: string | null;
   starts_at: string;
   ends_at: string;
@@ -171,6 +172,7 @@ export interface TranscriptSegment {
   start_sample: number;
   end_sample: number;
   text: string;
+  language?: string;
 }
 
 export interface ProtocolSummary {
@@ -179,16 +181,6 @@ export interface ProtocolSummary {
   action_items: Array<{ owner: string; task: string; due?: string }>;
   model?: string;
   generated_at?: string;
-}
-
-export interface ChatMarker {
-  id: string;
-  kind: 'decision' | 'todo';
-  text: string;
-  author?: string | null;
-  participant_id?: string | null;
-  captured_at: string;
-  offset_seconds: number;
 }
 
 export interface PauseWindow {
@@ -204,6 +196,8 @@ export interface TranscriptExport {
   provider: Provider;
   title: string | null;
   guest_name: string | null;
+  language?: string;
+  detected_languages?: string[];
   participation: ParticipationState;
   participation_reason: string | null;
   processing: ProcessingState;
@@ -233,7 +227,6 @@ export interface TranscriptExport {
   sources_summary: SourceSummary[];
   segments: TranscriptSegment[];
   keyframes?: RecordingKeyframe[];
-  chat_markers?: ChatMarker[];
   pause_windows?: PauseWindow[];
 }
 
@@ -344,6 +337,8 @@ export interface InstanceInfo {
   enable_keyframes?: boolean;
   llmSummaryEnabled?: boolean;
   llmModel?: string;
+  asrLanguages?: string[];
+  defaultAsrLanguage?: string;
 }
 
 export interface McpGrantItem {

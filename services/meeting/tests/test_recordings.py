@@ -90,7 +90,9 @@ def test_concurrent_preparation_and_claim_have_one_owner(client, database):
         assert len(db.scalars(select(Attempt)).all()) == 1
 
 
-def test_bootstrap_requires_owner_and_claim_retry_preserves_capture(client):
+def test_bootstrap_requires_owner_and_claim_retry_preserves_capture(client, monkeypatch):
+    from wortlaut.settings import get_settings
+
     recording = create(client)
     attempt, headers = prepare(client, recording)
     assert (
@@ -236,7 +238,9 @@ def test_bootstrap_requires_owner_and_claim_retry_preserves_capture(client):
         ).status_code
         == 409
     )
-    # No provider credentials configured: explicit failure, no fake guest token.
+    # Provider explicitly disabled and no SDK credentials configured: explicit 503 failure.
+    monkeypatch.setenv("WORTLAUT_ENABLE_WEBEX_BROWSER", "false")
+    get_settings.cache_clear()
     assert client.get(f"/v1/attempts/{attempt}/bootstrap", headers=owner).status_code == 503
 
 
@@ -270,6 +274,8 @@ def test_bootstrap_reports_guest_expiry_and_reuses_occurrence_subject(client, mo
         return {"access_token": "fixture-guest", "expires_in": 90}
 
     monkeypatch.setattr(app_module, "guest_token", issue)
+    monkeypatch.setenv("WORTLAUT_ENABLE_WEBEX_BROWSER", "false")
+    app_module.get_settings.cache_clear()
     body = request_body()
     body["ends_at"] = (datetime.fromisoformat(body["starts_at"]) + timedelta(hours=6)).isoformat()
     recording = create(client, body=body)
@@ -2059,28 +2065,27 @@ def test_calendar_protocol_block_injection_and_writeback(monkeypatch):
     assert "Aktualisierte HTML-Kurzfassung" not in html3
 
 
-def test_in_call_pause_windows_and_chat_markers_end_to_end(client, database, monkeypatch):
+def test_in_call_pause_windows_end_to_end(client, database):
     from types import SimpleNamespace
 
-    from wortlaut import exports as exports_module
     from wortlaut.app import build_chat_intro
     from wortlaut.asr import finalize_processing
-    from wortlaut.settings import get_settings
 
-    # 1. /privacy page documents #pause/#resume and #decision/#todo in both DE and EN
+    # 1. /privacy page documents #pause/#resume and #lang in both DE and EN
     priv_de = client.get("/privacy?lang=de").text
     priv_en = client.get("/privacy?lang=en").text
     for page_html in (priv_de, priv_en):
         assert "#pause" in page_html
         assert "#resume" in page_html
-        assert "#decision" in page_html
-        assert "#todo" in page_html
+        assert "#lang" in page_html
+        assert "#decision" not in page_html
+        assert "#todo" not in page_html
 
-    # 2. Worker status reports paused=True, pause_windows & chat_markers -> exports & LLM summary
+    # 2. Worker status reports paused=True & pause_windows -> exports & opt-out scrubbing
     t0 = datetime.now(UTC).replace(microsecond=0)
     recording = create(
         client,
-        key="pause-markers-e2e",
+        key="pause-windows-e2e",
         body={
             "meeting_url": "https://example.webex.com/meet/off-the-record",
             "starts_at": t0.isoformat(),
@@ -2125,8 +2130,9 @@ def test_in_call_pause_windows_and_chat_markers_end_to_end(client, database, mon
         assert "opt out" in intro
         assert "#pause" in intro
         assert "#resume" in intro
-        assert "#decision" in intro
-        assert "#todo" in intro
+        assert "#lang" in intro
+        assert "#decision" not in intro
+        assert "#todo" not in intro
         assert "/privacy" in intro
 
     paused_status = client.post(
@@ -2162,32 +2168,11 @@ def test_in_call_pause_windows_and_chat_markers_end_to_end(client, database, mon
                         "by": "Alice Old",
                     }
                 ],
-                "chat_markers": [
-                    {
-                        "id": "m-dec-1",
-                        "kind": "decision",
-                        "text": "Migrate legacy DB on Friday",
-                        "author": "Alice Old",
-                        "participant_id": "alice-1",
-                        "captured_at": (t0 + timedelta(seconds=20)).isoformat(),
-                    },
-                    {
-                        "id": "m-todo-1",
-                        "kind": "todo",
-                        "text": "Prepare legacy rollback checklist",
-                        "author": "Bob Ops",
-                        "participant_id": "bob-2",
-                        "captured_at": (t0 + timedelta(seconds=25)).isoformat(),
-                    },
-                ],
             },
         },
     )
     assert paused_status.status_code == 200, paused_status.text
-    status_body = paused_status.json()
-    assert len(status_body["live_markers"]) == 2
-    assert status_body["live_markers"][0]["kind"] == "decision"
-    assert status_body["live_markers"][1]["kind"] == "todo"
+    assert "live_markers" not in paused_status.json()
 
     detail_paused = client.get(f"/v1/recordings/{recording}", headers=API).json()
     assert detail_paused["live_status"]["is_active"] is True
@@ -2229,24 +2214,6 @@ def test_in_call_pause_windows_and_chat_markers_end_to_end(client, database, mon
                         "by": "Alice Old",
                     }
                 ],
-                "chat_markers": [
-                    {
-                        "id": "m-dec-1",
-                        "kind": "decision",
-                        "text": "Migrate legacy DB on Friday",
-                        "author": "Alice Old",
-                        "participant_id": "alice-1",
-                        "captured_at": (t0 + timedelta(seconds=20)).isoformat(),
-                    },
-                    {
-                        "id": "m-todo-1",
-                        "kind": "todo",
-                        "text": "Prepare legacy rollback checklist",
-                        "author": "Bob Ops",
-                        "participant_id": "bob-2",
-                        "captured_at": (t0 + timedelta(seconds=25)).isoformat(),
-                    },
-                ],
             },
         },
     )
@@ -2255,76 +2222,28 @@ def test_in_call_pause_windows_and_chat_markers_end_to_end(client, database, mon
     assert detail_ended["live_status"]["paused"] is False
     finalize_processing(database)
 
-    # Apply speaker override + term replacement and verify transcript JSON, Markdown & TXT exports
+    # Apply speaker override and verify transcript JSON, Markdown & TXT exports
     patch_res = client.patch(
         f"/v1/recordings/{recording}",
         headers=API,
-        json={
-            "speaker_overrides": {"Alice Old": "Dr. Alice Lead"},
-            "term_replacements": {"legacy": "v1"},
-        },
+        json={"speaker_overrides": {"Alice Old": "Dr. Alice Lead"}},
     )
     assert patch_res.status_code == 200
     tx = patch_res.json()
-    assert len(tx["chat_markers"]) == 2
-    assert tx["chat_markers"][0]["author"] == "Dr. Alice Lead"
-    assert tx["chat_markers"][0]["participant_id"] == "alice-1"
-    assert tx["chat_markers"][0]["text"] == "Migrate v1 DB on Friday"
-    assert tx["chat_markers"][1]["text"] == "Prepare v1 rollback checklist"
+    assert "chat_markers" not in tx
     assert len(tx["pause_windows"]) == 1
     assert tx["pause_windows"][0]["by"] == "Dr. Alice Lead"
-    assert tx["pause_windows"][0]["offset_seconds"] == 10.0
-    assert tx["pause_windows"][0]["end_offset_seconds"] == 75.0
+    assert tx["pause_windows"][0]["offset_seconds"] == 0.0
+    assert tx["pause_windows"][0]["end_offset_seconds"] == 65.0
 
     md_text = client.get(f"/v1/recordings/{recording}/exports/md", headers=API).text
-    assert "## Im Chat markierte Beschlüsse & Aufgaben" in md_text
-    assert "- **Beschluss:** Migrate v1 DB on Friday _(Dr. Alice Lead," in md_text
-    assert "- [ ] **Aufgabe:** Prepare v1 rollback checklist _(Bob Ops," in md_text
     assert "- **Off-the-Record-Pausen:** 1" in md_text
-    assert "> **[00:10 – 01:15] Off-the-Record-Pause:**" in md_text
+    assert "> **[00:00 – 01:05] Off-the-Record-Pause:**" in md_text
 
     txt_text = client.get(f"/v1/recordings/{recording}/exports/txt", headers=API).text
-    assert "IM CHAT MARKIERTE BESCHLÜSSE & AUFGABEN" in txt_text
-    assert "[Beschluss] Migrate v1 DB on Friday (Dr. Alice Lead," in txt_text
-    assert "[ ] [Aufgabe] Prepare v1 rollback checklist (Bob Ops," in txt_text
-    assert "[00:10 – 01:15] OFF-THE-RECORD-PAUSE" in txt_text
+    assert "[00:00 – 01:05] OFF-THE-RECORD-PAUSE" in txt_text
 
-    # Verify Ollama summary prompt receives human-verified chat markers even with 0 ASR segments
-    monkeypatch.setenv("WORTLAUT_ENABLE_LLM_SUMMARY", "true")
-    get_settings.cache_clear()
-    captured_prompts: list[str] = []
-
-    class FakeMarkerOllamaResponse:
-        status_code = 200
-
-        def raise_for_status(self):
-            pass
-
-        def json(self):
-            return {
-                "message": {
-                    "content": (
-                        '{"summary": "Datenbank-Migration beschlossen.", '
-                        '"topics": [{"title": "DB-Migration", "details": "Freitag geplant."}], '
-                        '"action_items": [{"owner": "Bob Ops", '
-                        '"task": "Prepare v1 rollback checklist"}]}'
-                    )
-                }
-            }
-
-    def capture_ollama_post(*args, **kwargs):
-        messages = kwargs.get("json", {}).get("messages", [])
-        captured_prompts.append(messages[-1]["content"] if messages else "")
-        return FakeMarkerOllamaResponse()
-
-    monkeypatch.setattr(exports_module.httpx, "post", capture_ollama_post)
-    sum_res = client.post(f"/v1/recordings/{recording}/summary", headers=API)
-    assert sum_res.status_code == 200, sum_res.text
-    assert len(captured_prompts) == 1
-    assert "BESCHLUSS (Dr. Alice Lead): Migrate v1 DB on Friday" in captured_prompts[0]
-    assert "AUFGABE (Bob Ops): Prepare v1 rollback checklist" in captured_prompts[0]
-
-    # Opting out Alice suppresses her chat markers while keeping Bob's marker intact
+    # Opting out Alice scrubs her name from pause_windows[0].by
     opt_res = client.patch(
         f"/v1/recordings/{recording}",
         headers=API,
@@ -2332,18 +2251,16 @@ def test_in_call_pause_windows_and_chat_markers_end_to_end(client, database, mon
     )
     assert opt_res.status_code == 200
     opt_tx = opt_res.json()
-    assert len(opt_tx["chat_markers"]) == 1
-    assert opt_tx["chat_markers"][0]["author"] == "Bob Ops"
     assert opt_tx["pause_windows"][0]["by"] is None
 
 
-def test_chat_markers_and_pause_windows_validation_rejoin_merge_and_anomaly_guard(client, database):
+def test_pause_windows_validation_rejoin_merge_and_anomaly_guard(client, database):
     t0 = datetime.now(UTC).replace(microsecond=0)
     recording = create(
         client,
-        key="markers-validation-rejoin",
+        key="pause-validation-rejoin",
         body={
-            "meeting_url": "https://example.webex.com/meet/rejoin-markers",
+            "meeting_url": "https://example.webex.com/meet/rejoin-pause",
             "starts_at": t0.isoformat(),
             "ends_at": (t0 + timedelta(minutes=45)).isoformat(),
             "title": "Security & Rejoin Sync",
@@ -2353,67 +2270,31 @@ def test_chat_markers_and_pause_windows_validation_rejoin_merge_and_anomaly_guar
     client.post(f"/v1/attempts/{attempt1}/claim", headers=headers1, json={"worker_id": "owner-1"})
     owner1 = {**headers1, "X-Worker-ID": "owner-1"}
 
-    # 1. Schema validation rejects invalid marker kind, oversize text (>500), and bad timestamps
-    bad_payloads = [
-        {
-            "chat_markers": [
-                {
-                    "id": "bad-kind",
-                    "kind": "note",
-                    "text": "Invalid kind",
-                    "captured_at": t0.isoformat(),
-                }
-            ]
-        },
-        {
-            "chat_markers": [
-                {
-                    "id": "oversize",
-                    "kind": "decision",
-                    "text": "x" * 501,
-                    "captured_at": t0.isoformat(),
-                }
-            ]
-        },
-        {
-            "chat_markers": [
-                {
-                    "id": "empty-txt",
-                    "kind": "todo",
-                    "text": "",
-                    "captured_at": t0.isoformat(),
-                }
-            ]
-        },
-        {
-            "pause_windows": [
-                {
-                    "started_at": "not-an-iso-timestamp",
-                    "ended_at": None,
-                }
-            ]
-        },
-    ]
-    for bad_part in bad_payloads:
-        bad_res = client.post(
-            f"/v1/attempts/{attempt1}/status",
-            headers=owner1,
-            json={
-                "participation": "capturing",
-                "streams": 1,
-                "audio_samples": 16000,
-                "participant_sources": {
-                    "available": True,
-                    "total": 1,
-                    "truncated": False,
-                    "sources": [],
-                    **bad_part,
-                },
+    # 1. Schema validation rejects bad timestamps on pause_windows
+    bad_res = client.post(
+        f"/v1/attempts/{attempt1}/status",
+        headers=owner1,
+        json={
+            "participation": "capturing",
+            "streams": 1,
+            "audio_samples": 16000,
+            "participant_sources": {
+                "available": True,
+                "total": 1,
+                "truncated": False,
+                "sources": [],
+                "pause_windows": [
+                    {
+                        "started_at": "not-an-iso-timestamp",
+                        "ended_at": None,
+                    }
+                ],
             },
-        )
-        assert bad_res.status_code == 422, f"Expected 422 for {bad_part}, got {bad_res.status_code}"
+        },
+    )
+    assert bad_res.status_code == 422
 
-    # 2. Attempt 1 records Decision #1 and Pause Window #1, then ends with room_empty (0 segments)
+    # 2. Attempt 1 records Pause Window #1, then ends with room_empty (0 segments)
     end1 = client.post(
         f"/v1/attempts/{attempt1}/status",
         headers=owner1,
@@ -2444,27 +2325,16 @@ def test_chat_markers_and_pause_windows_validation_rejoin_merge_and_anomaly_guar
                         "by": "Clara Sec",
                     }
                 ],
-                "chat_markers": [
-                    {
-                        "id": "att1-dec",
-                        "kind": "decision",
-                        "text": "Keep session off the record except formal decisions",
-                        "author": "Clara Sec",
-                        "participant_id": "p-clara",
-                        "captured_at": (t0 + timedelta(seconds=15)).isoformat(),
-                    }
-                ],
             },
         },
     )
     assert end1.status_code == 200
     tx_after_att1 = client.get(f"/v1/recordings/{recording}/transcript", headers=API).json()
-    # Because the call was explicitly paused & marked, capture_anomaly must be False!
+    # Because the call was explicitly paused, capture_anomaly must be False!
     assert tx_after_att1["quality"]["capture_anomaly"] is False
-    assert len(tx_after_att1["chat_markers"]) == 1
     assert len(tx_after_att1["pause_windows"]) == 1
 
-    # 3. Rejoin resets recording so prepare() creates Attempt 2; Attempt 2 merges & deduplicates
+    # 3. Rejoin resets recording so prepare() creates Attempt 2; Attempt 2 merges pause windows
     rejoin = client.post(f"/v1/recordings/{recording}/rejoin", headers=API)
     assert rejoin.status_code == 200
     attempt2, headers2 = prepare(client, recording)
@@ -2493,40 +2363,12 @@ def test_chat_markers_and_pause_windows_validation_rejoin_merge_and_anomaly_guar
                         "by": "Marco Infra",
                     }
                 ],
-                "chat_markers": [
-                    {
-                        "id": "att1-dec",
-                        "kind": "decision",
-                        "text": "Keep session off the record except formal decisions",
-                        "author": "Clara Sec",
-                        "participant_id": "p-clara",
-                        "captured_at": (t0 + timedelta(seconds=15)).isoformat(),
-                    },
-                    {
-                        "id": "att2-todo",
-                        "kind": "todo",
-                        "text": "Rotate mTLS leaf certs next Tuesday",
-                        "author": "Marco Infra",
-                        "captured_at": (t0 + timedelta(seconds=135)).isoformat(),
-                    },
-                ],
             },
         },
     )
     assert end2.status_code == 200
 
     merged_tx = client.get(f"/v1/recordings/{recording}/transcript", headers=API).json()
-    assert [m["id"] for m in merged_tx["chat_markers"]] == ["att1-dec", "att2-todo"]
-    assert merged_tx["chat_markers"][0]["participant_id"] == "p-clara"
     assert len(merged_tx["pause_windows"]) == 2
     assert merged_tx["pause_windows"][0]["offset_seconds"] == 0.0
     assert merged_tx["pause_windows"][1]["offset_seconds"] == 110.0
-
-    # Opt-out by participant_id ('p-clara') suppresses att1-dec without participant_name in sources
-    id_opt = client.patch(
-        f"/v1/recordings/{recording}",
-        headers=API,
-        json={"opted_out_speakers": ["p-clara"]},
-    )
-    assert id_opt.status_code == 200
-    assert [m["id"] for m in id_opt.json()["chat_markers"]] == ["att2-todo"]

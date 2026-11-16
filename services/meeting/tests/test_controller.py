@@ -181,6 +181,7 @@ def test_scheduler_lock_defers_start_until_the_other_controller_releases_it(
 
 def test_missing_webex_access_does_not_block_meet(client, database, cluster, monkeypatch):
     monkeypatch.delenv("WORTLAUT_WEBEX_SERVICE_TOKEN")
+    monkeypatch.setenv("WORTLAUT_ENABLE_WEBEX_BROWSER", "false")
     monkeypatch.setenv("WORTLAUT_ENABLE_GOOGLE_MEET", "true")
     get_settings.cache_clear()
     webex = create(client, "webex")

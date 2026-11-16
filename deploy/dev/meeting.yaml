@@ -6,6 +6,10 @@ data:
   WORTLAUT_SDK_PAGE_URL: https://wortlaut-dev.example.org/sdk/
   WORTLAUT_S3_CREATE_BUCKET: 'true'
   WORTLAUT_ENABLE_CONTROLLER: 'true'
+  WORTLAUT_ENABLE_GOOGLE_MEET: 'true'
+  WORTLAUT_ENABLE_TEAMS: 'true'
+  WORTLAUT_ENABLE_ZOOM: 'true'
+  WORTLAUT_ENABLE_WEBEX_BROWSER: 'true'
   WORTLAUT_NAMESPACE: wortlaut-dev
   WORTLAUT_API_URL: https://wortlaut-dev.example.org/
   WORTLAUT_OTLP_ENDPOINT: http://monitoring-stack-alloy.monitoring.svc.cluster.local:4318/v1/traces

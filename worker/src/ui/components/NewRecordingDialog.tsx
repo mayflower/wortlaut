@@ -21,7 +21,10 @@ import {
   getInstanceInfo,
   importCalendarPayload,
 } from '../api';
-import { useI18n } from '../i18n';
+import {
+  buildAsrLanguageOptions,
+  useI18n,
+} from '../i18n';
 import type { RecordingSummary } from '../types';
 import { ProviderBadge } from './ui/primitives';
 
@@ -42,8 +45,13 @@ export function NewRecordingDialog({
   onCreatedRecording,
   onImportedCalendar,
 }: NewRecordingDialogProps) {
-  const { tr } = useI18n();
+  const { lang, tr } = useI18n();
   const [tab, setTab] = useState<'link' | 'ics'>(initialTab);
+  const instance = getInstanceInfo();
+  const defaultAsrLang =
+    instance.defaultAsrLanguage && instance.defaultAsrLanguage !== '*'
+      ? instance.defaultAsrLanguage
+      : 'auto';
 
   useEffect(() => {
     if (open) {
@@ -54,6 +62,7 @@ export function NewRecordingDialog({
   const [meetingUrl, setMeetingUrl] = useState('');
   const [title, setTitle] = useState('');
   const [guestName, setGuestName] = useState('');
+  const [asrLanguage, setAsrLanguage] = useState<string>(defaultAsrLang);
   const [joinMode, setJoinMode] = useState<'live' | 'scheduled'>('live');
   const [durationMin, setDurationMin] = useState('60');
   const [startsAt, setStartsAt] = useState('');
@@ -63,7 +72,7 @@ export function NewRecordingDialog({
   const [error, setError] = useState<string | null>(null);
 
   const detectedProvider = detectProviderFromUrl(meetingUrl);
-  const instance = getInstanceInfo();
+  const asrLanguageOptions = buildAsrLanguageOptions(lang, asrLanguage);
 
   const joinModeOptions = [
     {
@@ -123,6 +132,7 @@ export function NewRecordingDialog({
         ends_at: endIso,
         title: title.trim() || null,
         guest_name: guestName.trim() || null,
+        language: asrLanguage || 'auto',
       });
       setMeetingUrl('');
       setTitle('');
@@ -296,6 +306,18 @@ export function NewRecordingDialog({
                           />
                         </div>
                       )}
+                    </div>
+
+                    <div id="modal-asr-language-field">
+                      <Selector
+                        label={tr(
+                          'Transkriptionssprache (Qwen3-ASR · 30 Sprachen)',
+                          'Transcription language (Qwen3-ASR · 30 languages)'
+                        )}
+                        options={asrLanguageOptions}
+                        value={asrLanguage}
+                        onChange={setAsrLanguage}
+                      />
                     </div>
 
                     {joinMode === 'scheduled' && (

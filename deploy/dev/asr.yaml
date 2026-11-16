@@ -42,7 +42,7 @@ spec:
             - containerPort: 8000
           env:
             - name: WORTLAUT_ASR_LANGUAGES
-              value: German,English
+              value: "*"
           envFrom:
             - secretRef:
                 name: wortlaut-asr

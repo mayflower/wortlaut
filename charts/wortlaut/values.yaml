@@ -12,7 +12,7 @@ providers:
   enableTeams: true
   enableZoom: true
   zoomLocale: en-US
-  enableWebexBrowser: false
+  enableWebexBrowser: true
 
 keyframes:
   # Settled screen-share slide snapshots (<= 1280x720 PNG); participant camera feeds are never recorded.
@@ -37,9 +37,9 @@ asr:
   enabled: true
   allowCpu: false
   gpuCount: 1
-  # Qwen3-ASR 1.7B (Transformers), constrained by default to German,English (`*` for all 30 languages).
+  # Qwen3-ASR 1.7B (Transformers), all 30 languages enabled by default (`*`, or comma-separated subset).
   modelRepo: Qwen/Qwen3-ASR-1.7B-hf
-  languages: German,English
+  languages: "*"
   glossary: ""
   storageClassName: ""
   cacheSize: 20Gi

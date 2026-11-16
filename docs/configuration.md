@@ -69,14 +69,14 @@ https://<your-wortlaut-domain>/auth/callback
 
 ## 3. Conference Provider Configuration
 
-All four providers work side-by-side per recording:
+All four conference platforms are **enabled by default** (`true`) out of the box and work side-by-side per recording (set any individual `WORTLAUT_ENABLE_<PROVIDER>=false` to disable a platform):
 
-| Provider | Environment Flag | Default Join Mode | Optional Authenticated Session |
+| Provider | Environment Flag (Default) | Default Join Mode | Optional Authenticated Session |
 | --- | --- | --- | --- |
 | **Google Meet** | `WORTLAUT_ENABLE_GOOGLE_MEET=true` | Browser guest (`wortlaut (<Inviter>)`) | Kubernetes Secret `WORTLAUT_MEET_STORAGE_STATE_SECRET` with Playwright `storageState.json` |
 | **Microsoft Teams** | `WORTLAUT_ENABLE_TEAMS=true` | Browser guest (`en-US` / `WORTLAUT_TEAMS_LOCALE`) | Guest lobby admission |
 | **Zoom** | `WORTLAUT_ENABLE_ZOOM=true` | Browser Web Client guest (`WORTLAUT_ZOOM_LOCALE=en-US`) | Kubernetes Secret `WORTLAUT_ZOOM_STORAGE_STATE_SECRET` |
-| **Cisco Webex** | `WORTLAUT_ENABLE_WEBEX_BROWSER=true` | Browser Web Client guest (or Webex Guest Issuer via `WORTLAUT_WEBEX_SERVICE_TOKEN`) | Service App / Guest Issuer token |
+| **Cisco Webex** | `WORTLAUT_ENABLE_WEBEX_BROWSER=true` | Browser Web Client guest (or Webex Guest Issuer when `WORTLAUT_WEBEX_SERVICE_TOKEN` is set) | Service App / Guest Issuer token |
 
 ---
 
@@ -113,11 +113,10 @@ Participants can control `wortlaut` directly from the conference chat without op
 
 | Chat Command | Effect |
 | --- | --- |
-| `opt out`, `optout`, `no`, `nein`, `stop`, `widerspruch` | Immediately halts audio and screen-share capture for that participant and purges their prior transcript segments, slide keyframes, and chat markers from PostgreSQL and S3. |
+| `opt out`, `optout`, `no`, `nein`, `stop`, `widerspruch` | Immediately halts audio and screen-share capture for that participant and purges their prior transcript segments and slide keyframes from PostgreSQL and S3. |
 | `#pause`, `/pause`, `!pause`, `#off-the-record`, `#pausieren` | Zeroes audio samples in worker RAM, suspends slide keyframe sampling, records a `pause_windows` entry, and switches the video tile to an amber **OFF THE RECORD** banner. |
 | `#resume`, `/resume`, `!resume`, `#weiter`, `#fortsetzen` | Ends the off-the-record pause and resumes normal capture without leaving the room. |
-| `#decision <text>`, `#beschluss <text>` | Pins a timestamped, speaker-attributed decision marker onto the video tile, Web-UI timeline, `.md`/`.txt`/`.json` exports, MCP tools, and Ollama summary context. |
-| `#todo <text>`, `#aufgabe <text>`, `#action <text>` | Pins a timestamped, speaker-attributed action-item marker across the video tile, Web-UI, exports, MCP, and Ollama summary context. |
+| `#lang <language>`, `#language <language>`, `#sprache <language>` | Switches the recording’s transcription language live across all 30 Qwen3-ASR languages (e.g. `#lang auto`, `#lang en`, `#lang Japanese`, `#lang fr,en`) and updates the live video tile & Web-UI selector. |
 
 ---
 
@@ -126,7 +125,7 @@ Participants can control `wortlaut` directly from the conference chat without op
 `wortlaut` exposes a built-in **MCP Streamable HTTP** server at `POST /mcp` (`GET /mcp`, `DELETE /mcp`) with zero extra containers required:
 
 - **OAuth 2.1 Auto-Discovery (`mcp auth`)**: Serves RFC 9728 Protected Resource Metadata (`/.well-known/oauth-protected-resource/mcp`), RFC 8414 Authorization Server Metadata (`/.well-known/oauth-authorization-server`), and RFC 7591 Dynamic Client Registration (`/oauth/register`) with mandatory PKCE (`S256`) and an explicit browser consent screen (`/oauth/authorize`).
-- **Scopes & Tenant Isolation**: `mcp:read` grants read access to the authenticated user’s own/invited recordings, transcripts, `chat_markers`, `pause_windows`, exports, calendar events, and binary slide keyframes (`wortlaut://recordings/{recording_id}/keyframes/{keyframe_id}.png`). `mcp:write` additionally enables scheduling/cancelling recordings, editing protocol metadata, generating Ollama summaries, and toggling/linking calendar events.
+- **Scopes & Tenant Isolation**: `mcp:read` grants read access to the authenticated user’s own/invited recordings, transcripts, `pause_windows`, exports, calendar events, and binary slide keyframes (`wortlaut://recordings/{recording_id}/keyframes/{keyframe_id}.png`). `mcp:write` additionally enables scheduling/cancelling recordings, editing protocol metadata, generating Ollama summaries, and toggling/linking calendar events.
 - **Connecting Clients**:
   ```sh
   claude mcp add --transport http wortlaut https://<your-wortlaut-domain>/mcp
@@ -139,9 +138,9 @@ Participants can control `wortlaut` directly from the conference chat without op
 ## 7. Speech-to-Text (`wortlaut-asr`), Glossary, Local Summaries & Retention
 
 ```dotenv
-# --- wortlaut-asr service ---
+# --- wortlaut-asr & wortlaut-meeting services ---
 WORTLAUT_ASR_MODEL_REPO=Qwen/Qwen3-ASR-1.7B-hf
-WORTLAUT_ASR_LANGUAGES=German,English   # Comma-separated language names, or "*" for all 30 languages
+WORTLAUT_ASR_LANGUAGES=*                # "*" = auto-detect all 30 languages (or e.g. "German,English"); switchable per recording
 WORTLAUT_ASR_ALLOW_CPU=false            # Set true when running without an NVIDIA GPU
 
 # --- wortlaut-meeting service ---

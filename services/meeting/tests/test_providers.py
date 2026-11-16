@@ -148,11 +148,6 @@ def test_meet_bootstrap_uses_browser_configuration_without_webex(client, monkeyp
     client.post(f"/v1/attempts/{attempt}/claim", headers=credential, json={"worker_id": "meet"})
     headers = {**credential, "X-Worker-ID": "meet"}
     response = client.get(f"/v1/attempts/{attempt}/bootstrap", headers=headers)
-    assert response.status_code == 503
-    assert response.json()["detail"] == "google_meet_not_configured"
-    monkeypatch.setenv("WORTLAUT_ENABLE_GOOGLE_MEET", "true")
-    get_settings.cache_clear()
-    response = client.get(f"/v1/attempts/{attempt}/bootstrap", headers=headers)
     assert response.status_code == 200
     assert response.headers["Cache-Control"] == "no-store"
     result = response.json()
@@ -160,6 +155,12 @@ def test_meet_bootstrap_uses_browser_configuration_without_webex(client, monkeyp
     assert result["meeting_url"] == MEET
     assert result["meet"] == {"display_name": "wortlaut", "locale": "de-DE", "auth_mode": "guest"}
     assert "guest" not in result and "sdk_page_url" not in result
+    monkeypatch.setenv("WORTLAUT_ENABLE_GOOGLE_MEET", "false")
+    get_settings.cache_clear()
+    disabled = client.get(f"/v1/attempts/{attempt}/bootstrap", headers=headers)
+    assert disabled.status_code == 503
+    assert disabled.json()["detail"] == "google_meet_not_configured"
+    monkeypatch.setenv("WORTLAUT_ENABLE_GOOGLE_MEET", "true")
     monkeypatch.setenv("WORTLAUT_MEET_STORAGE_STATE_SECRET", "wortlaut-meet-browser")
     get_settings.cache_clear()
     assert (
@@ -292,11 +293,6 @@ def test_teams_bootstrap_is_independent_and_preserves_passcode(client, database,
     client.post(f"/v1/attempts/{attempt}/claim", headers=credential, json={"worker_id": "teams"})
     headers = {**credential, "X-Worker-ID": "teams"}
     response = client.get(f"/v1/attempts/{attempt}/bootstrap", headers=headers)
-    assert response.status_code == 503
-    assert response.json()["detail"] == "teams_not_configured"
-    monkeypatch.setenv("WORTLAUT_ENABLE_TEAMS", "true")
-    get_settings.cache_clear()
-    response = client.get(f"/v1/attempts/{attempt}/bootstrap", headers=headers)
     assert response.status_code == 200
     assert response.headers["Cache-Control"] == "no-store"
     data = response.json()
@@ -304,6 +300,13 @@ def test_teams_bootstrap_is_independent_and_preserves_passcode(client, database,
     assert data["meeting_url"] == url
     assert data["teams"] == {"display_name": "wortlaut", "locale": "en-US"}
     assert "guest" not in data and "sdk_page_url" not in data and "meet" not in data
+    monkeypatch.setenv("WORTLAUT_ENABLE_TEAMS", "false")
+    get_settings.cache_clear()
+    disabled = client.get(f"/v1/attempts/{attempt}/bootstrap", headers=headers)
+    assert disabled.status_code == 503
+    assert disabled.json()["detail"] == "teams_not_configured"
+    monkeypatch.setenv("WORTLAUT_ENABLE_TEAMS", "true")
+    get_settings.cache_clear()
     status = client.post(f"/v1/attempts/{attempt}/status", headers=headers, json={
         "participation": "capturing", "capability": "unverified",
         "receiver_sources": [{
@@ -379,11 +382,6 @@ def test_zoom_bootstrap_and_calendar_invite(client, database, monkeypatch):
     client.post(f"/v1/attempts/{attempt}/claim", headers=credential, json={"worker_id": "zoom"})
     headers = {**credential, "X-Worker-ID": "zoom"}
     response = client.get(f"/v1/attempts/{attempt}/bootstrap", headers=headers)
-    assert response.status_code == 503
-    assert response.json()["detail"] == "zoom_not_configured"
-    monkeypatch.setenv("WORTLAUT_ENABLE_ZOOM", "true")
-    get_settings.cache_clear()
-    response = client.get(f"/v1/attempts/{attempt}/bootstrap", headers=headers)
     assert response.status_code == 200
     assert response.headers["Cache-Control"] == "no-store"
     data = response.json()
@@ -391,6 +389,12 @@ def test_zoom_bootstrap_and_calendar_invite(client, database, monkeypatch):
     assert data["meeting_url"] == expected_url
     assert data["zoom"] == {"display_name": "wortlaut", "locale": "en-US", "auth_mode": "guest"}
     assert "guest" not in data and "sdk_page_url" not in data and "meet" not in data
+    monkeypatch.setenv("WORTLAUT_ENABLE_ZOOM", "false")
+    get_settings.cache_clear()
+    disabled = client.get(f"/v1/attempts/{attempt}/bootstrap", headers=headers)
+    assert disabled.status_code == 503
+    assert disabled.json()["detail"] == "zoom_not_configured"
+    monkeypatch.setenv("WORTLAUT_ENABLE_ZOOM", "true")
     monkeypatch.setenv("WORTLAUT_ZOOM_STORAGE_STATE_SECRET", "wortlaut-zoom-browser")
     get_settings.cache_clear()
     assert (
@@ -419,3 +423,55 @@ def test_zoom_bootstrap_and_calendar_invite(client, database, monkeypatch):
     event = imported(client, mail(link=raw_url))
     assert event["status"] == "accepted"
     assert event["provider"] == "zoom"
+
+
+def test_all_four_providers_enabled_by_default(client, monkeypatch):
+    from wortlaut.ui import _build_instance_info
+
+    for env_key in (
+        "WORTLAUT_ENABLE_GOOGLE_MEET",
+        "WORTLAUT_ENABLE_TEAMS",
+        "WORTLAUT_ENABLE_ZOOM",
+        "WORTLAUT_ENABLE_WEBEX_BROWSER",
+        "WORTLAUT_WEBEX_SERVICE_TOKEN",
+    ):
+        monkeypatch.delenv(env_key, raising=False)
+    get_settings.cache_clear()
+    settings = get_settings()
+    assert settings.enable_google_meet is True
+    assert settings.enable_teams is True
+    assert settings.enable_zoom is True
+    assert settings.enable_webex_browser is True
+
+    providers = _build_instance_info()["providers"]
+    assert providers["google_meet"] is True
+    assert providers["teams"] is True
+    assert providers["webex"] is True
+    assert providers["zoom"] is True
+
+    for provider, url, boot_key in (
+        ("google_meet", MEET, "meet"),
+        ("teams", "https://teams.microsoft.com/meet/123456789?p=fixture", "teams"),
+        ("zoom", "https://zoom.us/j/12345678901?pwd=fixture", "zoom"),
+        ("webex", "https://example.webex.com/meet/example", "webex_browser"),
+    ):
+        rec_id = create(
+            client,
+            key=f"default-{provider}",
+            body={**request_body(), "meeting_url": url, "provider": provider},
+        )
+        attempt, credential = prepare(client, rec_id)
+        worker_id = f"default-{provider}"
+        client.post(
+            f"/v1/attempts/{attempt}/claim",
+            headers=credential,
+            json={"worker_id": worker_id},
+        )
+        resp = client.get(
+            f"/v1/attempts/{attempt}/bootstrap",
+            headers={**credential, "X-Worker-ID": worker_id},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["provider"] == provider
+        assert boot_key in body

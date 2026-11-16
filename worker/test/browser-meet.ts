@@ -1623,12 +1623,11 @@ try {
     assert.equal(rendered.snap.activeTracks, 1);
     assert.ok(rendered.nonDarkPixels > 50);
 
-    // Verify in-call #pause / #decision / #todo / #resume on MeetBrowser + video tile
+    // Verify in-call #pause / #lang / #resume on MeetBrowser + video tile
     await tileFixture.page.evaluate(() => {
       for (const [author, text] of [
         ['Bob Remote', '#pause'],
-        ['Bob Remote', '#decision Release am Freitag freigegeben'],
-        ['Bob Remote', '#todo Monitoring-Dashboard ergänzen'],
+        ['Bob Remote', '#lang English'],
       ]) {
         const bubble = document.createElement('div');
         bubble.setAttribute('data-sender-name', author);
@@ -1638,10 +1637,10 @@ try {
     });
     const pausedInspect = await tileFixture.meet.inspect();
     assert.equal(pausedInspect.participant_sources.paused, true);
-    assert.equal(pausedInspect.participant_sources.chat_markers?.length, 2);
+    assert.equal(pausedInspect.participant_sources.asr_language, 'English');
     const pausedTileSnap = await tileFixture.page.evaluate(() => window.wortlautVideoTile?.getSnapshot());
     assert.equal(pausedTileSnap?.paused, true);
-    assert.equal(pausedTileSnap?.markerCount, 2);
+    assert.equal(pausedTileSnap?.asrLanguage, 'English');
 
     await tileFixture.page.evaluate(() => {
       const resumeBubble = document.createElement('div');

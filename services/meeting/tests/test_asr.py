@@ -685,3 +685,320 @@ def test_asr_glossary_and_context_prompt_exclude_opted_out_speakers(
             assert "Wir starten heute mit dem" not in low_conf_prompt
     finally:
         get_settings.cache_clear()
+
+
+def test_per_recording_and_in_call_language_switching_across_30_languages(
+    client, database, storage, monkeypatch
+):
+    from wortlaut import exports as exports_module
+    from wortlaut.languages import QWEN_ASR_LANGUAGES, normalize_asr_language
+
+    assert len(QWEN_ASR_LANGUAGES) == 30
+    for lang in QWEN_ASR_LANGUAGES:
+        assert normalize_asr_language(lang) == lang
+        assert normalize_asr_language(lang.lower()) == lang
+    assert normalize_asr_language("auto") == "auto"
+    assert normalize_asr_language("*") == "auto"
+    assert normalize_asr_language("日本語") == "Japanese"
+    assert normalize_asr_language("中文") == "Chinese"
+    assert normalize_asr_language("العربية") == "Arabic"
+    assert normalize_asr_language("Tiếng Việt") == "Vietnamese"
+    assert normalize_asr_language("de+en") == "German,English"
+    with pytest.raises(ValueError, match="Unsupported Qwen3-ASR language"):
+        normalize_asr_language("Klingon")
+
+    monkeypatch.setenv("WORTLAUT_ENABLE_GOOGLE_MEET", "true")
+    get_settings.cache_clear()
+
+    now = datetime.now(UTC).replace(microsecond=0)
+    # Invalid language rejected with 422 on POST /v1/recordings
+    bad_create = client.post(
+        "/v1/recordings",
+        headers={**API, "Idempotency-Key": "bad-lang-rec"},
+        json={
+            "meeting_url": "https://meet.google.com/abc-defg-hij",
+            "starts_at": now.isoformat(),
+            "ends_at": (now + timedelta(minutes=30)).isoformat(),
+            "language": "Klingon",
+        },
+    )
+    assert bad_create.status_code == 422
+
+    # 1. Create recording starting in French ("fr" -> "French")
+    created = client.post(
+        "/v1/recordings",
+        headers={**API, "Idempotency-Key": "lang-switch-rec"},
+        json={
+            "meeting_url": "https://meet.google.com/abc-defg-hij",
+            "starts_at": now.isoformat(),
+            "ends_at": (now + timedelta(minutes=30)).isoformat(),
+            "title": "Global Architecture Sync",
+            "language": "fr",
+        },
+    )
+    assert created.status_code == 200, created.text
+    rec_id = created.json()["id"]
+    assert created.json()["language"] == "French"
+
+    att_res = client.post(f"/v1/recordings/{rec_id}/attempts", headers=API)
+    assert att_res.status_code == 200
+    attempt = att_res.json()["attempt_id"]
+    credential = att_res.json()["bootstrap_credential"]
+    auth_hdr = {"Authorization": f"Bearer {credential}"}
+    assert (
+        client.post(
+            f"/v1/attempts/{attempt}/claim",
+            headers=auth_hdr,
+            json={"worker_id": "fixture-worker"},
+        ).status_code
+        == 200
+    )
+    owner = {**auth_hdr, "X-Worker-ID": "fixture-worker"}
+    boot = client.get(f"/v1/attempts/{attempt}/bootstrap", headers=owner)
+    assert boot.status_code == 200
+    assert boot.json()["asr_language"] == "French"
+
+    # Send 2 streams so we can switch language mid-call between jobs!
+    speech_pcm = audio("german-a.wav")
+    identity1 = {
+        "meeting_id": rec_id,
+        "attempt_id": attempt,
+        "stream_id": str(uuid.uuid4()),
+        "epoch": str(uuid.uuid4()),
+        "provider_source_id": "meet:lang:1",
+        "source_kind": "speaker",
+        "speaker_id": "spk-polyglot",
+        "participant_id": "spk-polyglot",
+        "participant_name": "Claire Moreau",
+        "attribution_unknown": False,
+        "sample_rate": 16000,
+        "channels": 1,
+        "encoding": "pcm_s16le",
+        "monotonic_origin_ms": 1200,
+        "session_monotonic_origin_ms": 1000,
+        "session_utc_origin": now.isoformat(),
+    }
+    identity2 = {
+        **identity1,
+        "stream_id": str(uuid.uuid4()),
+        "epoch": str(uuid.uuid4()),
+        "provider_source_id": "meet:lang:2",
+        "speaker_id": "spk-kenji",
+        "participant_id": "spk-kenji",
+        "participant_name": "Kenji Sato",
+        "monotonic_origin_ms": 20000,
+    }
+    with client.websocket_connect(f"/v1/attempts/{attempt}/audio") as socket:
+        authenticate(socket, credential)
+        for ident in (identity1, identity2):
+            socket.send_json(begin(ident))
+            assert socket.receive_json()["type"] == "ack"
+            last_seq = -1
+            for last_seq, offset in enumerate(range(0, len(speech_pcm), 16000 * 5 * 2)):
+                send_pcm(
+                    socket,
+                    ident,
+                    speech_pcm[offset : offset + 16000 * 5 * 2],
+                    last_seq,
+                    offset // 2,
+                )
+            socket.send_json(
+                {
+                    "type": "end",
+                    "id": begin(ident)["id"] + "/end",
+                    "stream_id": ident["stream_id"],
+                    "epoch": ident["epoch"],
+                    "final_sample": len(speech_pcm) // 2,
+                    "last_sequence": last_seq,
+                }
+            )
+            assert socket.receive_json()["type"] == "ack"
+
+    for _ in range(8):
+        segmentation_pass(database)
+    with Session(database) as db:
+        pending_jobs = db.scalars(select(AsrJob).where(AsrJob.status == "pending")).all()
+        assert len(pending_jobs) == 2
+
+    monkeypatch.setenv("WORTLAUT_ASR_TOKEN", "fixture-gpu-token")
+    monkeypatch.setenv("WORTLAUT_ENABLE_LLM_SUMMARY", "true")
+    monkeypatch.setenv("WORTLAUT_OLLAMA_URL", "http://ollama.local:11434")
+    get_settings.cache_clear()
+    seen_asr_headers: list[dict[str, str]] = []
+    client_factory = httpx.Client
+
+    def mock_asr(request: httpx.Request) -> httpx.Response:
+        seen_asr_headers.append(
+            {
+                "langs": request.headers.get("X-ASR-Languages", ""),
+                "primary": request.headers.get("X-Primary-Language", ""),
+            }
+        )
+        req_lang = request.headers.get("X-ASR-Languages", "")
+        if req_lang == "French":
+            return httpx.Response(
+                200,
+                json={
+                    "job_id": request.headers["X-Job-ID"],
+                    "pcm_sha256": hashlib.sha256(request.content).hexdigest(),
+                    "text": "Bonjour tout le monde",
+                    "language": "French",
+                    "words": [
+                        {"word": "Bonjour", "confidence": 0.95},
+                        {"word": "tout", "confidence": 0.92},
+                        {"word": "le", "confidence": 0.94},
+                        {"word": "monde", "confidence": 0.96},
+                    ],
+                },
+            )
+        return httpx.Response(
+            200,
+            json={
+                "job_id": request.headers["X-Job-ID"],
+                "pcm_sha256": hashlib.sha256(request.content).hexdigest(),
+                "text": "皆さん こんにちは",
+                "language": "Japanese",
+                "words": [
+                    {"word": "皆さん", "confidence": 0.93},
+                    {"word": "こんにちは", "confidence": 0.97},
+                ],
+            },
+        )
+
+    monkeypatch.setattr(
+        httpx,
+        "Client",
+        lambda **kwargs: client_factory(**kwargs, transport=httpx.MockTransport(mock_asr)),
+    )
+    try:
+        # First job runs with French ("X-ASR-Languages: French", "X-Primary-Language: French")
+        assert inference_pass(database) is True
+        assert seen_asr_headers[0] == {"langs": "French", "primary": "French"}
+
+        # 2. Live in-call chat command (#lang ja) switches language to Japanese (seq=1)
+        st1 = client.post(
+            f"/v1/attempts/{attempt}/status",
+            headers=owner,
+            json={
+                "participation": "capturing",
+                "streams": 1,
+                "audio_samples": 160000,
+                "participant_sources": {
+                    "available": True,
+                    "total": 1,
+                    "asr_language": "Japanese",
+                    "asr_language_seq": 1,
+                    "sources": [
+                        {
+                            "participant_id": "spk-polyglot",
+                            "audio_csis": [1],
+                            "share_audio_csis": [],
+                        }
+                    ],
+                },
+            },
+        )
+        assert st1.status_code == 200
+        assert st1.json()["asr_language"] == "Japanese"
+
+        # Second job immediately runs with Japanese!
+        while inference_pass(database):
+            pass
+        assert seen_asr_headers[-1] == {"langs": "Japanese", "primary": "Japanese"}
+
+        # 3. Operator switches to "auto" in Web-UI PATCH; stale worker seq=1 does NOT overwrite it!
+        patch_auto = client.patch(
+            f"/v1/recordings/{rec_id}", headers=API, json={"language": "auto"}
+        )
+        assert patch_auto.status_code == 200
+        assert patch_auto.json()["language"] == "auto"
+        assert patch_auto.json()["detected_languages"] == ["French", "Japanese"]
+
+        st_stale = client.post(
+            f"/v1/attempts/{attempt}/status",
+            headers=owner,
+            json={
+                "participation": "capturing",
+                "streams": 1,
+                "audio_samples": 180000,
+                "participant_sources": {
+                    "available": True,
+                    "total": 1,
+                    "asr_language": "Japanese",
+                    "asr_language_seq": 1,
+                    "sources": [
+                        {
+                            "participant_id": "spk-polyglot",
+                            "audio_csis": [1],
+                            "share_audio_csis": [],
+                        }
+                    ],
+                },
+            },
+        )
+        assert st_stale.status_code == 200
+        assert st_stale.json()["asr_language"] == "auto"
+
+        # 4. Newer chat command (#lang es, seq=2) DOES update language to Spanish, then end call
+        st_es = client.post(
+            f"/v1/attempts/{attempt}/status",
+            headers=owner,
+            json={
+                "participation": "ended",
+                "reason": "normal",
+                "streams": 1,
+                "audio_samples": 180000,
+                "participant_sources": {
+                    "available": True,
+                    "total": 1,
+                    "asr_language": "Spanish",
+                    "asr_language_seq": 2,
+                    "sources": [
+                        {
+                            "participant_id": "spk-polyglot",
+                            "audio_csis": [1],
+                            "share_audio_csis": [],
+                        }
+                    ],
+                },
+            },
+        )
+        assert st_es.status_code == 200
+        assert st_es.json()["asr_language"] == "Spanish"
+
+        # 5. Ollama summary receives explicit target language ("Spanish") in system prompt
+        from wortlaut import exports as exports_module
+
+        captured_sys_prompts: list[str] = []
+
+        class FakeSpanishOllama:
+            status_code = 200
+
+            def raise_for_status(self):
+                pass
+
+            @staticmethod
+            def json():
+                return {
+                    "message": {
+                        "content": json.dumps(
+                            {
+                                "summary": "Resumen de arquitectura global.",
+                                "topics": [{"title": "Sincronización", "details": "Acordado."}],
+                                "action_items": [],
+                            }
+                        )
+                    }
+                }
+
+        def capture_ollama(*args, **kwargs):
+            msgs = kwargs.get("json", {}).get("messages", [])
+            captured_sys_prompts.append(msgs[0]["content"] if msgs else "")
+            return FakeSpanishOllama()
+
+        monkeypatch.setattr(exports_module.httpx, "post", capture_ollama)
+        sum_resp = client.post(f"/v1/recordings/{rec_id}/summary", headers=API)
+        assert sum_resp.status_code == 200
+        assert "written in Spanish" in captured_sys_prompts[0]
+    finally:
+        get_settings.cache_clear()

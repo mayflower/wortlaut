@@ -40,14 +40,12 @@ import {
   generateRecordingSummary,
   getInstanceInfo,
   getSourceFilterKey,
-  matchesChatMarkerSourceFilter,
   matchesKeyframeSourceFilter,
   matchesSourceFilter,
   updateRecordingProtocol,
 } from '../api';
 import { KEYFRAME_STRINGS, localizeAttributionStatus, useI18n } from '../i18n';
 import type {
-  ChatMarker,
   ParticipationState,
   PauseWindow,
   ProcessingState,
@@ -86,7 +84,6 @@ export interface TranscriptTabProps {
   termReplacements?: Record<string, string>;
   segments: TranscriptSegment[];
   keyframes?: RecordingKeyframe[];
-  chatMarkers?: ChatMarker[];
   pauseWindows?: PauseWindow[];
   sources: SourceSummary[];
   selectedSourceFilter: string;
@@ -118,7 +115,6 @@ interface GroupedTurn {
 type TimelineItem =
   | { kind: 'turn'; offset: number; turn: GroupedTurn }
   | { kind: 'keyframe'; offset: number; keyframe: RecordingKeyframe }
-  | { kind: 'marker'; offset: number; marker: ChatMarker }
   | { kind: 'pause'; offset: number; pause: PauseWindow; index: number };
 
 interface KeyframeTimelineCardProps {
@@ -277,7 +273,6 @@ export function TranscriptTab({
   termReplacements = {},
   segments,
   keyframes = [],
-  chatMarkers = [],
   pauseWindows = [],
   sources,
   selectedSourceFilter,
@@ -552,19 +547,6 @@ export function TranscriptTab({
     return turns;
   }, [filteredSegments]);
 
-  const filteredChatMarkers = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
-    return chatMarkers.filter((m) => {
-      if (!matchesChatMarkerSourceFilter(m, selectedSourceFilter, sources)) {
-        return false;
-      }
-      if (!q) return true;
-      const hay =
-        `${m.author || ''} ${m.text} ${m.kind === 'decision' ? 'beschluss entscheidung decision' : 'aufgabe todo to-do action'}`.toLowerCase();
-      return hay.includes(q);
-    });
-  }, [chatMarkers, selectedSourceFilter, searchQuery, sources]);
-
   const filteredPauseWindows = useMemo(() => {
     if (selectedSourceFilter && selectedSourceFilter !== 'all') return [];
     const q = searchQuery.trim().toLowerCase();
@@ -588,13 +570,6 @@ export function TranscriptTab({
           keyframe: kf,
         })
       ),
-      ...filteredChatMarkers.map(
-        (marker): TimelineItem => ({
-          kind: 'marker',
-          offset: marker.offset_seconds,
-          marker,
-        })
-      ),
       ...filteredPauseWindows.map(
         (pause, index): TimelineItem => ({
           kind: 'pause',
@@ -607,8 +582,7 @@ export function TranscriptTab({
     const kindRank: Record<TimelineItem['kind'], number> = {
       pause: 0,
       keyframe: 1,
-      marker: 2,
-      turn: 3,
+      turn: 2,
     };
     items.sort((a, b) => {
       if (a.offset !== b.offset) return a.offset - b.offset;
@@ -618,7 +592,6 @@ export function TranscriptTab({
   }, [
     groupedTurns,
     filteredKeyframes,
-    filteredChatMarkers,
     filteredPauseWindows,
   ]);
 
@@ -1396,7 +1369,6 @@ export function TranscriptTab({
             title={
               segments.length === 0 &&
               keyframes.length === 0 &&
-              chatMarkers.length === 0 &&
               pauseWindows.length === 0
                 ? participation === 'capturing'
                   ? tr(
@@ -1420,7 +1392,6 @@ export function TranscriptTab({
             description={
               segments.length === 0 &&
               keyframes.length === 0 &&
-              chatMarkers.length === 0 &&
               pauseWindows.length === 0
                 ? tr(
                     'Sobald im Gespräch gesprochen wird, erscheinen die Wortbeiträge hier automatisch nach Sprechern getrennt.',
@@ -1496,52 +1467,6 @@ export function TranscriptTab({
                             'Recording paused via meeting chat — neither audio nor screen-share slides were captured during this interval.'
                           )}
                         </Text>
-                      </div>
-                    </HStack>
-                  </div>
-                );
-              }
-              if (item.kind === 'marker') {
-                const m = item.marker;
-                const isDecision = m.kind === 'decision';
-                const authorLabel =
-                  m.author || tr('Konferenz-Chat', 'Meeting Chat');
-                return (
-                  <div
-                    key={`marker-${m.id}`}
-                    id={`marker-${m.id}`}
-                    className="wl-turn-row wl-fade-in"
-                  >
-                    <HStack gap={3} vAlign="start">
-                      <Avatar size="sm" shape="circle" name={authorLabel} />
-                      <div className="min-w-0 flex-1">
-                        <HStack gap={2} vAlign="center" wrap="wrap">
-                          <span className="font-semibold text-sm text-[var(--color-text-primary)]">
-                            {authorLabel}
-                          </span>
-                          <Text
-                            type="supporting"
-                            color="secondary"
-                            hasTabularNumbers
-                          >
-                            {formatWallClockTime(
-                              m.offset_seconds,
-                              timeOriginUtc
-                            )}
-                          </Text>
-                          <Token
-                            size="sm"
-                            color={isDecision ? 'green' : 'blue'}
-                            label={
-                              isDecision
-                                ? tr('Chat-Beschluss', 'Chat Decision')
-                                : tr('Chat-Aufgabe', 'Chat To-Do')
-                            }
-                          />
-                        </HStack>
-                        <p className="mt-1 text-sm font-medium text-[var(--color-text-primary)] leading-relaxed">
-                          {renderHighlightedText(m.text, searchQuery)}
-                        </p>
                       </div>
                     </HStack>
                   </div>

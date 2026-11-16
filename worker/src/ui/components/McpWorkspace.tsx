@@ -427,8 +427,8 @@ export function McpWorkspace({
                     <ListItem
                       label="list_recordings · get_recording · get_transcript · export_protocol · list_calendar_events"
                       description={tr(
-                        'Volltextsuche über Titel, gebundene Sprecher, Wortprotokolle & Chat-Marker (#decision / #todo), Pausenfenster (#pause), Bildschirm-Folien (wortlaut://…/keyframes/…) sowie Markdown/VTT/JSON-Exporte.',
-                        'Full-text search across titles, bound speakers, verbatim transcripts & chat markers (#decision / #todo), pause windows (#pause), slide keyframes (wortlaut://…/keyframes/…), and Markdown/VTT/JSON exports.'
+                        'Volltextsuche über Titel, gebundene Sprecher, Wortprotokolle, Pausenfenster (#pause), Bildschirm-Folien (wortlaut://…/keyframes/…) sowie Markdown/VTT/JSON-Exporte.',
+                        'Full-text search across titles, bound speakers, verbatim transcripts, pause windows (#pause), slide keyframes (wortlaut://…/keyframes/…), and Markdown/VTT/JSON exports.'
                       )}
                       endContent={
                         <Token size="sm" color="green" label="mcp:read" />

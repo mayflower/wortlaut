@@ -7,6 +7,8 @@ from typing import Annotated, Literal
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+from wortlaut.languages import normalize_asr_language
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="WORTLAUT_")
@@ -19,12 +21,12 @@ class Settings(BaseSettings):
     oidc_allowed_domains: list[str] = []
     oidc_admin_emails: list[str] = []
     webex_service_token: SecretStr | None = None
-    enable_webex_browser: bool = False
+    enable_webex_browser: bool = True
     enable_webex_refresh: bool = False
-    enable_google_meet: bool = False
-    enable_teams: bool = False
+    enable_google_meet: bool = True
+    enable_teams: bool = True
     teams_locale: str = "en-US"
-    enable_zoom: bool = False
+    enable_zoom: bool = True
     zoom_locale: str = "en-US"
     zoom_storage_state_secret: str | None = None
     meet_storage_state_secret: str | None = None
@@ -110,6 +112,7 @@ class Settings(BaseSettings):
     enable_processing: bool = True
     asr_url: str = "http://wortlaut-asr:8000"
     asr_token: SecretStr | None = None
+    asr_languages: str = "*"
     asr_glossary: Annotated[list[str], NoDecode] = []
     asr_timeout_seconds: int = 120
     asr_lease_seconds: int = 180
@@ -118,6 +121,14 @@ class Settings(BaseSettings):
     ollama_url: str = "http://ollama.ollama.svc.cluster.local:11434"
     ollama_model: str = "qwen3.8:latest"
     ollama_timeout_seconds: int = 120
+
+    @field_validator("asr_languages", mode="before")
+    @classmethod
+    def _parse_asr_languages(cls, value):
+        if value is None or value == "":
+            return "*"
+        norm = normalize_asr_language(str(value))
+        return "*" if not norm or norm == "auto" else norm
 
     @field_validator("asr_glossary", mode="before")
     @classmethod

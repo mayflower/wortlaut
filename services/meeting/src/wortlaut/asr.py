@@ -12,6 +12,7 @@ import httpx
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
+from wortlaut.languages import effective_recording_language, to_asr_header_value
 from wortlaut.models import (
     AsrJob,
     Attempt,
@@ -56,6 +57,9 @@ def _is_low_confidence_hallucination(word_confidences: list[float], word_count: 
 
 
 def _has_repetition_loop(words: list[dict]) -> bool:
+    joined = "".join(str(w.get("word") or "") for w in words)
+    if re.search(r"([^\W\d_])\1{9,}", joined):
+        return True
     tokens = [re.sub(r"[^\w]+", "", str(w.get("word") or "").lower()) for w in words]
     if len(tokens) < 6:
         return False
@@ -328,20 +332,68 @@ def build_asr_context_prompt(
                 if candidate:
                     prior_text = candidate[-120:]
 
+    lang_spec = effective_recording_language(recording, settings)
+    use_de_labels = lang_spec == "German" or (
+        lang_spec in ("auto", "German,English", "English,German")
+        and settings.default_locale == "de"
+    )
     parts: list[str] = []
     if recording is not None and recording.title:
         clean_title = " ".join(recording.title.split())[:120]
         if clean_title:
-            parts.append(f"Thema: {clean_title}")
+            parts.append(f"{'Thema' if use_de_labels else 'Topic'}: {clean_title}")
     if participant_list:
-        parts.append(f"Teilnehmende: {', '.join(participant_list)}")
+        parts.append(
+            f"{'Teilnehmende' if use_de_labels else 'Participants'}: "
+            f"{', '.join(participant_list)}"
+        )
     if glossary_terms:
-        parts.append(f"Glossar: {', '.join(glossary_terms)}")
+        parts.append(
+            f"{'Glossar' if use_de_labels else 'Glossary'}: {', '.join(glossary_terms)}"
+        )
     if prior_text:
-        parts.append(f"Vorheriger Kontext: {prior_text}")
+        parts.append(
+            f"{'Vorheriger Kontext' if use_de_labels else 'Prior context'}: {prior_text}"
+        )
     if not parts:
         return None
     return " | ".join(parts)[:500]
+
+
+def _resolve_primary_language(
+    db: Session, job: AsrJob, stream: AudioStream, lang_spec: str, settings
+) -> str | None:
+    if lang_spec and lang_spec != "auto":
+        langs = [part.strip() for part in lang_spec.split(",") if part.strip()]
+        if len(langs) == 1:
+            return langs[0]
+        locale_pref = "German" if settings.default_locale == "de" else "English"
+        if locale_pref in langs:
+            return locale_pref
+        return langs[0] if langs else None
+    if stream.id is not None:
+        prior_seg = db.scalar(
+            select(TranscriptSegment)
+            .join(AsrJob, AsrJob.id == TranscriptSegment.id)
+            .where(
+                AsrJob.stream_id == stream.id,
+                AsrJob.id != job.id,
+                AsrJob.end_sample <= job.start_sample + RATE,
+                AsrJob.end_sample >= max(0, job.start_sample - 30 * RATE),
+            )
+            .order_by(AsrJob.end_sample.desc())
+            .limit(1)
+        )
+        if prior_seg is not None and isinstance(prior_seg.result, dict):
+            prior_lang = prior_seg.result.get("language")
+            prior_conf = prior_seg.result.get("confidence")
+            if (
+                isinstance(prior_lang, str)
+                and prior_lang
+                and (not _is_number(prior_conf) or float(prior_conf) >= 0.55)
+            ):
+                return prior_lang
+    return None
 
 
 def inference_pass(engine):
@@ -354,8 +406,11 @@ def inference_pass(engine):
             return False
         identifier = job.id
         stream = db.get(AudioStream, job.stream_id)
+        attempt = db.get(Attempt, stream.attempt_id) if stream.attempt_id else None
+        recording = db.get(Recording, attempt.recording_id) if attempt else None
+        lang_spec = effective_recording_language(recording, settings)
         context_prompt = build_asr_context_prompt(db, job, stream, settings)
-        primary_language = "German" if settings.default_locale == "de" else "English"
+        primary_language = _resolve_primary_language(db, job, stream, lang_spec, settings)
         chunks = db.scalars(
             select(AudioChunk)
             .where(
@@ -374,8 +429,10 @@ def inference_pass(engine):
                 "Authorization": "Bearer " + settings.asr_token.get_secret_value(),
                 "Content-Type": "application/octet-stream",
                 "X-Job-ID": identifier,
-                "X-Primary-Language": primary_language,
+                "X-ASR-Languages": to_asr_header_value(lang_spec),
             }
+            if primary_language:
+                req_headers["X-Primary-Language"] = primary_language
             if context_prompt:
                 req_headers["X-ASR-Context-B64"] = base64.b64encode(
                     context_prompt.encode("utf-8")

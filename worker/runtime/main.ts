@@ -237,10 +237,10 @@ async function run(api: string, credential: string) {
         await meet?.updateVideoTile({
           participation: state.participation,
           segments: reported.live_transcript,
-          ...(Array.isArray(reported.live_markers)
+          ...(typeof reported.asr_language === 'string' && reported.asr_language
             ? {
-                markers: reported.live_markers,
-                expectedLocalMarkers: state.participant_sources?.chat_markers?.length ?? 0,
+                asrLanguage: reported.asr_language,
+                expectedLocalLangSeq: state.participant_sources?.asr_language_seq ?? 0,
               }
             : {}),
         });

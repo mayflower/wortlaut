@@ -17,7 +17,7 @@ function maxAbsPcmSample(buf: Buffer): number {
   return max;
 }
 
-test('in-call #pause / #resume and #decision / #todo chat commands zero PCM audio, block slides, deduplicate markers, and update video tile', async () => {
+test('in-call #pause / #resume and #lang chat commands zero PCM audio, block slides, and update video tile', async () => {
   const workerRoot = fileURLToPath(new URL('..', import.meta.url));
   if (!existsSync(fileURLToPath(new URL('../dist/meet/capture.js', import.meta.url)))) {
     await build({
@@ -41,7 +41,7 @@ test('in-call #pause / #resume and #decision / #todo chat commands zero PCM audi
     const attemptId = randomUUID();
     const meetUrl = 'https://meet.google.com/chat-ctrl-tst';
     const chatIntro =
-      'wortlaut zeichnet dieses Treffen auf. Chat-Befehle: „opt out“, „#pause“ / „#resume“, „#decision <Text>“ & „#todo <Text>“. Info: https://wortlaut.example/privacy';
+      'wortlaut zeichnet dieses Treffen auf. Chat-Befehle: „opt out“, „#pause“ / „#resume“ & „#lang“. Info: https://wortlaut.example/privacy';
 
     const chunks: Array<{
       sequence: number;
@@ -237,13 +237,12 @@ test('in-call #pause / #resume and #decision / #todo chat commands zero PCM audi
       meet: window.wortlautMeet.inspect(),
       tile: window.wortlautVideoTile!.getSnapshot(),
     }));
-    // Self chat_intro & self "You: #pause" must NOT have paused, opted out, or added markers!
+    // Self chat_intro & self "You: #pause" must NOT have paused or opted out!
     assert.equal(preState.meet.participant_sources.paused ?? false, false);
     assert.equal(preState.meet.participant_sources.opted_out ?? undefined, undefined);
-    assert.equal(preState.meet.participant_sources.chat_markers ?? undefined, undefined);
     assert.equal(preState.tile.paused, false);
 
-    // 1. Participant Alice sends "#pause" via DOM chat bubble + "#decision" & "#aufgabe" via both wire & DOM
+    // 1. Participant Alice sends "#pause" via DOM chat bubble + "#lang English" via wire data channel
     await page.evaluate(() => {
       const pauseBubble = document.createElement('div');
       pauseBubble.setAttribute('data-sender-name', 'Alice Lead');
@@ -255,20 +254,9 @@ test('in-call #pause / #resume and #decision / #todo chat commands zero PCM audi
         JSON.stringify({
           senderName: 'Alice Lead',
           participantId: 'spaces/room/devices/alice',
-          messageText: '#decision PostgreSQL 17 als Primärspeicher freigegeben',
+          messageText: '#lang English',
         }),
       );
-      // Duplicate DOM bubble for the exact same decision must deduplicate!
-      const dupDecision = document.createElement('div');
-      dupDecision.setAttribute('data-sender-name', 'Alice Lead');
-      dupDecision.setAttribute(
-        'data-message-text',
-        '#decision PostgreSQL 17 als Primärspeicher freigegeben',
-      );
-      const todoBubble = document.createElement('div');
-      todoBubble.setAttribute('data-sender-name', 'Bob Ops');
-      todoBubble.setAttribute('data-message-text', '#aufgabe Backup-Drill bis Freitag durchführen');
-      document.body.append(dupDecision, todoBubble);
 
       // Change slide to Slide 2 while paused — sampler must NOT emit while paused!
       (window as unknown as {__paintSlide: (n: number) => void}).__paintSlide(2);
@@ -282,20 +270,10 @@ test('in-call #pause / #resume and #decision / #todo chat commands zero PCM audi
     assert.equal(pausedState.meet.participant_sources.pause_windows?.length, 1);
     assert.equal(pausedState.meet.participant_sources.pause_windows?.[0]?.ended_at, null);
     assert.equal(pausedState.meet.participant_sources.pause_windows?.[0]?.by, 'Alice Lead');
-    assert.equal(pausedState.meet.participant_sources.chat_markers?.length, 2);
-    assert.equal(pausedState.meet.participant_sources.chat_markers?.[0]?.kind, 'decision');
-    assert.equal(
-      pausedState.meet.participant_sources.chat_markers?.[0]?.text,
-      'PostgreSQL 17 als Primärspeicher freigegeben',
-    );
-    assert.equal(pausedState.meet.participant_sources.chat_markers?.[1]?.kind, 'todo');
-    assert.equal(
-      pausedState.meet.participant_sources.chat_markers?.[1]?.text,
-      'Backup-Drill bis Freitag durchführen',
-    );
+    assert.equal(pausedState.meet.participant_sources.asr_language, 'English');
     // Instant syncVideoTileFromChat updated wortlautVideoTile immediately without waiting for main.ts poll!
     assert.equal(pausedState.tile.paused, true);
-    assert.equal(pausedState.tile.markerCount, 2);
+    assert.equal(pausedState.tile.asrLanguage, 'English');
     assert.ok(pausedState.tile.lastRenderedText.startsWith('OFF THE RECORD'));
 
     // Wait through one full 5-second chunk window that starts & finishes ENTIRELY inside the pause!
@@ -342,10 +320,7 @@ test('in-call #pause / #resume and #decision / #todo chat commands zero PCM audi
       'Expected #weiter to close pause_windows[0].ended_at',
     );
     assert.equal(resumedState.tile.paused, false);
-    assert.equal(
-      resumedState.tile.lastRenderedText,
-      '[AUFGABE] Bob Ops: Backup-Drill bis Freitag durchführen',
-    );
+    assert.ok(resumedState.tile.lastRenderedText.startsWith('Hört zu'));
 
     // Wait for post-resume audio chunk + resumed slide keyframe
     const chunksAtResume = chunks.length;
@@ -442,16 +417,15 @@ test('provider-specific chat DOM & gzipped protobuf commands across Meet, Teams,
       await page.goto(url);
       await init();
 
-      // Natural conversation mentioning "pause", "resume", bare "#decision", and custom bot_display_name MUST NOT trigger!
+      // Natural conversation mentioning "pause", "resume", bare "#lang", and custom bot_display_name MUST NOT trigger!
       await page.evaluate(() => {
         const cases = [
           {sender: 'Clara Host', text: 'Let us take a 5 minute pause before Q&A'},
           {sender: 'Clara Host', text: 'Can we resume on slide 4 tomorrow?'},
           {sender: 'Clara Host', text: '#paused for coffee'},
-          {sender: 'Clara Host', text: '#decision'},
-          {sender: 'Clara Host', text: '#todo   '},
+          {sender: 'Clara Host', text: '#lang'},
           {sender: 'Notizen Alpha', text: '#pause'},
-          {sender: 'Notizen Alpha', text: '#decision Self bot message must be ignored'},
+          {sender: 'Notizen Alpha', text: '#lang Japanese'},
         ];
         for (const c of cases) {
           const el = document.createElement('div');
@@ -464,9 +438,9 @@ test('provider-specific chat DOM & gzipped protobuf commands across Meet, Teams,
       const afterNegatives = await page.evaluate(() => window.wortlautMeet.inspect());
       assert.equal(afterNegatives.participant_sources.paused ?? false, false);
       assert.equal(afterNegatives.participant_sources.pause_windows ?? undefined, undefined);
-      assert.equal(afterNegatives.participant_sources.chat_markers ?? undefined, undefined);
+      assert.equal(afterNegatives.participant_sources.asr_language ?? undefined, undefined);
 
-      // Gzipped protobuf data-channel frame carrying participant ID + sibling name + "@wortlaut pause" & "#entscheidung"
+      // Gzipped protobuf data-channel frame carrying participant ID + sibling name + "@wortlaut pause" & "#lang Spanish"
       await page.evaluate(async () => {
         const offerer = new RTCPeerConnection({iceServers: []});
         const answerer = new RTCPeerConnection({iceServers: []});
@@ -525,11 +499,7 @@ test('provider-specific chat DOM & gzipped protobuf commands across Meet, Teams,
         };
 
         await sendGzipProto(['spaces/meet/devices/clara', 'Clara Host', '@wortlaut pause']);
-        await sendGzipProto([
-          'spaces/meet/devices/clara',
-          'Clara Host',
-          '#entscheidung: Zero-Trust-Netzwerk für Staging aktivieren',
-        ]);
+        await sendGzipProto(['spaces/meet/devices/clara', 'Clara Host', '#lang Spanish']);
       });
 
       await page.waitForFunction(
@@ -541,14 +511,9 @@ test('provider-specific chat DOM & gzipped protobuf commands across Meet, Teams,
       assert.equal(afterProto.participant_sources.paused, true);
       assert.equal(afterProto.participant_sources.pause_windows?.length, 1);
       assert.equal(afterProto.participant_sources.pause_windows?.[0]?.by, 'Clara Host');
-      assert.equal(afterProto.participant_sources.chat_markers?.length, 1);
-      assert.equal(afterProto.participant_sources.chat_markers?.[0]?.kind, 'decision');
-      assert.equal(
-        afterProto.participant_sources.chat_markers?.[0]?.text,
-        'Zero-Trust-Netzwerk für Staging aktivieren',
-      );
+      assert.equal(afterProto.participant_sources.asr_language, 'Spanish');
 
-      // Resume via 2026 Google Meet toast ([data-key^="notification-"]), then opt out Dave and verify Dave's #todo is ignored,
+      // Resume via 2026 Google Meet toast ([data-key^="notification-"]), opt out Dave,
       // then re-pause via 2026 Meet chat bubble ([data-message-id]) and call stop() while paused!
       const stoppedSources = await page.evaluate(async () => {
         const toast = document.createElement('div');
@@ -563,14 +528,10 @@ test('provider-specific chat DOM & gzipped protobuf commands across Meet, Teams,
         document.body.append(toast);
         window.wortlautMeet.inspect();
 
-        // Dave opts out, then tries to post a #todo marker (must be suppressed!)
         const daveOpt = document.createElement('div');
         daveOpt.setAttribute('data-sender-name', 'Dave Guest');
         daveOpt.setAttribute('data-message-text', 'opt out');
-        const daveTodo = document.createElement('div');
-        daveTodo.setAttribute('data-sender-name', 'Dave Guest');
-        daveTodo.setAttribute('data-message-text', '#todo Secret opted-out task');
-        document.body.append(daveOpt, daveTodo);
+        document.body.append(daveOpt);
         window.wortlautMeet.inspect();
 
         // Second pause cycle via 2026 Meet chat group ([data-message-id])
@@ -603,8 +564,7 @@ test('provider-specific chat DOM & gzipped protobuf commands across Meet, Teams,
       assert.equal(stoppedSources.mid.pause_windows?.length, 2);
       assert.ok(typeof stoppedSources.mid.pause_windows?.[0]?.ended_at === 'string');
       assert.equal(stoppedSources.mid.pause_windows?.[1]?.ended_at, null);
-      // Opted-out Dave's #todo must NOT appear in chat_markers!
-      assert.equal(stoppedSources.mid.chat_markers?.length, 1);
+      assert.deepEqual(stoppedSources.mid.opted_out, ['Dave Guest']);
       // stop() must close open pause_windows[1].ended_at and clear paused!
       assert.equal(stoppedSources.afterStop.paused ?? false, false);
       assert.ok(
@@ -638,7 +598,6 @@ test('provider-specific chat DOM & gzipped protobuf commands across Meet, Teams,
             document.body.append(wrap);
           };
           mkTeamsMsg('Elena Teams', '#off-the-record');
-          mkTeamsMsg('Elena Teams', '/action Security-Review mit Infra planen');
         },
       },
       {
@@ -656,9 +615,8 @@ test('provider-specific chat DOM & gzipped protobuf commands across Meet, Teams,
             item.append(body);
             document.body.append(item);
           };
-          mkWebexMsg('Notizen Webex', '#beschluss Self bot echo must be ignored');
+          mkWebexMsg('Notizen Webex', '#pause');
           mkWebexMsg('Marco Webex', '#pausieren', 'webex-user-42');
-          mkWebexMsg('Marco Webex', '#beschluss API-Token-Rotation auf 30 Tage senken', 'webex-user-42');
         },
       },
       {
@@ -678,7 +636,6 @@ test('provider-specific chat DOM & gzipped protobuf commands across Meet, Teams,
             document.body.append(item);
           };
           mkZoomMsg('Sofia Zoom', '#pause');
-          mkZoomMsg('Sofia Zoom', '@wortlaut todo Lasttest vor dem Release starten');
           mkZoomMsg('Sofia Zoom', '#on-the-record');
         },
       },
@@ -716,25 +673,62 @@ test('provider-specific chat DOM & gzipped protobuf commands across Meet, Teams,
       await page.evaluate(pc.injectChat);
       const st = await page.evaluate(() => window.wortlautMeet.inspect().participant_sources);
       assert.equal(st.pause_windows?.length, 1, `Expected 1 pause window on ${pc.provider}`);
-      assert.equal(st.chat_markers?.length, 1, `Expected 1 chat marker on ${pc.provider}`);
       if (pc.provider === 'zoom') {
         // Zoom injected #pause followed by #on-the-record -> resumed!
         assert.equal(st.paused ?? false, false);
         assert.ok(typeof st.pause_windows?.[0]?.ended_at === 'string');
-        assert.equal(st.chat_markers?.[0]?.kind, 'todo');
-        assert.equal(st.chat_markers?.[0]?.author, 'Sofia Zoom');
+        assert.equal(st.pause_windows?.[0]?.by, 'Sofia Zoom');
       } else if (pc.provider === 'teams') {
         assert.equal(st.paused, true);
-        assert.equal(st.chat_markers?.[0]?.kind, 'todo');
-        assert.equal(st.chat_markers?.[0]?.author, 'Elena Teams');
+        assert.equal(st.pause_windows?.[0]?.by, 'Elena Teams');
       } else {
         assert.equal(st.paused, true);
-        assert.equal(st.chat_markers?.[0]?.kind, 'decision');
-        assert.equal(st.chat_markers?.[0]?.author, 'Marco Webex');
-        assert.equal(st.chat_markers?.[0]?.participant_id, 'webex-user-42');
-        assert.equal(await page.evaluate(() => window.wortlautVideoTile?.getSnapshot().markerCount), 1);
+        assert.equal(st.pause_windows?.[0]?.by, 'Marco Webex');
 
-        // Retroactive opt-out: Marco later posts 'opt out' -> earlier marker & pause author scrubbed immediately!
+        // Live in-call language switching via chat (#lang ja -> #sprache Französisch,Englisch -> #lang auto)
+        // plus guard against invalid language (#lang klingon) and self/bot echo!
+        await page.evaluate(() => {
+          const mkMsg = (sender: string, senderId: string, text: string) => {
+            const item = document.createElement('div');
+            item.className = 'chat-message-wrapper';
+            item.setAttribute('data-sender-name', sender);
+            item.setAttribute('data-sender-id', senderId);
+            const body = document.createElement('div');
+            body.className = 'chat-message-text';
+            body.textContent = text;
+            item.append(body);
+            document.body.append(item);
+          };
+          mkMsg('wortlaut (Elena)', 'self-bot', '#lang Arabic');
+          mkMsg('Lucia Host', 'webex-user-99', '#lang klingon');
+          mkMsg('Lucia Host', 'webex-user-99', '/language-en');
+          mkMsg('Lucia Host', 'webex-user-99', '#lang-de');
+          mkMsg('Lucia Host', 'webex-user-99', '#lang 日本語');
+        });
+        const afterJa = await page.evaluate(() => window.wortlautMeet.inspect().participant_sources);
+        assert.equal(afterJa.asr_language, 'Japanese');
+        assert.equal(afterJa.asr_language_seq, 1);
+        assert.equal(
+          await page.evaluate(() => window.wortlautVideoTile?.getSnapshot().asrLanguage),
+          'Japanese',
+        );
+
+        await page.evaluate(() => {
+          const item = document.createElement('div');
+          item.className = 'chat-message-wrapper';
+          item.setAttribute('data-sender-name', 'Lucia Host');
+          item.setAttribute('data-sender-id', 'webex-user-99');
+          const body = document.createElement('div');
+          body.className = 'chat-message-text';
+          body.textContent = '#sprache Französisch, English';
+          item.append(body);
+          document.body.append(item);
+        });
+        const afterMulti = await page.evaluate(() => window.wortlautMeet.inspect().participant_sources);
+        assert.equal(afterMulti.asr_language, 'French,English');
+        assert.equal(afterMulti.asr_language_seq, 2);
+
+        // Retroactive opt-out: Marco later posts 'opt out' -> earlier pause author scrubbed immediately!
         await page.evaluate(() => {
           const item = document.createElement('div');
           item.className = 'chat-message-wrapper';
@@ -747,9 +741,7 @@ test('provider-specific chat DOM & gzipped protobuf commands across Meet, Teams,
           document.body.append(item);
         });
         const afterOptOut = await page.evaluate(() => window.wortlautMeet.inspect().participant_sources);
-        assert.equal(afterOptOut.chat_markers, undefined);
         assert.equal(afterOptOut.pause_windows?.[0]?.by, undefined);
-        assert.equal(await page.evaluate(() => window.wortlautVideoTile?.getSnapshot().markerCount), 0);
       }
       await page.evaluate(() => window.wortlautMeet.stop());
       await ctx.close();

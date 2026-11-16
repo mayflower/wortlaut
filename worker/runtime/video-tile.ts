@@ -7,25 +7,19 @@ export type VideoTileSegment = {
   start: number;
 };
 
-export type VideoTileMarker = {
-  kind: 'decision' | 'todo';
-  text: string;
-  author?: string | null;
-  start: number;
-};
-
 export type VideoTilePatch = {
   participation?: string;
   paused?: boolean;
+  asrLanguage?: string;
   segments?: VideoTileSegment[];
-  markers?: VideoTileMarker[];
-  expectedLocalMarkers?: number;
+  expectedLocalLangSeq?: number;
 };
 
 export type VideoTileMetadata = {
   locale: string;
   invitedBy: string | null;
   meetingTitle: string | null;
+  asrLanguage?: string | null;
 };
 
 type InitTileConfig = {
@@ -35,6 +29,7 @@ type InitTileConfig = {
   locale: string;
   invitedBy: string | null;
   meetingTitle: string | null;
+  asrLanguage: string | null;
 };
 
 declare global {
@@ -46,8 +41,8 @@ declare global {
         frameCount: number;
         participation: string;
         paused: boolean;
+        asrLanguage: string;
         segmentCount: number;
-        markerCount: number;
         lastRenderedText: string;
         activeTracks: number;
       };
@@ -70,6 +65,7 @@ export async function installVideoTile(
     locale: meta.locale,
     invitedBy: meta.invitedBy?.trim() || null,
     meetingTitle: meta.meetingTitle?.trim() || null,
+    asrLanguage: meta.asrLanguage?.trim() || null,
   };
 
   await page.addInitScript((cfg: InitTileConfig) => {
@@ -107,8 +103,8 @@ export async function installVideoTile(
 
     let participation = 'joining';
     let paused = false;
+    let asrLanguage = cfg.asrLanguage || 'auto';
     let segments: VideoTileSegment[] = [];
-    let markers: VideoTileMarker[] = [];
     let frameCount = 0;
     let lastRenderedText = '';
     const liveTracks = new Set<MediaStreamTrack>();
@@ -254,13 +250,21 @@ export async function installVideoTile(
       ctx.textBaseline = 'alphabetic';
       ctx.fillText('wortlaut', titleX, 74);
 
+      const langLabel =
+        !asrLanguage || asrLanguage === 'auto' || asrLanguage === '*'
+          ? (isEn ? 'Auto (30 langs)' : 'Auto (30 Sprachen)')
+          : asrLanguage.replace(/,/g, ' + ');
       let subtitle = '';
       if (cfg.invitedBy) {
-        subtitle = isEn ? `Invited by ${cfg.invitedBy}` : `Eingeladen von ${cfg.invitedBy}`;
+        subtitle = isEn
+          ? `Invited by ${cfg.invitedBy} · ASR: ${langLabel}`
+          : `Eingeladen von ${cfg.invitedBy} · ASR: ${langLabel}`;
       } else if (cfg.meetingTitle) {
-        subtitle = cfg.meetingTitle;
+        subtitle = `${cfg.meetingTitle} · ASR: ${langLabel}`;
       } else {
-        subtitle = isEn ? 'Automated Meeting Transcript' : 'Automatisches Konferenz-Protokoll';
+        subtitle = isEn
+          ? `Automated Meeting Transcript · ASR: ${langLabel}`
+          : `Automatisches Konferenz-Protokoll · ASR: ${langLabel}`;
       }
       ctx.font = `500 18px ${FONT_SANS}`;
       ctx.fillStyle = '#94a3b8';
@@ -309,7 +313,7 @@ export async function installVideoTile(
       ctx.fillStyle = isAmberPill ? '#fef3c7' : '#d1fae5';
       ctx.fillText(statusText, pillX + 35, pillY + 27);
 
-      // On-screen instructions strip (opt-out, off-the-record #pause/#resume, #decision/#todo markers)
+      // On-screen instructions strip (opt-out, off-the-record #pause/#resume, #lang switch)
       const stripY = 124;
       const stripH = 68;
       ctx.fillStyle = isPausedActive ? 'rgba(245, 158, 11, 0.13)' : '#1c2333';
@@ -379,23 +383,23 @@ export async function installVideoTile(
           stripY + 54,
           '#60a5fa',
           isEn
-            ? ['Other chat controls:', '[blue:opt out]', 'exclude yourself  ·', '[amber:#decision …]', 'decision  ·', '[emerald:#todo …]', 'action item']
-            : ['Weitere Chat-Befehle:', '[blue:nein / opt out]', 'Widerspruch  ·', '[amber:#decision …]', 'Beschluss  ·', '[emerald:#todo …]', 'Aufgabe'],
+            ? ['Other chat controls:', '[blue:opt out]', 'exclude yourself  ·', '[blue:#lang …]', 'switch language']
+            : ['Weitere Chat-Befehle:', '[blue:nein / opt out]', 'Widerspruch  ·', '[blue:#lang …]', 'Sprache wechseln'],
         );
       } else {
         drawInstructionRow(
           stripY + 26,
           '#60a5fa',
           isEn
-            ? ['*Chat controls:*', '[blue:opt out]', 'exclude yourself  ·', '[amber:#pause]', '/', '[amber:#resume]', 'off-the-record pause']
-            : ['*Chat-Befehle:*', '[blue:nein / opt out]', 'Widerspruch  ·', '[amber:#pause]', '/', '[amber:#resume]', 'Off-the-Record-Pause'],
+            ? ['*Chat:*', '[blue:opt out]', 'exclude yourself  ·', '[amber:#pause]', '/', '[amber:#resume]', 'off-the-record']
+            : ['*Chat:*', '[blue:nein / opt out]', 'Widerspruch  ·', '[amber:#pause]', '/', '[amber:#resume]', 'Off-the-Record-Pause'],
         );
         drawInstructionRow(
           stripY + 54,
           '#34d399',
           isEn
-            ? ['*Live markers:*', '[amber:#decision <text>]', 'pin decision  ·', '[emerald:#todo <text>]', 'add action item to protocol']
-            : ['*Protokoll-Marker:*', '[amber:#decision <Text>]', 'Beschluss  ·', '[emerald:#todo <Text>]', 'Aufgabe ins Protokoll übernehmen'],
+            ? ['*Language:*', '[blue:#lang <language>]', 'switch across all 30 ASR languages  ·', '[emerald:#lang en]', '·', '[emerald:#lang auto]']
+            : ['*Sprache:*', '[blue:#lang <Sprache>]', 'alle 30 ASR-Sprachen umschalten  ·', '[emerald:#lang en]', '·', '[emerald:#lang auto]'],
         );
       }
 
@@ -405,16 +409,7 @@ export async function installVideoTile(
       const bodyLeft = 96;
       const bodyWidth = cardW - 56;
 
-      type RenderEntry =
-        | {kind: 'segment'; start: number; seg: VideoTileSegment}
-        | {kind: 'marker'; start: number; marker: VideoTileMarker};
-
-      const entries: RenderEntry[] = [
-        ...segments.map((seg) => ({kind: 'segment' as const, start: seg.start, seg})),
-        ...markers.map((marker) => ({kind: 'marker' as const, start: marker.start, marker})),
-      ]
-        .sort((a, b) => a.start - b.start)
-        .slice(-8);
+      const entries = segments.slice(-8);
 
       if (isPausedActive) {
         const boxX = cardX + 64;
@@ -536,14 +531,12 @@ export async function installVideoTile(
         const textMaxW = bodyWidth - 32;
 
         for (let idx = entries.length - 1; idx >= 0; idx--) {
-          const entry = entries[idx];
-          const entryText = entry.kind === 'segment' ? entry.seg.text : entry.marker.text;
+          const seg = entries[idx];
           ctx.font = `400 22px ${FONT_SANS}`;
-          const lines = wrapLines(ctx, entryText, textMaxW, entry.kind === 'marker' ? 2 : 4);
+          const lines = wrapLines(ctx, seg.text, textMaxW, 4);
           if (lines.length === 0) continue;
 
-          const extraPad = entry.kind === 'marker' ? 12 : 0;
-          const blockH = headerHeight + lines.length * lineHeight + extraPad;
+          const blockH = headerHeight + lines.length * lineHeight;
           const blockTop = cursorY - blockH;
 
           if (blockTop < bodyTop - lineHeight * 2) {
@@ -554,69 +547,26 @@ export async function installVideoTile(
             overflowedTop = true;
           }
 
-          if (entry.kind === 'marker') {
-            const isDecision = entry.marker.kind === 'decision';
-            const accent = isDecision ? '#fbbf24' : '#34d399';
-            roundRect(ctx, bodyLeft, blockTop, bodyWidth, blockH, 10);
-            ctx.fillStyle = isDecision ? 'rgba(245, 158, 11, 0.10)' : 'rgba(16, 185, 129, 0.10)';
-            ctx.fill();
-            roundRect(ctx, bodyLeft, blockTop + 4, 4, blockH - 8, 2);
-            ctx.fillStyle = accent;
-            ctx.fill();
+          const accent = speakerColor(seg.speaker || 'Teilnehmer');
+          roundRect(ctx, bodyLeft, blockTop + 4, 4, blockH - 6, 2);
+          ctx.fillStyle = accent;
+          ctx.fill();
 
-            const ts = formatTimestamp(entry.marker.start);
-            ctx.font = `500 16px ${FONT_MONO}`;
-            ctx.fillStyle = '#94a3b8';
-            ctx.fillText(ts, bodyLeft + 16, blockTop + 23);
-            const tsW = ctx.measureText(ts).width;
+          const ts = formatTimestamp(seg.start);
+          ctx.font = `500 16px ${FONT_MONO}`;
+          ctx.fillStyle = '#64748b';
+          ctx.fillText(ts, bodyLeft + 16, blockTop + 19);
+          const tsW = ctx.measureText(ts).width;
 
-            const badgeLabel = isDecision
-              ? (isEn ? 'DECISION' : 'BESCHLUSS')
-              : (isEn ? 'TODO' : 'AUFGABE');
-            ctx.font = `700 14px ${FONT_MONO}`;
-            const bw = ctx.measureText(badgeLabel).width + 14;
-            const bx = bodyLeft + 16 + tsW + 10;
-            roundRect(ctx, bx, blockTop + 8, bw, 20, 5);
-            ctx.fillStyle = isDecision ? 'rgba(245, 158, 11, 0.24)' : 'rgba(16, 185, 129, 0.24)';
-            ctx.fill();
-            ctx.fillStyle = isDecision ? '#fde68a' : '#a7f3d0';
-            ctx.fillText(badgeLabel, bx + 7, blockTop + 22);
+          ctx.font = `700 19.5px ${FONT_SANS}`;
+          ctx.fillStyle = accent;
+          const spkLabel = truncateText(ctx, seg.speaker || 'Teilnehmer', 480);
+          ctx.fillText(spkLabel, bodyLeft + 16 + tsW + 12, blockTop + 19);
 
-            if (entry.marker.author) {
-              ctx.font = `600 18px ${FONT_SANS}`;
-              ctx.fillStyle = '#e2e8f0';
-              const authorLabel = truncateText(ctx, entry.marker.author, 380);
-              ctx.fillText(authorLabel, bx + bw + 10, blockTop + 23);
-            }
-
-            ctx.font = `500 21.5px ${FONT_SANS}`;
-            ctx.fillStyle = isDecision ? '#fef3c7' : '#ecfdf5';
-            for (let l = 0; l < lines.length; l++) {
-              ctx.fillText(lines[l], bodyLeft + 16, blockTop + headerHeight + 25 + l * lineHeight);
-            }
-          } else {
-            const seg = entry.seg;
-            const accent = speakerColor(seg.speaker || 'Teilnehmer');
-            roundRect(ctx, bodyLeft, blockTop + 4, 4, blockH - 6, 2);
-            ctx.fillStyle = accent;
-            ctx.fill();
-
-            const ts = formatTimestamp(seg.start);
-            ctx.font = `500 16px ${FONT_MONO}`;
-            ctx.fillStyle = '#64748b';
-            ctx.fillText(ts, bodyLeft + 16, blockTop + 19);
-            const tsW = ctx.measureText(ts).width;
-
-            ctx.font = `700 19.5px ${FONT_SANS}`;
-            ctx.fillStyle = accent;
-            const spkLabel = truncateText(ctx, seg.speaker || 'Teilnehmer', 480);
-            ctx.fillText(spkLabel, bodyLeft + 16 + tsW + 12, blockTop + 19);
-
-            ctx.font = `400 22px ${FONT_SANS}`;
-            ctx.fillStyle = '#f1f5f9';
-            for (let l = 0; l < lines.length; l++) {
-              ctx.fillText(lines[l], bodyLeft + 16, blockTop + headerHeight + 22 + l * lineHeight);
-            }
+          ctx.font = `400 22px ${FONT_SANS}`;
+          ctx.fillStyle = '#f1f5f9';
+          for (let l = 0; l < lines.length; l++) {
+            ctx.fillText(lines[l], bodyLeft + 16, blockTop + headerHeight + 22 + l * lineHeight);
           }
 
           cursorY = blockTop - turnGap;
@@ -631,16 +581,7 @@ export async function installVideoTile(
         }
         ctx.restore();
         const latest = entries[entries.length - 1];
-        if (latest.kind === 'segment') {
-          lastRenderedText = `${latest.seg.speaker}: ${latest.seg.text}`;
-        } else {
-          const prefix =
-            latest.marker.kind === 'decision'
-              ? (isEn ? '[DECISION]' : '[BESCHLUSS]')
-              : (isEn ? '[TODO]' : '[AUFGABE]');
-          const authorPrefix = latest.marker.author ? `${latest.marker.author}: ` : '';
-          lastRenderedText = `${prefix} ${authorPrefix}${latest.marker.text}`;
-        }
+        lastRenderedText = `${latest.speaker}: ${latest.text}`;
       }
 
       ctx.restore();
@@ -774,6 +715,9 @@ export async function installVideoTile(
         if (typeof patch.paused === 'boolean') {
           paused = patch.paused;
         }
+        if (typeof patch.asrLanguage === 'string' && patch.asrLanguage.trim()) {
+          asrLanguage = patch.asrLanguage.trim().slice(0, 120);
+        }
         if (Array.isArray(patch.segments)) {
           segments = patch.segments.slice(-8).map((s) => ({
             speaker: String(s?.speaker ?? '').slice(0, 80),
@@ -781,18 +725,7 @@ export async function installVideoTile(
             start: typeof s?.start === 'number' && Number.isFinite(s.start) ? s.start : 0,
           }));
         }
-        if (Array.isArray(patch.markers)) {
-          markers = patch.markers
-            .filter((m) => m && (m.kind === 'decision' || m.kind === 'todo') && String(m.text ?? '').trim())
-            .slice(-8)
-            .map((m) => ({
-              kind: m.kind === 'decision' ? 'decision' : 'todo',
-              text: String(m.text ?? '').trim().slice(0, 280),
-              author: m.author ? String(m.author).trim().slice(0, 80) : null,
-              start: typeof m.start === 'number' && Number.isFinite(m.start) ? m.start : 0,
-            }));
-        }
-        const sig = `${participation}::${paused ? '1' : '0'}::${JSON.stringify(segments)}::${JSON.stringify(markers)}`;
+        const sig = `${participation}::${paused ? '1' : '0'}::${asrLanguage}::${JSON.stringify(segments)}`;
         if (sig !== lastSignature) {
           lastSignature = sig;
           flushFrameBurst();
@@ -816,8 +749,8 @@ export async function installVideoTile(
           frameCount,
           participation,
           paused,
+          asrLanguage,
           segmentCount: segments.length,
-          markerCount: markers.length,
           lastRenderedText,
           activeTracks: [...liveTracks].filter((t) => t.readyState === 'live').length,
         };
@@ -831,13 +764,21 @@ export async function installVideoTile(
     await targetFrame
       .evaluate((rawPatch: VideoTilePatch) => {
         let p = rawPatch;
+        const localPs = (
+          window as unknown as {
+            wortlautMeet?: {
+              inspect?: () => {
+                participant_sources?: {asr_language_seq?: number};
+              };
+            };
+          }
+        ).wortlautMeet?.inspect?.()?.participant_sources;
         if (
-          typeof p.expectedLocalMarkers === 'number' &&
-          (window as unknown as {wortlautMeet?: {inspect?: () => {participant_sources?: {chat_markers?: unknown[]}}}}).wortlautMeet &&
-          (((window as unknown as {wortlautMeet?: {inspect?: () => {participant_sources?: {chat_markers?: unknown[]}}}}).wortlautMeet?.inspect?.()?.participant_sources?.chat_markers?.length) ?? 0) !==
-            p.expectedLocalMarkers
+          typeof p.expectedLocalLangSeq === 'number' &&
+          localPs &&
+          (localPs.asr_language_seq ?? 0) !== p.expectedLocalLangSeq
         ) {
-          p = {...p, markers: undefined};
+          p = {...p, asrLanguage: undefined};
         }
         window.wortlautVideoTile?.update(p);
       }, patch)

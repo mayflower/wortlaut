@@ -16,7 +16,7 @@ export type MeetBootstrap = {provider: 'google_meet'; meeting_id: string; attemp
   empty_room_timeout_seconds?: number; chat_intro?: string | null;
   enable_keyframes?: boolean;
   invited_by: string | null; invited_by_name: string | null; meeting_title: string | null;
-  default_locale: string;
+  default_locale: string; asr_language?: string;
   meet: {display_name: string; locale: string; auth_mode: 'guest' | 'account'}};
 
 export function mergeKeyframeDiagnostics(
@@ -641,6 +641,7 @@ export class MeetBrowser {
       locale: this.bootstrap.default_locale,
       invitedBy: this.bootstrap.invited_by_name ?? this.bootstrap.invited_by,
       meetingTitle: this.bootstrap.meeting_title,
+      asrLanguage: this.bootstrap.asr_language ?? null,
     });
     this.initialize = await installMeetCapture(this.page, this.bootstrap, {
       begin: (metadata) => this.transport.control(metadata as Record<string, unknown> & {id: string}),

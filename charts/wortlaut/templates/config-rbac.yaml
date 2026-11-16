@@ -17,6 +17,7 @@ data:
   WORTLAUT_ZOOM_LOCALE: {{ .Values.providers.zoomLocale | quote }}
   WORTLAUT_ENABLE_WEBEX_BROWSER: {{ .Values.providers.enableWebexBrowser | ternary "true" "false" | quote }}
   WORTLAUT_ENABLE_KEYFRAMES: {{ .Values.keyframes.enabled | ternary "true" "false" | quote }}
+  WORTLAUT_ASR_LANGUAGES: {{ .Values.asr.languages | quote }}
   WORTLAUT_ENABLE_LLM_SUMMARY: {{ .Values.llmSummary.enabled | ternary "true" "false" | quote }}
 {{- if .Values.asr.glossary }}
   WORTLAUT_ASR_GLOSSARY: {{ .Values.asr.glossary | quote }}

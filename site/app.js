@@ -54,7 +54,7 @@
         "Link your Google Workspace or Microsoft 365 calendar once via OAuth2, paste a live meeting URL on the home screen, or invite your bot email address like a regular attendee.",
       step2_title: "2. Transparent join & live chat controls",
       step2_desc:
-        "wortlaut joins displaying the inviter’s name with on-screen chat commands on its live video tile: type “opt out” to exclude your voice, “#pause” / “#resume” to go off the record, or “#decision” & “#todo” to pin markers.",
+        "wortlaut joins displaying the inviter’s name with on-screen chat commands on its live video tile: type “opt out” to exclude your voice, “#pause” / “#resume” to go off the record, or “#lang” to switch languages.",
       step3_title: "3. Calendar writeback, verify & export",
       step3_desc:
         "Right after the call, wortlaut writes the read-only protocol link directly into your calendar event, emails the transcript, and lets you verify 24h audio snippets, edit terms, or export Markdown.",
@@ -289,7 +289,7 @@ make test-local`,
         "Verknüpfe einmalig deinen Google- oder Microsoft-365-Kalender per OAuth2, füge spontan einen Meeting-Link auf der Startseite ein oder lade die Bot-E-Mail-Adresse wie einen normalen Gast ein.",
       step2_title: "2. Transparenter Beitritt & Live-Steuerung im Chat",
       step2_desc:
-        "wortlaut tritt mit dem Namen der einladenden Person bei und zeigt alle Chat-Befehle direkt auf seiner Live-Videokachel: „nein“ zum eigenen Ausnehmen, „#pause“ / „#weiter“ für Off-the-Record oder „#decision“ & „#todo“ für Marker.",
+        "wortlaut tritt mit dem Namen der einladenden Person bei und zeigt alle Chat-Befehle direkt auf seiner Live-Videokachel: „nein“ zum eigenen Ausnehmen, „#pause“ / „#weiter“ für Off-the-Record oder „#lang“ für den Sprachwechsel.",
       step3_title: "3. Kalender-Link, Audio-Check & Export",
       step3_desc:
         "Direkt nach Gesprächsende trägt wortlaut den Lese-Link automatisch in deinen Kalendereintrag ein, versendet das Protokoll per E-Mail und erlaubt Audio-Snippet-Prüfung (24 h), Korrekturen und Markdown-Export.",

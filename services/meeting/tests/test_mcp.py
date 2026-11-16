@@ -702,15 +702,6 @@ def test_mcp_tools_resources_multi_user_isolation_and_ui_revocation(
                     "total": 1,
                     "truncated": False,
                     "sources": [],
-                    "chat_markers": [
-                        {
-                            "id": "mcp-mk-1",
-                            "kind": "decision",
-                            "text": "Kubevela Rollout freigegeben",
-                            "author": "Dr. Weber",
-                            "captured_at": (now - timedelta(minutes=50)).isoformat(),
-                        }
-                    ],
                     "pause_windows": [
                         {
                             "started_at": (now - timedelta(minutes=40)).isoformat(),
@@ -1020,31 +1011,26 @@ def test_mcp_tools_resources_multi_user_isolation_and_ui_revocation(
         "tools/call",
         {"name": "get_recording", "arguments": {"recording_id": str(alice_rec_id)}},
     ).json()["result"]["structuredContent"]
-    assert rec_detail_mcp["transcript"]["chat_marker_count"] == 1
     assert rec_detail_mcp["transcript"]["pause_window_count"] == 1
-    assert rec_detail_mcp["chat_markers"][0]["author"] == "Prof. Dr. Martin Weber"
-    assert rec_detail_mcp["chat_markers"][0]["text"] == "KubeVela Rollout freigegeben"
+    assert rec_detail_mcp["pause_windows"][0]["by"] == "Prof. Dr. Martin Weber"
 
     full_tx_mcp = _rpc(
         ro_headers,
         "tools/call",
         {"name": "get_transcript", "arguments": {"recording_id": str(alice_rec_id)}},
     ).json()["result"]["structuredContent"]
-    assert len(full_tx_mcp["chat_markers"]) == 1
     assert len(full_tx_mcp["pause_windows"]) == 1
 
-    # Query & speaker filtering on get_transcript applies to chat_markers and hides pause_windows
+    # Query & speaker filtering on get_transcript hides pause_windows
     matching_query_mcp = _rpc(
         ro_headers,
         "tools/call",
         {
             "name": "get_transcript",
-            "arguments": {"recording_id": str(alice_rec_id), "query": "Rollout"},
+            "arguments": {"recording_id": str(alice_rec_id), "query": "KubeVela"},
         },
     ).json()["result"]
-    assert len(matching_query_mcp["structuredContent"]["chat_markers"]) == 1
     assert matching_query_mcp["structuredContent"]["pause_windows"] == []
-    assert "[DECISION]" in matching_query_mcp["content"][0]["text"]
 
     non_matching_speaker_mcp = _rpc(
         ro_headers,
@@ -1054,7 +1040,6 @@ def test_mcp_tools_resources_multi_user_isolation_and_ui_revocation(
             "arguments": {"recording_id": str(alice_rec_id), "speaker": "Nobody"},
         },
     ).json()["result"]["structuredContent"]
-    assert non_matching_speaker_mcp["chat_markers"] == []
     assert non_matching_speaker_mcp["pause_windows"] == []
 
     # Resources & Prompts
