@@ -6,6 +6,7 @@ import json
 import logging
 import re
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from html import escape
 from typing import Literal
@@ -303,7 +304,7 @@ def exchange_calendar_oauth_code(
             CalendarConnection.provider == provider,
             CalendarConnection.account_email == account_email,
         )
-        .with_for_update()
+        .with_for_update(key_share=True)
     )
     if conn is None:
         conn = CalendarConnection(
@@ -360,7 +361,32 @@ def _fetch_account_email(provider: CalendarOAuthProvider, access_token: str) -> 
     return None
 
 
-def _ensure_access_token(conn: CalendarConnection, now: datetime) -> str:
+@dataclass
+class ConnectionSnapshot:
+    id: uuid.UUID
+    provider: str
+    owner_email: str
+    account_email: str
+    encrypted_access_token: str | None
+    encrypted_refresh_token: str
+    token_expires_at: datetime | None
+
+
+def snapshot_connection(conn: CalendarConnection) -> ConnectionSnapshot:
+    return ConnectionSnapshot(
+        id=conn.id,
+        provider=conn.provider,
+        owner_email=conn.owner_email,
+        account_email=conn.account_email,
+        encrypted_access_token=conn.encrypted_access_token,
+        encrypted_refresh_token=conn.encrypted_refresh_token,
+        token_expires_at=conn.token_expires_at,
+    )
+
+
+def _ensure_access_token(
+    conn: CalendarConnection | ConnectionSnapshot, now: datetime
+) -> str:
     if (
         conn.encrypted_access_token
         and conn.token_expires_at
@@ -415,7 +441,10 @@ def _ensure_access_token(conn: CalendarConnection, now: datetime) -> str:
 
 
 def _fetch_provider_events(
-    conn: CalendarConnection, access_token: str, window_start: datetime, window_end: datetime
+    conn: CalendarConnection | ConnectionSnapshot,
+    access_token: str,
+    window_start: datetime,
+    window_end: datetime,
 ) -> list[dict]:
     headers = {"Authorization": f"Bearer {access_token}", "Accept": "application/json"}
     if conn.provider == "google":
@@ -471,7 +500,9 @@ def is_notetaker_bot(email: str | None = None, display_name: str | None = None) 
     return False
 
 
-def _parse_google_items(conn: CalendarConnection, items: list[dict]) -> list[dict]:
+def _parse_google_items(
+    conn: CalendarConnection | ConnectionSnapshot, items: list[dict]
+) -> list[dict]:
     parsed = []
     self_emails = {conn.owner_email.lower(), conn.account_email.lower()}
     for item in items:
@@ -559,7 +590,9 @@ def _parse_google_items(conn: CalendarConnection, items: list[dict]) -> list[dic
     return parsed
 
 
-def _parse_microsoft_items(conn: CalendarConnection, items: list[dict]) -> list[dict]:
+def _parse_microsoft_items(
+    conn: CalendarConnection | ConnectionSnapshot, items: list[dict]
+) -> list[dict]:
     parsed = []
     self_emails = {conn.owner_email.lower(), conn.account_email.lower()}
     for item in items:
@@ -688,7 +721,7 @@ def _find_canonical_meeting_recording(
             Recording.id.asc(),
         )
         .limit(1)
-        .with_for_update()
+        .with_for_update(key_share=True)
     )
 
 
@@ -770,7 +803,7 @@ def _reconcile_synced_event_recording(
             recording = db.scalar(
                 select(Recording)
                 .where(Recording.idempotency_key == idemp_key)
-                .with_for_update()
+                .with_for_update(key_share=True)
             )
             if recording is None:
                 if capacity_reached(db):
@@ -816,24 +849,48 @@ def _reconcile_synced_event_recording(
     return recording
 
 
-def sync_connection(
-    db: Session, conn: CalendarConnection, now: datetime | None = None
-) -> list[CalendarSyncedEvent]:
-    now = now or datetime.now(UTC)
+def fetch_connection_events_unlocked(
+    snap: ConnectionSnapshot, now: datetime
+) -> tuple[list[dict] | None, ConnectionSnapshot, str | None]:
     settings = get_settings()
     window_start = now - timedelta(minutes=15)
     window_end = now + timedelta(days=settings.calendar_horizon_days)
     try:
-        access_token = _ensure_access_token(conn, now)
-        raw_events = _fetch_provider_events(conn, access_token, window_start, window_end)
+        access_token = _ensure_access_token(snap, now)
+        raw_events = _fetch_provider_events(snap, access_token, window_start, window_end)
+        return raw_events, snap, None
     except Exception as exc:
-        conn.sync_error = str(exc)[:128] or type(exc).__name__
+        err = str(exc)[:128] or type(exc).__name__
+        return None, snap, err
+
+
+def apply_synced_events(
+    db: Session,
+    conn: CalendarConnection,
+    raw_events: list[dict] | None,
+    updated_snap: ConnectionSnapshot,
+    sync_error: str | None,
+    now: datetime,
+) -> list[CalendarSyncedEvent]:
+    if updated_snap.encrypted_access_token != conn.encrypted_access_token:
+        conn.encrypted_access_token = updated_snap.encrypted_access_token
+    if updated_snap.encrypted_refresh_token != conn.encrypted_refresh_token:
+        conn.encrypted_refresh_token = updated_snap.encrypted_refresh_token
+    if updated_snap.token_expires_at != conn.token_expires_at:
+        conn.token_expires_at = updated_snap.token_expires_at
+
+    if sync_error is not None or raw_events is None:
+        conn.sync_error = sync_error or "calendar_sync_failed"
         conn.last_synced_at = now
         return []
 
+    settings = get_settings()
+    window_start = now - timedelta(minutes=15)
+    window_end = now + timedelta(days=settings.calendar_horizon_days)
+
     seen_ext_ids: set[str] = set()
     synced: list[CalendarSyncedEvent] = []
-    for item in raw_ext_list(raw_events):
+    for item in sorted(raw_ext_list(raw_events), key=lambda x: x["external_event_id"]):
         ext_id = item["external_event_id"]
         seen_ext_ids.add(ext_id)
         ev = db.scalar(
@@ -842,7 +899,7 @@ def sync_connection(
                 CalendarSyncedEvent.connection_id == conn.id,
                 CalendarSyncedEvent.external_event_id == ext_id,
             )
-            .with_for_update()
+            .with_for_update(key_share=True)
         )
         is_self = bool(item["is_self_organized"])
         default_auto = bool(item.get("default_auto_record", is_self))
@@ -893,7 +950,8 @@ def sync_connection(
                     Recording.starts_at <= ev.ends_at + timedelta(hours=1),
                     Recording.ends_at >= ev.starts_at - timedelta(hours=1),
                 )
-                .with_for_update()
+                .order_by(Recording.id.asc())
+                .with_for_update(key_share=True)
             ).all()
             for mrec in matching_recs:
                 _merge_recording_attendees(mrec, event_attendees)
@@ -907,7 +965,8 @@ def sync_connection(
             CalendarSyncedEvent.starts_at >= window_start,
             CalendarSyncedEvent.starts_at <= window_end,
         )
-        .with_for_update()
+        .order_by(CalendarSyncedEvent.id.asc())
+        .with_for_update(key_share=True)
     ).all()
     for ev in missing:
         if ev.external_event_id not in seen_ext_ids and ev.status != "cancelled":
@@ -926,6 +985,15 @@ def sync_connection(
     return synced
 
 
+def sync_connection(
+    db: Session, conn: CalendarConnection, now: datetime | None = None
+) -> list[CalendarSyncedEvent]:
+    now = now or datetime.now(UTC)
+    snap = snapshot_connection(conn)
+    raw_events, updated_snap, sync_error = fetch_connection_events_unlocked(snap, now)
+    return apply_synced_events(db, conn, raw_events, updated_snap, sync_error, now)
+
+
 def raw_ext_list(items: list[dict]) -> list[dict]:
     dedup: dict[str, dict] = {}
     for item in items:
@@ -936,15 +1004,28 @@ def raw_ext_list(items: list[dict]) -> list[dict]:
 def toggle_synced_event(
     db: Session, principal: Principal, event_id: uuid.UUID, enabled: bool
 ) -> dict:
+    ev_peek = db.get(CalendarSyncedEvent, event_id)
+    if ev_peek is None:
+        raise HTTPException(404, "Synced calendar event not found")
+    owner_email = _effective_owner_email(principal)
+    if not principal.is_admin and ev_peek.owner_email.lower() != owner_email:
+        raise HTTPException(404, "Synced calendar event not found")
+    conn_id = ev_peek.connection_id
+    # Lock parent CalendarConnection before child CalendarSyncedEvent (FOR NO KEY UPDATE)
+    # so concurrent sync_connection / calendar_oauth_pass never invert lock order.
+    conn = db.scalar(
+        select(CalendarConnection)
+        .where(CalendarConnection.id == conn_id)
+        .with_for_update(key_share=True)
+    )
+    if conn is None:
+        raise HTTPException(404, "Synced calendar event not found")
     ev = db.scalar(
         select(CalendarSyncedEvent)
         .where(CalendarSyncedEvent.id == event_id)
-        .with_for_update()
+        .with_for_update(key_share=True)
     )
     if ev is None:
-        raise HTTPException(404, "Synced calendar event not found")
-    owner_email = _effective_owner_email(principal)
-    if not principal.is_admin and ev.owner_email.lower() != owner_email:
         raise HTTPException(404, "Synced calendar event not found")
     now = datetime.now(UTC)
     ev.user_override = enabled
@@ -960,19 +1041,25 @@ def calendar_oauth_pass(engine) -> bool:
         return False
     now = datetime.now(UTC)
     with Session(engine) as db:
-        conn_ids = db.scalars(select(CalendarConnection.id)).all()
-    if not conn_ids:
+        snapshots = [
+            snapshot_connection(c)
+            for c in db.scalars(
+                select(CalendarConnection).order_by(CalendarConnection.id.asc())
+            ).all()
+        ]
+    if not snapshots:
         return False
-    for conn_id in conn_ids:
+    for snap in snapshots:
+        raw_events, updated_snap, sync_error = fetch_connection_events_unlocked(snap, now)
         with Session(engine) as db:
             conn = db.scalar(
                 select(CalendarConnection)
-                .where(CalendarConnection.id == conn_id)
-                .with_for_update(skip_locked=True)
+                .where(CalendarConnection.id == snap.id)
+                .with_for_update(key_share=True, skip_locked=True)
             )
             if conn is None:
                 continue
-            sync_connection(db, conn, now=now)
+            apply_synced_events(db, conn, raw_events, updated_snap, sync_error, now)
             db.commit()
     return False
 
@@ -1191,8 +1278,11 @@ def publish_protocol_link_to_calendar_events(
                 ),
             ),
         )
-        .order_by(CalendarSyncedEvent.is_self_organized.desc())
-        .with_for_update()
+        .order_by(
+            CalendarSyncedEvent.is_self_organized.desc(),
+            CalendarSyncedEvent.id.asc(),
+        )
+        .with_for_update(key_share=True)
     ).all()
 
     if not events:

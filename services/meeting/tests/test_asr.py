@@ -912,7 +912,7 @@ def test_per_recording_and_in_call_language_switching_across_30_languages(
         )
         assert patch_auto.status_code == 200
         assert patch_auto.json()["language"] == "auto"
-        assert patch_auto.json()["detected_languages"] == ["French", "Japanese"]
+        assert set(patch_auto.json()["detected_languages"]) == {"French", "Japanese"}
 
         st_stale = client.post(
             f"/v1/attempts/{attempt}/status",

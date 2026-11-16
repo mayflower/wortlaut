@@ -909,3 +909,159 @@ def test_calendar_status_orders_upcoming_first_and_prevents_past_crowding(
     assert len(ext_ids) == 3 + 50
     assert ext_ids[3] == "past-59"
     assert ext_ids[-1] == "past-10"
+
+
+def test_calendar_toggle_concurrent_with_sync_no_postgres_deadlock(database, monkeypatch):
+    import threading
+    import time
+    from datetime import timedelta
+
+    import wortlaut.calendar_oauth as cal_oauth
+    from wortlaut.models import CalendarConnection, CalendarSyncedEvent
+    from wortlaut.oidc import Principal
+
+    now = datetime.now(UTC)
+    monkeypatch.setenv("WORTLAUT_ENABLE_GOOGLE_MEET", "true")
+    monkeypatch.setenv("WORTLAUT_ENABLE_CALENDAR_OAUTH_SYNC", "true")
+    get_settings.cache_clear()
+
+    with Session(database) as db:
+        conn = CalendarConnection(
+            owner_sub="sub-deadlock",
+            owner_email="owner@mayflower.de",
+            provider="google",
+            account_email="owner@mayflower.de",
+            encrypted_access_token=cal_oauth.encrypt_secret("valid-token"),
+            encrypted_refresh_token=cal_oauth.encrypt_secret("valid-refresh"),
+            token_expires_at=now + timedelta(hours=1),
+        )
+        db.add(conn)
+        db.flush()
+        conn_id = conn.id
+        ev1 = CalendarSyncedEvent(
+            connection_id=conn.id,
+            owner_sub="sub-deadlock",
+            owner_email="owner@mayflower.de",
+            calendar_provider="google",
+            external_event_id="evt-concurrent-1",
+            ical_uid="uid-concurrent-1",
+            title="Concurrent Sync 1",
+            starts_at=now + timedelta(hours=1),
+            ends_at=now + timedelta(hours=2),
+            organizer_email="ext@example.org",
+            is_self_organized=False,
+            meeting_provider="google_meet",
+            meeting_url="https://meet.google.com/abc-defg-hij",
+            status="confirmed",
+            auto_record=False,
+            updated_at=now,
+        )
+        ev2 = CalendarSyncedEvent(
+            connection_id=conn.id,
+            owner_sub="sub-deadlock",
+            owner_email="owner@mayflower.de",
+            calendar_provider="google",
+            external_event_id="evt-concurrent-2",
+            ical_uid="uid-concurrent-2",
+            title="Concurrent Toggle 2",
+            starts_at=now + timedelta(hours=3),
+            ends_at=now + timedelta(hours=4),
+            organizer_email="ext@example.org",
+            is_self_organized=False,
+            meeting_provider="google_meet",
+            meeting_url="https://meet.google.com/klm-nopq-rst",
+            status="confirmed",
+            auto_record=False,
+            updated_at=now,
+        )
+        db.add_all([ev1, ev2])
+        db.commit()
+        ev2_id = ev2.id
+
+    fetch_entered = threading.Event()
+    allow_fetch_finish = threading.Event()
+
+    def slow_fetch(c, token, ws, we):
+        fetch_entered.set()
+        allow_fetch_finish.wait(timeout=5.0)
+        return [
+            {
+                "external_event_id": "evt-concurrent-1",
+                "ical_uid": "uid-concurrent-1",
+                "title": "Concurrent Sync 1 Updated",
+                "starts_at": now + timedelta(hours=1),
+                "ends_at": now + timedelta(hours=2),
+                "organizer_email": "ext@example.org",
+                "attendee_emails": ["owner@mayflower.de", "ext@example.org"],
+                "is_self_organized": False,
+                "default_auto_record": False,
+                "meeting_provider": "google_meet",
+                "meeting_url": "https://meet.google.com/abc-defg-hij",
+                "status": "confirmed",
+            },
+            {
+                "external_event_id": "evt-concurrent-2",
+                "ical_uid": "uid-concurrent-2",
+                "title": "Concurrent Toggle 2",
+                "starts_at": now + timedelta(hours=3),
+                "ends_at": now + timedelta(hours=4),
+                "organizer_email": "ext@example.org",
+                "attendee_emails": ["owner@mayflower.de", "ext@example.org"],
+                "is_self_organized": False,
+                "default_auto_record": False,
+                "meeting_provider": "google_meet",
+                "meeting_url": "https://meet.google.com/klm-nopq-rst",
+                "status": "confirmed",
+            },
+        ]
+
+    monkeypatch.setattr(cal_oauth, "_fetch_provider_events", slow_fetch)
+    principal = Principal(
+        kind="user",
+        sub="sub-deadlock",
+        email="owner@mayflower.de",
+        name="Owner",
+        is_admin=False,
+    )
+
+    errors: list[Exception] = []
+    toggle_result: list[dict] = []
+
+    def run_bg_sync():
+        try:
+            cal_oauth.calendar_oauth_pass(database)
+        except Exception as exc:
+            errors.append(exc)
+
+    def run_toggle():
+        try:
+            assert fetch_entered.wait(timeout=5.0)
+            with Session(database) as db2:
+                res = cal_oauth.toggle_synced_event(db2, principal, ev2_id, True)
+                toggle_result.append(res)
+            time.sleep(0.05)
+        except Exception as exc:
+            errors.append(exc)
+        finally:
+            allow_fetch_finish.set()
+
+    t_sync = threading.Thread(target=run_bg_sync)
+    t_toggle = threading.Thread(target=run_toggle)
+    t_sync.start()
+    t_toggle.start()
+    t_sync.join(timeout=10.0)
+    t_toggle.join(timeout=10.0)
+
+    assert errors == [], f"Unexpected concurrency/deadlock errors: {errors}"
+    assert len(toggle_result) == 1
+    assert toggle_result[0]["auto_record"] is True
+    assert toggle_result[0]["recording_id"] is not None
+
+    with Session(database) as db:
+        refreshed = db.get(CalendarSyncedEvent, ev2_id)
+        assert refreshed is not None
+        assert refreshed.user_override is True
+        assert refreshed.auto_record is True
+        assert refreshed.recording_id is not None
+        conn_after = db.get(CalendarConnection, conn_id)
+        assert conn_after is not None and conn_after.last_synced_at is not None

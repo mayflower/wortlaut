@@ -44,11 +44,13 @@ from wortlaut.asr import finalize_processing, inference_pass
 from wortlaut.calendar import entry_json, imap_pass, import_mail
 from wortlaut.calendar_oauth import (
     CalendarOAuthProvider,
+    apply_synced_events,
     calendar_oauth_pass,
     connection_json,
     exchange_calendar_oauth_code,
+    fetch_connection_events_unlocked,
     publish_protocol_link_to_calendar_events,
-    sync_connection,
+    snapshot_connection,
     synced_event_json,
     toggle_synced_event,
 )
@@ -1002,17 +1004,24 @@ def calendar_oauth_exchange(
 def calendar_oauth_sync_now(
     connection_id: uuid.UUID, db: Db, principal: AuthPrincipal
 ):
+    conn_peek = db.get(CalendarConnection, connection_id)
+    if conn_peek is None:
+        raise HTTPException(404, "Calendar connection not found")
+    user_email = (principal.email or "operator@local").lower()
+    if not principal.is_admin and conn_peek.owner_email.lower() != user_email:
+        raise HTTPException(404, "Calendar connection not found")
+    snap = snapshot_connection(conn_peek)
+    db.rollback()
+    now = datetime.now(UTC)
+    raw_events, updated_snap, sync_error = fetch_connection_events_unlocked(snap, now)
     conn = db.scalar(
         select(CalendarConnection)
         .where(CalendarConnection.id == connection_id)
-        .with_for_update()
+        .with_for_update(key_share=True)
     )
     if conn is None:
         raise HTTPException(404, "Calendar connection not found")
-    user_email = (principal.email or "operator@local").lower()
-    if not principal.is_admin and conn.owner_email.lower() != user_email:
-        raise HTTPException(404, "Calendar connection not found")
-    synced = sync_connection(db, conn)
+    synced = apply_synced_events(db, conn, raw_events, updated_snap, sync_error, now)
     db.commit()
     return {
         "connection": connection_json(conn),
@@ -1038,6 +1047,7 @@ def calendar_oauth_disconnect(
     linked_events = db.scalars(
         select(CalendarSyncedEvent)
         .where(CalendarSyncedEvent.connection_id == conn.id)
+        .order_by(CalendarSyncedEvent.id.asc())
         .with_for_update()
     ).all()
     for ev in linked_events:
@@ -1045,7 +1055,7 @@ def calendar_oauth_disconnect(
             rec = db.scalar(
                 select(Recording)
                 .where(Recording.id == ev.recording_id)
-                .with_for_update()
+                .with_for_update(key_share=True)
             )
             if rec and rec.participation == "scheduled" and rec.cancelled_at is None:
                 request_cancellation(rec, now)
@@ -1681,7 +1691,8 @@ def cancel_recording(recording_id: uuid.UUID, db: Db, principal: AuthPrincipal):
     synced_for_rec = db.scalars(
         select(CalendarSyncedEvent)
         .where(CalendarSyncedEvent.recording_id == recording.id)
-        .with_for_update()
+        .order_by(CalendarSyncedEvent.id.asc())
+        .with_for_update(key_share=True)
     ).all()
     for sev in synced_for_rec:
         sev.recording_id = None
@@ -1725,7 +1736,8 @@ def delete_recording(recording_id: uuid.UUID, db: Db, principal: AuthPrincipal):
     synced_for_rec = db.scalars(
         select(CalendarSyncedEvent)
         .where(CalendarSyncedEvent.recording_id == recording.id)
-        .with_for_update()
+        .order_by(CalendarSyncedEvent.id.asc())
+        .with_for_update(key_share=True)
     ).all()
     for sev in synced_for_rec:
         sev.recording_id = None
@@ -2001,7 +2013,9 @@ def link_recording_in_calendar(
     db: Db,
     principal: AuthPrincipal,
 ):
-    recording = db.scalar(select(Recording).where(Recording.id == recording_id).with_for_update())
+    recording = db.scalar(
+        select(Recording).where(Recording.id == recording_id).with_for_update(key_share=True)
+    )
     if recording is None or not can_access_recording(db, principal, recording):
         raise HTTPException(404, "Recording not found")
     if recording.transcript_deleted_at or recording.metadata_deleted_at:
