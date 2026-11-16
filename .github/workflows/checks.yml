@@ -24,7 +24,7 @@ jobs:
           persist-credentials: false
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
-          version: 0.12.23
+          version: 0.13.8
           python-version: '3.12'
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -92,7 +92,7 @@ jobs:
           persist-credentials: false
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
-          version: 0.12.23
+          version: 0.13.8
           python-version: '3.12'
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -116,7 +116,7 @@ jobs:
             --env RUSTFS_ACCESS_KEY=fixture-s3-user \
             --env RUSTFS_SECRET_KEY=fixture-s3-password \
             --env RUSTFS_OBS_LOG_DIRECTORY= \
-            rustfs/rustfs:1.0.4@sha256:ed9210d6411d77ffceb70d94b964a3cb7d225983368bc25bebe01e995293dcc2 /data
+            rustfs/rustfs:1.0.6@sha256:ee717072290bec9b11abfc0365f8310b00df1cd9b3639943edae47bdef05044a /data
           curl --fail --retry 30 --retry-delay 1 --retry-all-errors \
             http://127.0.0.1:24609/health/ready
       - name: Behavior & integration tests with PostgreSQL/S3

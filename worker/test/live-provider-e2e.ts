@@ -2306,6 +2306,40 @@ async function runProviderLiveTest(provider: Provider, config: LiveConfig) {
       console.log(`      Nutze gespeicherte Host-Session: ${hostStatePath}`);
     }
 
+    const sanitizeStorageState = async (statePath: string) => {
+      const raw = JSON.parse(await readFile(statePath, 'utf8'));
+      const rawCookies: Array<Record<string, any>> = Array.isArray(raw?.cookies) ? raw.cookies : [];
+      const cookies = rawCookies
+        .filter(c => {
+          if (!c || typeof c.name !== 'string' || typeof c.value !== 'string') return false;
+          if (typeof c.domain !== 'string' || !c.domain) return false;
+          if (typeof c.partitionKey === 'string' && c.partitionKey.startsWith('chrome-extension://')) return false;
+          if (c.sameSite === 'None' && !c.secure) return false;
+          return true;
+        })
+        .map(c => ({
+          name: c.name,
+          value: c.value,
+          domain: c.domain,
+          path: typeof c.path === 'string' && c.path ? c.path : '/',
+          expires: typeof c.expires === 'number' && Number.isFinite(c.expires) ? c.expires : -1,
+          httpOnly: Boolean(c.httpOnly),
+          secure: Boolean(c.secure),
+          sameSite: (c.sameSite === 'Strict' || c.sameSite === 'Lax' || c.sameSite === 'None'
+            ? c.sameSite
+            : 'Lax') as 'Strict' | 'Lax' | 'None',
+        }));
+      return {
+        cookies,
+        origins: Array.isArray(raw?.origins)
+          ? (raw.origins as Array<{origin: string; localStorage: Array<{name: string; value: string}>}>)
+          : [],
+      };
+    };
+
+    const sanitizedHostState = hasHostState ? await sanitizeStorageState(hostStatePath) : undefined;
+    const sanitizedGuestState = hasGuestState ? await sanitizeStorageState(guestStatePath) : undefined;
+
     const useSeparateTeamsHost = provider === 'teams' && hasHostState;
     let pageHost: Page | undefined;
     if (useSeparateTeamsHost) {
@@ -2339,7 +2373,7 @@ async function runProviderLiveTest(provider: Provider, config: LiveConfig) {
       const ctxHost = await browserHost.newContext({
         locale: localeA,
         permissions: ['microphone', 'camera'],
-        storageState: hostStatePath,
+        ...(sanitizedHostState ? {storageState: sanitizedHostState} : {}),
       });
       await installSenderGate(ctxHost);
       pageHost = await ctxHost.newPage();
@@ -2348,10 +2382,14 @@ async function runProviderLiveTest(provider: Provider, config: LiveConfig) {
     const ctxA = await browserA.newContext({
       locale: localeA,
       permissions: ['microphone', 'camera'],
-      ...(hasHostState && !useSeparateTeamsHost ? {storageState: hostStatePath} : {}),
+      ...(sanitizedHostState && !useSeparateTeamsHost ? {storageState: sanitizedHostState} : {}),
     });
     const useHostForGuests = !hasGuestState && hasHostState && provider === 'google_meet';
-    const guestStorage = hasGuestState ? {storageState: guestStatePath} : useHostForGuests ? {storageState: hostStatePath} : {};
+    const guestStorage = sanitizedGuestState
+      ? {storageState: sanitizedGuestState}
+      : useHostForGuests && sanitizedHostState
+        ? {storageState: sanitizedHostState}
+        : {};
     await installSenderGate(ctxA, wavPathA);
 
     const pageA = await ctxA.newPage();
@@ -2470,11 +2508,32 @@ async function runProviderLiveTest(provider: Provider, config: LiveConfig) {
         const rec = await apiRequest<any>(config, 'GET', `/v1/recordings/${recordingId}`);
         if (rec.participation === 'waiting_admission') {
           const holdUntil = Date.now() + config.lobbyHoldSeconds * 1000;
+          let autoAdmitted = false;
           while (true) {
             const check: any = await apiRequest(config, 'GET', `/v1/recordings/${recordingId}`);
             const diag = check.attempts?.[0]?.diagnostics;
             if (typeof diag?.participant_sources?.total === 'number') {
               lobbySignaledParticipants = diag.participant_sources.total;
+            }
+            if (check.participation === 'capturing' || check.participation === 'active') {
+              await delay(1500);
+              const pendingOnHost = await hasPendingLobbyPrompt(admitPage, provider);
+              assert.equal(
+                pendingOnHost,
+                false,
+                `Worker meldet participation=${check.participation}, obwohl der Bot auf Host-Seite noch unzugelassen im Warteraum steht (Admit/Zulassen sichtbar)!`,
+              );
+              if (config.requireLobbyHold) {
+                throw new Error(
+                  `WORTLAUT_LIVE_REQUIRE_LOBBY=true, aber Bot wechselte ohne Host-Zulassung nach participation=${check.participation}.`,
+                );
+              }
+              console.log(
+                `      Kein Warteraum für Bot aktiv (Raum ließ Bot nach kurzem Verbindungsaufbau direkt zu: participation=${check.participation}).`,
+              );
+              activeRecording = check;
+              autoAdmitted = true;
+              break;
             }
             assert.equal(
               check.participation,
@@ -2499,12 +2558,14 @@ async function runProviderLiveTest(provider: Provider, config: LiveConfig) {
             if (Date.now() >= holdUntil) break;
             await delay(2000);
           }
-          lobbyHoldVerified = true;
-          console.log(
-            `      Warteraum-Haltephase bestanden (${config.lobbyHoldSeconds}s stabil in waiting_admission, 0 Streams, 0 Samples` +
-              (lobbySignaledParticipants !== null ? `, signaled_participants=${lobbySignaledParticipants}` : '') +
-              `).`,
-          );
+          if (!autoAdmitted) {
+            lobbyHoldVerified = true;
+            console.log(
+              `      Warteraum-Haltephase bestanden (${config.lobbyHoldSeconds}s stabil in waiting_admission, 0 Streams, 0 Samples` +
+                (lobbySignaledParticipants !== null ? `, signaled_participants=${lobbySignaledParticipants}` : '') +
+                `).`,
+            );
+          }
           break;
         }
         if (rec.participation === 'capturing' || rec.participation === 'active') {

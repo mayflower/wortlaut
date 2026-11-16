@@ -24,7 +24,7 @@ docker run --detach --rm --name "$S3_CONTAINER" \
   --env RUSTFS_ACCESS_KEY=fixture-s3-user \
   --env RUSTFS_SECRET_KEY=fixture-s3-password \
   --env RUSTFS_OBS_LOG_DIRECTORY= \
-  rustfs/rustfs:1.0.4 /data >/dev/null
+  rustfs/rustfs:1.0.6 /data >/dev/null
 
 PG_PORT="$(docker port "$PG_CONTAINER" 5432/tcp | head -n 1 | awk -F: '{print $NF}')"
 S3_PORT="$(docker port "$S3_CONTAINER" 9000/tcp | head -n 1 | awk -F: '{print $NF}')"

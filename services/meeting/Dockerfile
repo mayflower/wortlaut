@@ -8,7 +8,7 @@ RUN npm run build
 FROM python:3.12-slim-trixie
 RUN apt-get update && apt-get upgrade -y --no-install-recommends && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-COPY --from=ghcr.io/astral-sh/uv:0.13.7 /uv /usr/local/bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.13.8 /uv /usr/local/bin/uv
 COPY services/meeting/pyproject.toml services/meeting/uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project --no-cache
 COPY services/meeting/ ./

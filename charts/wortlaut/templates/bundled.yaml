@@ -158,7 +158,7 @@ spec:
         fsGroup: 10001
       containers:
         - name: rustfs
-          image: rustfs/rustfs:1.0.4
+          image: rustfs/rustfs:1.0.6
           args: ["/data"]
           ports:
             - containerPort: 9000

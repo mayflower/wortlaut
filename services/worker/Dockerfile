@@ -6,7 +6,7 @@ COPY worker/ ./
 RUN npm run build
 RUN npm prune --omit=dev --no-audit --no-fund && rm -rf node_modules/@typescript
 
-FROM mcr.microsoft.com/playwright:v1.65.0-noble
+FROM mcr.microsoft.com/playwright:v1.65.1-noble
 RUN apt-get update \
     && apt-get upgrade -y --no-install-recommends \
     && apt-get install -y --no-install-recommends xdotool \
