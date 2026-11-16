@@ -2071,17 +2071,20 @@ def test_in_call_pause_windows_end_to_end(client, database):
     from wortlaut.app import build_chat_intro
     from wortlaut.asr import finalize_processing
 
-    # 1. /privacy page documents #pause/#resume and #lang in both DE and EN
+    # 1. /privacy page documents "no" / "opt out" and #pause/#resume (without #lang) in DE and EN
     priv_de = client.get("/privacy?lang=de").text
     priv_en = client.get("/privacy?lang=en").text
     for page_html in (priv_de, priv_en):
+        assert "opt out" in page_html
+        assert any(tok in page_html for tok in ('„no“', '“no”', '"no"', "<code>no</code>"))
+        assert "nein" not in page_html.lower()
         assert "#pause" in page_html
         assert "#resume" in page_html
-        assert "#lang" in page_html
+        assert "#lang" not in page_html
         assert "#decision" not in page_html
         assert "#todo" not in page_html
 
-    # 2. Worker status reports paused=True & pause_windows -> exports & opt-out scrubbing
+    # 2. Worker status reports live audio activity, then paused=True & pause_windows -> exports
     t0 = datetime.now(UTC).replace(microsecond=0)
     recording = create(
         client,
@@ -2127,13 +2130,77 @@ def test_in_call_pause_windows_end_to_end(client, database):
     for intro in (intro_de, intro_en):
         assert intro is not None
         assert len(intro) < 500, f"Chat intro exceeds 500-char Meet limit ({len(intro)}): {intro}"
+        assert '"no"' in intro
         assert "opt out" in intro
+        assert "nein" not in intro.lower()
         assert "#pause" in intro
         assert "#resume" in intro
-        assert "#lang" in intro
+        assert "#lang" not in intro
         assert "#decision" not in intro
         assert "#todo" not in intro
         assert "/privacy" in intro
+
+    active_voice_status = client.post(
+        f"/v1/attempts/{attempt}/status",
+        headers=owner,
+        json={
+            "participation": "capturing",
+            "streams": 1,
+            "audio_samples": 48000,
+            "active_audio_samples": 32000,
+            "receiver_sources": [
+                {
+                    "provider_source_id": "webex:slot:alice",
+                    "source_kind": "speaker",
+                    "capture_path": "rtc_receiver",
+                    "track_id": "trk-alice",
+                    "csi": 101,
+                    "signaled_participant_id": "alice-1",
+                    "participant_name": "Alice Old",
+                    "source_state": "live",
+                    "ssrc": [],
+                    "csrc": [],
+                    "rtp_stats": {
+                        "packets_received": 120,
+                        "bytes_received": 9600,
+                        "packets_lost": 0,
+                        "jitter_buffer_emitted_count": 32000,
+                        "total_samples_received": 32000,
+                        "concealed_samples": 0,
+                        "silent_concealed_samples": 0,
+                        "total_audio_energy": 0.12,
+                        "audio_level": 0.42,
+                        "last_packet_ms_ago": 20,
+                        "codec": "audio/opus",
+                    },
+                }
+            ],
+            "participant_sources": {
+                "available": True,
+                "total": 2,
+                "truncated": False,
+                "sources": [
+                    {
+                        "participant_id": "alice-1",
+                        "participant_name": "Alice Old",
+                        "audio_csis": [101],
+                        "share_audio_csis": [],
+                    },
+                    {
+                        "participant_id": "bob-2",
+                        "participant_name": "Bob Ops",
+                        "audio_csis": [102],
+                        "share_audio_csis": [],
+                    },
+                ],
+            },
+        },
+    )
+    assert active_voice_status.status_code == 200, active_voice_status.text
+    detail_active = client.get(f"/v1/recordings/{recording}", headers=API).json()
+    assert detail_active["live_status"]["speech_active"] is True
+    assert detail_active["live_status"]["max_audio_level"] == 0.42
+    assert detail_active["live_status"]["active_speakers"] == ["Alice Old"]
 
     paused_status = client.post(
         f"/v1/attempts/{attempt}/status",
@@ -2142,6 +2209,7 @@ def test_in_call_pause_windows_end_to_end(client, database):
             "participation": "capturing",
             "streams": 1,
             "audio_samples": 80000,
+            "active_audio_samples": 32000,
             "participant_sources": {
                 "available": True,
                 "total": 2,
@@ -2177,6 +2245,7 @@ def test_in_call_pause_windows_end_to_end(client, database):
     detail_paused = client.get(f"/v1/recordings/{recording}", headers=API).json()
     assert detail_paused["live_status"]["is_active"] is True
     assert detail_paused["live_status"]["paused"] is True
+    assert detail_paused["live_status"]["speech_active"] is False
 
     # Resume recording and finish cleanly
     resumed_status = client.post(

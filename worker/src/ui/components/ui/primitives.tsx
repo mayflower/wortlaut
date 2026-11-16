@@ -29,7 +29,29 @@ export function useThemeMode(): ThemeModeContextValue {
   return useContext(ThemeModeContext);
 }
 
-export function LiveWaveform({ className }: { className?: string }) {
+export function LiveWaveform({
+  className,
+  active = true,
+}: {
+  className?: string;
+  active?: boolean;
+}) {
+  if (!active) {
+    return (
+      <span
+        className={cn(
+          'inline-flex h-4 items-center gap-[2px] text-slate-400 dark:text-slate-500',
+          className
+        )}
+        aria-hidden="true"
+      >
+        <span className="h-1 w-[2.5px] rounded-full bg-current" />
+        <span className="h-1.5 w-[2.5px] rounded-full bg-current" />
+        <span className="h-1 w-[2.5px] rounded-full bg-current" />
+        <span className="h-1.5 w-[2.5px] rounded-full bg-current" />
+      </span>
+    );
+  }
   return (
     <span
       className={cn('wl-waveform text-emerald-500', className)}

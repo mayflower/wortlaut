@@ -1574,7 +1574,7 @@ async function apiRequest<T = any>(
 }
 
 /**
- * Sends a live in-call chat message (e.g. "nein") from a participant browser across
+ * Sends a live in-call chat message (e.g. "no") from a participant browser across
  * Google Meet, Microsoft Teams, Webex, or Zoom (DE + EN locales).
  */
 async function sendMeetingChatMessage(page: Page, provider: Provider, message: string): Promise<boolean> {
@@ -2853,20 +2853,20 @@ async function runProviderLiveTest(provider: Provider, config: LiveConfig) {
       }
     }
 
-    // 5b. Test real In-Call Chat Opt-Out ("nein") and subsequent audio zeroing + GDPR retroactive purge
+    // 5b. Test real In-Call Chat Opt-Out ("no") and subsequent audio zeroing + GDPR retroactive purge
     let chatOptOutSent = false;
     let optOutSpeakerName: string | null = null;
     if (config.testChatOptOut && (pageC || pageB)) {
       const optOutPage = (pageC ?? pageB)!;
       optOutSpeakerName = pageC ? config.speakerCName : config.speakerBName;
-      console.log(`[5b/6] Prüfe echten In-Call-Chat-Widerspruch ("nein") durch "${optOutSpeakerName}"...`);
-      chatOptOutSent = await sendMeetingChatMessage(optOutPage, provider, 'nein');
+      console.log(`[5b/6] Prüfe echten In-Call-Chat-Widerspruch ("no") durch "${optOutSpeakerName}"...`);
+      chatOptOutSent = await sendMeetingChatMessage(optOutPage, provider, 'no');
       if (!chatOptOutSent && config.requireChatOptOut) {
         throw new Error(`Chat-Opt-Out konnte im ${provider}-UI von "${optOutSpeakerName}" nicht gesendet werden.`);
       }
       if (chatOptOutSent) {
         await delay(5000);
-        console.log(`      Chat-Opt-Out ("nein") gesendet; spiele Nach-Widerspruchs-Sprache zur Nullungsprüfung ein...`);
+        console.log(`      Chat-Opt-Out ("no") gesendet; spiele Nach-Widerspruchs-Sprache zur Nullungsprüfung ein...`);
         await setSpeakerTransmitting(optOutPage, true);
         await delay(Math.ceil((durationB + 1.0) * 1000));
         await setSpeakerTransmitting(optOutPage, false);
@@ -3098,7 +3098,7 @@ async function runProviderLiveTest(provider: Provider, config: LiveConfig) {
       assert.equal(
         report.chat_opt_out_verified,
         true,
-        `In-Call-Chat-Widerspruch ("nein") wurde nicht vollständig durchgesetzt (opted_out=${JSON.stringify(optedOutDiag)}, segmentsB=${segmentsB.length})`,
+        `In-Call-Chat-Widerspruch ("no") wurde nicht vollständig durchgesetzt (opted_out=${JSON.stringify(optedOutDiag)}, segmentsB=${segmentsB.length})`,
       );
     }
     if (config.speakerCount >= 4 && pageD) {

@@ -12,7 +12,6 @@ export type VideoTilePatch = {
   paused?: boolean;
   asrLanguage?: string;
   segments?: VideoTileSegment[];
-  expectedLocalLangSeq?: number;
 };
 
 export type VideoTileMetadata = {
@@ -36,12 +35,16 @@ declare global {
   interface Window {
     wortlautVideoTile?: {
       update: (patch: VideoTilePatch) => void;
+      reportAudioActivity: (level: number, speakerName?: string | null) => void;
       stop: () => void;
       getSnapshot: () => {
         frameCount: number;
         participation: string;
         paused: boolean;
         asrLanguage: string;
+        audioActive: boolean;
+        audioLevel: number;
+        activeSpeaker: string | null;
         segmentCount: number;
         lastRenderedText: string;
         activeTracks: number;
@@ -107,7 +110,46 @@ export async function installVideoTile(
     let segments: VideoTileSegment[] = [];
     let frameCount = 0;
     let lastRenderedText = '';
+    let liveAudioLevel = 0;
+    let lastVoiceAt = -Infinity;
+    let activeSpeaker: string | null = null;
+    let activeSpeakerUntil = -Infinity;
     const liveTracks = new Set<MediaStreamTrack>();
+
+    const sampleRtpAudioLevel = (): {level: number; speaker: string | null} => {
+      let maxLevel = 0;
+      const nowPerf = performance.now();
+      const conns = (
+        window as unknown as {
+          wortlautMeetReceivers?: {connections?: Set<RTCPeerConnection>};
+        }
+      ).wortlautMeetReceivers?.connections;
+      if (conns) {
+        for (const pc of conns) {
+          if (pc.connectionState === 'closed') continue;
+          for (const recv of pc.getReceivers()) {
+            if (recv.track?.kind !== 'audio' || recv.track.readyState !== 'live' || recv.track.muted) {
+              continue;
+            }
+            for (const src of [
+              ...recv.getSynchronizationSources(),
+              ...recv.getContributingSources(),
+            ]) {
+              if (
+                typeof src.timestamp === 'number' &&
+                nowPerf - src.timestamp <= 500 &&
+                typeof src.audioLevel === 'number' &&
+                Number.isFinite(src.audioLevel)
+              ) {
+                const boosted = Math.min(1, src.audioLevel * 3.2);
+                if (boosted > maxLevel) maxLevel = boosted;
+              }
+            }
+          }
+        }
+      }
+      return {level: maxLevel, speaker: null};
+    };
 
     const roundRect = (
       c: CanvasRenderingContext2D,
@@ -218,24 +260,40 @@ export async function installVideoTile(
       ctx.fillStyle = 'rgba(255, 255, 255, 0.02)';
       ctx.fillRect(cardX, cardY, cardW, 92);
 
+      const nowPerf = performance.now();
+      const isJoining = participation === 'joining' || participation === 'preparing';
+      const inLobby = participation === 'waiting_admission';
+      const isPendingEntry = isJoining || inLobby;
+      const isPausedActive = paused && !isPendingEntry;
+      const voiceActive =
+        !isPausedActive &&
+        !isPendingEntry &&
+        (liveAudioLevel >= 0.02 || nowPerf - lastVoiceAt <= 650);
+      const shownLevel = voiceActive ? Math.max(0.14, liveAudioLevel) : 0;
+      const currentSpeaker =
+        voiceActive && nowPerf <= activeSpeakerUntil && activeSpeaker ? activeSpeaker : null;
+
       // Brand icon badge (AudioLines mark)
       const logoX = 96;
       const logoY = 50;
       const logoSize = 54;
       roundRect(ctx, logoX, logoY, logoSize, logoSize, 14);
-      ctx.fillStyle = 'rgba(37, 99, 235, 0.20)';
+      ctx.fillStyle = voiceActive ? 'rgba(16, 185, 129, 0.22)' : 'rgba(37, 99, 235, 0.20)';
       ctx.fill();
       ctx.lineWidth = 1.5;
-      ctx.strokeStyle = 'rgba(96, 165, 250, 0.50)';
+      ctx.strokeStyle = voiceActive ? 'rgba(52, 211, 153, 0.65)' : 'rgba(96, 165, 250, 0.50)';
       ctx.stroke();
 
-      const barHeights = [12, 24, 32, 20, 14];
-      ctx.strokeStyle = '#60a5fa';
+      const baseBarHeights = [12, 24, 32, 20, 14];
+      ctx.strokeStyle = voiceActive ? '#34d399' : '#60a5fa';
       ctx.lineWidth = 3.6;
       ctx.lineCap = 'round';
-      for (let i = 0; i < barHeights.length; i++) {
+      for (let i = 0; i < baseBarHeights.length; i++) {
         const bx = logoX + 13 + i * 7;
-        const bh = barHeights[i];
+        const dynScale = voiceActive
+          ? 0.55 + 0.65 * shownLevel * (0.65 + 0.35 * Math.sin(frameCount * 1.3 + i * 1.1))
+          : 0.72;
+        const bh = Math.max(8, Math.min(36, baseBarHeights[i] * dynScale));
         const by = logoY + logoSize / 2;
         ctx.beginPath();
         ctx.moveTo(bx, by - bh / 2);
@@ -271,10 +329,6 @@ export async function installVideoTile(
       ctx.fillText(truncateText(ctx, subtitle, 590), titleX, 100);
 
       // Status pill (top right)
-      const isJoining = participation === 'joining' || participation === 'preparing';
-      const inLobby = participation === 'waiting_admission';
-      const isPendingEntry = isJoining || inLobby;
-      const isPausedActive = paused && !isPendingEntry;
       const isAmberPill = isPendingEntry || isPausedActive;
       const statusText = inLobby
         ? (isEn ? 'Waiting in lobby' : 'Wartet im Warteraum')
@@ -282,7 +336,9 @@ export async function installVideoTile(
           ? (isEn ? 'Joining meeting…' : 'Tritt Konferenz bei…')
           : isPausedActive
             ? (isEn ? 'Paused · Off the Record' : 'Pausiert · Off the Record')
-            : (isEn ? 'Live Transcript Active' : 'Wortprotokoll aktiv');
+            : voiceActive
+              ? (isEn ? 'Recording Audio' : 'Ton wird aufgezeichnet')
+              : (isEn ? 'Live Transcript Active' : 'Wortprotokoll aktiv');
       ctx.font = `600 19px ${FONT_SANS}`;
       const statusTextW = ctx.measureText(statusText).width;
       const pillW = statusTextW + 48;
@@ -313,9 +369,9 @@ export async function installVideoTile(
       ctx.fillStyle = isAmberPill ? '#fef3c7' : '#d1fae5';
       ctx.fillText(statusText, pillX + 35, pillY + 27);
 
-      // On-screen instructions strip (opt-out, off-the-record #pause/#resume, #lang switch)
+      // Single compact on-screen chat instruction strip ("no"/"opt out" & #pause/#resume)
       const stripY = 124;
-      const stripH = 68;
+      const stripH = 44;
       ctx.fillStyle = isPausedActive ? 'rgba(245, 158, 11, 0.13)' : '#1c2333';
       ctx.fillRect(cardX, stripY, cardW, stripH);
       ctx.strokeStyle = isPausedActive ? 'rgba(251, 191, 36, 0.42)' : 'rgba(255, 255, 255, 0.09)';
@@ -373,39 +429,25 @@ export async function installVideoTile(
 
       if (isPausedActive) {
         drawInstructionRow(
-          stripY + 26,
+          stripY + 28,
           '#fbbf24',
           isEn
-            ? ['*OFF THE RECORD — Capture paused.*', 'Type', '[amber:#resume]', 'in meeting chat to continue recording.']
-            : ['*OFF THE RECORD — Aufnahme pausiert.*', 'Im Chat', '[amber:#resume]', 'oder', '[amber:#weiter]', 'schreiben zum Fortsetzen.'],
-        );
-        drawInstructionRow(
-          stripY + 54,
-          '#60a5fa',
-          isEn
-            ? ['Other chat controls:', '[blue:opt out]', 'exclude yourself  ·', '[blue:#lang …]', 'switch language']
-            : ['Weitere Chat-Befehle:', '[blue:nein / opt out]', 'Widerspruch  ·', '[blue:#lang …]', 'Sprache wechseln'],
+            ? ['*OFF THE RECORD — Paused.*', 'Type', '[amber:#resume]', 'to continue  ·', '[blue:no]', '/', '[blue:opt out]', 'exclude yourself']
+            : ['*OFF THE RECORD — Pausiert.*', 'Im Chat', '[amber:#resume]', 'zum Fortsetzen  ·', '[blue:no]', '/', '[blue:opt out]', 'Widerspruch'],
         );
       } else {
         drawInstructionRow(
-          stripY + 26,
+          stripY + 28,
           '#60a5fa',
           isEn
-            ? ['*Chat:*', '[blue:opt out]', 'exclude yourself  ·', '[amber:#pause]', '/', '[amber:#resume]', 'off-the-record']
-            : ['*Chat:*', '[blue:nein / opt out]', 'Widerspruch  ·', '[amber:#pause]', '/', '[amber:#resume]', 'Off-the-Record-Pause'],
-        );
-        drawInstructionRow(
-          stripY + 54,
-          '#34d399',
-          isEn
-            ? ['*Language:*', '[blue:#lang <language>]', 'switch across all 30 ASR languages  ·', '[emerald:#lang en]', '·', '[emerald:#lang auto]']
-            : ['*Sprache:*', '[blue:#lang <Sprache>]', 'alle 30 ASR-Sprachen umschalten  ·', '[emerald:#lang en]', '·', '[emerald:#lang auto]'],
+            ? ['*Chat:*', '[blue:no]', '/', '[blue:opt out]', 'exclude your own voice  ·', '[amber:#pause]', '/', '[amber:#resume]', 'off-the-record']
+            : ['*Chat:*', '[blue:no]', '/', '[blue:opt out]', 'eigene Stimme ausnehmen  ·', '[amber:#pause]', '/', '[amber:#resume]', 'Off-the-Record-Pause'],
         );
       }
 
-      // Transcript viewport (leaves bottom safe margin for conference client nameplates)
-      const bodyTop = 204;
-      const bodyBottom = 620;
+      // Transcript viewport (leaves dedicated footer bar at y=612..668 for live audio activity)
+      const bodyTop = 180;
+      const bodyBottom = 602;
       const bodyLeft = 96;
       const bodyWidth = cardW - 56;
 
@@ -477,16 +519,23 @@ export async function installVideoTile(
         lastRenderedText = pausedHeadline;
       } else if (entries.length === 0) {
         const centerX = WIDTH / 2;
-        const centerY = (bodyTop + bodyBottom) / 2 - 10;
-        // Subtle animated listening waveform
-        const eqBars = [10, 18, 26, 16, 28, 14, 10];
-        ctx.strokeStyle = isPendingEntry ? 'rgba(251, 191, 36, 0.55)' : 'rgba(96, 165, 250, 0.65)';
-        ctx.lineWidth = 4;
+        const centerY = (bodyTop + bodyBottom) / 2 - 6;
+        // Audio-reactive listening waveform: flat calm baseline when silent, dynamic bars when speaking
+        const eqBars = [12, 22, 34, 24, 36, 20, 12];
+        ctx.strokeStyle = isPendingEntry
+          ? 'rgba(251, 191, 36, 0.55)'
+          : voiceActive
+            ? '#34d399'
+            : 'rgba(148, 163, 184, 0.45)';
+        ctx.lineWidth = 4.2;
         ctx.lineCap = 'round';
         for (let i = 0; i < eqBars.length; i++) {
-          const anim = 0.65 + 0.35 * Math.sin(frameCount * 0.7 + i * 0.9);
-          const h = Math.max(6, eqBars[i] * anim);
-          const bx = centerX - ((eqBars.length - 1) * 11) / 2 + i * 11;
+          const h = voiceActive
+            ? Math.max(8, eqBars[i] * shownLevel * (0.65 + 0.35 * Math.sin(frameCount * 1.4 + i * 1.1)))
+            : isPendingEntry
+              ? Math.max(6, eqBars[i] * 0.35 * (0.7 + 0.3 * Math.sin(frameCount * 0.6 + i * 0.9)))
+              : 6;
+          const bx = centerX - ((eqBars.length - 1) * 12) / 2 + i * 12;
           ctx.beginPath();
           ctx.moveTo(bx, centerY - 38 - h / 2);
           ctx.lineTo(bx, centerY - 38 + h / 2);
@@ -495,14 +544,18 @@ export async function installVideoTile(
 
         ctx.textAlign = 'center';
         ctx.font = `600 23px ${FONT_SANS}`;
-        ctx.fillStyle = '#e2e8f0';
+        ctx.fillStyle = voiceActive ? '#d1fae5' : '#e2e8f0';
         const emptyPrimary = inLobby
           ? (isEn ? 'Waiting for host admission…' : 'Wartet auf Einlass durch den Organisator…')
           : isJoining
             ? (isEn ? 'Connecting to meeting…' : 'Verbindet mit der Konferenz…')
-            : (isEn
-                ? 'Listening — spoken statements appear here live'
-                : 'Hört zu – aktuelle Beiträge erscheinen hier live');
+            : voiceActive
+              ? (isEn
+                  ? (currentSpeaker ? `Recording speech · ${currentSpeaker}` : 'Recording speech — transcribing segment…')
+                  : (currentSpeaker ? `Ton wird aufgezeichnet · ${currentSpeaker}` : 'Ton wird aufgezeichnet – Segment wird transkribiert…'))
+              : (isEn
+                  ? 'Listening — spoken statements appear here live'
+                  : 'Bereit – gesprochene Beiträge erscheinen hier live');
         ctx.fillText(emptyPrimary, centerX, centerY + 14);
 
         ctx.font = `400 18px ${FONT_SANS}`;
@@ -584,6 +637,87 @@ export async function installVideoTile(
         lastRenderedText = `${latest.speaker}: ${latest.text}`;
       }
 
+      // Dedicated persistent Live Audio Activity footer bar (always visible at bottom of card)
+      const footerY = 612;
+      const footerH = 56;
+      ctx.fillStyle = isPausedActive
+        ? 'rgba(245, 158, 11, 0.12)'
+        : voiceActive
+          ? 'rgba(16, 185, 129, 0.13)'
+          : 'rgba(15, 23, 42, 0.65)';
+      ctx.fillRect(cardX, footerY, cardW, footerH);
+      ctx.strokeStyle = isPausedActive
+        ? 'rgba(251, 191, 36, 0.35)'
+        : voiceActive
+          ? 'rgba(52, 211, 153, 0.42)'
+          : 'rgba(255, 255, 255, 0.08)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(cardX, footerY);
+      ctx.lineTo(cardX + cardW, footerY);
+      ctx.stroke();
+
+      // 14-bar real-time VU / waveform meter
+      const meterStartX = 196;
+      const meterMidY = footerY + footerH / 2;
+      const meterProfile = [0.45, 0.7, 0.95, 0.65, 1.0, 0.8, 0.55, 0.9, 1.0, 0.72, 0.88, 0.6, 0.78, 0.5];
+      ctx.lineWidth = 3.5;
+      ctx.lineCap = 'round';
+      for (let i = 0; i < meterProfile.length; i++) {
+        const bx = meterStartX + i * 8;
+        let bh = 4;
+        if (voiceActive) {
+          const wave = 0.62 + 0.38 * Math.sin(frameCount * 1.55 + i * 0.85);
+          bh = Math.max(5, Math.min(30, 30 * meterProfile[i] * shownLevel * wave));
+          ctx.strokeStyle = i % 3 === 0 ? '#38bdf8' : '#34d399';
+        } else if (isPausedActive) {
+          ctx.strokeStyle = 'rgba(251, 191, 36, 0.40)';
+        } else {
+          ctx.strokeStyle = 'rgba(148, 163, 184, 0.38)';
+        }
+        ctx.beginPath();
+        ctx.moveTo(bx, meterMidY - bh / 2);
+        ctx.lineTo(bx, meterMidY + bh / 2);
+        ctx.stroke();
+      }
+
+      const meterTextX = meterStartX + meterProfile.length * 8 + 14;
+      ctx.font = `600 17px ${FONT_SANS}`;
+      if (isPausedActive) {
+        ctx.fillStyle = '#fde68a';
+        ctx.fillText(
+          isEn
+            ? 'Paused — incoming audio is muted & discarded'
+            : 'Pausiert — eingehender Ton wird verworfen',
+          meterTextX,
+          meterMidY + 6,
+        );
+      } else if (isPendingEntry) {
+        ctx.fillStyle = '#fcd34d';
+        ctx.fillText(
+          isEn
+            ? 'Audio capture inactive until admitted to the call'
+            : 'Noch keine Tonaufzeichnung bis zum Einlass',
+          meterTextX,
+          meterMidY + 6,
+        );
+      } else if (voiceActive) {
+        ctx.fillStyle = '#a7f3d0';
+        const activeLabel = currentSpeaker
+          ? (isEn ? `Recording audio · ${currentSpeaker}` : `Ton wird aufgezeichnet · ${currentSpeaker}`)
+          : (isEn ? 'Recording audio — voice activity detected' : 'Ton wird aufgezeichnet — Sprachaktivität erkannt');
+        ctx.fillText(truncateText(ctx, activeLabel, cardX + cardW - meterTextX - 36), meterTextX, meterMidY + 6);
+      } else {
+        ctx.fillStyle = '#94a3b8';
+        ctx.fillText(
+          isEn
+            ? 'Audio ready — waiting for speech'
+            : 'Tonempfang bereit — warte auf Sprache',
+          meterTextX,
+          meterMidY + 6,
+        );
+      }
+
       ctx.restore();
     };
 
@@ -617,7 +751,32 @@ export async function installVideoTile(
     };
 
     renderFrame();
-    const intervalId = window.setInterval(emitFrame, 1000);
+    let lastIdleEmitAt = performance.now();
+    let wasVoiceActiveOnTile = false;
+    const intervalId = window.setInterval(() => {
+      const nowPerf = performance.now();
+      const rtp = sampleRtpAudioLevel();
+      if (rtp.level > liveAudioLevel) {
+        liveAudioLevel = rtp.level;
+      } else {
+        liveAudioLevel = liveAudioLevel * 0.58;
+        if (liveAudioLevel < 0.008) liveAudioLevel = 0;
+      }
+      if (liveAudioLevel >= 0.02) {
+        lastVoiceAt = nowPerf;
+      }
+      const voiceNow =
+        !paused &&
+        participation !== 'joining' &&
+        participation !== 'preparing' &&
+        participation !== 'waiting_admission' &&
+        (liveAudioLevel >= 0.02 || nowPerf - lastVoiceAt <= 650);
+      if (voiceNow || wasVoiceActiveOnTile || nowPerf - lastIdleEmitAt >= 1000) {
+        wasVoiceActiveOnTile = voiceNow;
+        lastIdleEmitAt = nowPerf;
+        emitFrame();
+      }
+    }, 250);
 
     const decorateVirtualVideoTrack = (track: MediaStreamTrack): MediaStreamTrack => {
       const tagged = track as MediaStreamTrack & {__wortlautVirtualVideo?: boolean};
@@ -625,7 +784,7 @@ export async function installVideoTile(
       track.contentHint = 'detail';
       Object.defineProperty(track, 'label', {
         configurable: true,
-        get: () => 'wortlaut Live-Protokoll',
+        get: () => 'wortlaut Live-Protokoll (16:9)',
       });
       const origGetSettings = track.getSettings.bind(track);
       track.getSettings = () => ({
@@ -635,20 +794,39 @@ export async function installVideoTile(
         width: WIDTH,
         height: HEIGHT,
         aspectRatio: WIDTH / HEIGHT,
-        frameRate: 5,
-        facingMode: 'user',
-      });
+        frameRate: 8,
+        resizeMode: 'none',
+      } as MediaTrackSettings);
       track.getCapabilities = () =>
         ({
-          aspectRatio: {min: 1, max: 2},
+          aspectRatio: {min: WIDTH / HEIGHT, max: WIDTH / HEIGHT},
           deviceId: 'wortlaut-virtual-camera',
-          facingMode: ['user'],
           frameRate: {min: 1, max: 30},
           groupId: 'wortlaut-virtual-group',
-          height: {min: 360, max: HEIGHT},
-          width: {min: 640, max: WIDTH},
-        }) as MediaTrackCapabilities;
-      track.applyConstraints = async () => {};
+          height: {min: HEIGHT, max: HEIGHT},
+          width: {min: WIDTH, max: WIDTH},
+          resizeMode: ['none'],
+        }) as unknown as MediaTrackCapabilities;
+      track.applyConstraints = async (constraints?: MediaTrackConstraints) => {
+        if (constraints && typeof constraints === 'object') {
+          const ar = constraints.aspectRatio;
+          const exactAr =
+            typeof ar === 'number'
+              ? null
+              : ar && typeof ar === 'object' && typeof ar.exact === 'number'
+                ? ar.exact
+                : null;
+          const wObj = constraints.width;
+          const hObj = constraints.height;
+          const exactW =
+            wObj && typeof wObj === 'object' && typeof wObj.exact === 'number' ? wObj.exact : null;
+          const exactH =
+            hObj && typeof hObj === 'object' && typeof hObj.exact === 'number' ? hObj.exact : null;
+          if ((exactAr !== null && exactAr < 1) || (exactW !== null && exactH !== null && exactW < exactH)) {
+            throw new DOMException('16:9 widescreen required', 'OverconstrainedError');
+          }
+        }
+      };
       const origClone = track.clone.bind(track);
       track.clone = () => decorateVirtualVideoTrack(origClone());
       const origStop = track.stop.bind(track);
@@ -682,7 +860,7 @@ export async function installVideoTile(
         throw new DOMException('Requested device not found', 'NotFoundError');
       }
       if (!baseTrack || baseTrack.readyState !== 'live') {
-        masterStream = canvas.captureStream(5);
+        masterStream = canvas.captureStream(8);
         baseTrack = masterStream.getVideoTracks()[0] as CanvasCaptureMediaStreamTrack;
       }
       const cloned = decorateVirtualVideoTrack(baseTrack.clone());
@@ -731,6 +909,26 @@ export async function installVideoTile(
           flushFrameBurst();
         }
       },
+      reportAudioActivity(level: number, speakerName?: string | null) {
+        if (typeof level !== 'number' || !Number.isFinite(level) || paused) return;
+        const clamped = Math.max(0, Math.min(1, level));
+        const nowPerf = performance.now();
+        if (clamped > liveAudioLevel) {
+          liveAudioLevel = clamped;
+        }
+        if (clamped >= 0.02) {
+          lastVoiceAt = nowPerf;
+          if (speakerName && speakerName.trim()) {
+            activeSpeaker = speakerName.trim().slice(0, 80);
+            activeSpeakerUntil = nowPerf + 1400;
+          }
+          if (!wasVoiceActiveOnTile) {
+            wasVoiceActiveOnTile = true;
+            lastIdleEmitAt = nowPerf;
+            emitFrame();
+          }
+        }
+      },
       stop() {
         window.clearInterval(intervalId);
         clearBurstTimers();
@@ -745,11 +943,21 @@ export async function installVideoTile(
         masterStream = null;
       },
       getSnapshot() {
+        const nowPerf = performance.now();
+        const audioActive =
+          !paused &&
+          participation !== 'joining' &&
+          participation !== 'preparing' &&
+          participation !== 'waiting_admission' &&
+          (liveAudioLevel >= 0.02 || nowPerf - lastVoiceAt <= 650);
         return {
           frameCount,
           participation,
           paused,
           asrLanguage,
+          audioActive,
+          audioLevel: Math.round(liveAudioLevel * 1000) / 1000,
+          activeSpeaker: audioActive && nowPerf <= activeSpeakerUntil ? activeSpeaker : null,
           segmentCount: segments.length,
           lastRenderedText,
           activeTracks: [...liveTracks].filter((t) => t.readyState === 'live').length,
@@ -763,24 +971,7 @@ export async function installVideoTile(
     if (!targetFrame) return;
     await targetFrame
       .evaluate((rawPatch: VideoTilePatch) => {
-        let p = rawPatch;
-        const localPs = (
-          window as unknown as {
-            wortlautMeet?: {
-              inspect?: () => {
-                participant_sources?: {asr_language_seq?: number};
-              };
-            };
-          }
-        ).wortlautMeet?.inspect?.()?.participant_sources;
-        if (
-          typeof p.expectedLocalLangSeq === 'number' &&
-          localPs &&
-          (localPs.asr_language_seq ?? 0) !== p.expectedLocalLangSeq
-        ) {
-          p = {...p, asrLanguage: undefined};
-        }
-        window.wortlautVideoTile?.update(p);
+        window.wortlautVideoTile?.update(rawPatch);
       }, patch)
       .catch(() => {});
   };

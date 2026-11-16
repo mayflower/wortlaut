@@ -54,7 +54,7 @@
         "Link your Google Workspace or Microsoft 365 calendar once via OAuth2, paste a live meeting URL on the home screen, or invite your bot email address like a regular attendee.",
       step2_title: "2. Transparent join & live chat controls",
       step2_desc:
-        "wortlaut joins displaying the inviter’s name with on-screen chat commands on its live video tile: type “opt out” to exclude your voice, “#pause” / “#resume” to go off the record, or “#lang” to switch languages.",
+        "wortlaut joins displaying the inviter’s name with live voice-activity metering and on-screen chat commands on its 16:9 video tile: type “no” / “opt out” to exclude your voice, or “#pause” / “#resume” to go off the record.",
       step3_title: "3. Calendar writeback, verify & export",
       step3_desc:
         "Right after the call, wortlaut writes the read-only protocol link directly into your calendar event, emails the transcript, and lets you verify 24h audio snippets, edit terms, or export Markdown.",
@@ -136,7 +136,7 @@
       f4_li3:
         "Zero biometric voiceprints are ever computed or stored — and if a provider hides a binding, wortlaut marks it transparently instead of guessing.",
       f4_badge: "Isolated stream → Verified speaker",
-      f4_optout_cmd: 'Chat: "opt out" / "nein"',
+      f4_optout_cmd: 'Chat: "no" / "opt out"',
       f4_optout_res: "→ Stream dropped & segments purged",
 
       priv_kicker: "PRIVACY, CONSENT & SECURITY",
@@ -148,7 +148,7 @@
         "Sandboxed browser workers, Qwen3-ASR speech recognition, and optional Ollama summaries all run inside your own cluster or server. Not a single second of audio leaves your infrastructure.",
       trust2_title: "Live Chat Opt-Out & Off-the-Record",
       trust2_desc:
-        "wortlaut joins as “wortlaut (Inviter Name)”, never records participant cameras, and lets anyone type “opt out” / “nein” to purge their stream or “#pause” / “#resume” to go off the record instantly.",
+        "wortlaut joins as “wortlaut (Inviter Name)”, never records participant cameras, and lets anyone type “no” / “opt out” to purge their stream or “#pause” / “#resume” to go off the record instantly.",
       trust3_title: "24h Audio Window & Auto-Expiry",
       trust3_desc:
         "Isolated audio chunks are deleted automatically from S3 after 24 hours; transcripts expire after 30 days by default and can be purged permanently at any moment with a single click.",
@@ -167,7 +167,7 @@
       comp_r2_w: "Isolated pre-mix WebRTC tracks bound to session — zero voiceprints",
       comp_r6_c: "Individual attendee opt-out",
       comp_r6_cloud: "All-or-nothing (remove bot for everyone or leave call)",
-      comp_r6_w: "Type “opt out” / “nein” in chat — only that speaker is excluded & purged",
+      comp_r6_w: "Type “no” / “opt out” in chat — only that speaker is excluded & purged",
       comp_r3_c: "Camera & screen recording",
       comp_r3_cloud: "Frequently records full video & screen shares",
       comp_r3_w: "Participant cameras blocked fail-closed; optional static screen-share slide snapshots only",
@@ -278,7 +278,7 @@ make test-local`,
       ui_turn2_text_html:
         'Und weil jede WebRTC-Empfangsspur vor dem Mischen separat erfasst wird, bleibt die <mark>Sprecherzuordnung</mark> auch bei gleichzeitigem Sprechen sauber – in 30 Sprachen.',
       ui_turn3_text_html:
-        'Unser Datenschutzbeauftragter hat besonders den <mark>Live-Opt-Out im Chat</mark> gelobt: Wer <code>nein</code> oder <code>opt out</code> in den Chat schreibt, wird sofort ausgeschlossen, während das Meeting für alle anderen weiterläuft.',
+        'Unser Datenschutzbeauftragter hat besonders den <mark>Live-Opt-Out im Chat</mark> gelobt: Wer <code>no</code> oder <code>opt out</code> in den Chat schreibt, wird sofort ausgeschlossen, während das Meeting für alle anderen weiterläuft.',
 
       how_kicker: "SO FUNKTIONIERT’S",
       how_title: "In drei einfachen Schritten vom Gespräch zum geprüften Protokoll",
@@ -289,7 +289,7 @@ make test-local`,
         "Verknüpfe einmalig deinen Google- oder Microsoft-365-Kalender per OAuth2, füge spontan einen Meeting-Link auf der Startseite ein oder lade die Bot-E-Mail-Adresse wie einen normalen Gast ein.",
       step2_title: "2. Transparenter Beitritt & Live-Steuerung im Chat",
       step2_desc:
-        "wortlaut tritt mit dem Namen der einladenden Person bei und zeigt alle Chat-Befehle direkt auf seiner Live-Videokachel: „nein“ zum eigenen Ausnehmen, „#pause“ / „#weiter“ für Off-the-Record oder „#lang“ für den Sprachwechsel.",
+        "wortlaut tritt mit dem Namen der einladenden Person bei und zeigt Live-Tonaktivität sowie Chat-Befehle direkt auf seiner 16:9-Videokachel: „no“ / „opt out“ zum eigenen Ausnehmen oder „#pause“ / „#resume“ für Off-the-Record.",
       step3_title: "3. Kalender-Link, Audio-Check & Export",
       step3_desc:
         "Direkt nach Gesprächsende trägt wortlaut den Lese-Link automatisch in deinen Kalendereintrag ein, versendet das Protokoll per E-Mail und erlaubt Audio-Snippet-Prüfung (24 h), Korrekturen und Markdown-Export.",
@@ -371,7 +371,7 @@ make test-local`,
       f4_li3:
         "Es werden niemals biometrische Stimmprofile (Voiceprints) berechnet oder gespeichert – fehlt eine Zuordnung, kennzeichnet wortlaut das transparent statt zu raten.",
       f4_badge: "Isolierte Tonspur → Geprüfte Sitzung",
-      f4_optout_cmd: 'Chat: "nein" / "opt out"',
+      f4_optout_cmd: 'Chat: "no" / "opt out"',
       f4_optout_res: "→ Tonspur verworfen & Segmente gelöscht",
 
       priv_kicker: "DATENSCHUTZ, WIDERSPRUCH & SICHERHEIT",
@@ -383,7 +383,7 @@ make test-local`,
         "Isolierte Browser-Worker, Qwen3-ASR-Spracherkennung und optionale Ollama-Zusammenfassungen laufen komplett auf euren eigenen Servern. Keine Sekunde Audio verlässt eure Infrastruktur.",
       trust2_title: "Live-Opt-Out & Off-the-Record im Chat",
       trust2_desc:
-        "wortlaut tritt als „wortlaut (Name der einladenden Person)“ bei, zeichnet niemals Teilnehmer-Kamerabilder auf und erlaubt jederzeit „nein“ / „opt out“ zum sofortigen Löschen der eigenen Spur oder „#pause“ / „#weiter“ für Off-the-Record.",
+        "wortlaut tritt als „wortlaut (Name der einladenden Person)“ bei, zeichnet niemals Teilnehmer-Kamerabilder auf und erlaubt jederzeit „no“ / „opt out“ zum sofortigen Löschen der eigenen Spur oder „#pause“ / „#resume“ für Off-the-Record.",
       trust3_title: "24-h-Audiofenster & automatische Löschfristen",
       trust3_desc:
         "Isolierte Roh-Audioschnipsel werden nach 24 Stunden automatisch aus S3 gelöscht, Protokolle standardmäßig nach 30 Tagen – oder jederzeit sofort per 1-Klick-Löschung.",
@@ -402,7 +402,7 @@ make test-local`,
       comp_r2_w: "Isolierte WebRTC-Spuren vor dem Mix – keinerlei Stimmprofile",
       comp_r6_c: "Widerspruch einzelner Teilnehmender",
       comp_r6_cloud: "Alles-oder-nichts (Bot für alle entfernen oder Call verlassen)",
-      comp_r6_w: "„nein“ / „opt out“ im Chat tippen – nur diese Person wird sofort ausgenommen",
+      comp_r6_w: "„no“ / „opt out“ im Chat tippen – nur diese Person wird sofort ausgenommen",
       comp_r3_c: "Kamera- & Bildschirmaufnahme",
       comp_r3_cloud: "Häufig kompletter Video- & Bildschirm-Mitschnitt",
       comp_r3_w: "Kameras strikt gesperrt; optional nur statische Standbilder aktiver Bildschirmfreigaben",

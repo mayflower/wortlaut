@@ -280,8 +280,8 @@ export function WelcomeLandingView({
                   </Text>
                   <Text type="supporting" color="secondary">
                     {tr(
-                      `Der Bot tritt stummgeschaltet als „${instance.assistantName}“ bei, erfasst jede Tonspur vor dem Mix getrennt und reagiert im Konferenz-Chat auf „nein“ / „opt out“, „#pause“ / „#weiter“ und „#lang“.`,
-                      `The bot joins muted as “${instance.assistantName}”, captures isolated pre-mix tracks, and responds in meeting chat to “opt out”, “#pause” / “#resume”, and “#lang”.`
+                      `Der Bot tritt stummgeschaltet als „${instance.assistantName}“ bei, erfasst jede Tonspur vor dem Mix getrennt und reagiert im Konferenz-Chat auf „no“ / „opt out“ sowie „#pause“ / „#resume“.`,
+                      `The bot joins muted as “${instance.assistantName}”, captures isolated pre-mix tracks, and responds in meeting chat to “no” / “opt out” and “#pause” / “#resume”.`
                     )}
                   </Text>
                 </VStack>

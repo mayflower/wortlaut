@@ -614,6 +614,8 @@ export class MeetBrowser {
   private chatAttempts = 0;
   private videoCheckedInCall = false;
   private videoCheckAttempts = 0;
+  private fullVideoChecked = false;
+  private fullVideoAttempts = 0;
   private rosterOpened = false;
   private chatRestored = false;
   private initialize?: () => Promise<void>;
@@ -862,6 +864,39 @@ export class MeetBrowser {
     } catch { /* chat intro is non-critical */ }
   }
 
+  private async ensureUncroppedSelfVideo() {
+    try {
+      const alreadyFull = this.page.locator(
+        'button[aria-label*="crop my video" i], ' +
+        'button[aria-label*="durch Meet zuschneiden" i], ' +
+        'button[aria-label*="Videofeed für andere zuschneiden" i]',
+      );
+      if ((await alreadyFull.count()) > 0) {
+        this.fullVideoChecked = true;
+        return;
+      }
+      const showFullSelector =
+        'button[aria-label*="Show my full video" i], ' +
+        'button[aria-label*="full video to others" i], ' +
+        'button[aria-label*="Vollständigen Videofeed" i], ' +
+        'button[aria-label*="ganzen Videofeed" i]';
+      let showFullBtn = this.page.locator(showFullSelector).first();
+      if ((await showFullBtn.count()) === 0) {
+        const selfTile = this.page.locator('[data-self-name]').first();
+        if (await visible(selfTile)) {
+          await selfTile.hover({timeout: 1200}).catch(() => {});
+          showFullBtn = this.page.locator(showFullSelector).first();
+        }
+      }
+      if ((await showFullBtn.count()) > 0) {
+        await showFullBtn.evaluate((el: HTMLElement) => el.click()).catch(() => {});
+        this.fullVideoChecked = true;
+      }
+    } catch {
+      // non-critical UI hint; retried on next inspect tick
+    }
+  }
+
   async inspect() {
     let state;
     try { state = await this.page.evaluate(() => window.wortlautMeet?.inspect()); }
@@ -931,6 +966,10 @@ export class MeetBrowser {
                   }).catch(() => {});
                 }
               }
+            }
+            if (this.videoCheckedInCall && !this.fullVideoChecked && this.fullVideoAttempts < 8) {
+              this.fullVideoAttempts += 1;
+              await this.ensureUncroppedSelfVideo();
             }
             if (!this.chatSent && this.chatAttempts < 8) {
               this.chatAttempts += 1;

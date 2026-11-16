@@ -238,10 +238,7 @@ async function run(api: string, credential: string) {
           participation: state.participation,
           segments: reported.live_transcript,
           ...(typeof reported.asr_language === 'string' && reported.asr_language
-            ? {
-                asrLanguage: reported.asr_language,
-                expectedLocalLangSeq: state.participant_sources?.asr_language_seq ?? 0,
-              }
+            ? {asrLanguage: reported.asr_language}
             : {}),
         });
       }

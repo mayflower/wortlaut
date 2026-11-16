@@ -184,7 +184,7 @@ async function readDecodedReceiverMetrics(target: Page | Frame) {
             bodySignature.push(luma);
           }
         }
-        if (y >= 132 && y <= 162 && x >= 24 && x <= 220 && luma > 85) {
+        if (y >= 120 && y <= 148 && x >= 24 && x <= 220 && luma > 85) {
           lowerTranscriptInk += 1;
         }
       }

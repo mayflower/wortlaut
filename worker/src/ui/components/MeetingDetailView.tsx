@@ -891,20 +891,34 @@ export function MeetingDetailView({
                           <Pause className="h-4 w-4" />
                         </span>
                       ) : (
-                        <LiveWaveform />
+                        <LiveWaveform active={Boolean(live.speech_active)} />
                       )}
                       <VStack gap={0.5}>
-                        <Text type="body" weight="bold">
-                          {live.paused
-                            ? tr(
-                                'Off the Record — Aufnahme im Konferenz-Chat pausiert',
-                                'Off the Record — Recording paused via meeting chat'
-                              )
-                            : tr(
-                                'Live-Aufnahme läuft — Wortprotokoll aktualisiert sich automatisch',
-                                'Recording live — transcript updates automatically'
-                              )}
-                        </Text>
+                        <HStack gap={2} vAlign="center" wrap="wrap">
+                          <Text type="body" weight="bold">
+                            {live.paused
+                              ? tr(
+                                  'Off the Record — Aufnahme im Konferenz-Chat pausiert',
+                                  'Off the Record — Recording paused via meeting chat'
+                                )
+                              : live.speech_active
+                                ? tr(
+                                    'Ton wird aufgezeichnet — Sprachaktivität erkannt',
+                                    'Recording audio — voice activity detected'
+                                  )
+                                : tr(
+                                    'Live-Aufnahme bereit — warte auf Sprache',
+                                    'Live capture ready — waiting for speech'
+                                  )}
+                          </Text>
+                          {!live.paused && live.speech_active && (live.active_speakers?.length ?? 0) > 0 && (
+                            <Token
+                              size="sm"
+                              color="green"
+                              label={live.active_speakers!.join(', ')}
+                            />
+                          )}
+                        </HStack>
                         <Text type="supporting" color="secondary">
                           {live.paused
                             ? tr(

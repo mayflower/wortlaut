@@ -113,10 +113,9 @@ Participants can control `wortlaut` directly from the conference chat without op
 
 | Chat Command | Effect |
 | --- | --- |
-| `opt out`, `optout`, `no`, `nein`, `stop`, `widerspruch` | Immediately halts audio and screen-share capture for that participant and purges their prior transcript segments and slide keyframes from PostgreSQL and S3. |
+| `no`, `opt out`, `optout`, `stop`, `widerspruch` | Immediately halts audio and screen-share capture for that participant and purges their prior transcript segments and slide keyframes from PostgreSQL and S3. |
 | `#pause`, `/pause`, `!pause`, `#off-the-record`, `#pausieren` | Zeroes audio samples in worker RAM, suspends slide keyframe sampling, records a `pause_windows` entry, and switches the video tile to an amber **OFF THE RECORD** banner. |
 | `#resume`, `/resume`, `!resume`, `#weiter`, `#fortsetzen` | Ends the off-the-record pause and resumes normal capture without leaving the room. |
-| `#lang <language>`, `#language <language>`, `#sprache <language>` | Switches the recording’s transcription language live across all 30 Qwen3-ASR languages (e.g. `#lang auto`, `#lang en`, `#lang Japanese`, `#lang fr,en`) and updates the live video tile & Web-UI selector. |
 
 ---
 

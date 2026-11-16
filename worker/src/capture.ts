@@ -7,6 +7,12 @@ export type CaptureSink = {
   end: (metadata: Record<string, unknown>) => void;
   gap: (metadata: Record<string, unknown>) => void;
   keyframe?: (metadata: Record<string, unknown>, png: Uint8Array) => void;
+  activity?: (info: {
+    level: number;
+    participant_id?: string | null;
+    participant_name?: string | null;
+    speaker_id?: string | null;
+  }) => void;
   error: (reason: string) => void;
 };
 type Handle = {stop: () => Promise<void>; suspend: () => void;
@@ -212,6 +218,9 @@ export class AudioCapture {
     let pendingBinding: Binding | undefined;
     let lastBoundSample = 0;
     let gapStart = 0, gapEnd = 0;
+    let lastActivityAt = -Infinity;
+    let accumSumSq = 0;
+    let accumCount = 0;
     const flushGap = () => {
       if (gapEnd === gapStart || !chunker) return;
       const range = chunker.gap(gapStart, gapEnd - gapStart);
@@ -278,6 +287,33 @@ export class AudioCapture {
               ? new Uint8Array(data.bytes.byteLength)
               : new Uint8Array(data.bytes);
             flushGap(); chunker.append(pcmBytes, data.start_sample);
+            if (sink.activity && pcmBytes.byteLength >= 2) {
+              if (this.muted) {
+                accumSumSq = 0;
+                accumCount = 0;
+              } else {
+                const view = new DataView(pcmBytes.buffer, pcmBytes.byteOffset, pcmBytes.byteLength);
+                for (let i = 0; i + 1 < pcmBytes.byteLength; i += 8) {
+                  const s = view.getInt16(i, true) / 32768;
+                  accumSumSq += s * s;
+                  accumCount += 1;
+                }
+              }
+              const nowMs = performance.now();
+              if (nowMs - lastActivityAt >= 120) {
+                const rms = accumCount > 0 ? Math.sqrt(accumSumSq / accumCount) : 0;
+                accumSumSq = 0;
+                accumCount = 0;
+                lastActivityAt = nowMs;
+                const activeBind = pendingBinding ?? currentBinding;
+                sink.activity({
+                  level: Math.min(1, rms * 4.2),
+                  participant_id: activeBind.participant_id ?? null,
+                  participant_name: activeBind.participant_name ?? null,
+                  speaker_id: activeBind.speaker_id ?? null,
+                });
+              }
+            }
             if (pendingBinding) applyPendingBind();
           }
         }

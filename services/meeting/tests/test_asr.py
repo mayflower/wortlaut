@@ -875,7 +875,13 @@ def test_per_recording_and_in_call_language_switching_across_30_languages(
         assert inference_pass(database) is True
         assert seen_asr_headers[0] == {"langs": "French", "primary": "French"}
 
-        # 2. Live in-call chat command (#lang ja) switches language to Japanese (seq=1)
+        # 2. Live operator PATCH switches language to Japanese while recording is running
+        patch_ja = client.patch(
+            f"/v1/recordings/{rec_id}", headers=API, json={"language": "Japanese"}
+        )
+        assert patch_ja.status_code == 200
+        assert patch_ja.json()["language"] == "Japanese"
+
         st1 = client.post(
             f"/v1/attempts/{attempt}/status",
             headers=owner,
@@ -886,8 +892,6 @@ def test_per_recording_and_in_call_language_switching_across_30_languages(
                 "participant_sources": {
                     "available": True,
                     "total": 1,
-                    "asr_language": "Japanese",
-                    "asr_language_seq": 1,
                     "sources": [
                         {
                             "participant_id": "spk-polyglot",
@@ -906,7 +910,7 @@ def test_per_recording_and_in_call_language_switching_across_30_languages(
             pass
         assert seen_asr_headers[-1] == {"langs": "Japanese", "primary": "Japanese"}
 
-        # 3. Operator switches to "auto" in Web-UI PATCH; stale worker seq=1 does NOT overwrite it!
+        # 3. Operator switches to "auto" in Web-UI PATCH; worker status sync reflects "auto"
         patch_auto = client.patch(
             f"/v1/recordings/{rec_id}", headers=API, json={"language": "auto"}
         )
@@ -914,7 +918,7 @@ def test_per_recording_and_in_call_language_switching_across_30_languages(
         assert patch_auto.json()["language"] == "auto"
         assert set(patch_auto.json()["detected_languages"]) == {"French", "Japanese"}
 
-        st_stale = client.post(
+        st_auto = client.post(
             f"/v1/attempts/{attempt}/status",
             headers=owner,
             json={
@@ -924,8 +928,6 @@ def test_per_recording_and_in_call_language_switching_across_30_languages(
                 "participant_sources": {
                     "available": True,
                     "total": 1,
-                    "asr_language": "Japanese",
-                    "asr_language_seq": 1,
                     "sources": [
                         {
                             "participant_id": "spk-polyglot",
@@ -936,10 +938,16 @@ def test_per_recording_and_in_call_language_switching_across_30_languages(
                 },
             },
         )
-        assert st_stale.status_code == 200
-        assert st_stale.json()["asr_language"] == "auto"
+        assert st_auto.status_code == 200
+        assert st_auto.json()["asr_language"] == "auto"
 
-        # 4. Newer chat command (#lang es, seq=2) DOES update language to Spanish, then end call
+        # 4. Operator switches language to Spanish via PATCH, then worker ends call
+        patch_es = client.patch(
+            f"/v1/recordings/{rec_id}", headers=API, json={"language": "Spanish"}
+        )
+        assert patch_es.status_code == 200
+        assert patch_es.json()["language"] == "Spanish"
+
         st_es = client.post(
             f"/v1/attempts/{attempt}/status",
             headers=owner,
@@ -951,8 +959,6 @@ def test_per_recording_and_in_call_language_switching_across_30_languages(
                 "participant_sources": {
                     "available": True,
                     "total": 1,
-                    "asr_language": "Spanish",
-                    "asr_language_seq": 2,
                     "sources": [
                         {
                             "participant_id": "spk-polyglot",

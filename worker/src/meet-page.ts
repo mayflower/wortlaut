@@ -50,8 +50,6 @@ type ParticipantSourcesState = {
   opted_out?: string[];
   paused?: boolean;
   pause_windows?: PauseWindowState[];
-  asr_language?: string;
-  asr_language_seq?: number;
   sources: {participant_id: string; participant_name?: string | null; audio_csis: number[]; share_audio_csis: number[]}[];
 };
 
@@ -236,9 +234,6 @@ function install(config: MeetCaptureConfig) {
   let capturePaused = false;
   const pauseWindows: PauseWindowState[] = [];
   const seenDomChatElements = new WeakMap<Element, string>();
-  let chatAsrLanguage: string | null = null;
-  let chatAsrLanguageSeq = 0;
-  let lastLangSwitchMs = -Infinity;
   let liveDomCount = 0;
   let everSawDomParticipants = false;
   const NOTETAKER_BOT_RE =
@@ -309,72 +304,6 @@ function install(config: MeetCaptureConfig) {
     return null;
   }
 
-  const CHAT_LANG_ALIASES: Record<string, string> = {
-    chinese: 'Chinese', zh: 'Chinese', 'zh-cn': 'Chinese', 'zh-tw': 'Chinese', mandarin: 'Chinese', chinesisch: 'Chinese', '中文': 'Chinese', '普通话': 'Chinese',
-    english: 'English', en: 'English', 'en-us': 'English', 'en-gb': 'English', englisch: 'English',
-    cantonese: 'Cantonese', yue: 'Cantonese', 'zh-hk': 'Cantonese', kantonesisch: 'Cantonese', '粵語': 'Cantonese', '粤语': 'Cantonese',
-    arabic: 'Arabic', ar: 'Arabic', arabisch: 'Arabic', 'العربية': 'Arabic',
-    german: 'German', de: 'German', 'de-de': 'German', 'de-at': 'German', 'de-ch': 'German', deutsch: 'German',
-    french: 'French', fr: 'French', 'fr-fr': 'French', französisch: 'French', franzoesisch: 'French', français: 'French', francais: 'French',
-    spanish: 'Spanish', es: 'Spanish', 'es-es': 'Spanish', 'es-mx': 'Spanish', spanisch: 'Spanish', español: 'Spanish', espanol: 'Spanish',
-    portuguese: 'Portuguese', pt: 'Portuguese', 'pt-br': 'Portuguese', 'pt-pt': 'Portuguese', portugiesisch: 'Portuguese', português: 'Portuguese', portugues: 'Portuguese',
-    indonesian: 'Indonesian', id: 'Indonesian', indonesisch: 'Indonesian', 'bahasa indonesia': 'Indonesian',
-    italian: 'Italian', it: 'Italian', italienisch: 'Italian', italiano: 'Italian',
-    korean: 'Korean', ko: 'Korean', koreanisch: 'Korean', '한국어': 'Korean',
-    russian: 'Russian', ru: 'Russian', russisch: 'Russian', 'русский': 'Russian',
-    thai: 'Thai', th: 'Thai', thailändisch: 'Thai', thailaendisch: 'Thai', 'ไทย': 'Thai',
-    vietnamese: 'Vietnamese', vi: 'Vietnamese', vietnamesisch: 'Vietnamese', 'tiếng việt': 'Vietnamese', 'tieng viet': 'Vietnamese',
-    japanese: 'Japanese', ja: 'Japanese', jp: 'Japanese', japanisch: 'Japanese', '日本語': 'Japanese',
-    turkish: 'Turkish', tr: 'Turkish', türkisch: 'Turkish', tuerkisch: 'Turkish', türkçe: 'Turkish', turkce: 'Turkish',
-    hindi: 'Hindi', hi: 'Hindi', 'हिन्दी': 'Hindi', 'हिंदी': 'Hindi',
-    malay: 'Malay', ms: 'Malay', malaiisch: 'Malay', 'bahasa melayu': 'Malay',
-    dutch: 'Dutch', nl: 'Dutch', niederländisch: 'Dutch', niederlaendisch: 'Dutch', holländisch: 'Dutch', nederlands: 'Dutch',
-    swedish: 'Swedish', sv: 'Swedish', schwedisch: 'Swedish', svenska: 'Swedish',
-    danish: 'Danish', da: 'Danish', dänisch: 'Danish', daenisch: 'Danish', dansk: 'Danish',
-    finnish: 'Finnish', fi: 'Finnish', finnisch: 'Finnish', suomi: 'Finnish',
-    polish: 'Polish', pl: 'Polish', polnisch: 'Polish', polski: 'Polish',
-    czech: 'Czech', cs: 'Czech', cz: 'Czech', tschechisch: 'Czech', čeština: 'Czech', cestina: 'Czech',
-    filipino: 'Filipino', fil: 'Filipino', tl: 'Filipino', tagalog: 'Filipino',
-    persian: 'Persian', fa: 'Persian', farsi: 'Persian', persisch: 'Persian', 'فارسی': 'Persian',
-    greek: 'Greek', el: 'Greek', gr: 'Greek', griechisch: 'Greek', 'ελληνικά': 'Greek',
-    hungarian: 'Hungarian', hu: 'Hungarian', ungarisch: 'Hungarian', magyar: 'Hungarian',
-    macedonian: 'Macedonian', mk: 'Macedonian', mazedonisch: 'Macedonian', 'македонски': 'Macedonian',
-    romanian: 'Romanian', ro: 'Romanian', rumänisch: 'Romanian', rumaenisch: 'Romanian', română: 'Romanian', romana: 'Romanian',
-  };
-
-  function parseChatLanguageCommand(rawText: unknown): string | null {
-    const norm = normalizeChatCommandInput(rawText, 160);
-    if (!norm) return null;
-    const match = (
-      norm.hasMention
-        ? /^(?:[#!]?(?:lang|language|sprache|asr)|\/(?:lang|language|sprache|asr)(?=\s))[\s:=]+(.+)$/i
-        : /^(?:[#!](?:lang|language|sprache|asr)|\/(?:lang|language|sprache|asr)(?=\s))[\s:=]+(.+)$/i
-    ).exec(norm.stripped);
-    if (!match) return null;
-    const rawArg = match[1]
-      .replace(/^[.,;:"'„“”‚‘’()[\]\s]+|[.!?,;:"'„“”‚‘’()[\]\s]+$/g, '')
-      .trim();
-    if (!rawArg || /^<(?:lang|language|sprache|code)>$/i.test(rawArg)) return null;
-    if (/^(?:\*|auto|all|automatisch|automatic|multilingual|alle)$/i.test(rawArg)) {
-      return 'auto';
-    }
-    const parts = rawArg.split(/[,+/;&|]+/).map((p) => p.trim()).filter(Boolean);
-    if (!parts.length || parts.length > 30) return null;
-    const resolved: string[] = [];
-    for (const part of parts) {
-      const key = part.toLowerCase().replace(/_/g, '-');
-      if (/^(?:\*|auto|all|automatisch|automatic|multilingual|alle)$/.test(key)) {
-        return 'auto';
-      }
-      const canon =
-        CHAT_LANG_ALIASES[key] ??
-        (key.includes('-') ? CHAT_LANG_ALIASES[key.split('-', 1)[0]] : undefined);
-      if (!canon) return null;
-      if (!resolved.includes(canon)) resolved.push(canon);
-    }
-    return resolved.length >= 30 ? 'auto' : resolved.join(',');
-  }
-
   function resolveChatSender(
     senderId?: string | null,
     senderName?: string | null,
@@ -409,24 +338,7 @@ function install(config: MeetCaptureConfig) {
   function syncVideoTileFromChat() {
     window.wortlautVideoTile?.update({
       paused: capturePaused,
-      ...(chatAsrLanguage ? {asrLanguage: chatAsrLanguage} : {}),
     });
-  }
-
-  function applyChatLanguage(
-    nextLang: string,
-    senderId?: string | null,
-    senderName?: string | null,
-  ): boolean {
-    const sender = resolveChatSender(senderId, senderName);
-    if (sender.rejected) return false;
-    const nowMs = performance.now();
-    if (chatAsrLanguage === nextLang && nowMs - lastLangSwitchMs < 3_000) return false;
-    chatAsrLanguage = nextLang;
-    chatAsrLanguageSeq += 1;
-    lastLangSwitchMs = nowMs;
-    syncVideoTileFromChat();
-    return true;
   }
 
   function applyPauseState(nextPaused: boolean, senderId?: string | null, senderName?: string | null): boolean {
@@ -1101,12 +1013,6 @@ function install(config: MeetCaptureConfig) {
           updated = true;
         }
       }
-      const langCmd = parseChatLanguageCommand(candidateText) ?? parseChatLanguageCommand(rawText);
-      if (langCmd) {
-        if (applyChatLanguage(langCmd, authorId, authorName)) {
-          updated = true;
-        }
-      }
     };
 
     const chatItems = document.querySelectorAll(
@@ -1189,8 +1095,7 @@ function install(config: MeetCaptureConfig) {
       if (
         !msgText ||
         (!isChatOptOutMessage(msgText) &&
-          !parseChatPauseCommand(msgText) &&
-          !parseChatLanguageCommand(msgText))
+          !parseChatPauseCommand(msgText))
       ) {
         continue;
       }
@@ -1732,8 +1637,7 @@ function install(config: MeetCaptureConfig) {
         if (typeof chatBodyCandidate === 'string') {
           const isOptOut = isChatOptOutMessage(chatBodyCandidate, explicitChatText !== undefined);
           const pauseCmd = parseChatPauseCommand(chatBodyCandidate);
-          const langCmd = parseChatLanguageCommand(chatBodyCandidate);
-          if (isOptOut || pauseCmd || langCmd) {
+          if (isOptOut || pauseCmd) {
             const fromObj = record.from && typeof record.from === 'object' ? (record.from as Record<string, unknown>) : undefined;
             const senderObj = record.sender && typeof record.sender === 'object' ? (record.sender as Record<string, unknown>) : undefined;
             const userObj = (fromObj?.user && typeof fromObj.user === 'object' ? (fromObj.user as Record<string, unknown>) : undefined) ??
@@ -1754,9 +1658,6 @@ function install(config: MeetCaptureConfig) {
               updated = true;
             }
             if (pauseCmd && applyPauseState(pauseCmd === 'pause', resolvedId, resolvedName)) {
-              updated = true;
-            }
-            if (langCmd && applyChatLanguage(langCmd, resolvedId, resolvedName)) {
               updated = true;
             }
           }
@@ -2048,8 +1949,7 @@ function install(config: MeetCaptureConfig) {
         !/^[A-Za-z0-9+/=_-]{20,}$/.test(s);
       const optOutStr = strings.find((s) => isChatOptOutMessage(s, false));
       const pauseStr = strings.find((s) => parseChatPauseCommand(s) !== null);
-      const langStr = strings.find((s) => parseChatLanguageCommand(s) !== null);
-      const chatCommandStr = optOutStr ?? pauseStr ?? langStr;
+      const chatCommandStr = optOutStr ?? pauseStr;
       if (chatCommandStr && matchedIds.length <= 1) {
         const senderNameCandidate = (matchedId
           ? (domNames.get(matchedId) ?? protoNames.get(matchedId) ?? participants.get(matchedId)?.participant_name)
@@ -2061,12 +1961,6 @@ function install(config: MeetCaptureConfig) {
         if (pauseStr) {
           const cmd = parseChatPauseCommand(pauseStr);
           if (cmd && applyPauseState(cmd === 'pause', matchedId, senderNameCandidate)) {
-            updated = true;
-          }
-        }
-        if (langStr) {
-          const parsedLang = parseChatLanguageCommand(langStr);
-          if (parsedLang && applyChatLanguage(parsedLang, matchedId, senderNameCandidate)) {
             updated = true;
           }
         }
@@ -2436,7 +2330,14 @@ function install(config: MeetCaptureConfig) {
           break;
         }
       }
-    }, error: (reason) => { state.reason = reason; }};
+    },
+    activity: ({level, participant_id, participant_name, speaker_id}) => {
+      if (capturePaused || isParticipantOptedOut(participant_id ?? speaker_id, participant_name)) {
+        return;
+      }
+      window.wortlautVideoTile?.reportAudioActivity?.(level, participant_name ?? null);
+    },
+    error: (reason) => { state.reason = reason; }};
 
   function recentRtpSources(items: RTCRtpContributingSource[]): number[] {
     if (!items.length) return [];
@@ -3249,7 +3150,6 @@ function install(config: MeetCaptureConfig) {
         ...(optedOutParticipants.size > 0 ? {opted_out: [...optedOutParticipants].slice(0, 64)} : {}),
         ...(capturePaused ? {paused: true} : {}),
         ...(pauseWindows.length > 0 ? {pause_windows: pauseWindows.slice(0, 64).map((w) => ({...w}))} : {}),
-        ...(chatAsrLanguage ? {asr_language: chatAsrLanguage, asr_language_seq: chatAsrLanguageSeq} : {}),
         sources: [...participants.values()].slice(0, 256).map((p) => ({
           participant_id: p.participant_id,
           ...(p.participant_name ? {participant_name: p.participant_name} : {}),

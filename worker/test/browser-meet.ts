@@ -1566,7 +1566,13 @@ try {
       });
       const firstFrameMs = performance.now() - t0;
       const inspected = window.wortlautMeet.inspect();
-      const settings = callTrack.getSettings();
+      const settings = callTrack.getSettings() as MediaTrackSettings & {resizeMode?: string};
+      let portraitConstraintRejected = false;
+      try {
+        await callTrack.applyConstraints({aspectRatio: {exact: 9 / 16}});
+      } catch (err) {
+        portraitConstraintRejected = (err as DOMException)?.name === 'OverconstrainedError';
+      }
       return {
         deviceKinds: devices.map((d) => d.kind),
         deviceLabel: devices[0]?.label,
@@ -1577,6 +1583,10 @@ try {
         contentHint: callTrack.contentHint,
         width: settings.width,
         height: settings.height,
+        aspectRatio: settings.aspectRatio,
+        facingMode: settings.facingMode,
+        resizeMode: settings.resizeMode,
+        portraitConstraintRejected,
         videoWidth: vid.videoWidth,
         firstFrameMs,
         domParticipants: inspected.participant_sources.dom_participants ?? 0,
@@ -1594,6 +1604,10 @@ try {
     assert.equal(mediaCheck.contentHint, 'detail');
     assert.equal(mediaCheck.width, 1280);
     assert.equal(mediaCheck.height, 720);
+    assert.equal(mediaCheck.aspectRatio, 16 / 9);
+    assert.equal(mediaCheck.facingMode, undefined);
+    assert.equal(mediaCheck.resizeMode, 'none');
+    assert.equal(mediaCheck.portraitConstraintRejected, true);
     assert.equal(mediaCheck.videoWidth, 1280);
     assert.ok(mediaCheck.firstFrameMs < 1000, `Expected immediate first frame, got ${mediaCheck.firstFrameMs}ms`);
     assert.equal(mediaCheck.domParticipants, 1);
@@ -1608,39 +1622,63 @@ try {
     });
     const rendered = await tileFixture.page.evaluate(() => {
       const tile = window.wortlautVideoTile!;
+      tile.reportAudioActivity(0.45, 'Alice Beispiel');
       const snap = tile.getSnapshot();
       const ctx = tile.canvas.getContext('2d')!;
       const sample = ctx.getImageData(100, 70, 200, 40).data;
+      const footerSample = ctx.getImageData(60, 620, 400, 40).data;
       let nonDarkPixels = 0;
       for (let i = 0; i < sample.length; i += 4) {
         if (sample[i] > 40 || sample[i + 1] > 40 || sample[i + 2] > 40) nonDarkPixels += 1;
       }
-      return {snap, nonDarkPixels};
+      let footerBrightPixels = 0;
+      for (let i = 0; i < footerSample.length; i += 4) {
+        if (footerSample[i] > 50 || footerSample[i + 1] > 80 || footerSample[i + 2] > 50) footerBrightPixels += 1;
+      }
+      return {snap, nonDarkPixels, footerBrightPixels};
     });
     assert.equal(rendered.snap.participation, 'capturing');
     assert.equal(rendered.snap.segmentCount, 2);
     assert.equal(rendered.snap.lastRenderedText, 'Bob Beispiel: Die Kachel aktualisiert sich laufend.');
     assert.equal(rendered.snap.activeTracks, 1);
+    assert.equal(rendered.snap.audioActive, true);
+    assert.equal(rendered.snap.activeSpeaker, 'Alice Beispiel');
+    assert.ok((rendered.snap.audioLevel ?? 0) >= 0.45);
     assert.ok(rendered.nonDarkPixels > 50);
+    assert.ok(rendered.footerBrightPixels > 20, 'Expected live audio activity footer bar to render bright VU pixels');
 
-    // Verify in-call #pause / #lang / #resume on MeetBrowser + video tile
+    // Verify ensureUncroppedSelfVideo clicks Meet's "Vollständigen Videofeed für andere anzeigen" button
     await tileFixture.page.evaluate(() => {
-      for (const [author, text] of [
-        ['Bob Remote', '#pause'],
-        ['Bob Remote', '#lang English'],
-      ]) {
-        const bubble = document.createElement('div');
-        bubble.setAttribute('data-sender-name', author);
-        bubble.setAttribute('data-message-text', text);
-        document.body.append(bubble);
-      }
+      const selfNode = document.createElement('div');
+      selfNode.setAttribute('data-self-name', 'wortlaut');
+      const fullBtn = document.createElement('button');
+      fullBtn.setAttribute('aria-label', 'Vollständigen Videofeed für andere anzeigen');
+      fullBtn.textContent = '16:9';
+      fullBtn.addEventListener('click', () => {
+        (window as unknown as Record<string, unknown>).__fullVideoClicked = true;
+        fullBtn.setAttribute('aria-label', 'Videofeed durch Meet zuschneiden lassen');
+      });
+      selfNode.append(fullBtn);
+      document.body.append(selfNode);
+    });
+    await (tileFixture.meet as unknown as {ensureUncroppedSelfVideo: () => Promise<void>}).ensureUncroppedSelfVideo();
+    const fullClicked = await tileFixture.page.evaluate(
+      () => (window as unknown as Record<string, unknown>).__fullVideoClicked === true,
+    );
+    assert.equal(fullClicked, true, 'Expected ensureUncroppedSelfVideo to click Meet full-video button');
+
+    // Verify in-call #pause / #resume on MeetBrowser + video tile (and suppression of audioActive during pause)
+    await tileFixture.page.evaluate(() => {
+      const bubble = document.createElement('div');
+      bubble.setAttribute('data-sender-name', 'Bob Remote');
+      bubble.setAttribute('data-message-text', '#pause');
+      document.body.append(bubble);
     });
     const pausedInspect = await tileFixture.meet.inspect();
     assert.equal(pausedInspect.participant_sources.paused, true);
-    assert.equal(pausedInspect.participant_sources.asr_language, 'English');
     const pausedTileSnap = await tileFixture.page.evaluate(() => window.wortlautVideoTile?.getSnapshot());
     assert.equal(pausedTileSnap?.paused, true);
-    assert.equal(pausedTileSnap?.asrLanguage, 'English');
+    assert.equal(pausedTileSnap?.audioActive, false);
 
     await tileFixture.page.evaluate(() => {
       const resumeBubble = document.createElement('div');

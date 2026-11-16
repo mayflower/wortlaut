@@ -282,16 +282,13 @@ PRIVACY_HTML = """<!DOCTYPE html>
       </h2>
       <p>
         <strong>Eigene Aussagen von der Protokollierung ausschließen (Chat-Opt-out):</strong>
-        Schreiben Sie während des laufenden Calls einfach <strong>„opt out“</strong>,
-        <strong>„optout“</strong>, <strong>„nein“</strong> oder <strong>„no“</strong> in den
-        Meeting-Chat. __OPTOUT_EFFECT_DE__<br><br>
-        <strong>Off-the-Record-Pause &amp; Sprachwechsel im Chat:</strong>
+        Schreiben Sie während des laufenden Calls einfach <strong>„no“</strong> oder
+        <strong>„opt out“</strong> in den Meeting-Chat. __OPTOUT_EFFECT_DE__<br><br>
+        <strong>Off-the-Record-Pause im Chat:</strong>
         Mit <strong>„#pause“</strong> im Konferenz-Chat pausieren Sie die Audio- und
         Bildschirmerfassung sofort (Anzeige „OFF THE RECORD“ auf der Videokachel; verworfene Daten
         werden nicht gespeichert), bis <strong>„#resume“</strong> oder <strong>„#weiter“</strong>
-        geschrieben wird. Mit <strong>„#lang &lt;Sprache&gt;“</strong> (z.&nbsp;B.
-        <code>#lang auto</code>, <code>#lang en</code>, <code>#lang Japanese</code>) wechseln Sie
-        die Transkriptionssprache (alle 30 Qwen3-ASR-Sprachen).<br><br>
+        geschrieben wird.<br><br>
         <strong>Gesamte Aufzeichnung beenden:</strong> Der Bot <strong>__ASSISTANT_NAME__</strong>
         kann jederzeit direkt über die Teilnehmerliste von Google Meet, Microsoft Teams, Zoom
         oder Cisco Webex aus dem Raum entfernt oder durch die einladende Person in der
@@ -591,15 +588,13 @@ PRIVACY_HTML_EN = """<!DOCTYPE html>
       <h2>3. Individual In-Call Chat Opt-Out &amp; Stopping Recording</h2>
       <p>
         <strong>Exclude only your own statements (Chat Opt-Out):</strong>
-        Simply type <strong>"opt out"</strong>, <strong>"optout"</strong>, <strong>"no"</strong>,
-        or <strong>"nein"</strong> in the meeting chat at any point during the call.
+        Simply type <strong>"no"</strong> or <strong>"opt out"</strong> in the meeting chat at any
+        point during the call.
         __OPTOUT_EFFECT_EN__<br><br>
-        <strong>Off-the-record pause &amp; language switch:</strong>
+        <strong>Off-the-record pause:</strong>
         Type <strong>"#pause"</strong> in the meeting chat to immediately pause audio and screen
         capture (the bot's video tile switches to "OFF THE RECORD" and drops media in memory) until
-        <strong>"#resume"</strong> is sent. Type <strong>"#lang &lt;language&gt;"</strong> (e.g.
-        <code>#lang auto</code>, <code>#lang fr</code>, <code>#lang Japanese</code>) to switch
-        transcription across all 30 Qwen3-ASR languages.<br><br>
+        <strong>"#resume"</strong> is sent.<br><br>
         <strong>Stop the entire recording:</strong> Remove <strong>__ASSISTANT_NAME__</strong> from
         the call roster or cancel/delete the recording in the <a href="/ui">wortlaut Web-UI</a>.
       </p>

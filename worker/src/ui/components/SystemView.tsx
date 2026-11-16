@@ -263,8 +263,8 @@ export function SystemView({
                     )}
                   >
                     {tr(
-                      'Direkt im Meeting-Chat steuerbar: „nein“ / „opt out“ löscht sofort die eigene Spur, „#pause“ / „#weiter“ („#resume“) pausiert Off-the-Record, und „#lang <Sprache>“ wechselt die Sprache (alle 30 Qwen3-ASR-Sprachen).',
-                      'Control right from the meeting chat: “opt out” / “no” purges your own track, “#pause” / “#resume” toggles off-the-record mode, and “#lang <language>” switches across all 30 Qwen3-ASR languages.'
+                      'Direkt im Meeting-Chat steuerbar: „no“ / „opt out“ löscht sofort die eigene Spur, und „#pause“ / „#resume“ pausiert Off-the-Record.',
+                      'Control right from the meeting chat: “no” / “opt out” purges your own track, and “#pause” / “#resume” toggles off-the-record mode.'
                     )}
                   </MetadataListItem>
                   <MetadataListItem

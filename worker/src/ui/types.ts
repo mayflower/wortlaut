@@ -61,6 +61,9 @@ export interface RecordingSummary {
 export interface LiveStatus {
   is_active: boolean;
   paused?: boolean;
+  speech_active?: boolean;
+  max_audio_level?: number;
+  active_speakers?: string[];
   participation: ParticipationState;
   processing: ProcessingState;
   active_streams: number;

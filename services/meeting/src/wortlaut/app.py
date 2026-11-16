@@ -202,7 +202,7 @@ app = FastAPI(
         "Self-hosted, pre-mix WebRTC speaker-isolated meeting transcription and protocol API "
         "for Google Meet, Microsoft Teams, Cisco Webex, and Zoom — including OAuth2 calendar "
         "sync & writeback, settled screen-share keyframes, live in-call chat controls "
-        "(`opt out`, `#pause`/`#resume`, `#lang`), and an authenticated OAuth 2.1 "
+        "(`no` / `opt out`, `#pause` / `#resume`), and an authenticated OAuth 2.1 "
         "Model Context Protocol (MCP) Streamable HTTP server at `/mcp`."
     ),
     lifespan=lifespan,
@@ -442,8 +442,6 @@ class ParticipantEvidence(BaseModel):
     )
     paused: bool = False
     pause_windows: list[PauseWindowEvidence] = Field(default_factory=list, max_length=64)
-    asr_language: str | None = Field(default=None, max_length=200)
-    asr_language_seq: int | None = Field(default=None, ge=0)
 
     @model_serializer(mode="wrap")
     def _serialize(self, handler):
@@ -456,10 +454,6 @@ class ParticipantEvidence(BaseModel):
             data.pop("paused", None)
         if not data.get("pause_windows"):
             data.pop("pause_windows", None)
-        if data.get("asr_language") is None:
-            data.pop("asr_language", None)
-        if data.get("asr_language_seq") is None:
-            data.pop("asr_language_seq", None)
         return data
 
 
@@ -1557,13 +1551,37 @@ def get_recording(
     diag = latest_attempt.diagnostics if latest_attempt and latest_attempt.diagnostics else {}
     receivers = diag.get("receiver_sources", [])
     part_sources = diag.get("participant_sources", {})
+    is_paused = bool(part_sources.get("paused"))
+    max_audio_level = 0.0
+    active_speakers: list[str] = []
+    for r in receivers:
+        lvl = (r.get("rtp_stats") or {}).get("audio_level")
+        if isinstance(lvl, (int, float)) and lvl > max_audio_level:
+            max_audio_level = float(lvl)
+        if (
+            not is_paused
+            and isinstance(lvl, (int, float))
+            and lvl >= 0.01
+            and r.get("participant_name")
+        ):
+            spk = str(r["participant_name"]).strip()
+            if spk and spk not in active_speakers:
+                active_speakers.append(spk)
+    speech_active = (
+        recording.participation == "capturing"
+        and not is_paused
+        and (max_audio_level >= 0.01 or bool(diag.get("speech_active")))
+    )
     result["live_status"] = {
         "is_active": recording.participation
         in ("starting", "joining", "waiting_admission", "capturing")
         or recording.processing not in ("completed", "failed"),
         "participation": recording.participation,
         "processing": recording.processing,
-        "paused": bool(part_sources.get("paused")),
+        "paused": is_paused,
+        "speech_active": speech_active,
+        "max_audio_level": round(max_audio_level, 3),
+        "active_speakers": active_speakers[:4],
         "active_streams": diag.get("streams", 0),
         "audio_seconds": round(samples / RATE, 1),
         "active_audio_seconds": round(diag.get("active_audio_samples", 0) / RATE, 1),
@@ -2332,24 +2350,24 @@ def build_chat_intro(
         if keyframes_on:
             return (
                 f"{bot_label} ({who_en}) transcribes this call (+ slide snapshots, no cameras). "
-                f'Chat: "no"/"opt out" | #pause/#resume | #lang. '
+                f'Chat: "no" / "opt out" | #pause / #resume. '
                 f"Transcript: {recording_url} | Info: {privacy_url}?lang=en"
             )
         return (
             f"{bot_label} ({who_en}) transcribes this call. "
-            f'Chat: "no"/"opt out" | #pause/#resume | #lang. '
+            f'Chat: "no" / "opt out" | #pause / #resume. '
             f"Transcript: {recording_url} | Info: {privacy_url}?lang=en"
         )
     who = (inviter.strip() if inviter and inviter.strip() else "einem Teilnehmenden")[:48]
     if keyframes_on:
         return (
             f"{bot_label} ({who}) protokolliert (+ Folien-Standbilder, keine Kameras). "
-            f"Chat: „nein“/„opt out“ | #pause/#resume | #lang. "
+            f'Chat: "no" / "opt out" | #pause / #resume. '
             f"Protokoll: {recording_url} | Info: {privacy_url}"
         )
     return (
         f"{bot_label} ({who}) protokolliert dieses Meeting. "
-        f"Chat: „nein“/„opt out“ | #pause/#resume | #lang. "
+        f'Chat: "no" / "opt out" | #pause / #resume. '
         f"Protokoll: {recording_url} | Info: {privacy_url}"
     )
 
@@ -2476,7 +2494,7 @@ def worker_status(
                 "active_audio_samples": 0,
                 "sdp": SdpEvidence().model_dump(),
                 "keyframes": None,
-                **attempt.diagnostics,
+                **{k: v for k, v in attempt.diagnostics.items() if k != "speech_active"},
             }
             == body.model_dump(mode="json", exclude={"participation"})
         ):
@@ -2484,25 +2502,17 @@ def worker_status(
         raise HTTPException(409, "Attempt has already ended")
     now = datetime.now(UTC)
     prev_diag = attempt.diagnostics if isinstance(attempt.diagnostics, dict) else {}
-    prev_ps = prev_diag.get("participant_sources")
-    prev_lang_seq = int(prev_ps.get("asr_language_seq") or 0) if isinstance(prev_ps, dict) else 0
     prev_active_samples = int(prev_diag.get("active_audio_samples") or 0)
     prev_audio_samples = int(prev_diag.get("audio_samples") or 0)
     attempt.last_heartbeat_at = now
     # Status is evidence about the current worker, not a provider acceptance test.
-    attempt.diagnostics = body.model_dump(mode="json", exclude={"participation"})
-    if (
-        body.participant_sources.asr_language
-        and (body.participant_sources.asr_language_seq or 0) > prev_lang_seq
-    ):
-        try:
-            chat_lang = normalize_asr_language(body.participant_sources.asr_language)
-        except ValueError:
-            chat_lang = None
-        if chat_lang:
-            meta = dict(recording.protocol_meta or {})
-            meta["asr_language"] = chat_lang
-            recording.protocol_meta = meta
+    diag_dump = body.model_dump(mode="json", exclude={"participation"})
+    if body.participation == "capturing":
+        diag_dump["speech_active"] = bool(
+            not body.participant_sources.paused
+            and int(diag_dump.get("active_audio_samples") or 0) > prev_active_samples
+        )
+    attempt.diagnostics = diag_dump
     if body.participant_sources.opted_out:
         meta = dict(recording.protocol_meta or {})
         cur_opted = list(meta.get("opted_out_speakers") or [])

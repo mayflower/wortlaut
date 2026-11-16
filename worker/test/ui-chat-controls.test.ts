@@ -192,6 +192,9 @@ test('Web-UI renders live Off-the-Record paused banner, inline chat markers & pa
           live_status: {
             is_active: true,
             paused: livePaused,
+            speech_active: !livePaused,
+            max_audio_level: !livePaused ? 0.42 : 0,
+            active_speakers: !livePaused ? ['Elena Rostova'] : [],
             participation: 'capturing',
             processing: 'processing',
             active_streams: 2,
@@ -371,12 +374,16 @@ test('Web-UI renders live Off-the-Record paused banner, inline chat markers & pa
     assert.equal(await page.locator('#seg-seg-2').count(), 0);
     await searchInput.fill('');
 
-    // 5. Switch livePaused -> false and verify next poll transitions banner back to active live recording!
+    // 5. Switch livePaused -> false and verify next poll transitions banner to active voice recording!
     livePaused = false;
     await page.waitForFunction(
       () => {
         const el = document.getElementById('live-status-banner');
-        return Boolean(el && el.innerText.includes('Live-Aufnahme läuft'));
+        return Boolean(
+          el &&
+            el.innerText.includes('Ton wird aufgezeichnet') &&
+            el.innerText.includes('Elena Rostova'),
+        );
       },
       undefined,
       {timeout: 8000},
