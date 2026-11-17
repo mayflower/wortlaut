@@ -258,9 +258,9 @@ function install(config: MeetCaptureConfig) {
     if (typeof rawText !== 'string') return null;
     const cleaned = rawText.trim().replace(/\s+/g, ' ');
     if (!cleaned || cleaned.length > maxLen || BOT_INTRO_OR_URL_RE.test(cleaned)) return null;
-    const hasMention = /^[@#]?(?:synia\s+)?wortlaut(?:\s+demo)?\b/i.test(cleaned);
+    const hasMention = /^[@#]?(?:synia\s+)?wortlaut(?:\.cloud|\s+demo)?\b/i.test(cleaned);
     const stripped = cleaned
-      .replace(/^[@#]?(?:synia\s+)?wortlaut(?:\s+demo)?(?:\s*\([^)]*\))?[\s,:;-]*/i, '')
+      .replace(/^[@#]?(?:synia\s+)?wortlaut(?:\.cloud|\s+demo)?(?:\s*\([^)]*\))?[\s,:;-]*/i, '')
       .trim();
     return stripped ? {hasMention, stripped} : null;
   }

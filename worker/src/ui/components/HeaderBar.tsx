@@ -98,7 +98,7 @@ export function ReaderTopBar({
               onReturnToAccount();
             }
           }}
-          title={tr('Zur Synia Wortlaut Demo Startseite', 'Go to Synia Wortlaut Demo home')}
+          title={tr('Zur Wortlaut.cloud Startseite', 'Go to Wortlaut.cloud home')}
           className="group flex items-center gap-2.5 rounded-lg px-1.5 py-1 no-underline transition-colors hover:bg-[var(--color-background-muted)] focus:outline-none"
         >
           <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--color-background-accent-subtle,#2563eb1a)] text-[var(--color-text-accent,#3b82f6)] ring-1 ring-[var(--color-border)] transition-transform group-hover:scale-105">
@@ -106,7 +106,7 @@ export function ReaderTopBar({
           </span>
           <HStack gap={1.5} vAlign="center">
             <Text type="body" weight="bold">
-              Synia Wortlaut Demo
+              Wortlaut.cloud
             </Text>
             <span id="health-dot">
               <StatusDot
@@ -232,7 +232,7 @@ export function HeaderBar({
                 <AudioLines className="h-4 w-4" />
               </span>
             }
-            heading="Synia Wortlaut Demo"
+            heading="Wortlaut.cloud"
             headingHref="#view=home"
             subheading="Meet · Teams · Webex · Zoom"
             headerEndContent={

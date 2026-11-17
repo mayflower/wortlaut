@@ -306,7 +306,7 @@ export async function installVideoTile(
       ctx.fillStyle = '#f8fafc';
       ctx.font = `700 30px ${FONT_SANS}`;
       ctx.textBaseline = 'alphabetic';
-      ctx.fillText('Synia Wortlaut Demo', titleX, 74);
+      ctx.fillText('Wortlaut.cloud', titleX, 74);
 
       const langLabel =
         !asrLanguage || asrLanguage === 'auto' || asrLanguage === '*'

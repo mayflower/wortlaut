@@ -305,7 +305,7 @@ UI_HTML = """<!DOCTYPE html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Synia Wortlaut Demo – Meeting-Transkription</title>
+  <title>Wortlaut.cloud – Meeting-Transkription</title>
   <link rel="stylesheet" href="/sdk/ui/app.css?v=__ASSET_VERSION__">
 </head>
 <body
