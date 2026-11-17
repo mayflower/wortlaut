@@ -7,8 +7,10 @@ export type CaptureSink = {
   end: (metadata: Record<string, unknown>) => void;
   gap: (metadata: Record<string, unknown>) => void;
   keyframe?: (metadata: Record<string, unknown>, png: Uint8Array) => void;
+  isOptedOut?: (binding: Binding) => boolean;
   activity?: (info: {
     level: number;
+    provider_source_id?: string;
     participant_id?: string | null;
     participant_name?: string | null;
     speaker_id?: string | null;
@@ -243,7 +245,9 @@ export class AudioCapture {
         return;
       }
       const sample = chunker.finalSample;
-      if (sample <= lastBoundSample || (lastBoundSample > 0 && sample - lastBoundSample < 16000 * 2)) return;
+      const urgentOptOutSwitch = Boolean(sink.isOptedOut?.(pendingBinding) && !sink.isOptedOut?.(currentBinding));
+      const minRebindDelta = urgentOptOutSwitch ? 1 : 16000 * 0.8;
+      if (sample <= lastBoundSample || (lastBoundSample > 0 && sample - lastBoundSample < minRebindDelta)) return;
       chunker.flush();
       currentBinding = {...pendingBinding};
       pendingBinding = undefined;
@@ -283,12 +287,14 @@ export class AudioCapture {
               gapEnd -= rest; flushGap(); gapEnd += rest;
             }
           } else {
-            const pcmBytes = this.muted
+            const activeTargetBind = pendingBinding ?? currentBinding;
+            const silenceFrame = this.muted || Boolean(sink.isOptedOut?.(activeTargetBind));
+            const pcmBytes = silenceFrame
               ? new Uint8Array(data.bytes.byteLength)
               : new Uint8Array(data.bytes);
             flushGap(); chunker.append(pcmBytes, data.start_sample);
             if (sink.activity && pcmBytes.byteLength >= 2) {
-              if (this.muted) {
+              if (silenceFrame) {
                 accumSumSq = 0;
                 accumCount = 0;
               } else {
@@ -308,6 +314,7 @@ export class AudioCapture {
                 const activeBind = pendingBinding ?? currentBinding;
                 sink.activity({
                   level: Math.min(1, rms * 4.2),
+                  provider_source_id: activeBind.provider_source_id,
                   participant_id: activeBind.participant_id ?? null,
                   participant_name: activeBind.participant_name ?? null,
                   speaker_id: activeBind.speaker_id ?? null,

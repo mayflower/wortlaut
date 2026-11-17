@@ -304,6 +304,7 @@ export interface InstanceInfo {
   oidc?: {
     enabled: boolean;
     issuer: string;
+    authorizationEndpoint?: string;
     clientId: string;
     allowedDomains: string[];
   };

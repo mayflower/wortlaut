@@ -1,5 +1,6 @@
 import type {Frame, Locator, Page} from 'playwright';
 import {AudioTransport} from '../src/transport.js';
+import {readSystemScreenText} from './browser.js';
 import {KeyframeTransport, type KeyframeUploadMetadata} from './keyframe-transport.js';
 import {installMeetCapture, MeetError, mergeKeyframeDiagnostics} from './meet.js';
 import {installVideoTile, type VideoTilePatch} from './video-tile.js';
@@ -21,6 +22,7 @@ export class WebexBrowser {
   private stopping?: Promise<void>;
   private reason = '';
   private joined = false;
+  private inCall = false;
   private chatSent = false;
   private chatAttempts = 0;
   private videoCheckedInCall = false;
@@ -178,13 +180,15 @@ export class WebexBrowser {
     const frame = this.frame();
     const state = await frame?.evaluate(() => window.wortlautMeet?.inspect()).catch(() => undefined);
     if (state?.reason) this.reason = state.reason;
-    const text = await frame?.locator('body').ariaSnapshot().catch(() => '') ?? '';
-    let participation = 'joining';
-    if (/waiting for (?:the )?host|host.*(?:let you in|admit)|wait.*lobby|in the lobby|Lobby des Meetings|bis der Host Sie einlässt|Warten.*(?:Gastgeber|Host)/i.test(text)) {
-      participation = 'waiting_admission';
-    } else if (!/Verbindung wird hergestellt|Connecting/i.test(text) && this.joined && frame && await frame.getByRole('button', {
+    const sysText = await readSystemScreenText(frame);
+    const hasLeave = Boolean(frame && await frame.getByRole('button', {
       name: /^(Leave meeting|Leave|Meeting verlassen|Meeting verlassen oder Meeting für alle beenden|Verlassen)(?:\s|$)/i,
-    }).first().isVisible()) {
+    }).first().isVisible().catch(() => false));
+    let participation = 'joining';
+    if (!this.inCall && /waiting for (?:the )?host|host.*(?:let you in|admit)|wait.*lobby|in the lobby|Lobby des Meetings|bis der Host Sie einlässt|Warten.*(?:Gastgeber|Host)/i.test(sysText)) {
+      participation = 'waiting_admission';
+    } else if (!/Verbindung wird hergestellt|Connecting/i.test(sysText) && this.joined && frame && hasLeave) {
+      this.inCall = true;
       participation = 'capturing';
       if (!this.videoCheckedInCall && this.videoCheckAttempts < 6) {
         this.videoCheckAttempts += 1;
@@ -218,8 +222,10 @@ export class WebexBrowser {
         }
       }
     }
-    if (/meeting (?:has )?ended|Meeting.*beendet/i.test(text)) this.reason = 'meeting_ended';
-    if (/host.*denied|not allowed to join|Beitritt.*abgelehnt/i.test(text)) this.reason = 'admission_denied';
+    if (participation !== 'capturing') {
+      if (/meeting (?:has )?ended|Meeting.*beendet/i.test(sysText)) this.reason = 'meeting_ended';
+      if (/host.*denied|not allowed to join|Beitritt.*abgelehnt/i.test(sysText)) this.reason = 'admission_denied';
+    }
     return {...state, capability: 'unverified', participation: this.stopping ? 'ended' : participation,
       reason: this.reason, stopped: Boolean(this.stopping || this.reason), drained: this.drained,
       streams: state?.streams ?? 0, audio_samples: state?.audio_samples ?? 0,

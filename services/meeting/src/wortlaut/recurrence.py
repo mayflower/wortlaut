@@ -9,7 +9,7 @@ from icalendar import Calendar
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
-from wortlaut.calendar import MAIL_LOCK, meeting_link, utc
+from wortlaut.calendar import MAIL_LOCK, event_attendee_emails, event_end_utc, meeting_link, utc
 from wortlaut.controller import request_cancellation
 from wortlaut.models import CalendarEntry, Recording
 from wortlaut.settings import get_settings
@@ -111,9 +111,11 @@ def expand_series(db, entry, now):
             ]
     entry.status, entry.reason = "expanded", None
     for key, event in desired.items():
-        starts, ends = utc(event.decoded("DTSTART")), utc(event.decoded("DTEND"))
+        starts = utc(event.decoded("DTSTART"))
+        ends = event_end_utc(event, starts)
         provider, link = normalize_meeting_url(meeting_link(event, ""))
         title = " ".join(str(event.get("SUMMARY", "")).split())[:200] or None
+        attendee_emails = event_attendee_emails(event)
         recording = existing.get(key)
         if key in conflicted:
             if recording:
@@ -122,6 +124,7 @@ def expand_series(db, entry, now):
             continue
         if recording is None:
             identifier = hashlib.sha256((entry.id.hex + "/" + key).encode()).hexdigest()
+            meta = {"attendee_emails": attendee_emails} if attendee_emails else {}
             db.add(
                 Recording(
                     calendar_entry_id=entry.id,
@@ -131,8 +134,10 @@ def expand_series(db, entry, now):
                     meeting_url=link,
                     provider=provider,
                     title=title,
+                    owner_email=entry.organizer,
                     starts_at=starts,
                     ends_at=ends,
+                    protocol_meta=meta,
                 )
             )
         elif recording.participation == "ended" and recording.cancelled_at is None:

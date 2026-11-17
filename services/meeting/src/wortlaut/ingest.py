@@ -461,22 +461,34 @@ def accept_chunk(
     ):
         raise HTTPException(409, "Chunk exceeds declared stream end")
     check_range(db, stream, body.sequence, body.start_sample, body.sample_count)
-    # Serialize capacity admission across different recording-row locks. This is
-    # a transaction-scoped PostgreSQL lock, not another queue or lease service.
-    db.execute(select(func.pg_advisory_xact_lock(749836123)))
     settings = get_settings()
     object_size = len(pcm) + 13 + len(canonical(contract).encode())
+    # Fast pre-check before S3 upload so over-capacity chunks fail without network I/O.
     if pending_samples(
         db, attempt.id
     ) + body.sample_count > settings.max_pending_samples_per_attempt or capacity_reached(
         db, body.sample_count, object_size
     ):
         raise HTTPException(409, "audio_capacity_limit")
+    # Write to S3 under only the per-recording row lock; never hold the cluster-wide
+    # advisory lock across S3 network I/O.
     key = f"audio/{recording.id}/{identifier}.pcm"
     try:
         get_storage().put(key, pcm, contract)
     except ObjectConflict:
         raise HTTPException(409, "Stored object contains different audio or metadata") from None
+    # Serialize final capacity admission across recordings for <1ms right before commit.
+    db.execute(select(func.pg_advisory_xact_lock(749836123)))
+    if pending_samples(
+        db, attempt.id
+    ) + body.sample_count > settings.max_pending_samples_per_attempt or capacity_reached(
+        db, body.sample_count, object_size
+    ):
+        try:
+            get_storage().delete_object(key)
+        except Exception:
+            pass
+        raise HTTPException(409, "audio_capacity_limit")
     # A crash before this commit leaves an immutable orphan. An identical retry
     # verifies the object and completes registration; ACK follows this commit.
     db.add(
@@ -516,7 +528,11 @@ def ingest_keyframe(
     meta: KeyframeIngestMetadata,
     png_bytes: bytes,
 ) -> tuple[RecordingKeyframe, bool]:
-    from wortlaut.processing import collect_opted_out_speakers, is_speaker_opted_out
+    from wortlaut.processing import (
+        collect_opted_out_speakers,
+        collect_stream_participant_names,
+        is_speaker_opted_out,
+    )
 
     settings = get_settings()
     if not settings.enable_keyframes:
@@ -560,22 +576,7 @@ def ingest_keyframe(
         if attempts
         else []
     )
-    participant_names: dict[str, str] = {}
-    for s in streams:
-        pid = s.contract.get("participant_id") or s.contract.get("speaker_id")
-        if pid and s.contract.get("participant_name"):
-            participant_names[str(pid)] = str(s.contract["participant_name"])
-    if streams:
-        bind_controls = db.scalars(
-            select(AudioControl).where(
-                AudioControl.stream_id.in_([s.id for s in streams]),
-                AudioControl.kind == "bind",
-            )
-        ).all()
-        for ctrl in bind_controls:
-            pid = ctrl.contract.get("participant_id") or ctrl.contract.get("speaker_id")
-            if pid and ctrl.contract.get("participant_name"):
-                participant_names[str(pid)] = str(ctrl.contract["participant_name"])
+    participant_names, _ = collect_stream_participant_names(db, streams)
     clean_pname = (meta.participant_name.strip() or None) if meta.participant_name else None
     if clean_pname:
         participant_names.setdefault(meta.participant_id, clean_pname)
@@ -613,7 +614,6 @@ def ingest_keyframe(
         "sha256": meta.sha256,
     }
     object_size = len(png_bytes) + 13 + len(canonical(contract).encode())
-    db.execute(select(func.pg_advisory_xact_lock(749836123)))
     if capacity_reached(db, 0, object_size):
         raise HTTPException(507, "storage_capacity_reached")
 
@@ -622,6 +622,14 @@ def ingest_keyframe(
         get_storage().put(key, png_bytes, contract)
     except ObjectConflict:
         raise HTTPException(409, "keyframe_sequence_conflict") from None
+
+    db.execute(select(func.pg_advisory_xact_lock(749836123)))
+    if capacity_reached(db, 0, object_size):
+        try:
+            get_storage().delete_object(key)
+        except Exception:
+            pass
+        raise HTTPException(507, "storage_capacity_reached")
 
     kf = RecordingKeyframe(
         recording_id=recording.id,

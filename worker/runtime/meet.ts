@@ -4,7 +4,7 @@ import type {CaptureSink} from '../src/capture.js';
 import type {Chunk} from '../src/chunks.js';
 import type {KeyframeDiagnostics} from '../src/keyframes.js';
 import type {MeetBridgeMessage, MeetCaptureConfig} from '../src/meet-page.js';
-import type {MeetInput} from './browser.js';
+import {visibleSystemText, type MeetInput} from './browser.js';
 import {KeyframeTransport, type KeyframeUploadMetadata} from './keyframe-transport.js';
 import {AudioTransport} from '../src/transport.js';
 import {isTeamsOrigin, teamsOrigins} from '../src/teams-url.js';
@@ -808,8 +808,8 @@ export class MeetBrowser {
       // admission. Stay on prejoin in waiting_admission until a participant enters.
       this.participation = 'waiting_admission';
       while (!this.stopping && !this.reason && await visible(this.page.getByText(emptyPrejoin))) {
-        if (await visible(this.page.getByText(denied))) throw new MeetError('prejoin_denied');
-        if (await visible(this.page.getByText(ended))) throw new MeetError('meeting_ended');
+        if (await visibleSystemText(this.page, denied)) throw new MeetError('prejoin_denied');
+        if (await visibleSystemText(this.page, ended)) throw new MeetError('meeting_ended');
         if (await humanVerificationVisible(this.page)) throw new MeetError('human_verification_required');
         await this.dismissWithoutMedia().catch(() => {});
         await this.page.waitForTimeout(500);
@@ -906,11 +906,13 @@ export class MeetBrowser {
     else if (url.origin !== 'https://meet.google.com') this.reason = 'unexpected_browser_origin';
     if (state?.reason) this.reason = state.reason;
     if (!this.stopping) {
-      if (await visible(this.page.getByText(denied))) {
+      const hasLeave = await visible(leaveButton(this.page)).catch(() => false);
+      const inActiveCallToolbar = this.participation === 'capturing' && hasLeave;
+      if (!inActiveCallToolbar && await visibleSystemText(this.page, denied)) {
         this.reason = this.joinSent ? 'admission_denied' : 'prejoin_denied';
       }
-      else if (await visible(this.page.getByText(removed))) this.reason = 'removed';
-      else if (await visible(this.page.getByText(ended))) this.reason = 'meeting_ended';
+      else if (!inActiveCallToolbar && await visibleSystemText(this.page, removed)) this.reason = 'removed';
+      else if (!inActiveCallToolbar && await visibleSystemText(this.page, ended)) this.reason = 'meeting_ended';
       else if (await humanVerificationVisible(this.page)) this.reason = 'human_verification_required';
       else if (await visible(this.page.getByRole('dialog').filter({hasText: consentPrompt}))) {
         this.reason = 'consent_required';
@@ -919,10 +921,9 @@ export class MeetBrowser {
           await this.dismissWithoutMedia().catch(() => {});
           await this.dismissInfoDialog().catch(() => {});
         }
-        if (this.participation !== 'capturing' && await visible(this.page.getByText(waiting))) {
+        if (this.participation !== 'capturing' && await visibleSystemText(this.page, waiting)) {
           this.participation = 'waiting_admission';
         } else if (this.joinSent && !await visible(joinButton(this.page))) {
-          const hasLeave = await visible(leaveButton(this.page));
           const hasRtp =
             (state?.streams ?? 0) > 0 ||
             (state?.receiver_sources ?? []).some((r: Record<string, any>) =>

@@ -19,6 +19,19 @@ data:
   WORTLAUT_ENABLE_KEYFRAMES: {{ .Values.keyframes.enabled | ternary "true" "false" | quote }}
   WORTLAUT_ASR_LANGUAGES: {{ .Values.asr.languages | quote }}
   WORTLAUT_ENABLE_LLM_SUMMARY: {{ .Values.llmSummary.enabled | ternary "true" "false" | quote }}
+{{- if .Values.llmSummary.ollamaUrl }}
+  WORTLAUT_OLLAMA_URL: {{ .Values.llmSummary.ollamaUrl | quote }}
+{{- end }}
+{{- if .Values.llmSummary.ollamaModel }}
+  WORTLAUT_OLLAMA_MODEL: {{ .Values.llmSummary.ollamaModel | quote }}
+{{- end }}
+{{- if .Values.calendarOAuth.googleClientId }}
+  WORTLAUT_GOOGLE_CALENDAR_CLIENT_ID: {{ .Values.calendarOAuth.googleClientId | quote }}
+{{- end }}
+{{- if .Values.calendarOAuth.microsoftClientId }}
+  WORTLAUT_MICROSOFT_CALENDAR_CLIENT_ID: {{ .Values.calendarOAuth.microsoftClientId | quote }}
+  WORTLAUT_MICROSOFT_CALENDAR_TENANT_ID: {{ .Values.calendarOAuth.microsoftTenantId | default "common" | quote }}
+{{- end }}
 {{- if .Values.asr.glossary }}
   WORTLAUT_ASR_GLOSSARY: {{ .Values.asr.glossary | quote }}
 {{- end }}

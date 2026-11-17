@@ -1,30 +1,33 @@
-"""Dex OIDC (PKCE + RS256 JWKS) authentication and per-user authorization."""
+"""OIDC (Discovery + PKCE + PyJWT JWK verification) authentication and per-user authorization."""
 
 import base64
 import hashlib
 import hmac
 import json
+import re
 import secrets
 import time
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Literal
+from urllib.parse import urlsplit
 
 import httpx
-from cryptography.exceptions import InvalidSignature
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.asymmetric import padding, rsa
+import jwt
 from fastapi import HTTPException
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from wortlaut.models import CalendarEntry, CalendarSyncedEvent, Delivery, Recording
-from wortlaut.settings import get_settings
+from wortlaut.settings import derive_subkey, get_settings
 
 USER_TOKEN_PREFIX = "wortlaut-user-"
 _JWKS_CACHE: dict[str, tuple[float, list[dict]]] = {}
 _JWKS_TTL_SECONDS = 300.0
+_DISCOVERY_CACHE: dict[tuple[str, str], tuple[float, dict]] = {}
+_DISCOVERY_TTL_SECONDS = 300.0
+_RFC2606_TEST_SUFFIXES = (".example.org", ".example.com", ".example.net", ".invalid", ".test")
 
 
 @dataclass(frozen=True)
@@ -90,9 +93,9 @@ def issue_user_session_token(
     payload_b64 = _b64url_encode(
         json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
     )
-    secret = get_settings().api_token.get_secret_value().encode()
+    subkey = derive_subkey(b"user-session-v1")
     sig = hmac.new(
-        secret,
+        subkey,
         b"wortlaut-user-session\0" + payload_b64.encode("ascii"),
         hashlib.sha256,
     ).hexdigest()
@@ -106,13 +109,15 @@ def verify_user_session_token(token: str) -> Principal | None:
     if "." not in rest:
         return None
     payload_b64, sig = rest.rsplit(".", 1)
-    secret = get_settings().api_token.get_secret_value().encode()
-    expected = hmac.new(
-        secret,
-        b"wortlaut-user-session\0" + payload_b64.encode("ascii"),
-        hashlib.sha256,
-    ).hexdigest()
-    if not secrets.compare_digest(sig.encode("ascii"), expected.encode("ascii")):
+    msg = b"wortlaut-user-session\0" + payload_b64.encode("ascii")
+    subkey = derive_subkey(b"user-session-v1")
+    expected = hmac.new(subkey, msg, hashlib.sha256).hexdigest()
+    valid_sig = secrets.compare_digest(sig.encode("ascii"), expected.encode("ascii"))
+    if not valid_sig:
+        legacy_secret = get_settings().api_token.get_secret_value().encode()
+        legacy_expected = hmac.new(legacy_secret, msg, hashlib.sha256).hexdigest()
+        valid_sig = secrets.compare_digest(sig.encode("ascii"), legacy_expected.encode("ascii"))
+    if not valid_sig:
         return None
     try:
         payload = json.loads(_b64url_decode(payload_b64))
@@ -150,82 +155,172 @@ def _dex_base_url() -> str:
     return base
 
 
-def fetch_dex_jwks(*, force_refresh: bool = False) -> list[dict]:
-    base = _dex_base_url()
+def _rewrite_internal_endpoint(url: str, public_iss: str, internal_iss: str) -> str:
+    if internal_iss and public_iss and url.startswith(public_iss):
+        return internal_iss + url[len(public_iss) :]
+    return url
+
+
+def fetch_oidc_discovery(*, force_refresh: bool = False) -> dict:
+    s = get_settings()
+    public_iss = (s.oidc_issuer or "").strip().rstrip("/")
+    if not public_iss:
+        raise HTTPException(503, "OIDC is not configured")
+    internal_iss = (s.oidc_internal_issuer or "").strip().rstrip("/")
+    base = internal_iss or public_iss
+    cache_key = (public_iss, internal_iss)
     now = time.monotonic()
-    cached = _JWKS_CACHE.get(base)
+    cached = _DISCOVERY_CACHE.get(cache_key)
+    if cached and not force_refresh and (now - cached[0]) < _DISCOVERY_TTL_SECONDS:
+        return cached[1]
+
+    fallback = {
+        "issuer": public_iss,
+        "authorization_endpoint": s.oidc_authorization_endpoint.strip() or f"{public_iss}/auth",
+        "token_endpoint": s.oidc_token_endpoint.strip() or f"{base}/token",
+        "jwks_uri": s.oidc_jwks_uri.strip() or f"{base}/keys",
+    }
+    host = (urlsplit(base).hostname or "").lower()
+    if host in ("example.org", "example.com", "example.net") or host.endswith(
+        _RFC2606_TEST_SUFFIXES
+    ):
+        _DISCOVERY_CACHE[cache_key] = (now, fallback)
+        return fallback
+
+    try:
+        res = httpx.get(f"{base}/.well-known/openid-configuration", timeout=5.0)
+        res.raise_for_status()
+        doc = res.json()
+        if not isinstance(doc, dict):
+            raise ValueError("Invalid OIDC discovery document")
+        auth_ep = (
+            s.oidc_authorization_endpoint.strip()
+            or str(doc.get("authorization_endpoint") or "").strip()
+            or fallback["authorization_endpoint"]
+        )
+        raw_tok_ep = (
+            s.oidc_token_endpoint.strip()
+            or str(doc.get("token_endpoint") or "").strip()
+            or fallback["token_endpoint"]
+        )
+        raw_jwks_uri = (
+            s.oidc_jwks_uri.strip()
+            or str(doc.get("jwks_uri") or "").strip()
+            or fallback["jwks_uri"]
+        )
+        resolved = {
+            "issuer": str(doc.get("issuer") or public_iss).rstrip("/"),
+            "authorization_endpoint": auth_ep,
+            "token_endpoint": _rewrite_internal_endpoint(raw_tok_ep, public_iss, internal_iss),
+            "jwks_uri": _rewrite_internal_endpoint(raw_jwks_uri, public_iss, internal_iss),
+        }
+        _DISCOVERY_CACHE[cache_key] = (now, resolved)
+        return resolved
+    except (httpx.HTTPError, ValueError):
+        _DISCOVERY_CACHE[cache_key] = (now, fallback)
+        return fallback
+
+
+def get_oidc_authorization_endpoint() -> str:
+    return fetch_oidc_discovery()["authorization_endpoint"]
+
+
+def get_oidc_token_endpoint() -> str:
+    return fetch_oidc_discovery()["token_endpoint"]
+
+
+def fetch_dex_jwks(*, force_refresh: bool = False) -> list[dict]:
+    jwks_uri = fetch_oidc_discovery(force_refresh=force_refresh)["jwks_uri"]
+    now = time.monotonic()
+    cached = _JWKS_CACHE.get(jwks_uri)
     if cached and not force_refresh and (now - cached[0]) < _JWKS_TTL_SECONDS:
         return cached[1]
     try:
-        res = httpx.get(f"{base}/keys", timeout=8.0)
+        res = httpx.get(jwks_uri, timeout=8.0)
         res.raise_for_status()
         keys = res.json().get("keys", [])
     except (httpx.HTTPError, ValueError) as exc:
         raise HTTPException(503, "OIDC JWKS unavailable") from exc
-    _JWKS_CACHE[base] = (now, keys)
+    _JWKS_CACHE[jwks_uri] = (now, keys)
     return keys
 
 
-def _rsa_public_key_from_jwk(jwk: dict):
-    n = int.from_bytes(_b64url_decode(jwk["n"]), "big")
-    e = int.from_bytes(_b64url_decode(jwk["e"]), "big")
-    return rsa.RSAPublicNumbers(e, n).public_key()
+fetch_oidc_jwks = fetch_dex_jwks
+
+
+_ALLOWED_JWT_ALGS: dict[str, str] = {
+    "RS256": "RSA",
+    "RS384": "RSA",
+    "RS512": "RSA",
+    "PS256": "RSA",
+    "PS384": "RSA",
+    "PS512": "RSA",
+    "ES256": "EC",
+    "ES384": "EC",
+    "ES512": "EC",
+    "EdDSA": "OKP",
+}
 
 
 def verify_dex_id_token(raw_jwt: str, *, expected_nonce: str | None = None) -> dict:
     settings = get_settings()
     if not settings.oidc_issuer:
         raise HTTPException(503, "OIDC is not configured")
-    parts = raw_jwt.split(".")
-    if len(parts) != 3:
-        raise HTTPException(401, "Invalid OIDC ID token format")
-    header_b64, claims_b64, sig_b64 = parts
     try:
-        header = json.loads(_b64url_decode(header_b64))
-        claims = json.loads(_b64url_decode(claims_b64))
-        signature = _b64url_decode(sig_b64)
-    except (ValueError, UnicodeError, TypeError):
+        header = jwt.get_unverified_header(raw_jwt)
+    except jwt.DecodeError:
         raise HTTPException(401, "Malformed OIDC ID token") from None
 
-    if header.get("alg") != "RS256":
+    alg = header.get("alg")
+    expected_kty = _ALLOWED_JWT_ALGS.get(str(alg or ""))
+    if not expected_kty:
         raise HTTPException(401, "Unsupported OIDC signing algorithm")
 
     kid = header.get("kid")
     keys = fetch_dex_jwks(force_refresh=False)
-    matching = [k for k in keys if k.get("kty") == "RSA" and (not kid or k.get("kid") == kid)]
+    matching = [
+        k for k in keys if k.get("kty") == expected_kty and (not kid or k.get("kid") == kid)
+    ]
     if not matching:
         keys = fetch_dex_jwks(force_refresh=True)
-        matching = [k for k in keys if k.get("kty") == "RSA" and (not kid or k.get("kid") == kid)]
+        matching = [
+            k for k in keys if k.get("kty") == expected_kty and (not kid or k.get("kid") == kid)
+        ]
     if not matching:
         raise HTTPException(401, "Unknown OIDC signing key")
 
-    signing_input = f"{header_b64}.{claims_b64}".encode("ascii")
-    verified = False
-    for jwk in matching:
+    claims: dict | None = None
+    last_jwt_error: jwt.PyJWTError | None = None
+    for jwk_dict in matching:
         try:
-            pub = _rsa_public_key_from_jwk(jwk)
-            pub.verify(signature, signing_input, padding.PKCS1v15(), hashes.SHA256())
-            verified = True
+            py_jwk = jwt.PyJWK.from_dict(jwk_dict, algorithm=alg)
+            claims = jwt.decode(
+                raw_jwt,
+                key=py_jwk.key,
+                algorithms=[alg],
+                audience=settings.oidc_client_id,
+                options={"require": ["exp", "iss", "aud", "sub"], "verify_iss": False},
+                leeway=30,
+            )
             break
-        except (InvalidSignature, KeyError, ValueError):
+        except jwt.ExpiredSignatureError:
+            raise HTTPException(401, "Expired OIDC token") from None
+        except jwt.InvalidAudienceError:
+            raise HTTPException(401, "Invalid OIDC token audience") from None
+        except (jwt.PyJWTError, KeyError, ValueError, TypeError) as exc:
+            if isinstance(exc, jwt.PyJWTError):
+                last_jwt_error = exc
             continue
-    if not verified:
+
+    if claims is None:
+        if isinstance(last_jwt_error, jwt.MissingRequiredClaimError):
+            raise HTTPException(401, f"Missing required OIDC claim: {last_jwt_error}") from None
         raise HTTPException(401, "Invalid OIDC token signature")
 
-    now = int(time.time())
     expected_iss = settings.oidc_issuer.strip().rstrip("/")
     iss = str(claims.get("iss") or "").rstrip("/")
     if iss != expected_iss:
         raise HTTPException(401, "Invalid OIDC token issuer")
-
-    aud = claims.get("aud")
-    aud_list = [aud] if isinstance(aud, str) else (aud if isinstance(aud, list) else [])
-    if settings.oidc_client_id not in aud_list:
-        raise HTTPException(401, "Invalid OIDC token audience")
-
-    exp = claims.get("exp")
-    if not isinstance(exp, (int, float)) or exp <= now - 30:
-        raise HTTPException(401, "Expired OIDC token")
 
     if expected_nonce is not None and claims.get("nonce") != expected_nonce:
         raise HTTPException(401, "Invalid OIDC nonce")
@@ -244,6 +339,9 @@ def verify_dex_id_token(raw_jwt: str, *, expected_nonce: str | None = None) -> d
     return claims
 
 
+verify_oidc_id_token = verify_dex_id_token
+
+
 def exchange_oidc_code(
     *,
     code: str,
@@ -256,10 +354,10 @@ def exchange_oidc_code(
         raise HTTPException(503, "OIDC is not configured")
     if len(code_verifier) < 43 or not code or not redirect_uri:
         raise HTTPException(400, "Invalid PKCE parameters")
-    base = _dex_base_url()
+    token_url = get_oidc_token_endpoint()
     try:
         res = httpx.post(
-            f"{base}/token",
+            token_url,
             data={
                 "grant_type": "authorization_code",
                 "client_id": settings.oidc_client_id,
@@ -310,13 +408,14 @@ def user_recording_access_predicate(principal: Principal):
     if user_email:
         predicates.append(func.lower(Recording.owner_email) == user_email)
         predicates.append(Recording.protocol_meta["attendee_emails"].contains([user_email]))
+        mailto_pattern = rf"mailto:{re.escape(user_email)}([^a-z0-9._%+-]|$)"
         predicates.append(
             select(CalendarEntry.id)
             .where(
                 CalendarEntry.id == Recording.calendar_entry_id,
                 or_(
                     func.lower(CalendarEntry.organizer) == user_email,
-                    func.lower(CalendarEntry.original).like(f"%mailto:{user_email}%"),
+                    func.lower(CalendarEntry.original).op("~")(mailto_pattern),
                 ),
             )
             .correlate(Recording)

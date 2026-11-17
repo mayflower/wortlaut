@@ -120,7 +120,23 @@ export async function startOidcLogin(): Promise<void> {
     JSON.stringify({ verifier, state, nonce, redirectUri })
   );
 
-  const authUrl = new URL(`${oidc.issuer.replace(/\/$/, '')}/auth`);
+  let authorizationEndpoint = oidc.authorizationEndpoint || '';
+  try {
+    const cfgRes = await fetch('/v1/auth/oidc/config', {
+      signal: AbortSignal.timeout(4000),
+    });
+    if (cfgRes.ok) {
+      const cfg = (await cfgRes.json()) as { authorization_endpoint?: string };
+      if (cfg.authorization_endpoint) {
+        authorizationEndpoint = cfg.authorization_endpoint;
+      }
+    }
+  } catch {
+    // Fall back to boot-configured or default authorization endpoint
+  }
+  const authUrl = new URL(
+    authorizationEndpoint || `${oidc.issuer.replace(/\/$/, '')}/auth`
+  );
   authUrl.searchParams.set('client_id', oidc.clientId);
   authUrl.searchParams.set('redirect_uri', redirectUri);
   authUrl.searchParams.set('response_type', 'code');
@@ -652,17 +668,23 @@ export interface RecordingsFilter {
   participation?: string;
   processing?: string;
   q?: string;
+  cursor?: string | null;
+  limit?: number;
 }
 
 export async function fetchRecordings(
   token: string,
   filter: RecordingsFilter
 ): Promise<{ items: RecordingSummary[]; next_cursor: string | null }> {
-  const params = new URLSearchParams({ limit: '60', order: 'desc' });
+  const params = new URLSearchParams({
+    limit: String(filter.limit ?? 100),
+    order: 'desc',
+  });
   if (filter.provider) params.set('provider', filter.provider);
   if (filter.participation) params.set('participation', filter.participation);
   if (filter.processing) params.set('processing', filter.processing);
   if (filter.q && filter.q.trim()) params.set('q', filter.q.trim());
+  if (filter.cursor) params.set('cursor', filter.cursor);
   return apiRequest(`/v1/recordings?${params.toString()}`, token);
 }
 

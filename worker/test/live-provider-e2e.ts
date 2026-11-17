@@ -422,6 +422,7 @@ async function installSenderGate(context: BrowserContext, wavPath?: string): Pro
       __wortlautShareActive?: boolean;
       __wortlautShareSlideIndex?: number;
       __wortlautSetShareSlide?: (idx: number) => void;
+      __wortlautSwapMeetShareToSlides?: () => Promise<number>;
       __wortlautStopShareStream?: () => void;
     };
     const pcs = new Set<RTCPeerConnection>();
@@ -535,13 +536,17 @@ async function installSenderGate(context: BrowserContext, wavPath?: string): Pro
       };
     }
 
+    let activeShareStream: MediaStream | undefined;
+    let nativeShareStream: MediaStream | undefined;
     if (navigator.mediaDevices) {
+      const origGetDisplayMedia = navigator.mediaDevices.getDisplayMedia?.bind(navigator.mediaDevices);
       let shareTimer: ReturnType<typeof setInterval> | undefined;
-      let activeShareStream: MediaStream | undefined;
       g.__wortlautShareActive = false;
       g.__wortlautShareSlideIndex = 0;
 
-      const renderSlide = (ctx2d: CanvasRenderingContext2D, idx: number) => {
+      const renderSlide = (ctx2d: CanvasRenderingContext2D, idx: number, w = 1280, h = 720) => {
+        ctx2d.save();
+        ctx2d.scale(w / 1280, h / 720);
         if (idx === 0) {
           ctx2d.fillStyle = '#0f172a';
           ctx2d.fillRect(0, 0, 1280, 720);
@@ -570,10 +575,38 @@ async function installSenderGate(context: BrowserContext, wavPath?: string): Pro
             ctx2d.fillRect(90, 200 + r * 115, 1100, 75);
           }
         }
+        ctx2d.restore();
       };
 
       g.__wortlautSetShareSlide = (idx: number) => {
         g.__wortlautShareSlideIndex = idx;
+      };
+      g.__wortlautSwapMeetShareToSlides = async () => {
+        const nativeShareVt = nativeShareStream?.getVideoTracks()[0];
+        const slideVt = activeShareStream?.getVideoTracks()[0];
+        if (!slideVt) return 0;
+        let swapped = 0;
+        for (const pc of pcs) {
+          try {
+            for (const sender of pc.getSenders()) {
+              if (
+                sender.track &&
+                sender.track.kind === 'video' &&
+                sender.track !== slideVt &&
+                sender.track.id !== slideVt.id &&
+                (sender.track.id === nativeShareVt?.id ||
+                  (Boolean(nativeShareVt?.label) && sender.track.label === nativeShareVt?.label) ||
+                  sender.track.getSettings?.().displaySurface !== undefined)
+              ) {
+                await sender.replaceTrack(slideVt);
+                swapped += 1;
+              }
+            }
+          } catch {
+            // ignore closed pc
+          }
+        }
+        return swapped;
       };
       g.__wortlautStopShareStream = () => {
         if (shareTimer !== undefined) {
@@ -591,20 +624,71 @@ async function installSenderGate(context: BrowserContext, wavPath?: string): Pro
           }
           activeShareStream = undefined;
         }
+        if (nativeShareStream) {
+          for (const t of nativeShareStream.getTracks()) {
+            try {
+              t.stop();
+              t.dispatchEvent(new Event('ended'));
+            } catch {
+              // ignore
+            }
+          }
+          nativeShareStream = undefined;
+        }
         g.__wortlautShareActive = false;
       };
 
-      navigator.mediaDevices.getDisplayMedia = async () => {
+      navigator.mediaDevices.getDisplayMedia = async (opts?: DisplayMediaStreamOptions) => {
         g.__wortlautStopShareStream?.();
+        let targetW = 1280;
+        let targetH = 720;
+        if (
+          typeof location !== 'undefined' &&
+          (location.hostname === 'meet.google.com' || isTeams()) &&
+          origGetDisplayMedia
+        ) {
+          try {
+            nativeShareStream = await origGetDisplayMedia(opts);
+            const nativeSettings = nativeShareStream.getVideoTracks()[0]?.getSettings?.();
+            if (nativeSettings?.width && nativeSettings?.height) {
+              targetW = nativeSettings.width;
+              targetH = nativeSettings.height;
+            }
+          } catch {
+            nativeShareStream = undefined;
+          }
+        }
         const canvas = document.createElement('canvas');
-        canvas.width = 1280;
-        canvas.height = 720;
+        canvas.width = targetW;
+        canvas.height = targetH;
         const ctx2d = canvas.getContext('2d');
-        if (ctx2d) renderSlide(ctx2d, g.__wortlautShareSlideIndex ?? 0);
-        shareTimer = setInterval(() => {
-          if (ctx2d) renderSlide(ctx2d, g.__wortlautShareSlideIndex ?? 0);
-        }, 100);
-        const stream = canvas.captureStream(10);
+        if (ctx2d) renderSlide(ctx2d, g.__wortlautShareSlideIndex ?? 0, targetW, targetH);
+
+        const TrackGenCtor = (window as unknown as {MediaStreamTrackGenerator?: new (init: {kind: 'video'}) => MediaStreamTrack & {writable: WritableStream<unknown>}}).MediaStreamTrackGenerator;
+        const VideoFrameCtor = (window as unknown as {VideoFrame?: new (source: HTMLCanvasElement, init: {timestamp: number}) => {close: () => void}}).VideoFrame;
+        let stream: MediaStream;
+        if (typeof TrackGenCtor === 'function' && typeof VideoFrameCtor === 'function') {
+          const gen = new TrackGenCtor({kind: 'video'});
+          const writer = gen.writable.getWriter();
+          const pushFrame = () => {
+            if (ctx2d) renderSlide(ctx2d, g.__wortlautShareSlideIndex ?? 0, targetW, targetH);
+            try {
+              const vf = new VideoFrameCtor(canvas, {timestamp: Math.round(performance.now() * 1000)});
+              void writer.write(vf).catch(() => {});
+              vf.close();
+            } catch {
+              // ignore frame after close
+            }
+          };
+          pushFrame();
+          shareTimer = setInterval(pushFrame, 100);
+          stream = new MediaStream([gen]);
+        } else {
+          shareTimer = setInterval(() => {
+            if (ctx2d) renderSlide(ctx2d, g.__wortlautShareSlideIndex ?? 0, targetW, targetH);
+          }, 100);
+          stream = canvas.captureStream(10);
+        }
         for (const vt of stream.getVideoTracks()) {
           try {
             Object.defineProperty(vt, 'contentHint', {value: 'detail', configurable: true});
@@ -614,7 +698,7 @@ async function installSenderGate(context: BrowserContext, wavPath?: string): Pro
         }
         activeShareStream = stream;
         g.__wortlautShareActive = true;
-        return stream;
+        return nativeShareStream ?? stream;
       };
     }
 
@@ -1557,11 +1641,26 @@ async function apiRequest<T = any>(
   if (body !== undefined) {
     headers['Content-Type'] = 'application/json';
   }
-  const res = await fetch(`${config.apiUrl}${path}`, {
-    method,
-    headers,
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
+  let res: Response | undefined;
+  let lastFetchErr: unknown;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      res = await fetch(`${config.apiUrl}${path}`, {
+        method,
+        headers,
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+      });
+      break;
+    } catch (err) {
+      lastFetchErr = err;
+      if (attempt < 2 && (method === 'GET' || Boolean(extraHeaders?.['Idempotency-Key']))) {
+        await delay(500 * (attempt + 1));
+        continue;
+      }
+      throw err;
+    }
+  }
+  if (!res) throw lastFetchErr;
   if (!res.ok) {
     const text = await res.text().catch(() => '');
     throw new Error(`API ${method} ${path} fehlgeschlagen (HTTP ${res.status}): ${text}`);
@@ -1810,6 +1909,16 @@ async function stopSyntheticScreenShare(page: Page, provider: Provider): Promise
       .locator('button[aria-label*="Stop Share" i], button[aria-label*="Freigabe beenden" i], button[aria-label*="Stoppen" i]')
       .or(page.getByRole('button', {name: /^(Stop Share|Freigabe beenden|Freigabe stoppen)$/i}));
     await clickIfVisible(stopBtn);
+  } else if (provider === 'google_meet') {
+    const stopBtn = page
+      .locator('button[aria-label*="Präsentation beenden" i], button[aria-label*="Stop presenting" i], button[aria-label*="Stop sharing" i]')
+      .or(page.locator('button').filter({hasText: /(Präsentation beenden|Stop presenting|Stop sharing)/i}));
+    await clickIfVisible(stopBtn);
+  } else if (provider === 'teams') {
+    const stopBtn = page
+      .locator('button[aria-label*="Teilen beenden" i], button[aria-label*="Stop sharing" i], button[aria-label*="Stop presenting" i]')
+      .or(page.getByRole('button', {name: /^(Stop sharing|Stop presenting|Teilen beenden|Freigabe beenden)(?: \(.*\))?$/i}));
+    await clickIfVisible(stopBtn);
   }
 }
 
@@ -1839,40 +1948,85 @@ async function startSyntheticScreenShare(page: Page, provider: Provider): Promis
       return false;
     }
     if (provider === 'google_meet') {
-      const presentBtn = page.getByRole('button', {
-        name: /Present now|Share screen|Jetzt präsentieren|Bildschirm teilen/i,
-      });
+      const okBtn = page.locator('button').filter({hasText: /^(OK|Ok|Verstanden|Got it|Schließen|Dismiss)$/i});
+      if (await okBtn.first().isVisible().catch(() => false)) {
+        await okBtn.first().click({timeout: 1500}).catch(() => {});
+        await delay(300);
+      }
+      await page.keyboard.press('Escape').catch(() => {});
+      const presentBtn = page
+        .locator(
+          'button[aria-label*="Bildschirm teilen" i], button[aria-label*="Share screen" i], ' +
+            'button[aria-label*="Present now" i], button[aria-label*="Jetzt präsentieren" i]',
+        )
+        .or(
+          page.getByRole('button', {
+            name: /Present now|Share screen|Jetzt präsentieren|Bildschirm teilen/i,
+          }),
+        );
       if (await presentBtn.first().isVisible().catch(() => false)) {
-        await presentBtn.first().click({timeout: 3000}).catch(() => {});
+        await presentBtn.first().click({timeout: 3000}).catch(() =>
+          presentBtn.first().evaluate((el) => (el as HTMLElement).click()),
+        );
         await delay(1000);
-        if (await isSyntheticShareActive(page)) return true;
-        const entireScreen = page.getByRole('menuitem', {
-          name: /Your entire screen|Entire screen|A window|Gesamter Bildschirm|Ein Fenster/i,
-        });
-        if (await entireScreen.first().isVisible().catch(() => false)) {
-          await entireScreen.first().click({timeout: 3000}).catch(() => {});
-          await delay(1500);
+        if (!(await isSyntheticShareActive(page))) {
+          const entireScreen = page.getByRole('menuitem', {
+            name: /Your entire screen|Entire screen|A window|Gesamter Bildschirm|Ein Fenster/i,
+          });
+          if (await entireScreen.first().isVisible().catch(() => false)) {
+            await entireScreen.first().click({timeout: 3000}).catch(() => {});
+            await delay(1500);
+          }
         }
-        return await isSyntheticShareActive(page);
+        if (await isSyntheticShareActive(page)) {
+          const shareAnyway = page.locator('button').filter({
+            hasText:
+              /Bildschirmübertragung trotzdem starten|Trotzdem teilen|Share screen anyway|Present anyway|Share anyway/i,
+          });
+          for (let w = 0; w < 10; w++) {
+            if (await shareAnyway.first().isVisible().catch(() => false)) {
+              await shareAnyway.first().click({timeout: 3000}).catch(() =>
+                shareAnyway.first().evaluate((el) => (el as HTMLElement).click()),
+              );
+              break;
+            }
+            await delay(500);
+          }
+          await delay(2000);
+          await page.evaluate(() => {
+            return (window as unknown as {__wortlautSwapMeetShareToSlides?: () => Promise<number>})
+              .__wortlautSwapMeetShareToSlides?.();
+          });
+          return true;
+        }
       }
       return false;
     }
     if (provider === 'teams') {
       const shareBtn = page
-        .locator('#share-button, button[data-tid="share-screen-button"]')
+        .locator('#screenshare-button, #share-button, button[data-tid="share-screen-button"]')
         .or(page.getByRole('button', {name: /^(Share|Teilen|Inhalt teilen)(?: \(.*\))?$/i}));
       if (await shareBtn.first().isVisible().catch(() => false)) {
         await shareBtn.first().click({timeout: 3000}).catch(() => {});
         await delay(1500);
-        if (await isSyntheticShareActive(page)) return true;
-        const screenOpt = page
-          .locator('[data-tid*="share-screen"], button, [role="menuitem"]')
-          .filter({hasText: /Screen, window, or tab|Screen|Window|Bildschirm|Fenster/i});
-        if (await screenOpt.first().isVisible().catch(() => false)) {
-          await screenOpt.first().click({timeout: 3000}).catch(() => {});
-          await delay(1500);
+        if (!(await isSyntheticShareActive(page))) {
+          const screenOpt = page
+            .locator('[data-tid*="share-screen"], button, [role="menuitem"]')
+            .filter({hasText: /Screen, window, or tab|Screen|Window|Bildschirm|Fenster/i});
+          if (await screenOpt.first().isVisible().catch(() => false)) {
+            await screenOpt.first().click({timeout: 3000}).catch(() => {});
+            await delay(1500);
+          }
         }
-        return await isSyntheticShareActive(page);
+        if (await isSyntheticShareActive(page)) {
+          await delay(2000);
+          await page.evaluate(() => {
+            return (window as unknown as {__wortlautSwapMeetShareToSlides?: () => Promise<number>})
+              .__wortlautSwapMeetShareToSlides?.();
+          });
+          return true;
+        }
+        return false;
       }
       return false;
     }
@@ -2631,6 +2785,13 @@ async function runProviderLiveTest(provider: Provider, config: LiveConfig) {
       throw new Error(`Timeout: wortlaut-Bot hat nach ${config.joinTimeoutSeconds}s nicht den Status 'active' erreicht.`);
     }
     console.log(`      wortlaut-Bot ist im Meeting aktiv (participation=active).`);
+    if (config.speakerCount < 4 && provider !== 'teams') {
+      stopLobbyWatcher?.();
+      stopLobbyWatcher = undefined;
+      if (provider === 'google_meet') {
+        await pageA.keyboard.press('Escape').catch(() => {});
+      }
+    }
 
     // Allow WebRTC receivers and initial 5s capture buffer to stabilize
     await delay(5500);
@@ -2772,20 +2933,40 @@ async function runProviderLiveTest(provider: Provider, config: LiveConfig) {
     // 5. Verify live streaming transcript segments while the meeting is still active (BEFORE any chat opt-out!)
     console.log(`[5/6] Prüfe Echtzeit-Streaming-Transkription während laufendem Meeting...`);
     let liveStreamedSegments: TranscriptSegment[] = [];
+    let liveStreamedKeyframes: ExportedKeyframe[] = [];
     const streamCheckDeadline = Date.now() + 35000;
     while (Date.now() < streamCheckDeadline) {
-      const transcript = await apiRequest<{segments: TranscriptSegment[]}>(
+      const transcript = await apiRequest<{segments: TranscriptSegment[]; keyframes?: ExportedKeyframe[]}>(
         config,
         'GET',
         `/v1/recordings/${recordingId}/transcript`,
       );
+      if (transcript.keyframes && transcript.keyframes.length > 0) {
+        liveStreamedKeyframes = transcript.keyframes;
+      }
       if (transcript.segments && transcript.segments.length > 0) {
         liveStreamedSegments = transcript.segments;
         const hasLiveA = liveStreamedSegments.some(s => /getrennten.*Audioquellen|Audioquellen|prüfen die getrenn/i.test(s.text));
         const hasLiveB = liveStreamedSegments.some(s => /zweite Teilnehmer|gleichen Zeit/i.test(s.text));
-        if (config.videoOnly || config.speakerCount < 2 ? hasLiveA : hasLiveA && hasLiveB) break;
+        const speechReady = config.videoOnly || config.speakerCount < 2 ? hasLiveA : hasLiveA && hasLiveB;
+        const kfReady = !(keyframesServerSupported && screenShareStarted) || liveStreamedKeyframes.length >= 1;
+        if (speechReady && kfReady) break;
       }
       await delay(2000);
+    }
+    let liveKeyframesVerified = false;
+    if (keyframesServerSupported && screenShareStarted && liveStreamedKeyframes.length >= 1) {
+      const liveKf = liveStreamedKeyframes[0];
+      assert.ok(liveKf.presenter && liveKf.presenter.length > 0, 'Live-Keyframe hat keinen gebundenen Presenter');
+      const unauthPngRes = await fetch(`${config.apiUrl}${liveKf.image_path}?token=${encodeURIComponent(config.apiToken)}`);
+      assert.equal(unauthPngRes.status, 401, 'Keyframe-PNG akzeptierte unzulässiges ?token= Query-Secret');
+      const authPngRes = await fetch(`${config.apiUrl}${liveKf.image_path}`, {
+        headers: {Authorization: `Bearer ${config.apiToken}`},
+      });
+      assert.equal(authPngRes.status, 200, `Live-Keyframe-PNG-Abruf schlug fehl (HTTP ${authPngRes.status})`);
+      const pngBytes = Buffer.from(await authPngRes.arrayBuffer());
+      assert.equal(pngBytes.subarray(0, 8).toString('hex'), '89504e470d0a1a0a', 'Ungültige PNG-Signatur');
+      liveKeyframesVerified = true;
     }
     const liveStreamingVerified = liveStreamedSegments.length > 0;
     const liveSegmentsA = liveStreamedSegments.filter(s => /getrennten.*Audioquellen|Audioquellen|prüfen die getrenn/i.test(s.text));
@@ -2923,23 +3104,38 @@ async function runProviderLiveTest(provider: Provider, config: LiveConfig) {
     const exportedVtt = await apiRequest<string>(config, 'GET', `/v1/recordings/${recordingId}/exports/vtt`);
 
     const exportedKeyframes = exportedJson.keyframes ?? [];
+    const optedOutDiagEarly: string[] = finalRecording.attempts?.[0]?.diagnostics?.participant_sources?.opted_out ?? [];
+    const sharedAccountOptedOutEarly = useHostForGuests && chatOptOutSent && optedOutDiagEarly.length > 0;
     let keyframesVerified: boolean | null = null;
     if (keyframesServerSupported && screenShareStarted) {
-      assert.ok(
-        exportedKeyframes.length >= 1,
-        `Screen-Share war aktiv, aber 0 Keyframes erfasst (diagnostics=${JSON.stringify(finalRecording.attempts?.[0]?.diagnostics?.keyframes)})`,
-      );
-      const firstKf = exportedKeyframes[0];
-      assert.ok(firstKf.presenter && firstKf.presenter.length > 0, 'Keyframe hat keinen gebundenen Presenter');
-      const unauthPngRes = await fetch(`${config.apiUrl}${firstKf.image_path}?token=${encodeURIComponent(config.apiToken)}`);
-      assert.equal(unauthPngRes.status, 401, 'Keyframe-PNG akzeptierte unzulässiges ?token= Query-Secret');
-      const authPngRes = await fetch(`${config.apiUrl}${firstKf.image_path}`, {
-        headers: {Authorization: `Bearer ${config.apiToken}`},
-      });
-      assert.equal(authPngRes.status, 200, `Keyframe-PNG-Abruf schlug fehl (HTTP ${authPngRes.status})`);
-      const pngBytes = Buffer.from(await authPngRes.arrayBuffer());
-      assert.equal(pngBytes.subarray(0, 8).toString('hex'), '89504e470d0a1a0a', 'Ungültige PNG-Signatur');
-      keyframesVerified = true;
+      if (sharedAccountOptedOutEarly) {
+        assert.ok(
+          liveStreamedKeyframes.length >= 1 && liveKeyframesVerified,
+          `Screen-Share war aktiv, aber vor Chat-Opt-Out wurden 0 Keyframes erfasst (diagnostics=${JSON.stringify(finalRecording.attempts?.[0]?.diagnostics?.keyframes)})`,
+        );
+        assert.equal(
+          exportedKeyframes.length,
+          0,
+          'Trotz Account-weitem Chat-Opt-Out blieben Screen-Share-Keyframes im finalen Export erhalten!',
+        );
+        keyframesVerified = true;
+      } else {
+        assert.ok(
+          exportedKeyframes.length >= 1,
+          `Screen-Share war aktiv, aber 0 Keyframes erfasst (diagnostics=${JSON.stringify(finalRecording.attempts?.[0]?.diagnostics?.keyframes)})`,
+        );
+        const firstKf = exportedKeyframes[0];
+        assert.ok(firstKf.presenter && firstKf.presenter.length > 0, 'Keyframe hat keinen gebundenen Presenter');
+        const unauthPngRes = await fetch(`${config.apiUrl}${firstKf.image_path}?token=${encodeURIComponent(config.apiToken)}`);
+        assert.equal(unauthPngRes.status, 401, 'Keyframe-PNG akzeptierte unzulässiges ?token= Query-Secret');
+        const authPngRes = await fetch(`${config.apiUrl}${firstKf.image_path}`, {
+          headers: {Authorization: `Bearer ${config.apiToken}`},
+        });
+        assert.equal(authPngRes.status, 200, `Keyframe-PNG-Abruf schlug fehl (HTTP ${authPngRes.status})`);
+        const pngBytes = Buffer.from(await authPngRes.arrayBuffer());
+        assert.equal(pngBytes.subarray(0, 8).toString('hex'), '89504e470d0a1a0a', 'Ungültige PNG-Signatur');
+        keyframesVerified = true;
+      }
     }
 
     const segments = exportedJson.segments || [];
@@ -3029,6 +3225,7 @@ async function runProviderLiveTest(provider: Provider, config: LiveConfig) {
       live_disjoint_speakers: liveDisjointSpeakers,
       camera_exclusion_verified: cameraExclusionVerified,
       screen_share_started: screenShareStarted,
+      live_keyframe_count: liveStreamedKeyframes.length,
       keyframe_count: exportedKeyframes.length,
       keyframes_verified: keyframesVerified,
       chat_opt_out_sent: chatOptOutSent,

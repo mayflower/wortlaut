@@ -106,10 +106,10 @@ def stream_quality(db: Session, stream: AudioStream):
     gaps = (
         select(
             AudioControl.sequence.label("sequence"),
-            AudioControl.start_sample.label("start"),
-            (AudioControl.start_sample + AudioControl.contract["sample_count"].as_integer()).label(
-                "end"
-            ),
+            func.min(AudioControl.start_sample).label("start"),
+            func.min(
+                AudioControl.start_sample + AudioControl.contract["sample_count"].as_integer()
+            ).label("end"),
             literal(True).label("gap"),
         )
         .where(
@@ -118,7 +118,7 @@ def stream_quality(db: Session, stream: AudioStream):
             True if frozen else AudioControl.contract["final"].as_boolean().is_(True),
             ~pcm_exists,
         )
-        .distinct(AudioControl.sequence)
+        .group_by(AudioControl.sequence)
         .order_by(AudioControl.sequence)
         .subquery()
     )
@@ -607,6 +607,52 @@ def is_speaker_opted_out(
     return False
 
 
+def collect_stream_participant_names(
+    db: Session,
+    streams: list[AudioStream],
+    *,
+    attempts: list[Attempt] | None = None,
+    order_binds: bool = False,
+) -> tuple[dict[str, str], list[AudioControl]]:
+    """Collect canonical participant_id -> participant_name mapping and bind controls."""
+    participant_names: dict[str, str] = {}
+    if attempts:
+        for att in attempts:
+            diag = att.diagnostics if isinstance(att.diagnostics, dict) else {}
+            for p in (diag.get("participant_sources") or {}).get("sources") or []:
+                if isinstance(p, dict) and p.get("participant_id") and p.get("participant_name"):
+                    participant_names[str(p["participant_id"])] = str(p["participant_name"])
+            for rcv in diag.get("receiver_sources") or []:
+                if (
+                    isinstance(rcv, dict)
+                    and rcv.get("signaled_participant_id")
+                    and rcv.get("participant_name")
+                ):
+                    participant_names[str(rcv["signaled_participant_id"])] = str(
+                        rcv["participant_name"]
+                    )
+    for s in streams:
+        pid = s.contract.get("participant_id") or s.contract.get("speaker_id")
+        if pid and s.contract.get("participant_name"):
+            participant_names[str(pid)] = str(s.contract["participant_name"])
+    stream_db_ids = [s.id for s in streams if s.id is not None]
+    if stream_db_ids:
+        q = select(AudioControl).where(
+            AudioControl.stream_id.in_(stream_db_ids),
+            AudioControl.kind == "bind",
+        )
+        if order_binds:
+            q = q.order_by(AudioControl.start_sample)
+        bind_controls = list(db.scalars(q).all())
+    else:
+        bind_controls = []
+    for ctrl in bind_controls:
+        pid = ctrl.contract.get("participant_id") or ctrl.contract.get("speaker_id")
+        if pid and ctrl.contract.get("participant_name"):
+            participant_names[str(pid)] = str(ctrl.contract["participant_name"])
+    return participant_names, bind_controls
+
+
 def purge_opted_out_transcript_segments(
     db: Session,
     recording: Recording,
@@ -623,27 +669,7 @@ def purge_opted_out_transcript_segments(
             select(AudioStream).where(AudioStream.attempt_id.in_([a.id for a in attempts]))
         ).all()
     )
-    participant_names: dict[str, str] = {}
-    for s in streams:
-        pid = s.contract.get("participant_id") or s.contract.get("speaker_id")
-        if pid and s.contract.get("participant_name"):
-            participant_names[str(pid)] = str(s.contract["participant_name"])
-    bind_controls = (
-        list(
-            db.scalars(
-                select(AudioControl).where(
-                    AudioControl.stream_id.in_([s.id for s in streams]),
-                    AudioControl.kind == "bind",
-                )
-            ).all()
-        )
-        if streams
-        else []
-    )
-    for ctrl in bind_controls:
-        pid = ctrl.contract.get("participant_id") or ctrl.contract.get("speaker_id")
-        if pid and ctrl.contract.get("participant_name"):
-            participant_names[str(pid)] = str(ctrl.contract["participant_name"])
+    participant_names, bind_controls = collect_stream_participant_names(db, streams)
     _, opted_out_norm = collect_opted_out_speakers(recording, attempts, participant_names)
     if not opted_out_norm or not streams:
         return 0
@@ -742,27 +768,7 @@ def purge_opted_out_keyframes(
         if attempts
         else []
     )
-    participant_names: dict[str, str] = {}
-    for s in streams:
-        pid = s.contract.get("participant_id") or s.contract.get("speaker_id")
-        if pid and s.contract.get("participant_name"):
-            participant_names[str(pid)] = str(s.contract["participant_name"])
-    bind_controls = (
-        list(
-            db.scalars(
-                select(AudioControl).where(
-                    AudioControl.stream_id.in_([s.id for s in streams]),
-                    AudioControl.kind == "bind",
-                )
-            ).all()
-        )
-        if streams
-        else []
-    )
-    for ctrl in bind_controls:
-        pid = ctrl.contract.get("participant_id") or ctrl.contract.get("speaker_id")
-        if pid and ctrl.contract.get("participant_name"):
-            participant_names[str(pid)] = str(ctrl.contract["participant_name"])
+    participant_names, _ = collect_stream_participant_names(db, streams)
 
     active_keyframes = list(
         db.scalars(
@@ -827,22 +833,7 @@ def is_keyframe_opted_out(
         if attempts
         else []
     )
-    participant_names: dict[str, str] = {}
-    for s in streams:
-        pid = s.contract.get("participant_id") or s.contract.get("speaker_id")
-        if pid and s.contract.get("participant_name"):
-            participant_names[str(pid)] = str(s.contract["participant_name"])
-    if streams:
-        bind_controls = db.scalars(
-            select(AudioControl).where(
-                AudioControl.stream_id.in_([s.id for s in streams]),
-                AudioControl.kind == "bind",
-            )
-        ).all()
-        for ctrl in bind_controls:
-            pid = ctrl.contract.get("participant_id") or ctrl.contract.get("speaker_id")
-            if pid and ctrl.contract.get("participant_name"):
-                participant_names[str(pid)] = str(ctrl.contract["participant_name"])
+    participant_names, _ = collect_stream_participant_names(db, streams)
     if kf.participant_id and kf.participant_name:
         participant_names.setdefault(str(kf.participant_id), str(kf.participant_name))
     _, opted_out_norm = collect_opted_out_speakers(recording, attempts, participant_names)

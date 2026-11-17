@@ -193,10 +193,24 @@ export function App() {
       const res = await fetch('/health/ready');
       return res.ok;
     },
-    refetchInterval: livePoll ? 5000 : false,
+    refetchInterval: livePoll ? 15000 : false,
+    refetchIntervalInBackground: false,
   });
 
-  // Recordings list query (operator only)
+  // Recordings list query (operator only) + cursor pagination for >100 items
+  const [olderRecordings, setOlderRecordings] = useState<
+    import('./types').RecordingSummary[]
+  >([]);
+  const [olderCursor, setOlderCursor] = useState<string | null | undefined>(
+    undefined
+  );
+  const [loadingMoreRecordings, setLoadingMoreRecordings] = useState(false);
+
+  useEffect(() => {
+    setOlderRecordings([]);
+    setOlderCursor(undefined);
+  }, [token, providerFilter, titleSearch]);
+
   const recordingsQuery = useQuery({
     queryKey: ['recordings', token, providerFilter, titleSearch],
     queryFn: () =>
@@ -205,7 +219,8 @@ export function App() {
         q: titleSearch.trim() || undefined,
       }),
     enabled: authMode.kind === 'operator',
-    refetchInterval: livePoll ? 3000 : false,
+    refetchInterval: livePoll ? 5000 : false,
+    refetchIntervalInBackground: false,
     retry: false,
   });
 
@@ -222,7 +237,39 @@ export function App() {
     }
   }, [recordingsQuery.error, recordingsQuery.isSuccess]);
 
-  const rawRecordings = recordingsQuery.data?.items || [];
+  const effectiveNextCursor =
+    olderCursor !== undefined
+      ? olderCursor
+      : (recordingsQuery.data?.next_cursor ?? null);
+
+  const handleLoadMoreRecordings = async () => {
+    if (!effectiveNextCursor || loadingMoreRecordings) return;
+    setLoadingMoreRecordings(true);
+    try {
+      const page = await fetchRecordings(token, {
+        provider: providerFilter || undefined,
+        q: titleSearch.trim() || undefined,
+        cursor: effectiveNextCursor,
+      });
+      setOlderRecordings((prev) => {
+        const seen = new Set(prev.map((r) => r.id));
+        const added = page.items.filter((r) => !seen.has(r.id));
+        return [...prev, ...added];
+      });
+      setOlderCursor(page.next_cursor);
+    } catch {
+      // keep existing items on transient load-more failure
+    } finally {
+      setLoadingMoreRecordings(false);
+    }
+  };
+
+  const rawRecordings = useMemo(() => {
+    const firstPage = recordingsQuery.data?.items || [];
+    if (olderRecordings.length === 0) return firstPage;
+    const seen = new Set(firstPage.map((r) => r.id));
+    return [...firstPage, ...olderRecordings.filter((r) => !seen.has(r.id))];
+  }, [recordingsQuery.data?.items, olderRecordings]);
 
   // Client-side quick status filter + human-first ordering:
   // 1. Live/active recordings first,
@@ -292,12 +339,16 @@ export function App() {
     ).length;
   }, [rawRecordings]);
 
-  // Calendar query (operator only)
+  // Calendar query (operator only) — only poll when viewing Home or Calendar
   const calendarQuery = useQuery({
     queryKey: ['calendar', token],
     queryFn: () => fetchCalendar(token),
     enabled: authMode.kind === 'operator',
-    refetchInterval: livePoll ? 5000 : false,
+    refetchInterval:
+      livePoll && !selectedId && (activeNav === 'calendar' || activeNav === 'home')
+        ? 15000
+        : false,
+    refetchIntervalInBackground: false,
     retry: false,
   });
 
@@ -306,11 +357,12 @@ export function App() {
     queryKey: ['mcpGrants', token],
     queryFn: () => fetchMcpGrants(token),
     enabled: authMode.kind === 'operator',
-    refetchInterval: livePoll && activeNav === 'mcp' ? 5000 : false,
+    refetchInterval: livePoll && activeNav === 'mcp' ? 10000 : false,
+    refetchIntervalInBackground: false,
     retry: false,
   });
 
-  // Active recording detail + transcript
+  // Active recording detail + transcript (stop polling once recording is ended & settled)
   const activeRecordingId =
     authMode.kind === 'reader' ? authMode.recordingId : selectedId;
 
@@ -319,16 +371,34 @@ export function App() {
     queryFn: () => fetchRecordingDetail(token, activeRecordingId!),
     enabled:
       authMode.kind !== 'unauthenticated' && Boolean(activeRecordingId),
-    refetchInterval: livePoll ? 3000 : false,
+    refetchInterval: (query) => {
+      if (!livePoll) return false;
+      const d = query.state.data;
+      if (
+        d &&
+        d.participation === 'ended' &&
+        (d.processing === 'completed' || d.processing === 'failed')
+      ) {
+        return false;
+      }
+      return 3000;
+    },
+    refetchIntervalInBackground: false,
     retry: false,
   });
+
+  const isSelectedRecordingSettled =
+    detailQuery.data?.participation === 'ended' &&
+    (detailQuery.data?.processing === 'completed' ||
+      detailQuery.data?.processing === 'failed');
 
   const transcriptQuery = useQuery({
     queryKey: ['transcript', token, activeRecordingId],
     queryFn: () => fetchTranscript(token, activeRecordingId!),
     enabled:
       authMode.kind !== 'unauthenticated' && Boolean(activeRecordingId),
-    refetchInterval: livePoll ? 3000 : false,
+    refetchInterval: livePoll && !isSelectedRecordingSettled ? 3000 : false,
+    refetchIntervalInBackground: false,
     retry: false,
   });
 
@@ -680,6 +750,9 @@ export function App() {
           token={token}
           recordings={filteredRecordings}
           totalRecordingsCount={rawRecordings.length}
+          hasMoreRecordings={Boolean(effectiveNextCursor)}
+          isLoadingMoreRecordings={loadingMoreRecordings}
+          onLoadMoreRecordings={handleLoadMoreRecordings}
           calendarConnections={calendarConnections}
           calendarSyncedEvents={calendarSyncedEvents}
           selectedId={selectedId}

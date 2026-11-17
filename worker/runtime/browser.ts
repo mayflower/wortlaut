@@ -4,7 +4,7 @@ import {mkdtemp, rm} from 'node:fs/promises';
 import {createServer} from 'node:net';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {chromium, type Browser, type Locator, type Page} from 'playwright';
+import {chromium, type Browser, type Frame, type Locator, type Page} from 'playwright';
 import {promisify} from 'node:util';
 import {randomUUID} from 'node:crypto';
 
@@ -116,6 +116,85 @@ export function nativeMeetInput(page: Page): MeetInput {
       }
     } finally { await element?.dispose(); }
   }};
+}
+
+const UNTRUSTED_USER_TEXT_SELECTOR = [
+  '[data-message-id]',
+  '[data-message-text]',
+  '[data-sender-name]',
+  '[data-panel-id="2"]',
+  '[data-tid*="chat" i]',
+  '[data-tid*="message" i]',
+  '[class*="chat-message"]',
+  '[class*="chatMessage"]',
+  '[class*="chat-item"]',
+  '[class*="chat-box"]',
+  '[class*="chat-panel"]',
+  '[class*="message-item"]',
+  '.chat-item__container',
+  '.new-chat-message__container',
+  '.chat-container',
+  '[class*="caption" i]',
+  '[data-tid*="caption" i]',
+  '[data-key^="notification-"]',
+  '[data-participant-id]',
+  '[data-requested-participant-id]',
+  '[data-participants-row]',
+].join(', ');
+
+/**
+ * Reads visible system UI text while stripping attendee-controlled chat messages,
+ * chat toasts, and roster nameplates to prevent chat-injection DoS (e.g. typing
+ * "This meeting has ended" in chat).
+ */
+export async function readSystemScreenText(target: Page | Frame | undefined): Promise<string> {
+  if (!target) return '';
+  return target
+    .evaluate((excludeSel: string) => {
+      if (!document.body) return '';
+      const out: string[] = [];
+      const stack: Node[] = [document.body];
+      while (stack.length > 0) {
+        const root = stack.pop()!;
+        const toPush: Node[] = [];
+        for (let child = root.firstChild; child; child = child.nextSibling) {
+          if (child.nodeType === Node.TEXT_NODE) {
+            const txt = child.nodeValue?.trim();
+            if (txt) out.push(txt);
+          } else if (child.nodeType === Node.ELEMENT_NODE) {
+            const el = child as HTMLElement;
+            const tag = el.tagName;
+            if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'NOSCRIPT') continue;
+            if (el.matches(excludeSel)) continue;
+            const style = window.getComputedStyle(el);
+            if (style.display === 'none' || style.visibility === 'hidden') continue;
+            const ariaLabel = el.getAttribute('aria-label')?.trim();
+            if (ariaLabel) out.push(ariaLabel);
+            if (el.shadowRoot) toPush.push(el.shadowRoot);
+            toPush.push(el);
+          }
+        }
+        for (let i = toPush.length - 1; i >= 0; i--) {
+          stack.push(toPush[i]);
+        }
+      }
+      return out.join('\n');
+    }, UNTRUSTED_USER_TEXT_SELECTOR)
+    .catch(() => '');
+}
+
+export async function visibleSystemText(page: Page, pattern: RegExp): Promise<boolean> {
+  const candidates = page.getByText(pattern);
+  const count = await candidates.count().catch(() => 0);
+  for (let i = 0; i < Math.min(count, 16); i++) {
+    const item = candidates.nth(i);
+    if (!await item.isVisible().catch(() => false)) continue;
+    const isUntrusted = await item
+      .evaluate((el, sel) => Boolean(el.closest(sel)), UNTRUSTED_USER_TEXT_SELECTOR)
+      .catch(() => true);
+    if (!isUntrusted) return true;
+  }
+  return false;
 }
 
 export async function launchBrowser(provider: 'google_meet' | 'webex' | 'teams' | 'zoom', locale = 'en-US', webexBrowser = false) {

@@ -6,6 +6,7 @@ import hmac
 import html
 import re
 import secrets
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -14,20 +15,21 @@ from urllib.parse import urlencode, urlsplit, urlunsplit
 import httpx
 from fastapi import HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
-from sqlalchemy import or_, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session
 
 from wortlaut.models import McpOAuthAuthorization, McpOAuthClient, McpOAuthGrant
 from wortlaut.oidc import (
     Principal,
     _b64url_encode,
-    _dex_base_url,
+    get_oidc_authorization_endpoint,
+    get_oidc_token_endpoint,
     is_admin_email,
     is_allowed_user_email,
     verify_dex_id_token,
     verify_user_session_token,
 )
-from wortlaut.settings import get_settings
+from wortlaut.settings import derive_subkey, get_settings
 
 MCP_SCOPES: tuple[str, ...] = ("mcp:read", "mcp:write")
 DEFAULT_SCOPE_STRING = "mcp:read mcp:write"
@@ -79,9 +81,16 @@ def _pkce_s256(verifier: str) -> str:
     return _b64url_encode(digest)
 
 
+_REGISTER_RATE_BUCKETS: dict[str, list[float]] = {}
+_REGISTER_RATE_WINDOW_SEC = 60.0
+_REGISTER_RATE_MAX_PER_IP = 40
+_MAX_OAUTH_CLIENTS = 512
+_SAFE_HOST_RE = re.compile(r"^[a-z0-9.-]+(?::\d{1,5})?$")
+
+
 def _hmac_tag(purpose: bytes, value: str) -> str:
-    secret = get_settings().api_token.get_secret_value().encode("utf-8")
-    return hmac.new(secret, purpose + b"\0" + value.encode("utf-8"), hashlib.sha256).hexdigest()
+    subkey = derive_subkey(b"mcp-oauth-v1")
+    return hmac.new(subkey, purpose + b"\0" + value.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
 def public_origin(request: Request) -> str:
@@ -89,22 +98,29 @@ def public_origin(request: Request) -> str:
     is_local_req = req_host in _LOOPBACK_HOSTS or req_host == "testserver"
 
     settings = get_settings()
-    configured = (settings.api_url or "").strip()
-    if configured and not is_local_req:
+    configured = settings.public_base_url()
+    if configured:
         parsed = urlsplit(configured)
         host = (parsed.hostname or "").lower()
         if (
             parsed.scheme in ("http", "https")
             and parsed.netloc
-            and "." in host
-            and host != "wortlaut.example.org"
+            and host
+            and host not in ("wortlaut.example.org", "meeting")
             and not host.endswith(".svc.cluster.local")
+            and req_host != "testserver"
         ):
             return f"{parsed.scheme}://{parsed.netloc}"
 
-    fwd_proto = (request.headers.get("x-forwarded-proto") or "").split(",", 1)[0].strip().lower()
-    scheme = fwd_proto if fwd_proto in ("http", "https") else request.url.scheme
-    return f"{scheme}://{request.url.netloc}"
+    if is_local_req:
+        return f"{request.url.scheme}://{request.url.netloc}"
+
+    # Fallback when api_url is unconfigured/internal: reject spoofed or malformed Host headers.
+    netloc = (request.url.netloc or "").strip().lower()
+    if not netloc or not _SAFE_HOST_RE.match(netloc):
+        return "https://wortlaut.example.org"
+    scheme = "https" if request.url.scheme == "https" else "http"
+    return f"{scheme}://{netloc}"
 
 
 def mcp_resource_url(origin: str) -> str:
@@ -271,7 +287,27 @@ def oauth_error_json(
     )
 
 
-def register_oauth_client(db: Session, payload: dict) -> tuple[int, dict]:
+def register_oauth_client(
+    db: Session, payload: dict, *, client_ip: str | None = None
+) -> tuple[int, dict]:
+    if client_ip:
+        now_mono = time.monotonic()
+        bucket = [
+            ts
+            for ts in _REGISTER_RATE_BUCKETS.get(client_ip, [])
+            if now_mono - ts < _REGISTER_RATE_WINDOW_SEC
+        ]
+        if len(bucket) >= _REGISTER_RATE_MAX_PER_IP:
+            _REGISTER_RATE_BUCKETS[client_ip] = bucket
+            return 429, {
+                "error": "slow_down",
+                "error_description": "Too many dynamic client registrations from this IP",
+            }
+        bucket.append(now_mono)
+        if len(_REGISTER_RATE_BUCKETS) > 1024:
+            _REGISTER_RATE_BUCKETS.clear()
+        _REGISTER_RATE_BUCKETS[client_ip] = bucket
+
     raw_uris = payload.get("redirect_uris")
     if not isinstance(raw_uris, list) or not raw_uris or len(raw_uris) > 16:
         return 400, {
@@ -313,6 +349,27 @@ def register_oauth_client(db: Session, payload: dict) -> tuple[int, dict]:
         secret_hash = _token_hash(raw_secret)
 
     now = datetime.now(UTC)
+    total_clients = db.scalar(select(func.count()).select_from(McpOAuthClient)) or 0
+    if total_clients >= _MAX_OAUTH_CLIENTS:
+        referenced_grants = select(McpOAuthGrant.client_id)
+        referenced_auths = select(McpOAuthAuthorization.client_id)
+        stale_ids = db.scalars(
+            select(McpOAuthClient.client_id)
+            .where(
+                McpOAuthClient.client_id.not_in(referenced_grants),
+                McpOAuthClient.client_id.not_in(referenced_auths),
+            )
+            .order_by(McpOAuthClient.created_at.asc())
+            .limit(max(16, total_clients - _MAX_OAUTH_CLIENTS + 1))
+        ).all()
+        if stale_ids:
+            db.execute(delete(McpOAuthClient).where(McpOAuthClient.client_id.in_(stale_ids)))
+        else:
+            return 429, {
+                "error": "temporarily_unavailable",
+                "error_description": "Registered OAuth client capacity reached",
+            }
+
     client = McpOAuthClient(
         client_id=client_id,
         client_secret_hash=secret_hash,
@@ -733,9 +790,11 @@ def start_oauth_authorization(
             "code_challenge": _pkce_s256(upstream_verifier),
             "code_challenge_method": "S256",
         }
-        dex_auth_url = f"{settings.oidc_issuer.rstrip('/')}/auth?{urlencode(oidc_params)}"
+        auth_ep = get_oidc_authorization_endpoint()
+        sep = "&" if "?" in auth_ep else "?"
+        oidc_auth_url = f"{auth_ep}{sep}{urlencode(oidc_params)}"
         resp: Response = RedirectResponse(
-            dex_auth_url, status_code=302, headers={"Cache-Control": "no-store"}
+            oidc_auth_url, status_code=302, headers={"Cache-Control": "no-store"}
         )
         _set_consent_cookie(resp, auth_row.id, origin)
         return resp
@@ -802,10 +861,10 @@ def handle_mcp_oidc_callback(request: Request, db: Session) -> Response:
 
     origin = public_origin(request)
     settings = get_settings()
-    base = _dex_base_url()
+    token_url = get_oidc_token_endpoint()
     try:
         res = httpx.post(
-            f"{base}/token",
+            token_url,
             data={
                 "grant_type": "authorization_code",
                 "client_id": settings.oidc_client_id,

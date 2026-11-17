@@ -16,11 +16,19 @@ os.environ.setdefault("WORTLAUT_ENABLE_PROCESSING", "false")
 
 @pytest.fixture(autouse=True)
 def reset_settings_cache():
+    from wortlaut import mcp_oauth as mcp_oauth_module
+    from wortlaut import oidc as oidc_module
     from wortlaut.settings import get_settings
 
     get_settings.cache_clear()
+    oidc_module._JWKS_CACHE.clear()
+    oidc_module._DISCOVERY_CACHE.clear()
+    mcp_oauth_module._REGISTER_RATE_BUCKETS.clear()
     yield
     get_settings.cache_clear()
+    oidc_module._JWKS_CACHE.clear()
+    oidc_module._DISCOVERY_CACHE.clear()
+    mcp_oauth_module._REGISTER_RATE_BUCKETS.clear()
 
 
 @pytest.fixture

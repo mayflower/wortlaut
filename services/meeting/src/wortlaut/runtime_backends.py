@@ -1,11 +1,9 @@
 """Docker and local subprocess worker runtimes implementing the controller API contract."""
 
-import http.client
 import json
 import os
 import shutil
 import signal
-import socket
 import subprocess
 import tempfile
 import urllib.parse
@@ -14,6 +12,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace as NS
 
+import httpx
 from kubernetes.client.exceptions import ApiException
 
 from wortlaut.settings import get_settings
@@ -22,18 +21,25 @@ LABEL = "wortlaut/attempt-id"
 POD_FINALIZER = "wortlaut/termination-observed"
 
 
-class UnixHTTPConnection(http.client.HTTPConnection):
-    """Standard-library HTTP connection over a Unix domain socket (/var/run/docker.sock)."""
-
-    def __init__(self, socket_path: str, timeout: float = 10.0):
-        super().__init__("localhost", timeout=timeout)
-        self.socket_path = socket_path
-
-    def connect(self):
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        sock.settimeout(self.timeout)
-        sock.connect(self.socket_path)
-        self.sock = sock
+def _parse_memory_bytes(spec: str | None) -> int | None:
+    if not spec:
+        return None
+    clean = spec.strip()
+    multipliers = {
+        "Ki": 1024,
+        "Mi": 1024**2,
+        "Gi": 1024**3,
+        "K": 1000,
+        "M": 1000**2,
+        "G": 1000**3,
+    }
+    for suffix, mult in multipliers.items():
+        if clean.endswith(suffix):
+            try:
+                return int(float(clean[: -len(suffix)]) * mult)
+            except ValueError:
+                return None
+    return int(clean) if clean.isdigit() else None
 
 
 class LocalSecretStore:
@@ -250,32 +256,77 @@ class DockerRuntime(LocalSecretStore):
         self.docker_host = (socket_path or settings.docker_host or "unix:///var/run/docker.sock").strip()
         self.jobs: dict[str, dict] = {}
 
-    def _open_connection(self) -> http.client.HTTPConnection:
+    def _docker_request(
+        self, method: str, path: str, payload: dict | None = None
+    ) -> tuple[int, str]:
         target = self.docker_host
+        headers = {"Content-Type": "application/json"} if payload is not None else {}
+        content = json.dumps(payload).encode("utf-8") if payload is not None else None
         if target.startswith(("tcp://", "http://")):
             parsed = urllib.parse.urlsplit(target.replace("tcp://", "http://", 1))
             if not parsed.hostname:
                 raise ValueError(f"Invalid WORTLAUT_DOCKER_HOST: {target}")
-            return http.client.HTTPConnection(parsed.hostname, parsed.port or 2375, timeout=10.0)
+            base_url = f"http://{parsed.hostname}:{parsed.port or 2375}"
+            with httpx.Client(base_url=base_url, timeout=10.0) as client:
+                resp = client.request(method, path, content=content, headers=headers)
+                return resp.status_code, resp.text
         sock_path = target.removeprefix("unix://")
-        return UnixHTTPConnection(sock_path, timeout=10.0)
+        transport = httpx.HTTPTransport(uds=sock_path)
+        with httpx.Client(base_url="http://localhost", transport=transport, timeout=10.0) as client:
+            resp = client.request(method, path, content=content, headers=headers)
+            return resp.status_code, resp.text
 
-    def _docker_request(
-        self, method: str, path: str, payload: dict | None = None
-    ) -> tuple[int, str]:
-        conn = self._open_connection()
+    def _recover_jobs_from_docker(self) -> None:
+        status, raw = self._docker_request("GET", "/containers/json?all=1")
+        if status != 200 or not raw:
+            return
         try:
-            headers = {"Content-Type": "application/json"} if payload is not None else {}
-            body = json.dumps(payload).encode("utf-8") if payload is not None else None
-            conn.request(method, path, body=body, headers=headers)
-            resp = conn.getresponse()
-            data = resp.read().decode("utf-8", errors="replace")
-            return resp.status, data
-        finally:
-            conn.close()
+            items = json.loads(raw)
+        except ValueError:
+            return
+        if not isinstance(items, list):
+            return
+        now = datetime.now(UTC)
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            labels = dict(item.get("Labels") or {})
+            names = item.get("Names") or []
+            first_name = str(names[0]).lstrip("/") if names else ""
+            if not first_name or first_name in self.jobs:
+                continue
+            if labels.get("app.kubernetes.io/managed-by") != "wortlaut" and LABEL not in labels:
+                continue
+            state_str = str(item.get("State") or "").lower()
+            running = state_str in ("created", "running", "restarting")
+            cid = str(item.get("Id") or uuid.uuid4())
+            created_ts = item.get("Created")
+            start_time = (
+                datetime.fromtimestamp(created_ts, tz=UTC)
+                if isinstance(created_ts, (int, float)) and created_ts > 0
+                else now
+            )
+            self.jobs[first_name] = {
+                "name": first_name,
+                "uid": cid[:36],
+                "pod_uid": str(uuid.uuid5(uuid.NAMESPACE_OID, f"pod:{first_name}:{cid}")),
+                "labels": labels,
+                "resource_version": "1",
+                "active_deadline_seconds": 7200,
+                "start_time": start_time,
+                "finished_at": None if running else now,
+                "finalizers": [POD_FINALIZER],
+            }
+
+    def _get_or_recover_job(self, name: str) -> dict | None:
+        entry = self.jobs.get(name)
+        if entry is None:
+            self._recover_jobs_from_docker()
+            entry = self.jobs.get(name)
+        return entry
 
     def read_namespaced_job(self, name: str, _namespace: str, **_kwargs):
-        entry = self.jobs.get(name)
+        entry = self._get_or_recover_job(name)
         if not entry:
             raise ApiException(status=404, reason="Not Found")
         return LocalProcessRuntime._to_job(entry)
@@ -288,6 +339,15 @@ class DockerRuntime(LocalSecretStore):
         labels = dict(body["metadata"].get("labels") or {})
         attempt_id = labels.get(LABEL, "")
         settings = get_settings()
+        host_config: dict = {
+            "ShmSize": 256 * 1024 * 1024,
+            "CapDrop": ["ALL"],
+            "SecurityOpt": ["no-new-privileges"],
+            "NetworkMode": settings.docker_network or "bridge",
+        }
+        mem_bytes = _parse_memory_bytes(settings.worker_memory_limit)
+        if mem_bytes:
+            host_config["Memory"] = mem_bytes
         create_payload = {
             "Image": settings.worker_image,
             "User": "1000:1000",
@@ -297,12 +357,7 @@ class DockerRuntime(LocalSecretStore):
                 f"WORTLAUT_ATTEMPT_ID={attempt_id}",
                 f"WORTLAUT_BOOTSTRAP_CREDENTIAL={secret.credential}",
             ],
-            "HostConfig": {
-                "ShmSize": 256 * 1024 * 1024,
-                "CapDrop": ["ALL"],
-                "SecurityOpt": ["no-new-privileges"],
-                "NetworkMode": settings.docker_network or "bridge",
-            },
+            "HostConfig": host_config,
         }
         query = urllib.parse.urlencode({"name": name})
         status, raw = self._docker_request("POST", f"/containers/create?{query}", create_payload)
@@ -320,7 +375,7 @@ class DockerRuntime(LocalSecretStore):
         entry = {
             "name": name,
             "uid": container_id[:36],
-            "pod_uid": str(uuid.uuid4()),
+            "pod_uid": str(uuid.uuid5(uuid.NAMESPACE_OID, f"pod:{name}:{container_id}")),
             "labels": labels,
             "resource_version": "1",
             "active_deadline_seconds": body["spec"].get("activeDeadlineSeconds"),
@@ -332,7 +387,7 @@ class DockerRuntime(LocalSecretStore):
         return LocalProcessRuntime._to_job(entry)
 
     def patch_namespaced_job(self, name: str, _namespace: str, body: dict, **_kwargs):
-        entry = self.jobs.get(name)
+        entry = self._get_or_recover_job(name)
         if not entry:
             raise ApiException(status=404, reason="Not Found")
         deadline = (body.get("spec") or {}).get("activeDeadlineSeconds")
@@ -345,6 +400,10 @@ class DockerRuntime(LocalSecretStore):
 
     def list_namespaced_pod(self, _namespace: str, label_selector: str = "", **_kwargs):
         target_attempt = label_selector.split("=", 1)[1] if "=" in label_selector else None
+        if target_attempt and not any(
+            e["labels"].get(LABEL) == target_attempt for e in self.jobs.values()
+        ):
+            self._recover_jobs_from_docker()
         items = []
         for name, entry in list(self.jobs.items()):
             if target_attempt and entry["labels"].get(LABEL) != target_attempt:
@@ -356,6 +415,9 @@ class DockerRuntime(LocalSecretStore):
                 state = json.loads(raw).get("State") or {}
                 running = bool(state.get("Running"))
                 exit_code = int(state.get("ExitCode", 0))
+            elif status == 404:
+                self.jobs.pop(name, None)
+                continue
             if not running and entry["finished_at"] is None:
                 entry["finished_at"] = datetime.now(UTC)
             phase = "Running" if running else ("Succeeded" if exit_code == 0 else "Failed")
@@ -389,7 +451,7 @@ class DockerRuntime(LocalSecretStore):
 
     def patch_namespaced_pod(self, name: str, _namespace: str, body: list, **_kwargs):
         job_name = name[:-4] if name.endswith("-pod") else name
-        entry = self.jobs.get(job_name)
+        entry = self._get_or_recover_job(job_name)
         if not entry:
             raise ApiException(status=404, reason="Not Found")
         for op in body:

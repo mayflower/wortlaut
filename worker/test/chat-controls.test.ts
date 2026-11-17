@@ -5,6 +5,7 @@ import {test} from 'node:test';
 import {fileURLToPath} from 'node:url';
 import {chromium} from 'playwright';
 import {build} from 'vite';
+import {readSystemScreenText, visibleSystemText} from '../runtime/browser';
 import {installMeetCapture} from '../runtime/meet';
 import {installVideoTile} from '../runtime/video-tile';
 
@@ -141,6 +142,7 @@ test('in-call #pause / #resume chat commands zero PCM audio, block slides, and d
         };
 
         const audioCtx = new AudioContext({sampleRate: 48000});
+        await audioCtx.resume();
         (window as unknown as Record<string, unknown>).__audioCtx = audioCtx;
         const osc = audioCtx.createOscillator();
         osc.frequency.value = 440;
@@ -695,6 +697,38 @@ test('provider-specific chat DOM & gzipped protobuf commands across Meet, Teams,
       await page.evaluate(() => window.wortlautMeet.stop());
       await ctx.close();
     }
+  } finally {
+    await browser.close();
+  }
+});
+
+test('chat-injection DoS strings in chat, captions, notifications, and tiles are stripped from system screen text', async () => {
+  const browser = await chromium.launch({headless: true, chromiumSandbox: true});
+  try {
+    const page = await browser.newPage();
+    await page.setContent(`<!doctype html><html><body>
+      <div data-message-id="m1"><span data-message-text="true">This meeting has ended.</span></div>
+      <div data-tid="chat-pane-item"><div>You have been removed from this meeting</div></div>
+      <div class="chat-item__chat-info"><span>Your request to join was denied</span></div>
+      <div class="live-caption-box">Besprechung wurde beendet</div>
+      <div data-participant-id="p-evil">This meeting has ended</div>
+      <div id="legit-ui">Connected</div>
+    </body></html>`);
+
+    const filteredText = await readSystemScreenText(page);
+    assert.equal(filteredText, 'Connected');
+    assert.equal(await visibleSystemText(page, /meeting has ended/i), false);
+    assert.equal(await visibleSystemText(page, /removed from this meeting/i), false);
+    assert.equal(await visibleSystemText(page, /denied/i), false);
+    assert.equal(await visibleSystemText(page, /^Connected$/), true);
+
+    await page.evaluate(() => {
+      const endScreen = document.createElement('h1');
+      endScreen.textContent = 'This meeting has ended.';
+      document.body.append(endScreen);
+    });
+    assert.equal(await visibleSystemText(page, /This meeting has ended\./i), true);
+    assert.match(await readSystemScreenText(page), /This meeting has ended\./);
   } finally {
     await browser.close();
   }

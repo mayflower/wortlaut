@@ -1,6 +1,7 @@
 import hmac
 import io
 import json
+import re
 import secrets
 import uuid
 import wave
@@ -27,11 +28,12 @@ from wortlaut.processing import (
     MAX_CHUNK,
     RATE,
     collect_opted_out_speakers,
+    collect_stream_participant_names,
     is_speaker_opted_out,
     read_pcm,
     stream_quality,
 )
-from wortlaut.settings import get_settings
+from wortlaut.settings import derive_subkey, get_settings
 
 BERLIN_TZ = ZoneInfo("Europe/Berlin")
 WEEKDAYS_DE = ("Mo.", "Di.", "Mi.", "Do.", "Fr.", "Sa.", "So.")
@@ -331,7 +333,7 @@ def export_reader_token(recording: Recording) -> str | None:
     # to export reads. Neither the API key nor a reader secret is stored in mail state.
     domain = f"wortlaut.export.reader.v1:{recording.id}:{recording.export_reader_nonce}"
     signature = hmac.digest(
-        get_settings().api_token.get_secret_value().encode(), domain.encode(), "sha256"
+        derive_subkey(b"reader-token-v1"), domain.encode(), "sha256"
     ).hex()
     return "wortlaut-read-" + signature
 
@@ -350,9 +352,21 @@ def chat_reader_token(recording: Recording) -> str | None:
         return None
     domain = f"wortlaut.chat.reader.v1:{recording.id}:{recording.request_digest}"
     signature = hmac.digest(
-        get_settings().api_token.get_secret_value().encode(), domain.encode(), "sha256"
+        derive_subkey(b"reader-token-v1"), domain.encode(), "sha256"
     ).hex()
     return "wortlaut-read-" + signature
+
+
+def _legacy_reader_candidates(recording: Recording) -> list[str]:
+    out: list[str] = []
+    raw_api = get_settings().api_token.get_secret_value().encode()
+    if recording.export_reader_nonce and recording.processing_finished_at is not None:
+        dom = f"wortlaut.export.reader.v1:{recording.id}:{recording.export_reader_nonce}"
+        out.append("wortlaut-read-" + hmac.digest(raw_api, dom.encode(), "sha256").hex())
+    if recording.request_digest:
+        dom = f"wortlaut.chat.reader.v1:{recording.id}:{recording.request_digest}"
+        out.append("wortlaut-read-" + hmac.digest(raw_api, dom.encode(), "sha256").hex())
+    return out
 
 
 def verify_recording_reader_token(recording: Recording | None, token: str) -> bool:
@@ -362,7 +376,15 @@ def verify_recording_reader_token(recording: Recording | None, token: str) -> bo
     prefix = f"wortlaut-read-{recording.id}."
     if clean.lower().startswith(prefix.lower()):
         clean = "wortlaut-read-" + clean.split(".", 1)[1]
-    for candidate in (export_reader_token(recording), chat_reader_token(recording)):
+    if (
+        recording.transcript_deleted_at is not None
+        or recording.metadata_deleted_at is not None
+    ):
+        return False
+    candidates = [export_reader_token(recording), chat_reader_token(recording)]
+    if any(c is not None for c in candidates):
+        candidates.extend(_legacy_reader_candidates(recording))
+    for candidate in candidates:
         if candidate is not None and secrets.compare_digest(clean.encode(), candidate.encode()):
             return True
     return False
@@ -480,37 +502,14 @@ def export_data(
 ):
     attempts = db.scalars(select(Attempt).where(Attempt.recording_id == recording.id)).all()
     raw_pauses = _collect_raw_pause_windows(attempts)
-    streams = db.scalars(
-        select(AudioStream).where(AudioStream.attempt_id.in_([a.id for a in attempts]))
-    ).all()
-    participant_names: dict[str, str] = {}
-    for attempt in attempts:
-        for p in attempt.diagnostics.get("participant_sources", {}).get("sources", []):
-            if p.get("participant_id") and p.get("participant_name"):
-                participant_names[p["participant_id"]] = p["participant_name"]
-        for rcv in attempt.diagnostics.get("receiver_sources", []):
-            if rcv.get("signaled_participant_id") and rcv.get("participant_name"):
-                participant_names[rcv["signaled_participant_id"]] = rcv["participant_name"]
-    for s in streams:
-        pid = s.contract.get("participant_id") or s.contract.get("speaker_id")
-        if pid and s.contract.get("participant_name"):
-            participant_names[pid] = s.contract["participant_name"]
-    bind_controls = (
+    streams = list(
         db.scalars(
-            select(AudioControl)
-            .where(
-                AudioControl.stream_id.in_([s.id for s in streams]),
-                AudioControl.kind == "bind",
-            )
-            .order_by(AudioControl.start_sample)
+            select(AudioStream).where(AudioStream.attempt_id.in_([a.id for a in attempts]))
         ).all()
-        if streams
-        else []
     )
-    for ctrl in bind_controls:
-        pid = ctrl.contract.get("participant_id") or ctrl.contract.get("speaker_id")
-        if pid and ctrl.contract.get("participant_name"):
-            participant_names[pid] = ctrl.contract["participant_name"]
+    participant_names, bind_controls = collect_stream_participant_names(
+        db, streams, attempts=list(attempts), order_binds=True
+    )
     meta = dict(recording.protocol_meta or {})
     speaker_overrides: dict[str, str] = dict(meta.get("speaker_overrides") or {})
     term_replacements: dict[str, str] = dict(meta.get("term_replacements") or {})
@@ -706,42 +705,24 @@ def export_data(
             and seg_conf < MIN_EXPORT_SEGMENT_CONFIDENCE
         ):
             continue
-        has_stream_bindings = (
-            stream_key in unambiguous_stream_bindings
-            or bool(stream_bind_timeline.get(stream_key))
-        )
-        if segment.get("attribution_unknown") and has_stream_bindings:
-            if (
-                not is_protected
-                and stream_key not in unambiguous_stream_bindings
-                and dur <= 0.30
-                and isinstance(seg_conf, (int, float))
-                and seg_conf < MIN_SHORT_FRAGMENT_CONFIDENCE
-            ):
-                continue
-            if stream_key in unambiguous_stream_bindings:
-                resolved_pid, resolved_spk, resolved_kind = unambiguous_stream_bindings[stream_key]
-                resolved_name = participant_names.get(resolved_pid)
-            else:
-                tl = stream_bind_timeline[stream_key]
-                before = [b for b in tl if b[0] <= segment["end"] + 0.35]
-                after = [b for b in tl if b[0] > segment["start"]]
-                if before and after:
-                    if after[0][0] - segment["end"] <= 2.5 or before[-1][1] == after[0][1]:
-                        chosen = after[0]
-                    else:
-                        chosen = before[-1]
-                elif before:
-                    chosen = before[-1]
-                else:
-                    chosen = after[0]
-                _, resolved_pid, resolved_spk, resolved_kind, resolved_name = chosen
+        if segment.get("attribution_unknown") and stream_key in unambiguous_stream_bindings:
+            resolved_pid, resolved_spk, resolved_kind = unambiguous_stream_bindings[stream_key]
+            resolved_name = participant_names.get(resolved_pid)
             segment["attribution_unknown"] = False
             segment["participant_id"] = resolved_pid
             segment["speaker_id"] = resolved_spk if resolved_kind == "speaker" else None
             segment["source_kind"] = resolved_kind
             if resolved_name and not segment.get("participant_name"):
                 segment["participant_name"] = resolved_name
+        elif (
+            not is_protected
+            and segment.get("attribution_unknown")
+            and bool(stream_bind_timeline.get(stream_key))
+            and dur <= 0.30
+            and isinstance(seg_conf, (int, float))
+            and seg_conf < MIN_SHORT_FRAGMENT_CONFIDENCE
+        ):
+            continue
         elif (
             not is_protected
             and not segment.get("attribution_unknown")
@@ -801,11 +782,7 @@ def export_data(
         if seg_id and seg_id in segment_edits and segment_edits[seg_id].strip():
             seg["text"] = " ".join(segment_edits[seg_id].split())
         if term_replacements:
-            txt = seg.get("text") or ""
-            for old_t, new_t in term_replacements.items():
-                if old_t:
-                    txt = txt.replace(old_t, new_t)
-            seg["text"] = txt
+            seg["text"] = _apply_text_replacements(seg.get("text") or "", term_replacements)
         if speaker_overrides:
             pid = seg.get("participant_id") or seg.get("speaker_id")
             orig_label = seg.get("speaker_label") or ""
@@ -1221,11 +1198,24 @@ def _build_sources_summary(
 
 
 def _apply_text_replacements(value: str, term_replacements: dict[str, str]) -> str:
-    out = value
-    for old_t, new_t in term_replacements.items():
-        if old_t:
-            out = out.replace(old_t, new_t)
-    return out
+    if not value or not term_replacements:
+        return value
+    valid = [(k, v) for k, v in term_replacements.items() if k]
+    if not valid:
+        return value
+    # Single-pass longest-first match with word boundaries so replacements never corrupt
+    # substrings inside unrelated words (e.g. "ai" -> "AI" in "said") or chain into each other.
+    valid.sort(key=lambda kv: len(kv[0]), reverse=True)
+    parts: list[str] = []
+    lookup: dict[str, str] = {}
+    for old_t, new_t in valid:
+        lookup[old_t] = new_t
+        esc = re.escape(old_t)
+        prefix = r"(?<!\w)" if (old_t[0].isalnum() or old_t[0] == "_") else ""
+        suffix = r"(?!\w)" if (old_t[-1].isalnum() or old_t[-1] == "_") else ""
+        parts.append(f"{prefix}{esc}{suffix}")
+    pattern = re.compile("|".join(parts))
+    return pattern.sub(lambda m: lookup.get(m.group(0), m.group(0)), value)
 
 
 def _single_line(value: object) -> str:
@@ -1401,7 +1391,7 @@ def render_export(data, format):
         ):
             lines.append("_Keine Transkriptsegmente vorhanden._")
         else:
-            ui_url = f"{get_settings().api_url.rstrip('/')}/ui"
+            ui_url = f"{get_settings().public_base_url()}/ui"
             protocol_link = f"{ui_url}#view=meetings&id={data['recording_id']}"
             timeline_items: list[tuple[float, int, int, str, dict]] = []
             for idx, kf in enumerate(keyframes_list):
@@ -1743,85 +1733,107 @@ def extract_audio_snippet_wav(
 ) -> bytes:
     if recording.audio_deleted_at is not None:
         raise LookupError("audio_deleted")
-    attempts = db.scalars(select(Attempt).where(Attempt.recording_id == recording.id)).all()
+    if not stream_id or not str(stream_id).strip():
+        raise LookupError("stream_id_required")
+    attempts = list(
+        db.scalars(select(Attempt).where(Attempt.recording_id == recording.id)).all()
+    )
     if not attempts:
         raise LookupError("no_audio")
-    streams = db.scalars(
-        select(AudioStream).where(AudioStream.attempt_id.in_([a.id for a in attempts]))
-    ).all()
+    streams = list(
+        db.scalars(
+            select(AudioStream).where(AudioStream.attempt_id.in_([a.id for a in attempts]))
+        ).all()
+    )
     if not streams:
         raise LookupError("no_audio")
     anchors = [datetime.fromisoformat(s.contract["session_utc_origin"]) for s in streams]
     origin = min(anchors) if anchors else recording.starts_at
 
-    participant_names: dict[str, str] = {}
-    for s in streams:
-        pid = s.contract.get("participant_id") or s.contract.get("speaker_id")
-        if pid and s.contract.get("participant_name"):
-            participant_names[str(pid)] = str(s.contract["participant_name"])
-    bind_controls = list(
-        db.scalars(
-            select(AudioControl).where(
-                AudioControl.stream_id.in_([s.id for s in streams]),
-                AudioControl.kind == "bind",
-            )
-        ).all()
+    participant_names, bind_controls = collect_stream_participant_names(
+        db, streams, attempts=attempts, order_binds=True
     )
-    for ctrl in bind_controls:
-        pid = ctrl.contract.get("participant_id") or ctrl.contract.get("speaker_id")
-        if pid and ctrl.contract.get("participant_name"):
-            participant_names[str(pid)] = str(ctrl.contract["participant_name"])
     _, opted_out_norm = collect_opted_out_speakers(recording, attempts, participant_names)
 
-    def _stream_is_opted_out(s: AudioStream) -> bool:
-        if not opted_out_norm:
-            return False
-        pid = s.contract.get("participant_id") or s.contract.get("speaker_id")
-        pname = s.contract.get("participant_name") or (
-            participant_names.get(str(pid)) if pid else None
-        )
-        spk = s.contract.get("speaker_id")
-        psid = s.contract.get("provider_source_id")
-        if is_speaker_opted_out(
-            opted_out_norm,
-            participant_id=str(pid) if pid else None,
-            speaker_id=str(spk) if spk else None,
-            participant_name=str(pname) if pname else None,
-            provider_source_id=str(psid) if psid else None,
-        ):
-            return True
-        for ctrl in bind_controls:
-            if ctrl.stream_id == s.id:
-                cpid = ctrl.contract.get("participant_id") or ctrl.contract.get("speaker_id")
-                cpname = ctrl.contract.get("participant_name") or (
-                    participant_names.get(str(cpid)) if cpid else None
-                )
-                cspk = ctrl.contract.get("speaker_id")
-                cpsid = ctrl.contract.get("provider_source_id")
-                if is_speaker_opted_out(
-                    opted_out_norm,
-                    participant_id=str(cpid) if cpid else None,
-                    speaker_id=str(cspk) if cspk else None,
-                    participant_name=str(cpname) if cpname else None,
-                    provider_source_id=str(cpsid) if cpsid else None,
-                ):
-                    return True
-        return False
-
-    candidates = [s for s in streams if stream_id and str(s.stream_id) == str(stream_id)]
-    if candidates and all(_stream_is_opted_out(s) for s in candidates):
-        raise LookupError("speaker_opted_out")
+    candidates = [s for s in streams if str(s.stream_id) == str(stream_id).strip()]
     if not candidates:
-        candidates = [s for s in streams if not _stream_is_opted_out(s)]
-    else:
-        candidates = [s for s in candidates if not _stream_is_opted_out(s)]
-    if not candidates:
-        raise LookupError("speaker_opted_out")
+        raise LookupError("stream_not_found")
 
     duration_sec = min(90.0, max(0.8, float(end_sec) - float(start_sec)))
     target_end_sec = float(start_sec) + duration_sec
 
+    def _resolve_allowed_sample_window(
+        s: AudioStream,
+        core_start: int,
+        core_end: int,
+        padded_start: int,
+        padded_end: int,
+    ) -> tuple[int, int, str | None]:
+        def _ctrl_sample(ctrl: AudioControl) -> int:
+            if ctrl.start_sample is not None:
+                return int(ctrl.start_sample)
+            return int((ctrl.contract or {}).get("start_sample") or 0)
+
+        s_binds = sorted(
+            [c for c in bind_controls if c.stream_id == s.id],
+            key=_ctrl_sample,
+        )
+        intervals: list[tuple[int, int | None, dict]] = []
+        first_bind_sample = _ctrl_sample(s_binds[0]) if s_binds else None
+        if first_bind_sample is None or first_bind_sample > 0:
+            intervals.append((0, first_bind_sample, s.contract))
+        for idx, ctrl in enumerate(s_binds):
+            cur_s = _ctrl_sample(ctrl)
+            nxt = _ctrl_sample(s_binds[idx + 1]) if idx + 1 < len(s_binds) else None
+            intervals.append((cur_s, nxt, ctrl.contract))
+
+        observed_pids: set[str] = set()
+        for _, _, cdict in intervals:
+            if not cdict.get("attribution_unknown"):
+                opid = cdict.get("participant_id") or cdict.get("speaker_id")
+                if opid:
+                    observed_pids.add(str(opid))
+        unambiguous_pid = next(iter(observed_pids)) if len(observed_pids) == 1 else None
+
+        def _interval_block_reason(cdict: dict) -> str | None:
+            if not opted_out_norm:
+                return None
+            cpid = cdict.get("participant_id") or cdict.get("speaker_id") or unambiguous_pid
+            cpname = cdict.get("participant_name") or (
+                participant_names.get(str(cpid)) if cpid else None
+            )
+            cspk = cdict.get("speaker_id") or unambiguous_pid
+            cpsid = cdict.get("provider_source_id") or s.contract.get("provider_source_id")
+            if is_speaker_opted_out(
+                opted_out_norm,
+                participant_id=str(cpid) if cpid else None,
+                speaker_id=str(cspk) if cspk else None,
+                participant_name=str(cpname) if cpname else None,
+                provider_source_id=str(cpsid) if cpsid else None,
+            ):
+                return "speaker_opted_out"
+            if cdict.get("attribution_unknown") and not unambiguous_pid:
+                return "attribution_unverified"
+            return None
+
+        eff_start = padded_start
+        eff_end = padded_end
+        for iv_start, iv_end, cdict in intervals:
+            reason = _interval_block_reason(cdict)
+            if reason is None:
+                continue
+            # If the core segment itself overlaps a blocked interval, reject immediately.
+            if (iv_end is None or iv_end > core_start) and iv_start < core_end:
+                return eff_start, eff_end, reason
+            # Clamp context padding so it never bleeds into an adjacent blocked interval.
+            if iv_end is not None and iv_end <= core_start and eff_start < iv_end:
+                eff_start = iv_end
+            if iv_start >= core_end and eff_end > iv_start:
+                eff_end = iv_start
+        return eff_start, max(eff_start + 1, eff_end), None
+
     pcm_bytes = b""
+    blocked_reason: str | None = None
     for s in candidates:
         s_delta = (
             datetime.fromisoformat(s.contract["session_utc_origin"]) - origin
@@ -1831,11 +1843,19 @@ def extract_audio_snippet_wav(
             - s.contract.get("session_monotonic_origin_ms", 0)
         ) / 1000.0
         stream_offset = s_delta + s_mono_delta
-        start_sample = max(0, int((float(start_sec) - stream_offset - 0.15) * RATE))
-        end_sample = max(
-            start_sample + int(0.5 * RATE),
+        core_start = max(0, int((float(start_sec) - stream_offset) * RATE))
+        core_end = max(core_start + 1, int((target_end_sec - stream_offset) * RATE))
+        padded_start = max(0, int((float(start_sec) - stream_offset - 0.15) * RATE))
+        padded_end = max(
+            padded_start + int(0.5 * RATE),
             int((target_end_sec - stream_offset + 0.25) * RATE),
         )
+        start_sample, end_sample, block = _resolve_allowed_sample_window(
+            s, core_start, core_end, padded_start, padded_end
+        )
+        if block is not None:
+            blocked_reason = block
+            continue
         chunks = db.scalars(
             select(AudioChunk)
             .where(
@@ -1861,7 +1881,7 @@ def extract_audio_snippet_wav(
             continue
 
     if not pcm_bytes:
-        raise LookupError("audio_range_unavailable")
+        raise LookupError(blocked_reason or "audio_range_unavailable")
 
     buf = io.BytesIO()
     with wave.open(buf, "wb") as wf:

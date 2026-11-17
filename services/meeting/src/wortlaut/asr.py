@@ -17,7 +17,6 @@ from wortlaut.models import (
     AsrJob,
     Attempt,
     AudioChunk,
-    AudioControl,
     AudioStream,
     Recording,
     TranscriptSegment,
@@ -195,7 +194,9 @@ def commit_result(db: Session, identifier: str, result: dict):
     db.commit()
 
 
-def retry_job(engine, identifier: str, reason: str, permanent: bool):
+def retry_job(
+    engine, identifier: str, reason: str, permanent: bool, *, delay_seconds: int = 30
+):
     with Session(engine) as db:
         job = db.scalar(select(AsrJob).where(AsrJob.id == identifier).with_for_update())
         if job is None or job.status in ("completed", "failed"):
@@ -206,7 +207,7 @@ def retry_job(engine, identifier: str, reason: str, permanent: bool):
         job.status = (
             "failed" if job.attempts >= get_settings().asr_max_permanent_failures else "pending"
         )
-        job.retry_at = datetime.now(UTC) + timedelta(seconds=30)
+        job.retry_at = datetime.now(UTC) + timedelta(seconds=max(1, min(120, delay_seconds)))
         db.commit()
 
 
@@ -230,32 +231,12 @@ def build_asr_context_prompt(
         else [stream]
     )
 
-    raw_names: dict[str, str] = {}
-    for s in streams:
-        pid = s.contract.get("participant_id") or s.contract.get("speaker_id")
-        pname = s.contract.get("participant_name")
-        if pid and isinstance(pname, str) and pname.strip():
-            raw_names[str(pid)] = " ".join(pname.split())
-    stream_db_ids = [s.id for s in streams if s.id is not None]
-    if stream_db_ids:
-        for ctrl in db.scalars(
-            select(AudioControl).where(
-                AudioControl.stream_id.in_(stream_db_ids),
-                AudioControl.kind == "bind",
-            )
-        ):
-            pid = ctrl.contract.get("participant_id") or ctrl.contract.get("speaker_id")
-            pname = ctrl.contract.get("participant_name")
-            if pid and isinstance(pname, str) and pname.strip():
-                raw_names[str(pid)] = " ".join(pname.split())
-    for a in attempts:
-        diag = a.diagnostics if isinstance(a.diagnostics, dict) else {}
-        ps = diag.get("participant_sources")
-        for src in (ps.get("sources") or []) if isinstance(ps, dict) else []:
-            if isinstance(src, dict) and src.get("participant_id") and src.get("participant_name"):
-                raw_names[str(src["participant_id"])] = " ".join(
-                    str(src["participant_name"]).split()
-                )
+    from wortlaut.processing import collect_stream_participant_names
+
+    collected, _ = collect_stream_participant_names(db, list(streams), attempts=list(attempts))
+    raw_names: dict[str, str] = {
+        pid: " ".join(name.split()) for pid, name in collected.items() if name.strip()
+    }
     if isinstance(job.binding, dict) and job.binding.get("participant_name"):
         b_pid = str(
             job.binding.get("participant_id") or job.binding.get("speaker_id") or "current"
@@ -449,11 +430,16 @@ def inference_pass(engine):
                 request_seconds = time.perf_counter() - inference_start
             if response.status_code != 200:
                 outcome = f"gpu_http_{response.status_code}"
+                retry_delay = 30
+                if response.status_code == 429:
+                    raw_ra = (response.headers.get("Retry-After") or "").strip()
+                    retry_delay = int(raw_ra) if raw_ra.isdigit() else 5
                 retry_job(
                     engine,
                     identifier,
                     f"gpu_http_{response.status_code}",
                     response.status_code in (400, 413, 422),
+                    delay_seconds=retry_delay,
                 )
                 return True
             payload = response.json()
@@ -629,9 +615,7 @@ def finalize_processing(engine):
         for rec_id in completed_ids:
             try:
                 with Session(engine) as db:
-                    rec = db.scalar(
-                        select(Recording).where(Recording.id == rec_id).with_for_update()
-                    )
+                    rec = db.get(Recording, rec_id)
                     if rec is not None:
                         publish_protocol_link_to_calendar_events(db, rec)
                         db.commit()

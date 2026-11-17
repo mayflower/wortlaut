@@ -512,7 +512,8 @@ def build_message(db, recording, delivery):
     human_provider = provider_label(recording.provider)
     human_period = format_period_de(period["start"], period["end"])
     date_short = format_date_short_de(period["start"])
-    ui_url = f"{settings.api_url.rstrip('/')}/ui"
+    public_base = settings.public_base_url()
+    ui_url = f"{public_base}/ui"
     title = recording.title or f"Besprechung ({human_provider})"
 
     capture_anomaly = bool(quality.get("capture_anomaly"))
@@ -633,7 +634,7 @@ def build_message(db, recording, delivery):
             filename=f"wortlaut-{recording.id}.zip",
         )
         if len(message.as_bytes()) > settings.mail_attachment_limit_bytes:
-            target = urlsplit(settings.api_url)
+            target = urlsplit(public_base)
             if (
                 target.scheme != "https"
                 or not target.hostname
@@ -648,7 +649,7 @@ def build_message(db, recording, delivery):
             sig = credential.removeprefix("wortlaut-read-")
             ui_link = f"{ui_url}#token=wortlaut-read-{recording.id}.{sig}"
             message.clear_content()
-            base_url = settings.api_url.rstrip("/") + f"/v1/recordings/{recording.id}/exports"
+            base_url = public_base + f"/v1/recordings/{recording.id}/exports"
             downloads = "\n".join(
                 f"curl --fail --header {shlex.quote('Authorization: Bearer ' + credential)} "
                 f"{shlex.quote(base_url + '/' + format)} "

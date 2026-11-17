@@ -84,6 +84,9 @@ export interface RecordingSidebarProps {
   token?: string;
   recordings: RecordingSummary[];
   totalRecordingsCount?: number;
+  hasMoreRecordings?: boolean;
+  isLoadingMoreRecordings?: boolean;
+  onLoadMoreRecordings?: () => void;
   calendarConnections?: CalendarConnectionInfo[];
   calendarSyncedEvents?: CalendarSyncedEventInfo[];
   selectedId: string | null;
@@ -162,6 +165,9 @@ export function RecordingSidebar({
   token = '',
   recordings,
   totalRecordingsCount,
+  hasMoreRecordings = false,
+  isLoadingMoreRecordings = false,
+  onLoadMoreRecordings,
   calendarConnections = [],
   calendarSyncedEvents = [],
   onSelectRecording,
@@ -1213,8 +1219,8 @@ export function RecordingSidebar({
                         variant="ghost"
                         size="sm"
                         label={tr(
-                          `Alle Aufnahmen durchsuchen (${totalCount})`,
-                          `Browse all recordings (${totalCount})`
+                          `Alle Aufnahmen durchsuchen (${totalCount}${hasMoreRecordings ? '+' : ''})`,
+                          `Browse all recordings (${totalCount}${hasMoreRecordings ? '+' : ''})`
                         )}
                         endContent={<ArrowRight className="h-3.5 w-3.5" />}
                         onClick={onNavigateMeetings}
@@ -1383,6 +1389,24 @@ export function RecordingSidebar({
                     }}
                   />
                 )}
+
+                {hasMoreRecordings &&
+                  onLoadMoreRecordings &&
+                  (!isHomeView || hasActiveFilter) && (
+                    <HStack justify="center">
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        isDisabled={isLoadingMoreRecordings}
+                        label={
+                          isLoadingMoreRecordings
+                            ? tr('Lade weitere Aufnahmen…', 'Loading more recordings…')
+                            : tr('Weitere Aufnahmen laden', 'Load more recordings')
+                        }
+                        onClick={onLoadMoreRecordings}
+                      />
+                    </HStack>
+                  )}
               </VStack>
             </VStack>
           </div>

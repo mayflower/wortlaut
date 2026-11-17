@@ -17,6 +17,8 @@ dependencies = [
   "recurring-ical-events==3.8.2",
   "dkimpy==1.1.8",
   "cryptography>=44,<51",
+  "PyJWT>=2.9,<3",
+  "mcp>=1.9,<2",
   "onnxruntime>=1.20,<2",
 ]
 

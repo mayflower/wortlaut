@@ -14,7 +14,7 @@ from urllib.parse import quote, urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
-from cryptography.fernet import Fernet, InvalidToken
+from cryptography.fernet import Fernet, InvalidToken, MultiFernet
 from fastapi import HTTPException
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
@@ -32,7 +32,7 @@ from wortlaut.models import (
     TranscriptSegment,
 )
 from wortlaut.oidc import Principal
-from wortlaut.settings import get_settings
+from wortlaut.settings import derive_subkey, get_settings
 from wortlaut.validation import normalize_meeting_url
 
 CalendarOAuthProvider = Literal["google", "microsoft"]
@@ -54,10 +54,26 @@ MICROSOFT_EVENTS_URL = "https://graph.microsoft.com/v1.0/me/events"
 MICROSOFT_ME_URL = "https://graph.microsoft.com/v1.0/me"
 
 
-def _fernet() -> Fernet:
-    secret = get_settings().api_token.get_secret_value().encode("utf-8")
-    digest = hashlib.sha256(b"wortlaut-cal-oauth-v1:" + secret).digest()
-    return Fernet(base64.urlsafe_b64encode(digest))
+def _fernet() -> MultiFernet:
+    settings = get_settings()
+    primary = Fernet(
+        base64.urlsafe_b64encode(
+            derive_subkey(b"calendar-oauth-fernet-v1", use_encryption_secret=True)
+        )
+    )
+    fernets = [primary]
+    if settings.encryption_key is not None:
+        fernets.append(
+            Fernet(
+                base64.urlsafe_b64encode(
+                    derive_subkey(b"calendar-oauth-fernet-v1", use_encryption_secret=False)
+                )
+            )
+        )
+    api_secret = settings.api_token.get_secret_value().encode("utf-8")
+    legacy_digest = hashlib.sha256(b"wortlaut-cal-oauth-v1:" + api_secret).digest()
+    fernets.append(Fernet(base64.urlsafe_b64encode(legacy_digest)))
+    return MultiFernet(fernets)
 
 
 def encrypt_secret(plain: str) -> str:
@@ -161,7 +177,7 @@ def build_protocol_reader_url(recording: Recording | None) -> str | None:
     if not cred:
         return None
     sig = cred.removeprefix("wortlaut-read-")
-    base_url = get_settings().api_url.rstrip("/")
+    base_url = get_settings().public_base_url()
     return (
         f"{base_url}/ui#view=meetings&id={recording.id}"
         f"&token=wortlaut-read-{recording.id}.{sig}"
@@ -283,7 +299,10 @@ def exchange_calendar_oauth_code(
 
     token_data = resp.json()
     access_token = token_data.get("access_token")
-    refresh_token = token_data.get("refresh_token") or access_token
+    raw_refresh = token_data.get("refresh_token")
+    new_refresh = (
+        raw_refresh.strip() if isinstance(raw_refresh, str) and raw_refresh.strip() else None
+    )
     if not access_token or not isinstance(access_token, str):
         raise HTTPException(401, "Calendar OAuth response missing access_token")
 
@@ -307,12 +326,17 @@ def exchange_calendar_oauth_code(
         .with_for_update(key_share=True)
     )
     if conn is None:
+        if not new_refresh:
+            raise HTTPException(
+                400,
+                "Calendar OAuth response missing refresh_token; please grant offline access.",
+            )
         conn = CalendarConnection(
             owner_sub=principal.sub,
             owner_email=owner_email,
             provider=provider,
             account_email=account_email,
-            encrypted_refresh_token=encrypt_secret(refresh_token),
+            encrypted_refresh_token=encrypt_secret(new_refresh),
             encrypted_access_token=encrypt_secret(access_token),
             token_expires_at=now + timedelta(seconds=max(60, expires_in - 60)),
         )
@@ -320,8 +344,8 @@ def exchange_calendar_oauth_code(
         db.flush()
     else:
         conn.owner_sub = principal.sub or conn.owner_sub
-        if token_data.get("refresh_token"):
-            conn.encrypted_refresh_token = encrypt_secret(refresh_token)
+        if new_refresh:
+            conn.encrypted_refresh_token = encrypt_secret(new_refresh)
         conn.encrypted_access_token = encrypt_secret(access_token)
         conn.token_expires_at = now + timedelta(seconds=max(60, expires_in - 60))
         conn.sync_error = None
@@ -440,6 +464,17 @@ def _ensure_access_token(
     return access_token
 
 
+_MAX_CALENDAR_SYNC_PAGES = 20
+
+
+class _EventPageList(list):
+    """List of parsed calendar events carrying whether upstream pagination hit the page cap."""
+
+    def __init__(self, iterable=(), *, truncated: bool = False):
+        super().__init__(iterable)
+        self.truncated = truncated
+
+
 def _fetch_provider_events(
     conn: CalendarConnection | ConnectionSnapshot,
     access_token: str,
@@ -448,37 +483,71 @@ def _fetch_provider_events(
 ) -> list[dict]:
     headers = {"Authorization": f"Bearer {access_token}", "Accept": "application/json"}
     if conn.provider == "google":
-        resp = httpx.get(
-            GOOGLE_CALENDAR_EVENTS_URL,
-            params={
+        all_items: list[dict] = []
+        page_token: str | None = None
+        truncated = False
+        for page_idx in range(_MAX_CALENDAR_SYNC_PAGES):
+            params: dict[str, str] = {
                 "singleEvents": "true",
                 "orderBy": "startTime",
                 "timeMin": window_start.isoformat(),
                 "timeMax": window_end.isoformat(),
                 "maxResults": "250",
-            },
-            headers=headers,
+            }
+            if page_token:
+                params["pageToken"] = page_token
+            resp = httpx.get(
+                GOOGLE_CALENDAR_EVENTS_URL,
+                params=params,
+                headers=headers,
+                timeout=12.0,
+            )
+            if resp.status_code != 200:
+                raise ValueError(f"google_calendar_http_{resp.status_code}")
+            body = resp.json()
+            all_items.extend(body.get("items") or [])
+            next_tok = body.get("nextPageToken")
+            if not isinstance(next_tok, str) or not next_tok.strip():
+                break
+            page_token = next_tok.strip()
+            if page_idx == _MAX_CALENDAR_SYNC_PAGES - 1:
+                truncated = True
+        out = _EventPageList(_parse_google_items(conn, all_items))
+        out.truncated = truncated
+        return out
+
+    all_ms_items: list[dict] = []
+    next_url: str | None = MICROSOFT_CALENDAR_VIEW_URL
+    ms_params: dict[str, str] | None = {
+        "startDateTime": window_start.isoformat(),
+        "endDateTime": window_end.isoformat(),
+        "$top": "250",
+    }
+    truncated = False
+    for page_idx in range(_MAX_CALENDAR_SYNC_PAGES):
+        resp = httpx.get(
+            next_url,
+            params=ms_params,
+            headers={**headers, "Prefer": 'outlook.timezone="UTC"'},
             timeout=12.0,
         )
         if resp.status_code != 200:
-            raise ValueError(f"google_calendar_http_{resp.status_code}")
-        items = resp.json().get("items") or []
-        return _parse_google_items(conn, items)
-
-    resp = httpx.get(
-        MICROSOFT_CALENDAR_VIEW_URL,
-        params={
-            "startDateTime": window_start.isoformat(),
-            "endDateTime": window_end.isoformat(),
-            "$top": "250",
-        },
-        headers={**headers, "Prefer": 'outlook.timezone="UTC"'},
-        timeout=12.0,
-    )
-    if resp.status_code != 200:
-        raise ValueError(f"microsoft_calendar_http_{resp.status_code}")
-    items = resp.json().get("value") or []
-    return _parse_microsoft_items(conn, items)
+            raise ValueError(f"microsoft_calendar_http_{resp.status_code}")
+        body = resp.json()
+        all_ms_items.extend(body.get("value") or [])
+        raw_next = body.get("@odata.nextLink")
+        if not isinstance(raw_next, str) or not raw_next.strip():
+            break
+        parsed_next = urlsplit(raw_next.strip())
+        if parsed_next.scheme != "https" or parsed_next.hostname != "graph.microsoft.com":
+            break
+        next_url = raw_next.strip()
+        ms_params = None
+        if page_idx == _MAX_CALENDAR_SYNC_PAGES - 1:
+            truncated = True
+    out = _EventPageList(_parse_microsoft_items(conn, all_ms_items))
+    out.truncated = truncated
+    return out
 
 
 _NOTETAKER_BOT_RE = re.compile(
@@ -958,21 +1027,23 @@ def apply_synced_events(
         synced.append(ev)
 
     # Mark previously synced future events in this window that disappeared as cancelled
-    missing = db.scalars(
-        select(CalendarSyncedEvent)
-        .where(
-            CalendarSyncedEvent.connection_id == conn.id,
-            CalendarSyncedEvent.starts_at >= window_start,
-            CalendarSyncedEvent.starts_at <= window_end,
-        )
-        .order_by(CalendarSyncedEvent.id.asc())
-        .with_for_update(key_share=True)
-    ).all()
-    for ev in missing:
-        if ev.external_event_id not in seen_ext_ids and ev.status != "cancelled":
-            ev.status = "cancelled"
-            ev.updated_at = now
-            _reconcile_synced_event_recording(db, ev, now)
+    # (skip when upstream pagination hit the safety page cap so valid events are never truncated).
+    if not getattr(raw_events, "truncated", False):
+        missing = db.scalars(
+            select(CalendarSyncedEvent)
+            .where(
+                CalendarSyncedEvent.connection_id == conn.id,
+                CalendarSyncedEvent.starts_at >= window_start,
+                CalendarSyncedEvent.starts_at <= window_end,
+            )
+            .order_by(CalendarSyncedEvent.id.asc())
+            .with_for_update(key_share=True)
+        ).all()
+        for ev in missing:
+            if ev.external_event_id not in seen_ext_ids and ev.status != "cancelled":
+                ev.status = "cancelled"
+                ev.updated_at = now
+                _reconcile_synced_event_recording(db, ev, now)
 
     conn.last_synced_at = now
     conn.sync_error = None
@@ -1152,7 +1223,7 @@ def _inject_protocol_block_html(
 
 
 def _patch_provider_event_protocol_link(
-    conn: CalendarConnection,
+    conn: CalendarConnection | ConnectionSnapshot,
     ev: CalendarSyncedEvent,
     protocol_url: str,
     summary_text: str | None,
@@ -1282,7 +1353,6 @@ def publish_protocol_link_to_calendar_events(
             CalendarSyncedEvent.is_self_organized.desc(),
             CalendarSyncedEvent.id.asc(),
         )
-        .with_for_update(key_share=True)
     ).all()
 
     if not events:
@@ -1292,20 +1362,29 @@ def publish_protocol_link_to_calendar_events(
             "protocol_url": protocol_url,
         }
 
+    # Prepare connection snapshots before releasing DB locks during external HTTP PATCH calls.
+    conn_snaps: dict[uuid.UUID, ConnectionSnapshot] = {}
+    for ev in events:
+        if ev.connection_id not in conn_snaps:
+            conn_row = db.get(CalendarConnection, ev.connection_id)
+            if conn_row is not None:
+                conn_snaps[ev.connection_id] = snapshot_connection(conn_row)
+
+    rec_id = recording.id
     updated_count = 0
     organizer_patched = False
     last_error: str | None = None
+    event_ids_to_link = [ev.id for ev in events if ev.recording_id is None]
+
     for ev in events:
-        if ev.recording_id is None:
-            ev.recording_id = recording.id
         if organizer_patched and not ev.is_self_organized:
             continue
-        conn = db.get(CalendarConnection, ev.connection_id)
-        if conn is None:
+        snap = conn_snaps.get(ev.connection_id)
+        if snap is None:
             continue
         try:
             _patch_provider_event_protocol_link(
-                conn, ev, protocol_url, summary_text, now
+                snap, ev, protocol_url, summary_text, now
             )
             updated_count += 1
             if ev.is_self_organized:
@@ -1315,25 +1394,57 @@ def publish_protocol_link_to_calendar_events(
             last_error = err_code
             logging.getLogger("wortlaut").warning(
                 "calendar_protocol_link_failed recording=%s event=%s error=%s",
-                recording.id,
+                rec_id,
                 ev.id,
                 err_code,
             )
 
+    # Lock in canonical order: CalendarConnection -> CalendarSyncedEvent -> Recording
+    for cid in sorted(conn_snaps):
+        snap = conn_snaps[cid]
+        conn_locked = db.scalar(
+            select(CalendarConnection)
+            .where(CalendarConnection.id == cid)
+            .with_for_update(key_share=True)
+        )
+        if conn_locked is not None:
+            if snap.encrypted_access_token != conn_locked.encrypted_access_token:
+                conn_locked.encrypted_access_token = snap.encrypted_access_token
+            if snap.encrypted_refresh_token != conn_locked.encrypted_refresh_token:
+                conn_locked.encrypted_refresh_token = snap.encrypted_refresh_token
+            if snap.token_expires_at != conn_locked.token_expires_at:
+                conn_locked.token_expires_at = snap.token_expires_at
+
+    if event_ids_to_link:
+        locked_events = db.scalars(
+            select(CalendarSyncedEvent)
+            .where(CalendarSyncedEvent.id.in_(event_ids_to_link))
+            .order_by(CalendarSyncedEvent.id.asc())
+            .with_for_update()
+        ).all()
+        for lev in locked_events:
+            if lev.recording_id is None:
+                lev.recording_id = rec_id
+
+    locked_rec = db.scalar(
+        select(Recording).where(Recording.id == rec_id).with_for_update()
+    )
+    target_rec = locked_rec or recording
+    fresh_meta = dict(target_rec.protocol_meta or {})
     if updated_count > 0:
-        meta["calendar_link_synced_at"] = now.isoformat()
-        meta.pop("calendar_link_error", None)
-        recording.protocol_meta = meta
+        fresh_meta["calendar_link_synced_at"] = now.isoformat()
+        fresh_meta.pop("calendar_link_error", None)
+        target_rec.protocol_meta = fresh_meta
         return {
             "updated_events": updated_count,
             "status": "linked",
             "protocol_url": protocol_url,
-            "calendar_link_synced_at": meta["calendar_link_synced_at"],
+            "calendar_link_synced_at": fresh_meta["calendar_link_synced_at"],
         }
 
     if last_error:
-        meta["calendar_link_error"] = last_error
-        recording.protocol_meta = meta
+        fresh_meta["calendar_link_error"] = last_error
+        target_rec.protocol_meta = fresh_meta
     return {
         "updated_events": 0,
         "status": "error",

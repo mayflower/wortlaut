@@ -52,6 +52,12 @@ spec:
             - secretRef:
                 name: {{ .Values.secrets.teamsSecretName }}
                 optional: true
+            - secretRef:
+                name: {{ .Values.secrets.zoomSecretName }}
+                optional: true
+            - secretRef:
+                name: {{ .Values.calendarOAuth.secretName }}
+                optional: true
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:

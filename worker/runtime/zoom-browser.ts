@@ -1,5 +1,6 @@
 import type {Page} from 'playwright';
 import {AudioTransport} from '../src/transport.js';
+import {readSystemScreenText} from './browser.js';
 import {KeyframeTransport, type KeyframeUploadMetadata} from './keyframe-transport.js';
 import {installMeetCapture, MeetError, mergeKeyframeDiagnostics} from './meet.js';
 import {isZoomOrigin} from '../src/zoom-url.js';
@@ -323,7 +324,7 @@ export class ZoomBrowser {
         }, zoomJoinButtonSelector).catch(() => false);
         if (!clickedDom) {
           await joinBtn.first().waitFor({state: 'visible', timeout: 10000});
-          await joinBtn.first().click({force: true, timeout: 5000});
+          await joinBtn.first().click({timeout: 5000});
         }
         this.joined = true;
       }
@@ -341,22 +342,28 @@ export class ZoomBrowser {
     if (!this.reason && await zoomHumanVerificationVisible(this.page)) {
       this.reason = 'human_verification_required';
     }
-    const text = await this.page.locator('body').innerText().catch(() => '');
-    if (passcodeErrorPattern.test(text) || await this.page.locator('#input-for-pwd, #passcode, input[placeholder*="passcode" i], input[type="password"]').isVisible().catch(() => false)) {
-      this.reason = 'zoom_passcode_required';
-    } else if (authRequiredPattern.test(text)) {
-      this.reason = this.bootstrap.zoom.auth_mode === 'account' ? 'auth_session_missing' : 'zoom_auth_required';
-    } else if (webClientDisabledPattern.test(text)) {
-      this.reason = 'zoom_web_client_disabled';
-    } else if (deniedPattern.test(text)) {
-      this.reason = 'admission_denied';
-    } else if (endedPattern.test(text)) {
-      this.reason = 'ended';
-    }
-
     const leaveVisible = await this.page.locator(
       'button.footer-button-base__button[aria-label*="Leave" i], button[aria-label*="Verlassen" i], .footer__leave-btn'
     ).or(this.page.getByRole('button', {name: leaveLabel})).first().isVisible().catch(() => false);
+    const inActiveCallToolbar = this.capturing && leaveVisible;
+    const text = await readSystemScreenText(this.page);
+    const modalText = inActiveCallToolbar
+      ? await this.page.locator('.zm-modal, .zm-modal-body-title, [role="dialog"], [role="alertdialog"]')
+          .first()
+          .innerText()
+          .catch(() => '')
+      : text;
+    if (!inActiveCallToolbar && (passcodeErrorPattern.test(text) || await this.page.locator('#input-for-pwd, #passcode, input[placeholder*="passcode" i], input[type="password"]').isVisible().catch(() => false))) {
+      this.reason = 'zoom_passcode_required';
+    } else if (!inActiveCallToolbar && authRequiredPattern.test(text)) {
+      this.reason = this.bootstrap.zoom.auth_mode === 'account' ? 'auth_session_missing' : 'zoom_auth_required';
+    } else if (!inActiveCallToolbar && webClientDisabledPattern.test(text)) {
+      this.reason = 'zoom_web_client_disabled';
+    } else if (deniedPattern.test(modalText)) {
+      this.reason = 'admission_denied';
+    } else if (endedPattern.test(modalText)) {
+      this.reason = 'ended';
+    }
     const hasInCallControls = await this.page.locator(
       'button[aria-label*="Participants" i], button[aria-label*="Teilnehmer" i], .footer-button__participants-icon, ' +
       'button[aria-label*="open the chat" i], .footer-button__chat-icon, ' +
@@ -377,7 +384,7 @@ export class ZoomBrowser {
     const capture = await this.page.evaluate(() => window.wortlautMeet?.inspect()).catch(() => undefined);
     if (!this.reason && capture?.reason) this.reason = capture.reason;
 
-    const isWaiting = waitingRoomPattern.test(text);
+    const isWaiting = !inMeetingDom && waitingRoomPattern.test(text);
     const hasCaptureEvidence = Boolean(
       capture && (capture.streams > 0 || capture.audio_samples > 0 || capture.participant_sources.total > 0)
     );

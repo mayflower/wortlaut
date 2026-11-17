@@ -2,7 +2,9 @@
 
 import json
 import logging
+import queue
 import secrets
+import threading
 import time
 import uuid
 from typing import Any
@@ -12,6 +14,41 @@ import httpx
 from wortlaut.settings import get_settings
 
 logger = logging.getLogger("wortlaut.telemetry")
+_ORIG_HTTPX_POST = httpx.post
+_SPAN_QUEUE: queue.Queue[tuple[str, dict[str, Any]]] = queue.Queue(maxsize=256)
+_WORKER_LOCK = threading.Lock()
+_WORKER_STARTED = False
+
+
+def _span_exporter_loop() -> None:
+    with httpx.Client(timeout=2.0) as client:
+        while True:
+            endpoint, payload = _SPAN_QUEUE.get()
+            try:
+                client.post(
+                    endpoint,
+                    json=payload,
+                    headers={"Content-Type": "application/json"},
+                )
+            except Exception:
+                logger.debug("otlp_export_failed", exc_info=False)
+            finally:
+                _SPAN_QUEUE.task_done()
+
+
+def _ensure_exporter_thread() -> None:
+    global _WORKER_STARTED
+    if _WORKER_STARTED:
+        return
+    with _WORKER_LOCK:
+        if not _WORKER_STARTED:
+            t = threading.Thread(
+                target=_span_exporter_loop,
+                name="wortlaut-otlp-exporter",
+                daemon=True,
+            )
+            t.start()
+            _WORKER_STARTED = True
 
 
 def _otel_value(value: Any) -> dict[str, Any]:
@@ -120,15 +157,22 @@ def emit_span(
     )
     endpoint = get_settings().otlp_endpoint
     if endpoint:
-        try:
-            httpx.post(
-                endpoint,
-                json=payload,
-                headers={"Content-Type": "application/json"},
-                timeout=0.5,
-            )
-        except Exception:
-            logger.debug("otlp_export_failed", exc_info=False)
+        if httpx.post is not _ORIG_HTTPX_POST:
+            try:
+                httpx.post(
+                    endpoint,
+                    json=payload,
+                    headers={"Content-Type": "application/json"},
+                    timeout=0.5,
+                )
+            except Exception:
+                logger.debug("otlp_export_failed", exc_info=False)
+        else:
+            _ensure_exporter_thread()
+            try:
+                _SPAN_QUEUE.put_nowait((endpoint, payload))
+            except queue.Full:
+                logger.debug("otlp_queue_full", exc_info=False)
     return payload
 
 

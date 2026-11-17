@@ -305,7 +305,7 @@ UI_HTML = """<!DOCTYPE html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>wortlaut – Meeting-Transkription</title>
+  <title>Synia Wortlaut Demo – Meeting-Transkription</title>
   <link rel="stylesheet" href="/sdk/ui/app.css?v=__ASSET_VERSION__">
 </head>
 <body
@@ -413,6 +413,7 @@ def _build_instance_info() -> dict:
         "oidc": {
             "enabled": bool(s.oidc_issuer),
             "issuer": s.oidc_issuer,
+            "authorizationEndpoint": s.oidc_authorization_endpoint or "",
             "clientId": s.oidc_client_id,
             "allowedDomains": list(s.oidc_allowed_domains or []),
         },
@@ -434,13 +435,25 @@ def _build_instance_info() -> dict:
     }
 
 
+def _safe_script_json(payload: object) -> str:
+    """Serialize JSON safely for inline <script> injection (prevents </script> XSS)."""
+    raw = json.dumps(payload, ensure_ascii=False)
+    return (
+        raw.replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("&", "\\u0026")
+        .replace("\u2028", "\\u2028")
+        .replace("\u2029", "\\u2029")
+    )
+
+
 def render_ui() -> str:
     payload = {
         "failureReasons": FAILURE_REASONS,
         "instance": _build_instance_info(),
     }
     return (
-        UI_HTML.replace("__BOOT_PAYLOAD_JSON__", json.dumps(payload, ensure_ascii=False))
+        UI_HTML.replace("__BOOT_PAYLOAD_JSON__", _safe_script_json(payload))
         .replace("__ASSET_VERSION__", _asset_version())
     )
 

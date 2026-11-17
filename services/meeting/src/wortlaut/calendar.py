@@ -164,6 +164,31 @@ def entry_json(entry, recording=None):
     }
 
 
+def event_end_utc(event, starts: datetime) -> datetime:
+    if "DTEND" in event:
+        return utc(event.decoded("DTEND"))
+    if "DURATION" in event:
+        dur = event.decoded("DURATION")
+        if isinstance(dur, timedelta):
+            return starts + dur
+    raise KeyError("DTEND")
+
+
+def event_attendee_emails(event) -> list[str]:
+    raw_att = event.get("ATTENDEE")
+    if raw_att is None:
+        return []
+    items = raw_att if isinstance(raw_att, list) else [raw_att]
+    found: set[str] = set()
+    for item in items:
+        val = str(item).strip()
+        if val.lower().startswith("mailto:"):
+            addr = val[7:].strip().lower()
+            if "@" in addr and len(addr) <= 320:
+                found.add(addr)
+    return sorted(found)
+
+
 def import_event(
     db, calendar, event, authenticated, mail_text, *, instant=False, subject=None
 ):
@@ -192,7 +217,8 @@ def import_event(
         raise ValueError("method_unsupported")
     link_conflict = False
     if method == "REQUEST":
-        starts, ends = utc(event.decoded("DTSTART")), utc(event.decoded("DTEND"))
+        starts = utc(event.decoded("DTSTART"))
+        ends = event_end_utc(event, starts)
         if ends <= starts:
             raise ValueError("calendar_end_invalid")
         # Include a validated body fallback in version equality too: otherwise
@@ -319,7 +345,7 @@ def import_event(
         db.flush()
         return entry_json(entry, recording)
     starts = utc(event.decoded("DTSTART"))
-    ends = utc(event.decoded("DTEND"))
+    ends = event_end_utc(event, starts)
     if instant:
         starts = recording.starts_at if recording else datetime.now(UTC)
     if ends <= starts:
@@ -327,6 +353,7 @@ def import_event(
     link = meeting_link(event, mail_text)
     provider, link = normalize_meeting_url(link)
     title = " ".join(str(event.get("SUMMARY", "")).split())[:200] or subject or None
+    attendee_emails = event_attendee_emails(event)
     entry.status = "accepted"
     db.flush()
     if recording:
@@ -356,8 +383,15 @@ def import_event(
                 recording.ends_at = ends
             recording.provider = provider
             recording.title = title
+            recording.owner_email = recording.owner_email or organizer
+            if attendee_emails:
+                meta = dict(recording.protocol_meta or {})
+                merged = set(meta.get("attendee_emails") or []) | set(attendee_emails)
+                meta["attendee_emails"] = sorted(merged)
+                recording.protocol_meta = meta
             recording.calendar_conflict = False
     else:
+        meta = {"attendee_emails": attendee_emails} if attendee_emails else {}
         recording = Recording(
             calendar_entry_id=entry.id,
             recurrence_key="",
@@ -366,8 +400,10 @@ def import_event(
             meeting_url=link,
             provider=provider,
             title=title,
+            owner_email=organizer,
             starts_at=starts,
             ends_at=ends,
+            protocol_meta=meta,
         )
         db.add(recording)
         db.flush()

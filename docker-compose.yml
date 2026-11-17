@@ -110,7 +110,9 @@ services:
     environment:
       WORTLAUT_DATABASE_URL: postgresql+psycopg://wortlaut:${WORTLAUT_POSTGRES_PASSWORD:-wortlaut-local-db}@postgres:5432/wortlaut
       WORTLAUT_API_TOKEN: ${WORTLAUT_API_TOKEN:-wortlaut-local-admin-token}
+      WORTLAUT_ENCRYPTION_KEY: ${WORTLAUT_ENCRYPTION_KEY:-}
       WORTLAUT_API_URL: ${WORTLAUT_API_URL:-http://meeting:8000/}
+      WORTLAUT_PUBLIC_URL: ${WORTLAUT_PUBLIC_URL:-http://localhost:${WORTLAUT_PORT:-34601}/}
       WORTLAUT_SDK_PAGE_URL: ${WORTLAUT_SDK_PAGE_URL:-http://meeting:8000/sdk/}
       WORTLAUT_S3_ENDPOINT: http://rustfs:9000
       WORTLAUT_S3_ACCESS_KEY: ${WORTLAUT_S3_ACCESS_KEY:-wortlaut-s3}

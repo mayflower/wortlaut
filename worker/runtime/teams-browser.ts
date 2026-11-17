@@ -1,5 +1,6 @@
 import type {Page} from 'playwright';
 import {AudioTransport} from '../src/transport.js';
+import {readSystemScreenText} from './browser.js';
 import {KeyframeTransport, type KeyframeUploadMetadata} from './keyframe-transport.js';
 import {installMeetCapture, MeetError, mergeKeyframeDiagnostics} from './meet.js';
 import {isTeamsOrigin} from '../src/teams-url.js';
@@ -246,12 +247,16 @@ export class TeamsBrowser {
     const url = new URL(this.page.url());
     if (/^(login\.microsoftonline\.com|login\.live\.com)$/.test(url.hostname)) this.reason = 'teams_auth_required';
     const trusted = isTeamsOrigin(url);
-    const text = trusted ? await this.page.locator('body').innerText().catch(() => '') : '';
-    if (/verify your (?:email|identity)|enter (?:the )?(?:verification|security) code|E-Mail.*bestätigen|Bestätigungscode eingeben/i.test(text)) this.reason = 'teams_verification_required';
-    if (/you were denied|denied entry|Anfrage.*abgelehnt|Zutritt.*verweigert/i.test(text)) this.reason = 'admission_denied';
-    if (/removed from this meeting|aus.*Besprechung.*entfernt/i.test(text)) this.reason = 'removed';
-    if (/meeting (?:has )?ended|Besprechung.*beendet/i.test(text)) this.reason = 'meeting_ended';
-    if (/meeting not found|Besprechung nicht gefunden/i.test(text)) this.reason = 'meeting_not_found';
+    const hasLeave = trusted && await this.page.getByRole('button', {name: leaveLabel}).first().isVisible().catch(() => false);
+    const inActiveCallToolbar = this.capturing && hasLeave;
+    const text = trusted ? await readSystemScreenText(this.page) : '';
+    if (!inActiveCallToolbar) {
+      if (/verify your (?:email|identity)|enter (?:the )?(?:verification|security) code|E-Mail.*bestätigen|Bestätigungscode eingeben/i.test(text)) this.reason = 'teams_verification_required';
+      if (/you were denied|denied entry|Anfrage.*abgelehnt|Zutritt.*verweigert/i.test(text)) this.reason = 'admission_denied';
+      if (/removed from this meeting|aus.*Besprechung.*entfernt/i.test(text)) this.reason = 'removed';
+      if (/meeting (?:has )?ended|Besprechung.*beendet/i.test(text)) this.reason = 'meeting_ended';
+      if (/meeting not found|Besprechung nicht gefunden/i.test(text)) this.reason = 'meeting_not_found';
+    }
     const state = trusted ? await this.page.evaluate(() => window.wortlautMeet?.inspect()).catch(() => undefined) : undefined;
     this.reason ||= state?.reason ?? '';
     const joinBtn = this.page.getByRole('button', {name: joinLabel})
@@ -261,10 +266,9 @@ export class TeamsBrowser {
       await joinBtn.isVisible().catch(() => false) &&
       await joinBtn.isEnabled().catch(() => false);
     let participation = 'joining';
-    if (trusted && this.joined && !joinVisible && waiting.test(text)) {
+    if (trusted && this.joined && !joinVisible && !this.capturing && waiting.test(text)) {
       participation = 'waiting_admission';
     } else if (trusted && this.joined && !joinVisible) {
-      const hasLeave = await this.page.getByRole('button', {name: leaveLabel}).first().isVisible();
       const hasRtpOrParticipants =
         (state?.participant_sources?.total ?? 0) > 0 ||
         (state?.participant_sources?.dom_participants ?? 0) > 0 ||

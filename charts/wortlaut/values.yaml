@@ -24,8 +24,16 @@ oidc:
   allowedDomains: []
   adminEmails: []
 
+calendarOAuth:
+  googleClientId: ""
+  microsoftClientId: ""
+  microsoftTenantId: common
+  secretName: wortlaut-calendar-oauth
+
 llmSummary:
   enabled: false
+  ollamaUrl: ""
+  ollamaModel: qwen3.8:latest
 
 capacity:
   maxActiveMeetings: 15
@@ -61,6 +69,7 @@ secrets:
   mailSecretName: wortlaut-mail
   meetSecretName: wortlaut-meet
   teamsSecretName: wortlaut-teams
+  zoomSecretName: wortlaut-zoom
 
 ingress:
   enabled: true

@@ -1,30 +1,42 @@
-"""Authenticated MCP Streamable HTTP server for wortlaut users."""
+"""Authenticated MCP Streamable HTTP server built on the official `mcp` Python SDK."""
 
-import base64
+import asyncio
+import contextvars
 import hashlib
 import hmac
 import json
 import secrets
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import urlsplit
 
+import mcp.types as mcp_types
 from botocore.exceptions import ClientError
 from fastapi import HTTPException, Request, Response
 from fastapi.responses import JSONResponse
-from sqlalchemy import and_, desc, func, or_, select
+from mcp.server.lowlevel import Server
+from mcp.server.lowlevel.helper_types import ReadResourceContents
+from mcp.server.streamable_http import (
+    SUPPORTED_PROTOCOL_VERSIONS as SDK_PROTOCOL_VERSIONS,
+)
+from mcp.shared.exceptions import McpError
+from pydantic import AnyUrl, TypeAdapter, ValidationError
+from sqlalchemy import desc, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from wortlaut.calendar import entry_json
 from wortlaut.calendar_oauth import (
-    connection_json,
     publish_protocol_link_to_calendar_events,
-    synced_event_json,
     toggle_synced_event,
 )
-from wortlaut.controller import request_cancellation
+from wortlaut.domain import (
+    apply_protocol_metadata_fields,
+    apply_recordings_search_filters,
+    cancel_recording_and_unlink_calendar,
+    query_calendar_overview,
+)
 from wortlaut.exports import (
     export_data,
     generate_protocol_summary,
@@ -44,40 +56,43 @@ from wortlaut.mcp_oauth import (
     mcp_www_authenticate,
     public_origin,
 )
-from wortlaut.models import (
-    AsrJob,
-    Attempt,
-    AudioControl,
-    AudioStream,
-    CalendarConnection,
-    CalendarEntry,
-    CalendarSyncedEvent,
-    Recording,
-    RecordingKeyframe,
-    TranscriptSegment,
-)
+from wortlaut.models import Recording, RecordingKeyframe
 from wortlaut.oidc import Principal, can_access_recording, user_recording_access_predicate
 from wortlaut.processing import is_keyframe_opted_out
-from wortlaut.settings import get_settings
+from wortlaut.settings import derive_subkey, get_settings
 from wortlaut.storage import ObjectConflict, get_storage
 from wortlaut.validation import normalize_meeting_url
 
-SUPPORTED_PROTOCOL_VERSIONS: tuple[str, ...] = (
-    "2025-11-25",
-    "2025-06-18",
-    "2025-03-26",
-    "2024-11-05",
+SUPPORTED_PROTOCOL_VERSIONS: tuple[str, ...] = tuple(
+    dict.fromkeys(
+        [
+            *SDK_PROTOCOL_VERSIONS,
+            "2025-11-25",
+            "2025-06-18",
+            "2025-03-26",
+            "2024-11-05",
+        ]
+    )
 )
 DEFAULT_PROTOCOL_VERSION = "2025-06-18"
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
+_JSONRPC_ADAPTER: TypeAdapter[mcp_types.JSONRPCMessage] = TypeAdapter(mcp_types.JSONRPCMessage)
+_CLIENT_REQ_ADAPTER: TypeAdapter[mcp_types.ClientRequest] = TypeAdapter(mcp_types.ClientRequest)
 
-class JsonRpcError(Exception):
-    def __init__(self, code: int, message: str, data: Any = None) -> None:
-        super().__init__(message)
-        self.code = code
-        self.message = message
-        self.data = data
+
+@dataclass(frozen=True)
+class _McpCallScope:
+    request: Request
+    db: Session
+    auth: McpAuthContext
+
+
+_ACTIVE_CALL_SCOPE: contextvars.ContextVar[_McpCallScope] = contextvars.ContextVar(
+    "wortlaut_mcp_call_scope"
+)
+
+mcp_app = Server("wortlaut")
 
 
 def _principal_binding(principal: Principal) -> str:
@@ -86,9 +101,9 @@ def _principal_binding(principal: Principal) -> str:
 
 def _mint_mcp_session_id(principal: Principal) -> str:
     sid = uuid.uuid4().hex
-    secret = get_settings().api_token.get_secret_value().encode("utf-8")
+    subkey = derive_subkey(b"mcp-session-v1")
     msg = f"wortlaut-mcp-session\0{sid}\0{_principal_binding(principal)}".encode()
-    sig = hmac.new(secret, msg, hashlib.sha256).hexdigest()[:32]
+    sig = hmac.new(subkey, msg, hashlib.sha256).hexdigest()[:32]
     return f"{sid}.{sig}"
 
 
@@ -98,9 +113,9 @@ def _verify_mcp_session_id(session_id: str, principal: Principal) -> bool:
     sid, sig = session_id.split(".", 1)
     if not sid or len(sid) > 64 or not sig:
         return False
-    secret = get_settings().api_token.get_secret_value().encode("utf-8")
+    subkey = derive_subkey(b"mcp-session-v1")
     msg = f"wortlaut-mcp-session\0{sid}\0{_principal_binding(principal)}".encode()
-    expected = hmac.new(secret, msg, hashlib.sha256).hexdigest()[:32]
+    expected = hmac.new(subkey, msg, hashlib.sha256).hexdigest()[:32]
     return secrets.compare_digest(sig, expected)
 
 
@@ -108,10 +123,17 @@ def _is_allowed_mcp_origin(request: Request, origin_hdr: str) -> bool:
     parsed = urlsplit(origin_hdr)
     scheme = (parsed.scheme or "").lower()
     host = (parsed.hostname or "").lower()
-    expected = public_origin(request).lower()
-    if origin_hdr.rstrip("/").lower() == expected.rstrip("/"):
+    if not scheme or not host:
+        return False
+    norm_origin = origin_hdr.rstrip("/").lower()
+    expected = public_origin(request).rstrip("/").lower()
+    if norm_origin == expected:
         return True
-    if scheme == "https" and host:
+    settings = get_settings()
+    allowed_cfg = {
+        o.strip().rstrip("/").lower() for o in settings.mcp_allowed_origins if o and o.strip()
+    }
+    if norm_origin in allowed_cfg:
         return True
     if scheme == "http" and host in _LOOPBACK_HOSTS:
         return True
@@ -142,21 +164,44 @@ def validate_mcp_origin(request: Request) -> None:
         raise HTTPException(403, "Disallowed Origin header")
 
 
-MCP_TOOLS: list[dict[str, Any]] = [
-    {
-        "name": "list_recordings",
-        "required_scope": "mcp:read",
-        "description": (
+def _tool_spec(
+    name: str,
+    *,
+    required_scope: str,
+    title: str,
+    description: str,
+    input_schema: dict[str, Any],
+    read_only: bool,
+    destructive: bool = False,
+    idempotent: bool = True,
+) -> tuple[str, mcp_types.Tool]:
+    return (
+        required_scope,
+        mcp_types.Tool(
+            name=name,
+            description=description,
+            inputSchema=input_schema,
+            annotations=mcp_types.ToolAnnotations(
+                title=title,
+                readOnlyHint=read_only,
+                destructiveHint=destructive,
+                idempotentHint=idempotent,
+            ),
+        ),
+    )
+
+
+_SCOPED_TOOLS: list[tuple[str, mcp_types.Tool]] = [
+    _tool_spec(
+        "list_recordings",
+        required_scope="mcp:read",
+        title="List & Search Recordings",
+        description=(
             "List or search meeting recordings accessible to the authenticated user. "
             "Searches titles, bound speaker names, and full transcript text."
         ),
-        "annotations": {
-            "title": "List & Search Recordings",
-            "readOnlyHint": True,
-            "destructiveHint": False,
-            "idempotentHint": True,
-        },
-        "inputSchema": {
+        read_only=True,
+        input_schema={
             "type": "object",
             "properties": {
                 "query": {
@@ -192,68 +237,50 @@ MCP_TOOLS: list[dict[str, Any]] = [
             },
             "additionalProperties": False,
         },
-    },
-    {
-        "name": "get_recording",
-        "required_scope": "mcp:read",
-        "description": (
+    ),
+    _tool_spec(
+        "get_recording",
+        required_scope="mcp:read",
+        title="Get Recording Details & Summary",
+        description=(
             "Retrieve metadata, live capture/pause status, executive summary, action items, notes, "
             "speaker list, screen-share keyframes, off-the-record pause windows, and raw-audio "
             "retention availability for a recording."
         ),
-        "annotations": {
-            "title": "Get Recording Details & Summary",
-            "readOnlyHint": True,
-            "destructiveHint": False,
-            "idempotentHint": True,
-        },
-        "inputSchema": {
+        read_only=True,
+        input_schema={
             "type": "object",
             "properties": {
-                "recording_id": {
-                    "type": "string",
-                    "description": "UUID of the recording.",
-                },
+                "recording_id": {"type": "string", "description": "UUID of the recording."}
             },
             "required": ["recording_id"],
             "additionalProperties": False,
         },
-    },
-    {
-        "name": "get_transcript",
-        "required_scope": "mcp:read",
-        "description": (
+    ),
+    _tool_spec(
+        "get_transcript",
+        required_scope="mcp:read",
+        title="Read Speaker-Attributed Transcript",
+        description=(
             "Read speaker-attributed verbatim transcript segments, settled screen-share keyframes "
             "(wortlaut://recordings/{recording_id}/keyframes/{keyframe_id}.png), and "
             "off-the-record pause windows for a recording, with optional speaker, keyword, and "
             "timestamp filters plus isolated audio snippets."
         ),
-        "annotations": {
-            "title": "Read Speaker-Attributed Transcript",
-            "readOnlyHint": True,
-            "destructiveHint": False,
-            "idempotentHint": True,
-        },
-        "inputSchema": {
+        read_only=True,
+        input_schema={
             "type": "object",
             "properties": {
-                "recording_id": {
-                    "type": "string",
-                    "description": "UUID of the recording.",
-                },
+                "recording_id": {"type": "string", "description": "UUID of the recording."},
                 "speaker": {
                     "type": "string",
                     "description": (
-                        "Optional case-insensitive substring filter on speaker name or speaker_id "
-                        "(filters transcript segments, keyframes, and chat markers)."
+                        "Optional case-insensitive substring filter on speaker name or speaker_id."
                     ),
                 },
                 "query": {
                     "type": "string",
-                    "description": (
-                        "Optional case-insensitive substring filter on segment and "
-                        "chat-marker text."
-                    ),
+                    "description": "Optional case-insensitive substring filter on segment text.",
                 },
                 "start_seconds": {
                     "type": "number",
@@ -282,28 +309,20 @@ MCP_TOOLS: list[dict[str, Any]] = [
             "required": ["recording_id"],
             "additionalProperties": False,
         },
-    },
-    {
-        "name": "export_protocol",
-        "required_scope": "mcp:read",
-        "description": (
+    ),
+    _tool_spec(
+        "export_protocol",
+        required_scope="mcp:read",
+        title="Export Formatted Protocol",
+        description=(
             "Render the formatted meeting protocol in Markdown (md), plain text (txt), "
-            "WebVTT (vtt), or JSON (including executive summary, action items, chat-pinned "
-            "decisions/to-dos, off-the-record pause windows, and screen-share slide references)."
+            "WebVTT (vtt), or JSON."
         ),
-        "annotations": {
-            "title": "Export Formatted Protocol",
-            "readOnlyHint": True,
-            "destructiveHint": False,
-            "idempotentHint": True,
-        },
-        "inputSchema": {
+        read_only=True,
+        input_schema={
             "type": "object",
             "properties": {
-                "recording_id": {
-                    "type": "string",
-                    "description": "UUID of the recording.",
-                },
+                "recording_id": {"type": "string", "description": "UUID of the recording."},
                 "format": {
                     "type": "string",
                     "enum": ["md", "txt", "vtt", "json"],
@@ -313,21 +332,17 @@ MCP_TOOLS: list[dict[str, Any]] = [
             "required": ["recording_id"],
             "additionalProperties": False,
         },
-    },
-    {
-        "name": "list_calendar_events",
-        "required_scope": "mcp:read",
-        "description": (
+    ),
+    _tool_spec(
+        "list_calendar_events",
+        required_scope="mcp:read",
+        title="List Calendar Events",
+        description=(
             "List the authenticated user's connected Google/Microsoft calendars and upcoming "
             "(or recent) synced calendar meetings and .ics invitations."
         ),
-        "annotations": {
-            "title": "List Calendar Events",
-            "readOnlyHint": True,
-            "destructiveHint": False,
-            "idempotentHint": True,
-        },
-        "inputSchema": {
+        read_only=True,
+        input_schema={
             "type": "object",
             "properties": {
                 "include_past": {
@@ -344,21 +359,18 @@ MCP_TOOLS: list[dict[str, Any]] = [
             },
             "additionalProperties": False,
         },
-    },
-    {
-        "name": "schedule_recording",
-        "required_scope": "mcp:write",
-        "description": (
+    ),
+    _tool_spec(
+        "schedule_recording",
+        required_scope="mcp:write",
+        title="Schedule or Start Recording",
+        description=(
             "Schedule a future recording or start an immediate ad-hoc recording for a "
             "Google Meet, Microsoft Teams, Cisco Webex, or Zoom URL."
         ),
-        "annotations": {
-            "title": "Schedule or Start Recording",
-            "readOnlyHint": False,
-            "destructiveHint": False,
-            "idempotentHint": False,
-        },
-        "inputSchema": {
+        read_only=False,
+        idempotent=False,
+        input_schema={
             "type": "object",
             "properties": {
                 "meeting_url": {
@@ -390,64 +402,47 @@ MCP_TOOLS: list[dict[str, Any]] = [
                 },
                 "language": {
                     "type": "string",
-                    "description": (
-                        "Optional Qwen3-ASR transcription language ('auto' for all 30 languages, "
-                        "or one/comma-separated names/ISO codes such as 'English', 'German', "
-                        "'French', 'Japanese', 'Chinese', 'Spanish', 'German,English')."
-                    ),
+                    "description": "Optional Qwen3-ASR language ('auto' or name/ISO).",
                 },
             },
             "required": ["meeting_url"],
             "additionalProperties": False,
         },
-    },
-    {
-        "name": "cancel_recording",
-        "required_scope": "mcp:write",
-        "description": "Stop an active recording or cancel a scheduled recording.",
-        "annotations": {
-            "title": "Stop or Cancel Recording",
-            "readOnlyHint": False,
-            "destructiveHint": True,
-            "idempotentHint": True,
-        },
-        "inputSchema": {
+    ),
+    _tool_spec(
+        "cancel_recording",
+        required_scope="mcp:write",
+        title="Stop or Cancel Recording",
+        description="Stop an active recording or cancel a scheduled recording.",
+        read_only=False,
+        destructive=True,
+        input_schema={
             "type": "object",
             "properties": {
                 "recording_id": {
                     "type": "string",
                     "description": "UUID of the recording to stop or cancel.",
-                },
+                }
             },
             "required": ["recording_id"],
             "additionalProperties": False,
         },
-    },
-    {
-        "name": "update_protocol",
-        "required_scope": "mcp:write",
-        "description": (
+    ),
+    _tool_spec(
+        "update_protocol",
+        required_scope="mcp:write",
+        title="Update Protocol Metadata & Replacements",
+        description=(
             "Update a recording's title, transcription language (all 30 Qwen3-ASR languages or "
             "'auto'), human meeting notes, speaker display-name overrides, or glossary term "
             "replacements."
         ),
-        "annotations": {
-            "title": "Update Protocol Metadata & Replacements",
-            "readOnlyHint": False,
-            "destructiveHint": False,
-            "idempotentHint": True,
-        },
-        "inputSchema": {
+        read_only=False,
+        input_schema={
             "type": "object",
             "properties": {
-                "recording_id": {
-                    "type": "string",
-                    "description": "UUID of the recording.",
-                },
-                "title": {
-                    "type": "string",
-                    "description": "Optional updated meeting title.",
-                },
+                "recording_id": {"type": "string", "description": "UUID of the recording."},
+                "title": {"type": "string", "description": "Optional updated meeting title."},
                 "language": {
                     "type": "string",
                     "description": (
@@ -455,10 +450,7 @@ MCP_TOOLS: list[dict[str, Any]] = [
                         f"or any of: {', '.join(QWEN_ASR_LANGUAGES)})."
                     ),
                 },
-                "notes": {
-                    "type": "string",
-                    "description": "Optional Markdown meeting notes.",
-                },
+                "notes": {"type": "string", "description": "Optional Markdown meeting notes."},
                 "speaker_overrides": {
                     "type": "object",
                     "additionalProperties": {"type": "string"},
@@ -473,46 +465,36 @@ MCP_TOOLS: list[dict[str, Any]] = [
             "required": ["recording_id"],
             "additionalProperties": False,
         },
-    },
-    {
-        "name": "generate_summary",
-        "required_scope": "mcp:write",
-        "description": (
+    ),
+    _tool_spec(
+        "generate_summary",
+        required_scope="mcp:write",
+        title="Generate Local AI Summary",
+        description=(
             "Generate or refresh the structured executive summary, topics, and action items "
             "for a completed recording using the local self-hosted Ollama model."
         ),
-        "annotations": {
-            "title": "Generate Local AI Summary",
-            "readOnlyHint": False,
-            "destructiveHint": False,
-            "idempotentHint": False,
-        },
-        "inputSchema": {
+        read_only=False,
+        idempotent=False,
+        input_schema={
             "type": "object",
             "properties": {
-                "recording_id": {
-                    "type": "string",
-                    "description": "UUID of the recording.",
-                },
+                "recording_id": {"type": "string", "description": "UUID of the recording."}
             },
             "required": ["recording_id"],
             "additionalProperties": False,
         },
-    },
-    {
-        "name": "toggle_calendar_event_recording",
-        "required_scope": "mcp:write",
-        "description": (
+    ),
+    _tool_spec(
+        "toggle_calendar_event_recording",
+        required_scope="mcp:write",
+        title="Toggle Calendar Event Auto-Record",
+        description=(
             "Enable or disable automatic recording for a synced Google Calendar or "
             "Microsoft 365 event."
         ),
-        "annotations": {
-            "title": "Toggle Calendar Event Auto-Record",
-            "readOnlyHint": False,
-            "destructiveHint": False,
-            "idempotentHint": True,
-        },
-        "inputSchema": {
+        read_only=False,
+        input_schema={
             "type": "object",
             "properties": {
                 "event_id": {
@@ -527,77 +509,68 @@ MCP_TOOLS: list[dict[str, Any]] = [
             "required": ["event_id", "enabled"],
             "additionalProperties": False,
         },
-    },
-    {
-        "name": "publish_calendar_protocol_link",
-        "required_scope": "mcp:write",
-        "description": (
+    ),
+    _tool_spec(
+        "publish_calendar_protocol_link",
+        required_scope="mcp:write",
+        title="Write Protocol Link to Calendar Invite",
+        description=(
             "Write the scoped read-only protocol link back into the matching Google Calendar "
             "or Microsoft 365 invite."
         ),
-        "annotations": {
-            "title": "Write Protocol Link to Calendar Invite",
-            "readOnlyHint": False,
-            "destructiveHint": False,
-            "idempotentHint": True,
-        },
-        "inputSchema": {
+        read_only=False,
+        input_schema={
             "type": "object",
             "properties": {
                 "recording_id": {
                     "type": "string",
                     "description": "UUID of the completed recording.",
-                },
+                }
             },
             "required": ["recording_id"],
             "additionalProperties": False,
         },
-    },
+    ),
 ]
 
-MCP_PROMPTS: list[dict[str, Any]] = [
-    {
-        "name": "meeting_followup",
-        "description": (
+_TOOL_BY_NAME: dict[str, tuple[str, mcp_types.Tool]] = {
+    tool.name: (scope, tool) for scope, tool in _SCOPED_TOOLS
+}
+
+_PROMPTS: list[mcp_types.Prompt] = [
+    mcp_types.Prompt(
+        name="meeting_followup",
+        description=(
             "Draft a concise follow-up summary with speaker-attributed decisions and action items."
         ),
-        "arguments": [
-            {
-                "name": "recording_id",
-                "description": "UUID of the recording to summarize.",
-                "required": True,
-            }
+        arguments=[
+            mcp_types.PromptArgument(
+                name="recording_id",
+                description="UUID of the recording to summarize.",
+                required=True,
+            )
         ],
-    },
-    {
-        "name": "decision_audit",
-        "description": (
+    ),
+    mcp_types.Prompt(
+        name="decision_audit",
+        description=(
             "Verify exact verbatim quotes and timestamps for technical or product decisions "
             "in a meeting."
         ),
-        "arguments": [
-            {
-                "name": "recording_id",
-                "description": "UUID of the recording to audit.",
-                "required": True,
-            },
-            {
-                "name": "topic",
-                "description": "Specific topic or question to verify.",
-                "required": False,
-            },
+        arguments=[
+            mcp_types.PromptArgument(
+                name="recording_id",
+                description="UUID of the recording to audit.",
+                required=True,
+            ),
+            mcp_types.PromptArgument(
+                name="topic",
+                description="Specific topic or question to verify.",
+                required=False,
+            ),
         ],
-    },
+    ),
 ]
-
-
-def _public_tool_def(tool: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "name": tool["name"],
-        "description": tool["description"],
-        "inputSchema": tool["inputSchema"],
-        "annotations": tool["annotations"],
-    }
 
 
 def _parse_uuid(raw: Any, field_name: str = "recording_id") -> uuid.UUID:
@@ -655,21 +628,21 @@ def _get_accessible_recording(
     return rec
 
 
-def _tool_result(text_body: str, structured: dict[str, Any] | None = None) -> dict[str, Any]:
-    res: dict[str, Any] = {
-        "content": [{"type": "text", "text": text_body}],
-        "isError": False,
-    }
-    if structured is not None:
-        res["structuredContent"] = structured
-    return res
+def _tool_result(
+    text_body: str, structured: dict[str, Any] | None = None
+) -> mcp_types.CallToolResult:
+    return mcp_types.CallToolResult(
+        content=[mcp_types.TextContent(type="text", text=text_body)],
+        structuredContent=structured,
+        isError=False,
+    )
 
 
-def _tool_error(message: str) -> dict[str, Any]:
-    return {
-        "content": [{"type": "text", "text": f"Error: {message}"}],
-        "isError": True,
-    }
+def _tool_error(message: str) -> mcp_types.CallToolResult:
+    return mcp_types.CallToolResult(
+        content=[mcp_types.TextContent(type="text", text=f"Error: {message}")],
+        isError=True,
+    )
 
 
 def _mcp_keyframe_item(rec_id: uuid.UUID, kf: dict[str, Any]) -> dict[str, Any]:
@@ -679,82 +652,32 @@ def _mcp_keyframe_item(rec_id: uuid.UUID, kf: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _execute_tool(
-    request: Request,
-    db: Session,
-    ctx: McpAuthContext,
+def _execute_tool_sync(
+    scope: _McpCallScope,
     name: str,
     arguments: dict[str, Any],
-) -> dict[str, Any]:
-    origin = public_origin(request)
-    principal = ctx.principal
+) -> mcp_types.CallToolResult:
+    origin = public_origin(scope.request)
+    db = scope.db
+    principal = scope.auth.principal
 
     if name == "list_recordings":
         limit = max(1, min(50, _parse_int(arguments.get("limit"), 20, "limit")))
         q_str = str(arguments.get("query") or "").strip()
-        provider = arguments.get("provider")
-        participation = str(arguments.get("participation") or "").strip()
-        processing = str(arguments.get("processing") or "").strip()
+        provider = str(arguments["provider"]) if arguments.get("provider") else None
+        participation = str(arguments.get("participation") or "").strip() or None
+        processing = str(arguments.get("processing") or "").strip() or None
 
-        stmt = select(Recording).where(Recording.metadata_deleted_at.is_(None))
-        unstarted_cancelled_cal = and_(
-            Recording.idempotency_key.like("cal-oauth-%"),
-            Recording.participation == "ended",
-            Recording.participation_reason == "cancelled",
-            ~select(Attempt.id).where(Attempt.recording_id == Recording.id).exists(),
+        stmt, empty_for_principal = apply_recordings_search_filters(
+            select(Recording).where(Recording.metadata_deleted_at.is_(None)),
+            principal=principal,
+            provider=provider,
+            participation=participation,
+            processing=processing,
+            q=q_str or None,
         )
-        stmt = stmt.where(~unstarted_cancelled_cal)
-        if not principal.is_admin:
-            pred = user_recording_access_predicate(principal)
-            if pred is False:
-                return _tool_result("No recordings found.", {"items": [], "count": 0})
-            stmt = stmt.where(pred)
-        if provider:
-            stmt = stmt.where(Recording.provider == str(provider))
-        if participation:
-            parts = [p.strip() for p in participation.split(",") if p.strip()]
-            stmt = stmt.where(Recording.participation.in_(parts))
-        if processing:
-            stmt = stmt.where(Recording.processing == processing)
-        if q_str:
-            needle = f"%{q_str}%"
-            segment_match = (
-                select(TranscriptSegment.id)
-                .join(AsrJob, AsrJob.id == TranscriptSegment.id)
-                .join(AudioStream, AudioStream.id == AsrJob.stream_id)
-                .join(Attempt, Attempt.id == AudioStream.attempt_id)
-                .where(
-                    Attempt.recording_id == Recording.id,
-                    or_(
-                        TranscriptSegment.result["text"].astext.ilike(needle),
-                        TranscriptSegment.result["participant_name"].astext.ilike(needle),
-                        TranscriptSegment.result["speaker_id"].astext.ilike(needle),
-                    ),
-                )
-                .exists()
-            )
-            stream_match = (
-                select(AudioStream.id)
-                .join(Attempt, Attempt.id == AudioStream.attempt_id)
-                .outerjoin(AudioControl, AudioControl.stream_id == AudioStream.id)
-                .where(
-                    Attempt.recording_id == Recording.id,
-                    or_(
-                        AudioStream.contract["participant_name"].astext.ilike(needle),
-                        AudioStream.contract["speaker_id"].astext.ilike(needle),
-                        AudioControl.contract["participant_name"].astext.ilike(needle),
-                    ),
-                )
-                .exists()
-            )
-            stmt = stmt.where(
-                or_(
-                    Recording.title.ilike(needle),
-                    Recording.guest_name.ilike(needle),
-                    segment_match,
-                    stream_match,
-                )
-            )
+        if empty_for_principal:
+            return _tool_result("No recordings found.", {"items": [], "count": 0})
         rows = db.scalars(
             stmt.order_by(desc(Recording.starts_at), desc(Recording.id)).limit(limit)
         ).all()
@@ -762,8 +685,6 @@ def _execute_tool(
         lines = []
         for rec in rows:
             meta = rec.protocol_meta if isinstance(rec.protocol_meta, dict) else {}
-            has_summary = bool(meta.get("summary"))
-            audio_retained = rec.audio_deleted_at is None
             item = {
                 "id": str(rec.id),
                 "title": rec.title or f"{rec.provider} meeting",
@@ -772,8 +693,8 @@ def _execute_tool(
                 "ends_at": rec.ends_at.isoformat(),
                 "participation": rec.participation,
                 "processing": rec.processing,
-                "summary_available": has_summary,
-                "audio_snippets_available": audio_retained,
+                "summary_available": bool(meta.get("summary")),
+                "audio_snippets_available": rec.audio_deleted_at is None,
                 "ui_url": f"{origin}/ui#view=meetings&id={rec.id}",
             }
             items.append(item)
@@ -806,15 +727,10 @@ def _execute_tool(
             exp = export_data(db, rec)
             segs = exp.get("segments") or []
             detected_langs = list(exp.get("detected_languages") or [])
-            keyframes_out = [
-                _mcp_keyframe_item(rec.id, kf) for kf in (exp.get("keyframes") or [])
-            ]
+            keyframes_out = [_mcp_keyframe_item(rec.id, kf) for kf in (exp.get("keyframes") or [])]
             pause_windows_out = list(exp.get("pause_windows") or [])
             speakers = sorted(
-                {
-                    str(s.get("speaker_label") or s.get("speaker_name") or "Unknown")
-                    for s in segs
-                }
+                {str(s.get("speaker_label") or s.get("speaker_name") or "Unknown") for s in segs}
             )
             transcript_info = {
                 "segment_count": len(segs),
@@ -1001,66 +917,22 @@ def _execute_tool(
         )
 
     if name == "list_calendar_events":
-        include_past = _parse_bool(
-            arguments.get("include_past"), "include_past", default=False
-        )
+        include_past = _parse_bool(arguments.get("include_past"), "include_past", default=False)
         limit = max(1, min(100, _parse_int(arguments.get("limit"), 30, "limit")))
-        now = datetime.now(UTC)
-        user_email = (principal.email or "").lower()
-
-        conn_query = select(CalendarConnection).order_by(CalendarConnection.created_at.desc())
-        synced_query = select(CalendarSyncedEvent)
-        cal_query = select(CalendarEntry).order_by(CalendarEntry.dtstamp.desc())
-        if principal.kind != "operator":
-            conn_query = conn_query.where(func.lower(CalendarConnection.owner_email) == user_email)
-            synced_query = synced_query.where(
-                func.lower(CalendarSyncedEvent.owner_email) == user_email
-            )
-        if not principal.is_admin:
-            cal_query = cal_query.where(func.lower(CalendarEntry.organizer) == user_email)
-
-        if include_past:
-            synced_query = synced_query.where(
-                CalendarSyncedEvent.ends_at >= now - timedelta(days=7)
-            )
-        else:
-            synced_query = synced_query.where(CalendarSyncedEvent.ends_at >= now)
-
-        connections = [connection_json(c) for c in db.scalars(conn_query).all()]
-        synced_rows = db.scalars(
-            synced_query.order_by(CalendarSyncedEvent.starts_at.asc()).limit(limit)
-        ).all()
-        rec_ids = [ev.recording_id for ev in synced_rows if ev.recording_id]
-        rec_map = (
-            {
-                r.id: r
-                for r in db.scalars(select(Recording).where(Recording.id.in_(rec_ids))).all()
-            }
-            if rec_ids
-            else {}
+        overview = query_calendar_overview(
+            db,
+            principal,
+            datetime.now(UTC),
+            include_past=include_past,
+            synced_upcoming_limit=limit,
+            synced_past_limit=0,
+            ics_limit=limit,
+            match_unlinked_urls=False,
         )
-        synced_events = [
-            synced_event_json(ev, rec_map.get(ev.recording_id) if ev.recording_id else None)
-            for ev in synced_rows
-        ]
-        ics_entries = []
-        for entry in db.scalars(cal_query.limit(limit)).all():
-            recs = db.scalars(
-                select(Recording).where(Recording.calendar_entry_id == entry.id)
-            ).all()
-            item = entry_json(entry, recs[0] if len(recs) == 1 else None)
-            if not include_past and item.get("ends_at"):
-                try:
-                    if datetime.fromisoformat(item["ends_at"]) < now:
-                        continue
-                except ValueError:
-                    pass
-            ics_entries.append(item)
-
         payload = {
-            "connections": connections,
-            "synced_events": synced_events,
-            "ics_events": ics_entries[:limit],
+            "connections": overview["connections"],
+            "synced_events": overview["synced_events"],
+            "ics_events": overview["events"][:limit],
         }
         return _tool_result(json.dumps(payload, ensure_ascii=False, indent=2), payload)
 
@@ -1163,17 +1035,10 @@ def _execute_tool(
 
     if name == "cancel_recording":
         rec_id = _parse_uuid(arguments.get("recording_id"))
-        rec = _get_accessible_recording(db, principal, rec_id, for_update=True)
-        request_cancellation(rec, datetime.now(UTC))
-        synced_for_rec = db.scalars(
-            select(CalendarSyncedEvent)
-            .where(CalendarSyncedEvent.recording_id == rec.id)
-            .with_for_update()
-        ).all()
-        for sev in synced_for_rec:
-            sev.recording_id = None
-            sev.user_override = False
-            sev.auto_record = False
+        _get_accessible_recording(db, principal, rec_id, for_update=False)
+        rec = cancel_recording_and_unlink_calendar(db, rec_id, datetime.now(UTC))
+        if rec is None:
+            return _tool_error(f"Recording {rec_id} not found.")
         db.commit()
         out = {
             "id": str(rec.id),
@@ -1187,49 +1052,30 @@ def _execute_tool(
         rec = _get_accessible_recording(db, principal, rec_id, for_update=True)
         if rec.transcript_deleted_at is not None:
             return _tool_error("Transcript retention window has expired for this recording.")
-
-        if "title" in arguments and arguments["title"] is not None:
-            rec.title = " ".join(str(arguments["title"]).split())[:200] or None
         meta = dict(rec.protocol_meta or {})
-        if "language" in arguments and arguments["language"] is not None:
-            raw_lang = str(arguments["language"]).strip()
-            if not raw_lang:
-                meta.pop("asr_language", None)
-            else:
-                try:
-                    norm_lang = normalize_asr_language(raw_lang)
-                except ValueError as exc:
-                    return _tool_error(str(exc))
-                if norm_lang:
-                    meta["asr_language"] = norm_lang
-                else:
-                    meta.pop("asr_language", None)
-        if "notes" in arguments and arguments["notes"] is not None:
-            meta["notes"] = str(arguments["notes"])[:20000]
-        if isinstance(arguments.get("speaker_overrides"), dict):
-            cur_speakers = dict(meta.get("speaker_overrides") or {})
-            for k, v in arguments["speaker_overrides"].items():
-                key = str(k).strip()[:200]
-                if not key:
-                    continue
-                val = str(v).strip()[:120]
-                if val:
-                    cur_speakers[key] = val
-                else:
-                    cur_speakers.pop(key, None)
-            meta["speaker_overrides"] = cur_speakers
-        if isinstance(arguments.get("term_replacements"), dict):
-            cur_terms = dict(meta.get("term_replacements") or {})
-            for k, v in arguments["term_replacements"].items():
-                key = str(k).strip()[:120]
-                if not key:
-                    continue
-                val = str(v).strip()[:120]
-                if val and val != key:
-                    cur_terms[key] = val
-                else:
-                    cur_terms.pop(key, None)
-            meta["term_replacements"] = cur_terms
+        try:
+            meta = apply_protocol_metadata_fields(
+                rec,
+                meta,
+                title=arguments.get("title"),
+                has_title="title" in arguments and arguments["title"] is not None,
+                language=arguments.get("language"),
+                has_language="language" in arguments and arguments["language"] is not None,
+                notes=arguments.get("notes"),
+                has_notes="notes" in arguments and arguments["notes"] is not None,
+                speaker_overrides=(
+                    arguments["speaker_overrides"]
+                    if isinstance(arguments.get("speaker_overrides"), dict)
+                    else None
+                ),
+                term_replacements=(
+                    arguments["term_replacements"]
+                    if isinstance(arguments.get("term_replacements"), dict)
+                    else None
+                ),
+            )
+        except ValueError as exc:
+            return _tool_error(str(exc))
         rec.protocol_meta = meta
         db.commit()
         out = {
@@ -1257,9 +1103,9 @@ def _execute_tool(
         except RuntimeError as exc:
             return _tool_error(f"Local LLM summary failed: {exc}")
         try:
-            locked = db.scalar(select(Recording).where(Recording.id == rec.id).with_for_update())
-            if locked is not None:
-                publish_protocol_link_to_calendar_events(db, locked)
+            fresh_rec = db.get(Recording, rec.id)
+            if fresh_rec is not None:
+                publish_protocol_link_to_calendar_events(db, fresh_rec)
                 db.commit()
         except Exception:
             db.rollback()
@@ -1279,7 +1125,7 @@ def _execute_tool(
 
     if name == "publish_calendar_protocol_link":
         rec_id = _parse_uuid(arguments.get("recording_id"))
-        rec = _get_accessible_recording(db, principal, rec_id, for_update=True)
+        rec = _get_accessible_recording(db, principal, rec_id)
         if rec.processing != "completed":
             return _tool_error(f"Recording processing is '{rec.processing}' (must be 'completed').")
         res = publish_protocol_link_to_calendar_events(db, rec, force_empty_audio=True)
@@ -1288,289 +1134,370 @@ def _execute_tool(
             return _tool_error(f"Calendar update failed: {res.get('error') or res.get('status')}")
         return _tool_result(json.dumps(res, ensure_ascii=False, indent=2), res)
 
-    raise JsonRpcError(-32602, f"Unknown tool: {name}")
+    raise McpError(
+        mcp_types.ErrorData(code=mcp_types.INVALID_PARAMS, message=f"Unknown tool: {name}")
+    )
 
 
-def _dispatch_rpc_method(
-    request: Request,
-    db: Session,
-    ctx: McpAuthContext,
-    method: str,
-    params: dict[str, Any],
-) -> tuple[dict[str, Any], dict[str, str]]:
+@mcp_app.list_tools()
+async def _sdk_list_tools() -> list[mcp_types.Tool]:
+    scope = _ACTIVE_CALL_SCOPE.get()
+    return [tool for req_scope, tool in _SCOPED_TOOLS if req_scope in scope.auth.scopes]
+
+
+@mcp_app.call_tool(validate_input=False)
+async def _sdk_call_tool(name: str, arguments: dict[str, Any]) -> mcp_types.CallToolResult:
+    scope = _ACTIVE_CALL_SCOPE.get()
+    spec = _TOOL_BY_NAME.get(name)
+    if spec is None:
+        raise McpError(
+            mcp_types.ErrorData(code=mcp_types.INVALID_PARAMS, message=f"Unknown tool: {name}")
+        )
+    req_scope, _ = spec
+    if req_scope not in scope.auth.scopes:
+        origin = public_origin(scope.request)
+        raise McpAuthError(
+            403,
+            f"Insufficient scope: {req_scope} is required for {name}",
+            www_authenticate=mcp_www_authenticate(
+                origin,
+                error="insufficient_scope",
+                error_description=f"Tool {name} requires {req_scope}",
+            ),
+        )
+    try:
+        return _execute_tool_sync(scope, name, arguments)
+    except (ValueError, LookupError) as exc:
+        return _tool_error(str(exc))
+
+
+@mcp_app.list_resources()
+async def _sdk_list_resources() -> list[mcp_types.Resource]:
+    scope = _ACTIVE_CALL_SCOPE.get()
+    if "mcp:read" not in scope.auth.scopes:
+        origin = public_origin(scope.request)
+        raise McpAuthError(
+            403,
+            "Insufficient scope: mcp:read is required",
+            www_authenticate=mcp_www_authenticate(origin, error="insufficient_scope"),
+        )
+    stmt = select(Recording).where(
+        Recording.metadata_deleted_at.is_(None),
+        Recording.transcript_deleted_at.is_(None),
+        Recording.processing == "completed",
+    )
+    if not scope.auth.principal.is_admin:
+        pred = user_recording_access_predicate(scope.auth.principal)
+        if pred is False:
+            return []
+        stmt = stmt.where(pred)
+    recs = scope.db.scalars(stmt.order_by(desc(Recording.starts_at)).limit(25)).all()
+    return [
+        mcp_types.Resource(
+            uri=AnyUrl(f"wortlaut://recordings/{r.id}/protocol.md"),
+            name=r.title or f"{r.provider} ({r.starts_at.strftime('%Y-%m-%d %H:%M UTC')})",
+            description=f"Markdown protocol for {r.provider} meeting on {r.starts_at.isoformat()}",
+            mimeType="text/markdown",
+        )
+        for r in recs
+    ]
+
+
+@mcp_app.list_resource_templates()
+async def _sdk_list_resource_templates() -> list[mcp_types.ResourceTemplate]:
+    return [
+        mcp_types.ResourceTemplate(
+            uriTemplate="wortlaut://recordings/{recording_id}/protocol.md",
+            name="Meeting Protocol (Markdown)",
+            description="Formatted speaker-attributed meeting protocol in Markdown.",
+            mimeType="text/markdown",
+        ),
+        mcp_types.ResourceTemplate(
+            uriTemplate="wortlaut://recordings/{recording_id}/transcript.json",
+            name="Meeting Transcript (JSON)",
+            description="Structured speaker-attributed transcript segments.",
+            mimeType="application/json",
+        ),
+        mcp_types.ResourceTemplate(
+            uriTemplate="wortlaut://recordings/{recording_id}/keyframes/{keyframe_id}.png",
+            name="Screen-Share Slide Keyframe (PNG)",
+            description="Settled static PNG snapshot captured from an active screen share.",
+            mimeType="image/png",
+        ),
+    ]
+
+
+@mcp_app.read_resource()
+async def _sdk_read_resource(uri_obj: AnyUrl) -> list[ReadResourceContents]:
+    scope = _ACTIVE_CALL_SCOPE.get()
+    if "mcp:read" not in scope.auth.scopes:
+        origin = public_origin(scope.request)
+        raise McpAuthError(
+            403,
+            "Insufficient scope: mcp:read is required",
+            www_authenticate=mcp_www_authenticate(origin, error="insufficient_scope"),
+        )
+    uri = str(uri_obj)
+    prefix = "wortlaut://recordings/"
+    if not uri.startswith(prefix):
+        raise McpError(
+            mcp_types.ErrorData(
+                code=mcp_types.INVALID_PARAMS, message=f"Unsupported resource URI: {uri}"
+            )
+        )
+    rest = uri.removeprefix(prefix)
+    parts = rest.split("/", 1)
+    if len(parts) != 2:
+        raise McpError(
+            mcp_types.ErrorData(
+                code=mcp_types.INVALID_PARAMS, message=f"Invalid wortlaut resource path: {uri}"
+            )
+        )
+    subpath = parts[1]
+    is_keyframe_uri = (
+        subpath.startswith("keyframes/")
+        and subpath.endswith(".png")
+        and "/" not in subpath.removeprefix("keyframes/")
+    )
+    if subpath not in ("protocol.md", "transcript.json") and not is_keyframe_uri:
+        raise McpError(
+            mcp_types.ErrorData(
+                code=mcp_types.INVALID_PARAMS, message=f"Invalid wortlaut resource path: {uri}"
+            )
+        )
+    try:
+        rec_id = _parse_uuid(parts[0])
+        rec = _get_accessible_recording(scope.db, scope.auth.principal, rec_id)
+    except (ValueError, LookupError) as exc:
+        raise McpError(mcp_types.ErrorData(code=-32002, message=str(exc))) from None
+    if rec.transcript_deleted_at is not None:
+        raise McpError(
+            mcp_types.ErrorData(code=-32002, message="Transcript retention expired")
+        )
+    if is_keyframe_uri:
+        raw_kf_id = subpath.removeprefix("keyframes/").removesuffix(".png")
+        try:
+            kf_id = _parse_uuid(raw_kf_id)
+        except ValueError as exc:
+            raise McpError(mcp_types.ErrorData(code=-32002, message=str(exc))) from None
+        kf = scope.db.get(RecordingKeyframe, kf_id)
+        if (
+            kf is None
+            or kf.recording_id != rec.id
+            or kf.deleted_at is not None
+            or not kf.object_key
+            or is_keyframe_opted_out(scope.db, rec, kf)
+        ):
+            raise McpError(mcp_types.ErrorData(code=-32002, message="Keyframe not found"))
+        try:
+            png_bytes = get_storage().read(kf.object_key)
+        except (ClientError, ObjectConflict):
+            raise McpError(mcp_types.ErrorData(code=-32002, message="Keyframe not found")) from None
+        if hashlib.sha256(png_bytes).hexdigest() != kf.sha256:
+            raise McpError(
+                mcp_types.ErrorData(code=-32002, message="Invalid keyframe object integrity")
+            )
+        return [ReadResourceContents(content=png_bytes, mime_type="image/png")]
+    fmt = "md" if subpath == "protocol.md" else "json"
+    rendered, mime = render_export(export_data(scope.db, rec), fmt)
+    text_body = rendered.decode("utf-8") if isinstance(rendered, bytes) else str(rendered)
+    return [ReadResourceContents(content=text_body, mime_type=mime.split(";", 1)[0])]
+
+
+@mcp_app.list_prompts()
+async def _sdk_list_prompts() -> list[mcp_types.Prompt]:
+    return _PROMPTS
+
+
+@mcp_app.get_prompt()
+async def _sdk_get_prompt(
+    name: str, arguments: dict[str, str] | None
+) -> mcp_types.GetPromptResult:
+    p_args = arguments or {}
+    rec_id = str(p_args.get("recording_id") or "").strip()
+    if name == "meeting_followup":
+        return mcp_types.GetPromptResult(
+            description="Follow-up summary with decisions and action items",
+            messages=[
+                mcp_types.PromptMessage(
+                    role="user",
+                    content=mcp_types.TextContent(
+                        type="text",
+                        text=(
+                            f"Call `get_recording` and `get_transcript` for `{rec_id}`. "
+                            "Produce a concise follow-up note with: (1) key decisions "
+                            "attributed to exact bound speakers, (2) concrete action items "
+                            "with owners, and (3) open questions or off-the-record "
+                            "`pause_windows`."
+                        ),
+                    ),
+                )
+            ],
+        )
+    if name == "decision_audit":
+        topic = str(p_args.get("topic") or "").strip()
+        topic_clause = f" focusing on '{topic}'" if topic else ""
+        return mcp_types.GetPromptResult(
+            description="Verbatim decision audit with timestamps",
+            messages=[
+                mcp_types.PromptMessage(
+                    role="user",
+                    content=mcp_types.TextContent(
+                        type="text",
+                        text=(
+                            f"Inspect `{rec_id}` using `get_transcript`{topic_clause}. "
+                            "Quote exact verbatim statements with `[MM:SS]` timestamps and "
+                            "bound speaker names, noting any `attribution_unknown` or "
+                            "`pause_windows`."
+                        ),
+                    ),
+                )
+            ],
+        )
+    raise McpError(
+        mcp_types.ErrorData(code=mcp_types.INVALID_PARAMS, message=f"Unknown prompt: {name}")
+    )
+
+
+async def _dispatch_via_mcp_sdk(
+    scope: _McpCallScope,
+    req: mcp_types.JSONRPCRequest,
+) -> tuple[mcp_types.JSONRPCResponse | mcp_types.JSONRPCError, dict[str, str]]:
     extra_headers: dict[str, str] = {}
-    origin = public_origin(request)
+    params = dict(req.params or {})
 
-    if method == "initialize":
+    if req.method == "initialize":
         client_ver = str(params.get("protocolVersion") or "").strip()
         negotiated = (
             client_ver if client_ver in SUPPORTED_PROTOCOL_VERSIONS else DEFAULT_PROTOCOL_VERSION
         )
-        session_id = _mint_mcp_session_id(ctx.principal)
+        session_id = _mint_mcp_session_id(scope.auth.principal)
         extra_headers["Mcp-Session-Id"] = session_id
         extra_headers["MCP-Protocol-Version"] = negotiated
+        init_res = mcp_types.InitializeResult(
+            protocolVersion=negotiated,
+            capabilities=mcp_types.ServerCapabilities(
+                tools=mcp_types.ToolsCapability(listChanged=False),
+                resources=mcp_types.ResourcesCapability(subscribe=False, listChanged=False),
+                prompts=mcp_types.PromptsCapability(listChanged=False),
+            ),
+            serverInfo=mcp_types.Implementation(
+                name=get_settings().assistant_name,
+                version="0.1.0",
+            ),
+            instructions=(
+                "wortlaut provides pre-mix WebRTC speaker-isolated meeting transcripts "
+                "(Google Meet, Microsoft Teams, Cisco Webex, Zoom) scoped to the authenticated "
+                "user. Prefer get_transcript with pagination or filters for verbatim speaker "
+                "statements, off-the-record pause_windows (#pause / #resume), and settled "
+                "screen-share keyframes (readable as image/png via "
+                "wortlaut://recordings/{id}/keyframes/{kf_id}.png)."
+            ),
+        )
         return (
-            {
-                "protocolVersion": negotiated,
-                "capabilities": {
-                    "tools": {"listChanged": False},
-                    "resources": {"subscribe": False, "listChanged": False},
-                    "prompts": {"listChanged": False},
-                },
-                "serverInfo": {
-                    "name": get_settings().assistant_name,
-                    "version": "0.1.0",
-                },
-                "instructions": (
-                    "wortlaut provides pre-mix WebRTC speaker-isolated meeting transcripts "
-                    "(Google Meet, Microsoft Teams, Cisco Webex, Zoom) scoped to the authenticated "
-                    "user. Prefer get_transcript with pagination or filters for verbatim speaker "
-                    "statements, off-the-record pause_windows (#pause / #resume), and settled "
-                    "screen-share keyframes (readable as image/png via "
-                    "wortlaut://recordings/{id}/keyframes/{kf_id}.png)."
-                ),
-            },
+            mcp_types.JSONRPCResponse(
+                jsonrpc="2.0",
+                id=req.id,
+                result=init_res.model_dump(by_alias=True, mode="json", exclude_none=True),
+            ),
             extra_headers,
         )
 
-    if method == "ping":
-        return {}, extra_headers
-
-    if method == "tools/list":
-        visible = [
-            _public_tool_def(t)
-            for t in MCP_TOOLS
-            if t["required_scope"] in ctx.scopes
-        ]
-        return {"tools": visible}, extra_headers
-
-    if method == "tools/call":
-        tool_name = str(params.get("name") or "").strip()
-        raw_args = params.get("arguments")
-        if raw_args is None:
-            args: dict[str, Any] = {}
-        elif isinstance(raw_args, dict):
-            args = raw_args
-        else:
-            raise JsonRpcError(-32602, "Tool arguments must be a JSON object")
-
-        tool_spec = next((t for t in MCP_TOOLS if t["name"] == tool_name), None)
-        if tool_spec is None:
-            raise JsonRpcError(-32602, f"Unknown tool: {tool_name}")
-
-        if tool_spec["required_scope"] not in ctx.scopes:
-            raise McpAuthError(
-                403,
-                f"Insufficient scope: {tool_spec['required_scope']} is required for {tool_name}",
-                www_authenticate=mcp_www_authenticate(
-                    origin,
-                    error="insufficient_scope",
-                    error_description=f"Tool {tool_name} requires {tool_spec['required_scope']}",
-                ),
-            )
-
-        try:
-            result = _execute_tool(request, db, ctx, tool_name, args)
-        except (ValueError, LookupError) as exc:
-            result = _tool_error(str(exc))
-        return result, extra_headers
-
-    if method == "resources/list":
-        if "mcp:read" not in ctx.scopes:
-            raise McpAuthError(
-                403,
-                "Insufficient scope: mcp:read is required",
-                www_authenticate=mcp_www_authenticate(origin, error="insufficient_scope"),
-            )
-        stmt = select(Recording).where(
-            Recording.metadata_deleted_at.is_(None),
-            Recording.transcript_deleted_at.is_(None),
-            Recording.processing == "completed",
+    try:
+        typed_req = _CLIENT_REQ_ADAPTER.validate_python(
+            {"method": req.method, "params": params or None}
+        ).root
+    except ValidationError as exc:
+        known_methods = {
+            "ping",
+            "tools/list",
+            "tools/call",
+            "resources/list",
+            "resources/templates/list",
+            "resources/read",
+            "prompts/list",
+            "prompts/get",
+        }
+        code = (
+            mcp_types.INVALID_PARAMS
+            if req.method in known_methods
+            else mcp_types.METHOD_NOT_FOUND
         )
-        if not ctx.principal.is_admin:
-            pred = user_recording_access_predicate(ctx.principal)
-            if pred is False:
-                return {"resources": []}, extra_headers
-            stmt = stmt.where(pred)
-        recs = db.scalars(stmt.order_by(desc(Recording.starts_at)).limit(25)).all()
-        resources = [
-            {
-                "uri": f"wortlaut://recordings/{r.id}/protocol.md",
-                "name": r.title or f"{r.provider} ({r.starts_at.strftime('%Y-%m-%d %H:%M UTC')})",
-                "description": (
-                    f"Markdown protocol for {r.provider} meeting on {r.starts_at.isoformat()}"
-                ),
-                "mimeType": "text/markdown",
-            }
-            for r in recs
-        ]
-        return {"resources": resources}, extra_headers
-
-    if method == "resources/templates/list":
+        msg = (
+            exc.errors()[0].get("msg", "Invalid parameters")
+            if code == mcp_types.INVALID_PARAMS
+            else f"Method not found: {req.method}"
+        )
         return (
-            {
-                "resourceTemplates": [
-                    {
-                        "uriTemplate": "wortlaut://recordings/{recording_id}/protocol.md",
-                        "name": "Meeting Protocol (Markdown)",
-                        "description": "Formatted speaker-attributed meeting protocol in Markdown.",
-                        "mimeType": "text/markdown",
-                    },
-                    {
-                        "uriTemplate": "wortlaut://recordings/{recording_id}/transcript.json",
-                        "name": "Meeting Transcript (JSON)",
-                        "description": "Structured speaker-attributed transcript segments.",
-                        "mimeType": "application/json",
-                    },
-                    {
-                        "uriTemplate": (
-                            "wortlaut://recordings/{recording_id}/keyframes/{keyframe_id}.png"
+            mcp_types.JSONRPCError(
+                jsonrpc="2.0",
+                id=req.id,
+                error=mcp_types.ErrorData(code=code, message=msg),
+            ),
+            extra_headers,
+        )
+
+    handler = mcp_app.request_handlers.get(type(typed_req))
+    if handler is None:
+        return (
+            mcp_types.JSONRPCError(
+                jsonrpc="2.0",
+                id=req.id,
+                error=mcp_types.ErrorData(
+                    code=mcp_types.METHOD_NOT_FOUND,
+                    message=f"Method not found: {req.method}",
+                ),
+            ),
+            extra_headers,
+        )
+
+    tok = _ACTIVE_CALL_SCOPE.set(scope)
+    try:
+        if isinstance(typed_req, mcp_types.CallToolRequest):
+            tool_name = typed_req.params.name
+            spec = _TOOL_BY_NAME.get(tool_name)
+            if spec is None:
+                return (
+                    mcp_types.JSONRPCError(
+                        jsonrpc="2.0",
+                        id=req.id,
+                        error=mcp_types.ErrorData(
+                            code=mcp_types.INVALID_PARAMS,
+                            message=f"Unknown tool: {tool_name}",
                         ),
-                        "name": "Screen-Share Slide Keyframe (PNG)",
-                        "description": (
-                            "Settled static PNG snapshot captured from an active screen share."
-                        ),
-                        "mimeType": "image/png",
-                    },
-                ]
-            },
-            extra_headers,
-        )
-
-    if method == "resources/read":
-        if "mcp:read" not in ctx.scopes:
-            raise McpAuthError(
-                403,
-                "Insufficient scope: mcp:read is required",
-                www_authenticate=mcp_www_authenticate(origin, error="insufficient_scope"),
-            )
-        uri = str(params.get("uri") or "").strip()
-        prefix = "wortlaut://recordings/"
-        if not uri.startswith(prefix):
-            raise JsonRpcError(-32602, f"Unsupported resource URI: {uri}")
-        rest = uri.removeprefix(prefix)
-        parts = rest.split("/", 1)
-        if len(parts) != 2:
-            raise JsonRpcError(-32602, f"Invalid wortlaut resource path: {uri}")
-        subpath = parts[1]
-        is_keyframe_uri = (
-            subpath.startswith("keyframes/")
-            and subpath.endswith(".png")
-            and "/" not in subpath.removeprefix("keyframes/")
-        )
-        if subpath not in ("protocol.md", "transcript.json") and not is_keyframe_uri:
-            raise JsonRpcError(-32602, f"Invalid wortlaut resource path: {uri}")
-        try:
-            rec_id = _parse_uuid(parts[0])
-            rec = _get_accessible_recording(db, ctx.principal, rec_id)
-        except (ValueError, LookupError) as exc:
-            raise JsonRpcError(-32002, str(exc)) from None
-        if rec.transcript_deleted_at is not None:
-            raise JsonRpcError(-32002, "Transcript retention expired")
-        if is_keyframe_uri:
-            raw_kf_id = subpath.removeprefix("keyframes/").removesuffix(".png")
-            try:
-                kf_id = _parse_uuid(raw_kf_id)
-            except ValueError as exc:
-                raise JsonRpcError(-32002, str(exc)) from None
-            kf = db.get(RecordingKeyframe, kf_id)
-            if (
-                kf is None
-                or kf.recording_id != rec.id
-                or kf.deleted_at is not None
-                or not kf.object_key
-                or is_keyframe_opted_out(db, rec, kf)
-            ):
-                raise JsonRpcError(-32002, "Keyframe not found")
-            try:
-                png_bytes = get_storage().read(kf.object_key)
-            except (ClientError, ObjectConflict):
-                raise JsonRpcError(-32002, "Keyframe not found") from None
-            if hashlib.sha256(png_bytes).hexdigest() != kf.sha256:
-                raise JsonRpcError(-32002, "Invalid keyframe object integrity")
-            return (
-                {
-                    "contents": [
-                        {
-                            "uri": uri,
-                            "mimeType": "image/png",
-                            "blob": base64.b64encode(png_bytes).decode("ascii"),
-                        }
-                    ]
-                },
-                extra_headers,
-            )
-        fmt = "md" if subpath == "protocol.md" else "json"
-        rendered, mime = render_export(export_data(db, rec), fmt)
-        text_body = rendered.decode("utf-8") if isinstance(rendered, bytes) else str(rendered)
+                    ),
+                    extra_headers,
+                )
+            req_scope, _ = spec
+            if req_scope not in scope.auth.scopes:
+                origin = public_origin(scope.request)
+                raise McpAuthError(
+                    403,
+                    f"Insufficient scope: {req_scope} is required for {tool_name}",
+                    www_authenticate=mcp_www_authenticate(
+                        origin,
+                        error="insufficient_scope",
+                        error_description=f"Tool {tool_name} requires {req_scope}",
+                    ),
+                )
+            mcp_app._tool_cache.update({tool.name: tool for _, tool in _SCOPED_TOOLS})
+        server_result = await handler(typed_req)
+    except McpError as exc:
         return (
-            {
-                "contents": [
-                    {
-                        "uri": uri,
-                        "mimeType": mime.split(";", 1)[0],
-                        "text": text_body,
-                    }
-                ]
-            },
+            mcp_types.JSONRPCError(jsonrpc="2.0", id=req.id, error=exc.error),
             extra_headers,
         )
+    finally:
+        _ACTIVE_CALL_SCOPE.reset(tok)
 
-    if method == "prompts/list":
-        return {"prompts": MCP_PROMPTS}, extra_headers
-
-    if method == "prompts/get":
-        p_name = str(params.get("name") or "").strip()
-        p_args = params.get("arguments") if isinstance(params.get("arguments"), dict) else {}
-        rec_id = str(p_args.get("recording_id") or "").strip()
-        if p_name == "meeting_followup":
-            return (
-                {
-                    "description": "Follow-up summary with decisions and action items",
-                    "messages": [
-                        {
-                            "role": "user",
-                            "content": {
-                                "type": "text",
-                                "text": (
-                                    f"Call `get_recording` and `get_transcript` for `{rec_id}`. "
-                                    "Produce a concise follow-up note with: (1) key decisions "
-                                    "attributed to exact bound speakers, (2) concrete action items "
-                                    "with owners, and (3) open questions or off-the-record "
-                                    "`pause_windows`."
-                                ),
-                            },
-                        }
-                    ],
-                },
-                extra_headers,
-            )
-        if p_name == "decision_audit":
-            topic = str(p_args.get("topic") or "").strip()
-            topic_clause = f" focusing on '{topic}'" if topic else ""
-            return (
-                {
-                    "description": "Verbatim decision audit with timestamps",
-                    "messages": [
-                        {
-                            "role": "user",
-                            "content": {
-                                "type": "text",
-                                "text": (
-                                    f"Inspect `{rec_id}` using `get_transcript`{topic_clause}. "
-                                    "Quote exact verbatim statements with `[MM:SS]` timestamps and "
-                                    "bound speaker names, noting any `attribution_unknown` or "
-                                    "`pause_windows`."
-                                ),
-                            },
-                        }
-                    ],
-                },
-                extra_headers,
-            )
-        raise JsonRpcError(-32602, f"Unknown prompt: {p_name}")
-
-    raise JsonRpcError(-32601, f"Method not found: {method}")
+    return (
+        mcp_types.JSONRPCResponse(
+            jsonrpc="2.0",
+            id=req.id,
+            result=server_result.root.model_dump(by_alias=True, mode="json", exclude_none=True),
+        ),
+        extra_headers,
+    )
 
 
 def handle_mcp_post(
@@ -1595,14 +1522,14 @@ def handle_mcp_post(
     proto_hdr = (request.headers.get("mcp-protocol-version") or "").strip()
     if proto_hdr and proto_hdr not in SUPPORTED_PROTOCOL_VERSIONS:
         return JSONResponse(
-            {
-                "jsonrpc": "2.0",
-                "id": None,
-                "error": {
-                    "code": -32600,
-                    "message": f"Unsupported MCP-Protocol-Version: {proto_hdr}",
-                },
-            },
+            mcp_types.JSONRPCError(
+                jsonrpc="2.0",
+                id=0,
+                error=mcp_types.ErrorData(
+                    code=mcp_types.INVALID_REQUEST,
+                    message=f"Unsupported MCP-Protocol-Version: {proto_hdr}",
+                ),
+            ).model_dump(by_alias=True, mode="json", exclude_none=True),
             status_code=400,
             headers=headers,
         )
@@ -1626,7 +1553,7 @@ def handle_mcp_post(
             {
                 "jsonrpc": "2.0",
                 "id": None,
-                "error": {"code": -32700, "message": "Parse error"},
+                "error": {"code": mcp_types.PARSE_ERROR, "message": "Parse error"},
             },
             status_code=400,
             headers=headers,
@@ -1639,77 +1566,79 @@ def handle_mcp_post(
             {
                 "jsonrpc": "2.0",
                 "id": None,
-                "error": {"code": -32600, "message": "Invalid Request"},
+                "error": {"code": mcp_types.INVALID_REQUEST, "message": "Invalid Request"},
             },
             status_code=400,
             headers=headers,
         )
 
+    scope = _McpCallScope(request=request, db=db, auth=ctx)
     responses: list[dict[str, Any]] = []
-    for item in messages:
-        if not isinstance(item, dict) or item.get("jsonrpc") != "2.0":
-            responses.append(
-                {
-                    "jsonrpc": "2.0",
-                    "id": item.get("id") if isinstance(item, dict) else None,
-                    "error": {"code": -32600, "message": "Invalid JSON-RPC 2.0 message"},
-                }
-            )
-            continue
 
-        has_id = "id" in item
-        msg_id = item.get("id")
-        method = item.get("method")
-
-        # JSON-RPC notifications or client responses carry no "id" (or no "method")
-        if not has_id or method is None:
-            continue
-
-        if not isinstance(method, str):
-            responses.append(
-                {
-                    "jsonrpc": "2.0",
-                    "id": msg_id,
-                    "error": {"code": -32600, "message": "Invalid method name"},
-                }
-            )
-            continue
-
-        raw_params = item.get("params")
-        if raw_params is None:
-            params: dict[str, Any] = {}
-        elif isinstance(raw_params, dict):
-            params = raw_params
-        else:
-            responses.append(
-                {
-                    "jsonrpc": "2.0",
-                    "id": msg_id,
-                    "error": {"code": -32602, "message": "params must be an object"},
-                }
-            )
-            continue
-
-        try:
-            result, extra_hdrs = _dispatch_rpc_method(request, db, ctx, method, params)
+    async def _run_batch() -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        for item in messages:
+            if not isinstance(item, dict) or item.get("jsonrpc") != "2.0":
+                out.append(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": item.get("id") if isinstance(item, dict) else None,
+                        "error": {
+                            "code": mcp_types.INVALID_REQUEST,
+                            "message": "Invalid JSON-RPC 2.0 message",
+                        },
+                    }
+                )
+                continue
+            if "id" not in item or item.get("method") is None:
+                continue
+            raw_params = item.get("params")
+            if raw_params is not None and not isinstance(raw_params, dict):
+                out.append(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": item.get("id"),
+                        "error": {
+                            "code": mcp_types.INVALID_PARAMS,
+                            "message": "params must be an object",
+                        },
+                    }
+                )
+                continue
+            try:
+                parsed_msg = _JSONRPC_ADAPTER.validate_python(item).root
+            except ValidationError:
+                out.append(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": item.get("id"),
+                        "error": {
+                            "code": mcp_types.INVALID_REQUEST,
+                            "message": "Invalid JSON-RPC 2.0 request",
+                        },
+                    }
+                )
+                continue
+            if not isinstance(parsed_msg, mcp_types.JSONRPCRequest):
+                continue
+            rpc_out, extra_hdrs = await _dispatch_via_mcp_sdk(scope, parsed_msg)
             headers.update(extra_hdrs)
-            responses.append({"jsonrpc": "2.0", "id": msg_id, "result": result})
-        except McpAuthError as exc:
-            headers["WWW-Authenticate"] = exc.www_authenticate
-            return JSONResponse(
-                {
-                    "jsonrpc": "2.0",
-                    "id": msg_id,
-                    "error": {"code": -32003, "message": exc.detail},
-                },
-                status_code=exc.status_code,
-                headers=headers,
-            )
-        except JsonRpcError as exc:
-            err_obj: dict[str, Any] = {"code": exc.code, "message": exc.message}
-            if exc.data is not None:
-                err_obj["data"] = exc.data
-            responses.append({"jsonrpc": "2.0", "id": msg_id, "error": err_obj})
+            out.append(rpc_out.model_dump(by_alias=True, mode="json", exclude_none=True))
+        return out
+
+    try:
+        responses = asyncio.run(_run_batch())
+    except McpAuthError as exc:
+        headers["WWW-Authenticate"] = exc.www_authenticate
+        return JSONResponse(
+            {
+                "jsonrpc": "2.0",
+                "id": messages[0].get("id") if isinstance(messages[0], dict) else None,
+                "error": {"code": -32003, "message": exc.detail},
+            },
+            status_code=exc.status_code,
+            headers=headers,
+        )
 
     if not responses:
         return Response(status_code=202, headers=headers)

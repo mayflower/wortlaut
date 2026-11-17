@@ -239,7 +239,7 @@ function install(config: MeetCaptureConfig) {
   const NOTETAKER_BOT_RE =
     /\b(fireflies(\.ai)?|otter(\.ai)?|read\.ai|fathom|tl;dv|tldv|meetgeek|fellow(\.app)?|avoma|sembly|supernormal|grain|krisp|tactiq|airgram|notta|nyota|circleback|sonnet|bluedot|granola|notetaker|note[\s-]*taker|meeting[\s-]*bot|ai[\s-]*notetaker|ai[\s-]*assistant)\b/i;
   const SELF_OR_UI_TEXT_RE =
-    /^(wortlaut(?:\b.*)?|you|sie|ich)$/i;
+    /^(?:(?:synia\s+)?wortlaut(?:\b.*)?|you|sie|ich)$/i;
   const UI_CHROME_TEXT_RE =
     /(vollständigen videofeed|full video|bildausschnitt|reframing)/i;
   const BOT_INTRO_OR_URL_RE =
@@ -258,8 +258,10 @@ function install(config: MeetCaptureConfig) {
     if (typeof rawText !== 'string') return null;
     const cleaned = rawText.trim().replace(/\s+/g, ' ');
     if (!cleaned || cleaned.length > maxLen || BOT_INTRO_OR_URL_RE.test(cleaned)) return null;
-    const hasMention = /^[@#]?wortlaut\b/i.test(cleaned);
-    const stripped = cleaned.replace(/^[@#]?wortlaut(?:\s*\([^)]*\))?[\s,:;-]*/i, '').trim();
+    const hasMention = /^[@#]?(?:synia\s+)?wortlaut(?:\s+demo)?\b/i.test(cleaned);
+    const stripped = cleaned
+      .replace(/^[@#]?(?:synia\s+)?wortlaut(?:\s+demo)?(?:\s*\([^)]*\))?[\s,:;-]*/i, '')
+      .trim();
     return stripped ? {hasMention, stripped} : null;
   }
 
@@ -503,10 +505,13 @@ function install(config: MeetCaptureConfig) {
   const webexSelfCsis = new Set<number>();
   const webexParticipantOwnedCsis = new Map<string, Set<number>>();
   const webexParticipantDeviceCsis = new Map<string, Set<number>>();
+  const webexSlotSsrcToCsi = new Map<number, number>();
   const webexSsrcToParticipant = new Map<number, string>();
   const webexSlideVideoSsrcToParticipant = new Map<number, string>();
   let webexCurrentActiveSpeakerCsis: number[] = [];
   let webexLastActiveSpeakerAt = 0;
+  const sources = new Map<RTCRtpReceiver, {id: string; track?: MediaStreamTrack; recovered?: boolean; silentSamples?: number}>();
+  const sourceLastVoicedAt = new Map<string, number>();
 
   function findWebexParticipantByCsi(csi: number): string | null {
     for (const [pid, set] of webexParticipantOwnedCsis) {
@@ -548,7 +553,7 @@ function install(config: MeetCaptureConfig) {
         }
         if (Array.isArray(devRec.mediaSessions)) {
           for (const ms of devRec.mediaSessions.slice(0, 16)) {
-            if (ms && typeof ms !== 'object' && validCsi((ms as Record<string, unknown>).csi)) {
+            if (ms && typeof ms === 'object' && validCsi((ms as Record<string, unknown>).csi)) {
               webexSelfCsis.add((ms as Record<string, unknown>).csi as number);
             }
           }
@@ -560,14 +565,22 @@ function install(config: MeetCaptureConfig) {
   function updateWebexActiveSpeakerBindings(): boolean {
     if (config.provider !== 'webex') return false;
     let changed = false;
+    for (const [slotSsrc, stCsi] of webexSlotSsrcToCsi) {
+      const pid = findWebexParticipantByCsi(stCsi);
+      if (pid && pid !== webexSelfParticipantId && webexSsrcToParticipant.get(slotSsrc) !== pid) {
+        webexSsrcToParticipant.set(slotSsrc, pid);
+        changed = true;
+      }
+    }
     for (const [ssrc, pid] of webexSsrcToParticipant) {
       if (!participants.has(pid) || pid === webexSelfParticipantId) {
         webexSsrcToParticipant.delete(ssrc);
         changed = true;
       }
     }
+    const now = performance.now();
     const activePids: string[] = [];
-    if (webexCurrentActiveSpeakerCsis.length > 0 && performance.now() - webexLastActiveSpeakerAt <= 3000) {
+    if (webexCurrentActiveSpeakerCsis.length > 0 && now - webexLastActiveSpeakerAt <= 3000) {
       for (const csi of webexCurrentActiveSpeakerCsis) {
         const pid = findWebexParticipantByCsi(csi);
         if (pid && pid !== webexSelfParticipantId && !activePids.includes(pid)) {
@@ -580,7 +593,8 @@ function install(config: MeetCaptureConfig) {
       for (const p of participants.values()) {
         for (const sc of p.share_audio_csis) shareCsis.add(sc);
       }
-      const candidates: {ssrc: number; ts: number}[] = [];
+      const voicedSet = new Set<number>();
+      const allLiveCandidates: {ssrc: number; ts: number}[] = [];
       let maxTs = -Infinity;
       for (const pc of connections) {
         if (pc.connectionState === 'closed') continue;
@@ -588,41 +602,45 @@ function install(config: MeetCaptureConfig) {
           if (!received.has(receiver) || receiver.track?.kind !== 'audio' || receiver.track.readyState !== 'live') {
             continue;
           }
+          const srcEntry = sources.get(receiver);
+          const pcmVoiced = Boolean(srcEntry && now - (sourceLastVoicedAt.get(srcEntry.id) ?? -Infinity) <= 900);
           for (const item of receiver.getSynchronizationSources()) {
-            if (!validCsi(item.source) || shareCsis.has(item.source)) continue;
+            if (!validCsi(item.source) || shareCsis.has(item.source) || webexSlotSsrcToCsi.has(item.source)) continue;
             const ts = typeof item.timestamp === 'number' && Number.isFinite(item.timestamp) ? item.timestamp : 0;
             if (ts > maxTs) maxTs = ts;
-            candidates.push({ssrc: item.source, ts});
+            allLiveCandidates.push({ssrc: item.source, ts});
+            const rtpVoiced = typeof item.audioLevel === 'number' && item.audioLevel > 0.01;
+            if (pcmVoiced || rtpVoiced) voicedSet.add(item.source);
           }
         }
       }
-      const liveSsrcs = [...new Set(
-        candidates
-          .filter((c) => !Number.isFinite(maxTs) || maxTs <= 0 || maxTs - c.ts <= 600)
-          .map((c) => c.ssrc),
-      )];
-      if (liveSsrcs.length === 1 && activePids.length >= 1) {
-        const ssrc = liveSsrcs[0];
-        const pid = activePids[0];
-        if (webexSsrcToParticipant.get(ssrc) !== pid) {
-          webexSsrcToParticipant.set(ssrc, pid);
-          changed = true;
-        }
-      } else if (liveSsrcs.length > 1) {
-        const usedPids = new Set<string>();
-        for (const ssrc of liveSsrcs) {
-          const cur = webexSsrcToParticipant.get(ssrc);
-          if (cur && activePids.includes(cur) && !usedPids.has(cur)) {
-            usedPids.add(cur);
-          }
-        }
-        for (const ssrc of liveSsrcs) {
-          const cur = webexSsrcToParticipant.get(ssrc);
-          if (cur && activePids.includes(cur) && usedPids.has(cur)) continue;
-          const nextPid = activePids.find((p) => !usedPids.has(p)) ?? activePids[0];
-          if (nextPid && webexSsrcToParticipant.get(ssrc) !== nextPid) {
-            webexSsrcToParticipant.set(ssrc, nextPid);
-            usedPids.add(nextPid);
+      const allLiveSsrcs = [
+        ...new Set(
+          allLiveCandidates
+            .filter((c) => !Number.isFinite(maxTs) || maxTs <= 0 || maxTs - c.ts <= 600)
+            .map((c) => c.ssrc),
+        ),
+      ];
+      const liveSet = new Set(allLiveSsrcs);
+      const voicedSsrcs = [...voicedSet].filter((s) => liveSet.has(s));
+      const candidateSsrcs =
+        voicedSsrcs.length > 0 ? voicedSsrcs : allLiveSsrcs.length === 1 ? allLiveSsrcs : [];
+      if (candidateSsrcs.length > 0) {
+        const unresolvedSsrcs = candidateSsrcs.filter((s) => {
+          const cur = webexSsrcToParticipant.get(s);
+          return !cur || !activePids.includes(cur);
+        });
+        const matchedPids = new Set(
+          candidateSsrcs
+            .map((s) => webexSsrcToParticipant.get(s))
+            .filter((p): p is string => Boolean(p && activePids.includes(p))),
+        );
+        const unassignedPids = activePids.filter((p) => !matchedPids.has(p));
+        if (unresolvedSsrcs.length === 1 && unassignedPids.length === 1) {
+          const targetSsrc = unresolvedSsrcs[0];
+          const targetPid = unassignedPids[0];
+          if (webexSsrcToParticipant.get(targetSsrc) !== targetPid) {
+            webexSsrcToParticipant.set(targetSsrc, targetPid);
             changed = true;
           }
         }
@@ -929,6 +947,12 @@ function install(config: MeetCaptureConfig) {
       const val = el.getAttribute(attr)?.trim();
       if (val && val.length <= 200 && val !== 'fixture') return cleanCandidate(val) ?? val;
     }
+    if (el.getAttribute('data-cid') === 'calling-participant-stream') {
+      const tidName = el.getAttribute('data-tid')?.trim();
+      if (tidName && tidName.length <= 200 && !/^(?:calling-|video-|stage-|roster-|share-)/i.test(tidName)) {
+        return cleanCandidate(tidName) ?? tidName;
+      }
+    }
     if (el.getAttribute('role') === 'listitem') {
       const aria = el.getAttribute('aria-label')?.trim();
       const cleanedAria = aria ? cleanCandidate(aria) : null;
@@ -954,7 +978,7 @@ function install(config: MeetCaptureConfig) {
       if (attrVal && attrVal.length <= 200 && attrVal !== 'fixture') return cleanCandidate(attrVal) ?? attrVal;
     }
     for (const np of Array.from(el.querySelectorAll('.notranslate, [jsslot]')).slice(0, 16)) {
-      if (np.children.length > 0 || np.closest('button')) continue;
+      if (np.children.length > 0 || np.closest('button') || np.closest('[role="tooltip"]')) continue;
       const cls = typeof np.className === 'string' ? np.className : '';
       if (/material-icons|google-symbols|google-material-icons/i.test(cls)) continue;
       const txt = (np.textContent || '').trim();
@@ -962,21 +986,28 @@ function install(config: MeetCaptureConfig) {
         txt &&
         !UI_CHROME_TEXT_RE.test(txt) &&
         !/^\d{1,2}:\d{2}(?::\d{2})?$/.test(txt) &&
-        !/^(devices|mic|mic_off|more_vert|keep|push_pin|frame_person|visual_effects|volume_up|volume_off|present_to_all|screen_share|stop_screen_share)$/i.test(txt)
+        !/^(devices|mic|mic_off|mic_none|more_vert|keep|keep_off|keep_outline|push_pin|frame_person|visual_effects|volume_up|volume_off|present_to_all|screen_share|stop_screen_share|zoom_in|open_in_new|open_in_full)$/i.test(txt)
       ) {
         const cleaned = cleanCandidate(txt);
         if (cleaned) return cleaned;
       }
     }
     for (const child of Array.from(el.querySelectorAll('span, div, p')).slice(0, 64)) {
-      if (child.children.length > 0 || child.closest('button') || child.closest('[aria-hidden="true"]')) continue;
+      if (
+        child.children.length > 0 ||
+        child.closest('button') ||
+        child.closest('[role="tooltip"]') ||
+        child.closest('[aria-hidden="true"]')
+      ) {
+        continue;
+      }
       const cls = child.className || '';
       if (typeof cls === 'string' && /material-icons|google-symbols|google-material-icons/i.test(cls)) continue;
       const txt = (child.textContent || '').trim();
       if (txt && txt.length >= 2 && txt.length <= 120 && txt !== 'fixture' &&
           !UI_CHROME_TEXT_RE.test(txt) &&
           !/^\d{1,2}:\d{2}(?::\d{2})?$/.test(txt) &&
-          !/^(devices|mic|mic_off|more_vert|keep|push_pin|frame_person|visual_effects|volume_up|volume_off|present_to_all|screen_share|stop_screen_share)$/i.test(txt)) {
+          !/^(devices|mic|mic_off|mic_none|more_vert|keep|keep_off|keep_outline|push_pin|frame_person|visual_effects|volume_up|volume_off|present_to_all|screen_share|stop_screen_share|zoom_in|open_in_new|open_in_full)$/i.test(txt)) {
         return cleanCandidate(txt) ?? txt;
       }
     }
@@ -1143,7 +1174,7 @@ function install(config: MeetCaptureConfig) {
     const nodes = document.querySelectorAll(
       '[data-participant-id], [data-requested-participant-id], [data-member-id], ' +
       '[data-endpoint-id], [data-user-id], [data-tid*="roster"], [data-tid*="video-tile"], ' +
-      '[data-tid*="share"], [data-cid*="screen-sharing"], ' +
+      '[data-tid*="share"], [data-cid*="screen-sharing"], [data-cid="calling-participant-stream"], ' +
       '[role="listitem"][data-participant-id], [role="listitem"][data-member-id], ' +
       '.participants-li[data-participants-row]'
     );
@@ -1172,7 +1203,13 @@ function install(config: MeetCaptureConfig) {
         el.getAttribute('data-is-screencast') === 'true' ||
         el.hasAttribute('data-screencast') ||
         el.getAttribute('data-is-presentation') === 'true' ||
-        Boolean(el.querySelector('[data-is-screencast="true"], [data-is-presentation="true"]')) ||
+        /^screensharing$/i.test(el.getAttribute('data-stream-type') ?? '') ||
+        el.getAttribute('data-type') === 'screen-sharing' ||
+        Boolean(
+          el.querySelector(
+            '[data-is-screencast="true"], [data-is-presentation="true"], [data-type="screen-sharing"], [data-stream-type="ScreenSharing"]',
+          ),
+        ) ||
         Boolean(el.closest('[data-is-screencast="true"], [data-is-presentation="true"]')) ||
         /screen-share|stage-share|sharing-stage|application-sharing|screen-sharing/i.test(
           `${el.getAttribute('data-tid') ?? ''} ${el.getAttribute('data-cid') ?? ''}`,
@@ -1183,7 +1220,7 @@ function install(config: MeetCaptureConfig) {
       const hasVirtualSelfVideo = mediaElements.some((media) => {
         const ownerTile = media.closest(
           '[data-participant-id], [data-requested-participant-id], [data-member-id], ' +
-          '[data-endpoint-id], [data-user-id], [data-tid*="video-tile"]'
+          '[data-endpoint-id], [data-user-id], [data-tid*="video-tile"], [data-cid="calling-participant-stream"]'
         );
         if (ownerTile && ownerTile !== el) return false;
         const src = (media as HTMLMediaElement).srcObject;
@@ -1317,13 +1354,36 @@ function install(config: MeetCaptureConfig) {
           }
         }
       }
-      const effectiveId = mappedParentId || (name && (streamIds.length || trackIds.length || csis.length || shareVideoStreamIds.length || shareVideoTrackIds.length)
-        ? `dom:${streamIds[0] ?? trackIds[0] ?? shareVideoStreamIds[0] ?? shareVideoTrackIds[0] ?? csis[0]}`
-        : '');
+      let resolvedTeamsRosterId = '';
+      if (!mappedParentId && name && config.provider === 'teams') {
+        const targetLower = name.trim().toLowerCase();
+        const rosterMatches = [...participants.values()].filter(
+          (p) =>
+            !ignoredParticipantIds.has(p.participant_id) &&
+            !p.participant_id.startsWith('dom:') &&
+            Boolean(p.participant_name) &&
+            p.participant_name!.trim().toLowerCase() === targetLower,
+        );
+        if (rosterMatches.length === 1) {
+          resolvedTeamsRosterId = rosterMatches[0].participant_id;
+        }
+      }
+      const effectiveId =
+        mappedParentId ||
+        resolvedTeamsRosterId ||
+        (name &&
+        !(config.provider === 'teams' && isScreencastTile) &&
+        (streamIds.length || trackIds.length || csis.length || shareVideoStreamIds.length || shareVideoTrackIds.length)
+          ? `dom:${streamIds[0] ?? trackIds[0] ?? shareVideoStreamIds[0] ?? shareVideoTrackIds[0] ?? csis[0]}`
+          : '');
       if (effectiveId && (csis.length || streamIds.length || trackIds.length || shareVideoStreamIds.length || shareVideoTrackIds.length)) {
+        const effectiveParticipantName =
+          isScreencastTile && mappedParentId !== rawId
+            ? (domNames.get(effectiveId) ?? protoNames.get(effectiveId) ?? participants.get(effectiveId)?.participant_name ?? name ?? null)
+            : (name ?? domNames.get(effectiveId) ?? protoNames.get(effectiveId) ?? null);
         if (ingestParticipantRecord({
           participant_id: effectiveId,
-          participant_name: name ?? domNames.get(effectiveId) ?? protoNames.get(effectiveId) ?? null,
+          participant_name: effectiveParticipantName,
           ...(isScreencastTile ? {share_video_csis: csis} : {audio_csis: csis}),
           stream_ids: streamIds,
           track_ids: trackIds,
@@ -1561,6 +1621,7 @@ function install(config: MeetCaptureConfig) {
                   const slotSsrc = idObj?.ssrc;
                   const stCsi = stRec.csi;
                   if (validCsi(slotSsrc) && validCsi(stCsi)) {
+                    if (webexSlotSsrcToCsi.size < 128) webexSlotSsrcToCsi.set(slotSsrc, stCsi);
                     const pid = findWebexParticipantByCsi(stCsi);
                     if (pid && pid !== webexSelfParticipantId) {
                       webexSsrcToParticipant.set(slotSsrc, pid);
@@ -2182,7 +2243,6 @@ function install(config: MeetCaptureConfig) {
     .then(() => { window.wortlautMeetReceivers.observe = observe; state.capture_ready = true; })
     .catch(() => { state.reason = 'capture_modules_failed'; })
     .finally(() => { modules.forEach((url) => URL.revokeObjectURL(url)); });
-  const sources = new Map<RTCRtpReceiver, {id: string; track?: MediaStreamTrack; recovered?: boolean; silentSamples?: number}>();
   const keepaliveAudios = new Map<RTCRtpReceiver, {el: HTMLAudioElement; track: MediaStreamTrack}>();
   const receiverStats = new Map<RTCRtpReceiver, InboundAudioStats>();
   let peerStats: MediaState['peer_connections'] = [];
@@ -2301,6 +2361,8 @@ function install(config: MeetCaptureConfig) {
     send({attempt_id: config.attempt_id, type: 'control', metadata}, JSON.stringify(metadata).length);
   };
   const sink: CaptureSink = {begin: control, bind: control, end: control, gap: control,
+    isOptedOut: (b: Binding) =>
+      isParticipantOptedOut(b.participant_id ?? b.speaker_id, b.participant_name),
     chunk: (metadata: Chunk, pcm: Uint8Array) => {
       // Five-second blocks, not one RPC per AudioWorklet render quantum.
       const optedOut = isParticipantOptedOut(metadata.participant_id ?? metadata.speaker_id, metadata.participant_name);
@@ -2331,7 +2393,13 @@ function install(config: MeetCaptureConfig) {
         }
       }
     },
-    activity: ({level, participant_id, participant_name, speaker_id}) => {
+    activity: ({level, provider_source_id, participant_id, participant_name, speaker_id}) => {
+      if (provider_source_id && level >= 0.025) {
+        sourceLastVoicedAt.set(provider_source_id, performance.now());
+        if (config.provider === 'webex' && updateWebexActiveSpeakerBindings()) {
+          void inspectReceivers();
+        }
+      }
       if (capturePaused || isParticipantOptedOut(participant_id ?? speaker_id, participant_name)) {
         return;
       }
@@ -2669,7 +2737,7 @@ function install(config: MeetCaptureConfig) {
     if ((track as MediaStreamTrack & {__wortlautVirtualVideo?: boolean}).__wortlautVirtualVideo) {
       return true;
     }
-    if (track.label === 'wortlaut Live-Protokoll') {
+    if (track.label.startsWith('wortlaut Live-Protokoll')) {
       return true;
     }
     for (const pc of connections) {

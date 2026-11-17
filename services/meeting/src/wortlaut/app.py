@@ -35,13 +35,13 @@ from pydantic import (
     model_serializer,
     model_validator,
 )
-from sqlalchemy import and_, delete, func, or_, select, text, tuple_
+from sqlalchemy import delete, func, select, text, tuple_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
 from wortlaut.asr import finalize_processing, inference_pass
-from wortlaut.calendar import entry_json, imap_pass, import_mail
+from wortlaut.calendar import imap_pass, import_mail
 from wortlaut.calendar_oauth import (
     CalendarOAuthProvider,
     apply_synced_events,
@@ -56,6 +56,12 @@ from wortlaut.calendar_oauth import (
 )
 from wortlaut.controller import controller_pass, new_attempt, request_cancellation
 from wortlaut.database import get_engine, session
+from wortlaut.domain import (
+    apply_protocol_metadata_fields,
+    apply_recordings_search_filters,
+    cancel_recording_and_unlink_calendar,
+    query_calendar_overview,
+)
 from wortlaut.exports import (
     chat_reader_token,
     export_data,
@@ -121,8 +127,8 @@ from wortlaut.oidc import (
     Principal,
     can_access_recording,
     exchange_oidc_code,
+    get_oidc_authorization_endpoint,
     is_admin_email,
-    user_recording_access_predicate,
     verify_dex_id_token,
     verify_user_session_token,
 )
@@ -644,7 +650,10 @@ async def oauth_register_endpoint(request: Request, db: Db):
         return oauth_error_json("invalid_client_metadata", "Invalid JSON body")
     if not isinstance(payload, dict):
         return oauth_error_json("invalid_client_metadata", "JSON object required")
-    status_code, data = await run_in_threadpool(register_oauth_client, db, payload)
+    client_ip = request.client.host if request.client else None
+    status_code, data = await run_in_threadpool(
+        register_oauth_client, db, payload, client_ip=client_ip
+    )
     return JSONResponse(data, status_code=status_code, headers=cors_oauth_headers())
 
 
@@ -775,6 +784,20 @@ def privacy_page(lang: str | None = None):
     return HTMLResponse(render_privacy(lang=lang), headers={"Cache-Control": "no-store"})
 
 
+@app.get("/v1/auth/oidc/config")
+def oidc_config_endpoint(response: Response):
+    s = get_settings()
+    response.headers["Cache-Control"] = "no-store"
+    if not s.oidc_issuer:
+        return {"enabled": False, "authorization_endpoint": "", "client_id": ""}
+    return {
+        "enabled": True,
+        "issuer": s.oidc_issuer,
+        "authorization_endpoint": get_oidc_authorization_endpoint(),
+        "client_id": s.oidc_client_id,
+    }
+
+
 @app.post("/v1/auth/oidc/exchange")
 def oidc_exchange(body: OidcExchangeRequest, response: Response):
     response.headers["Cache-Control"] = "no-store"
@@ -893,87 +916,7 @@ async def import_calendar_message(request: Request, db: Db, principal: AuthPrinc
 
 @app.get("/v1/calendar")
 def calendar_status(db: Db, principal: AuthPrincipal):
-    now = datetime.now(UTC)
-    cal_query = select(CalendarEntry).order_by(CalendarEntry.dtstamp.desc())
-    conn_query = select(CalendarConnection).order_by(CalendarConnection.created_at.desc())
-    synced_base = select(CalendarSyncedEvent)
-    user_email = (principal.email or "").lower()
-    if principal.kind != "operator":
-        conn_query = conn_query.where(func.lower(CalendarConnection.owner_email) == user_email)
-        synced_base = synced_base.where(
-            func.lower(CalendarSyncedEvent.owner_email) == user_email
-        )
-    if not principal.is_admin:
-        cal_query = cal_query.where(func.lower(CalendarEntry.organizer) == user_email)
-    entries = db.scalars(cal_query.limit(128)).all()
-    result = []
-    for entry in entries:
-        recordings = db.scalars(
-            select(Recording).where(Recording.calendar_entry_id == entry.id)
-        ).all()
-        item = entry_json(entry, recordings[0] if len(recordings) == 1 else None)
-        item["recording_ids"] = [str(r.id) for r in recordings]
-        result.append(item)
-
-    def _ics_sort_key(item: dict) -> tuple[int, float]:
-        if item["starts_at"] is None or item["ends_at"] is None:
-            return (2, -datetime.fromisoformat(item["dtstamp"]).timestamp())
-        starts_dt = datetime.fromisoformat(item["starts_at"])
-        ends_dt = datetime.fromisoformat(item["ends_at"])
-        if ends_dt < now:
-            return (1, -starts_dt.timestamp())
-        return (0, starts_dt.timestamp())
-
-    result.sort(key=_ics_sort_key)
-
-    connections = [connection_json(c) for c in db.scalars(conn_query).all()]
-    upcoming_synced_rows = db.scalars(
-        synced_base.where(CalendarSyncedEvent.ends_at >= now)
-        .order_by(CalendarSyncedEvent.starts_at.asc())
-        .limit(200)
-    ).all()
-    past_synced_rows = db.scalars(
-        synced_base.where(
-            CalendarSyncedEvent.ends_at >= now - timedelta(days=7),
-            CalendarSyncedEvent.ends_at < now,
-        )
-        .order_by(CalendarSyncedEvent.starts_at.desc())
-        .limit(50)
-    ).all()
-    synced_rows = [*upcoming_synced_rows, *past_synced_rows]
-    rec_ids = [ev.recording_id for ev in synced_rows if ev.recording_id]
-    rec_map = (
-        {
-            r.id: r
-            for r in db.scalars(select(Recording).where(Recording.id.in_(rec_ids))).all()
-        }
-        if rec_ids
-        else {}
-    )
-    synced_events = []
-    for ev in synced_rows:
-        rec = rec_map.get(ev.recording_id) if ev.recording_id else None
-        if rec is None and ev.meeting_url:
-            candidate = db.scalar(
-                select(Recording)
-                .where(
-                    Recording.meeting_url == ev.meeting_url,
-                    Recording.metadata_deleted_at.is_(None),
-                    Recording.cancelled_at.is_(None),
-                    Recording.starts_at <= ev.ends_at + timedelta(hours=1),
-                    Recording.ends_at >= ev.starts_at - timedelta(hours=1),
-                )
-                .order_by(Recording.starts_at.desc())
-                .limit(1)
-            )
-            if candidate is not None and can_access_recording(db, principal, candidate):
-                rec = candidate
-        synced_events.append(synced_event_json(ev, rec))
-    return {
-        "events": result,
-        "connections": connections,
-        "synced_events": synced_events,
-    }
+    return query_calendar_overview(db, principal, datetime.now(UTC))
 
 
 @app.post("/v1/calendar/oauth/exchange")
@@ -1097,14 +1040,18 @@ def prometheus_metrics(db: Db):
             func.coalesce(func.sum(RecordingKeyframe.byte_size), 0),
         ).where(RecordingKeyframe.deleted_at.is_(None))
     ).one()
+    def _prom_label(val: object) -> str:
+        return str(val).replace("\\", "\\\\").replace("\n", "\\n").replace('"', '\\"')
+
     lines = [
         "# HELP wortlaut_recordings_total Total recordings by provider and state.",
         "# TYPE wortlaut_recordings_total gauge",
     ]
     for prov, part, proc, count in rec_rows:
         lines.append(
-            f'wortlaut_recordings_total{{provider="{prov}",participation="{part}",'
-            f'processing="{proc}"}} {count}'
+            f'wortlaut_recordings_total{{provider="{_prom_label(prov)}",'
+            f'participation="{_prom_label(part)}",'
+            f'processing="{_prom_label(proc)}"}} {count}'
         )
     lines.extend(
         [
@@ -1116,7 +1063,7 @@ def prometheus_metrics(db: Db):
         ]
     )
     for status, count in asr_rows:
-        lines.append(f'wortlaut_asr_jobs_total{{status="{status}"}} {count}')
+        lines.append(f'wortlaut_asr_jobs_total{{status="{_prom_label(status)}"}} {count}')
     lines.extend(
         [
             "# HELP wortlaut_stored_audio_samples Active stored audio samples.",
@@ -1159,80 +1106,17 @@ def list_recordings(
             raise HTTPException(422, "Explicit timezone required")
     if starts_from and starts_before and starts_from >= starts_before:
         raise HTTPException(422, "Invalid start-time interval")
-    query = select(Recording, Delivery).outerjoin(Delivery)
-    unstarted_cancelled_cal = and_(
-        Recording.idempotency_key.like("cal-oauth-%"),
-        Recording.participation == "ended",
-        Recording.participation_reason == "cancelled",
-        ~select(Attempt.id).where(Attempt.recording_id == Recording.id).exists(),
+    query, empty_for_principal = apply_recordings_search_filters(
+        select(Recording, Delivery).outerjoin(Delivery),
+        principal=principal,
+        provider=provider,
+        participation=participation,
+        processing=processing,
+        q=q,
+        include_attempt_diagnostics=True,
     )
-    query = query.where(~unstarted_cancelled_cal)
-    if not principal.is_admin:
-        pred = user_recording_access_predicate(principal)
-        if pred is False:
-            return {"items": [], "next_cursor": None}
-        query = query.where(pred)
-    if provider:
-        query = query.where(Recording.provider == provider)
-    if participation:
-        parts = [p.strip() for p in participation.split(",") if p.strip()]
-        if len(parts) == 1:
-            query = query.where(Recording.participation == parts[0])
-        elif parts:
-            query = query.where(Recording.participation.in_(parts))
-    if processing:
-        query = query.where(Recording.processing == processing)
-    if q and q.strip():
-        needle = f"%{q.strip()}%"
-        segment_match = (
-            select(TranscriptSegment.id)
-            .join(AsrJob, AsrJob.id == TranscriptSegment.id)
-            .join(AudioStream, AudioStream.id == AsrJob.stream_id)
-            .join(Attempt, Attempt.id == AudioStream.attempt_id)
-            .where(
-                Attempt.recording_id == Recording.id,
-                or_(
-                    TranscriptSegment.result["text"].astext.ilike(needle),
-                    TranscriptSegment.result["participant_name"].astext.ilike(needle),
-                    TranscriptSegment.result["speaker_id"].astext.ilike(needle),
-                ),
-            )
-            .exists()
-        )
-        stream_match = (
-            select(AudioStream.id)
-            .join(Attempt, Attempt.id == AudioStream.attempt_id)
-            .outerjoin(AudioControl, AudioControl.stream_id == AudioStream.id)
-            .where(
-                Attempt.recording_id == Recording.id,
-                or_(
-                    AudioStream.contract["participant_name"].astext.ilike(needle),
-                    AudioStream.contract["speaker_id"].astext.ilike(needle),
-                    AudioControl.contract["participant_name"].astext.ilike(needle),
-                ),
-            )
-            .exists()
-        )
-        attempt_match = (
-            select(Attempt.id)
-            .where(
-                Attempt.recording_id == Recording.id,
-                or_(
-                    Attempt.diagnostics["receiver_sources"].astext.ilike(needle),
-                    Attempt.diagnostics["participant_sources"].astext.ilike(needle),
-                ),
-            )
-            .exists()
-        )
-        query = query.where(
-            or_(
-                Recording.title.ilike(needle),
-                Recording.guest_name.ilike(needle),
-                segment_match,
-                stream_match,
-                attempt_match,
-            )
-        )
+    if empty_for_principal:
+        return {"items": [], "next_cursor": None}
     if starts_from:
         query = query.where(Recording.starts_at >= starts_from)
     if starts_before:
@@ -1702,28 +1586,29 @@ def prepare_attempt(recording_id: uuid.UUID, db: Db, response: Response):
 
 @app.post("/v1/recordings/{recording_id}/cancel")
 def cancel_recording(recording_id: uuid.UUID, db: Db, principal: AuthPrincipal):
-    recording = db.scalar(select(Recording).where(Recording.id == recording_id).with_for_update())
-    if recording is None or not can_access_recording(db, principal, recording):
+    rec_peek = db.get(Recording, recording_id)
+    if rec_peek is None or not can_access_recording(db, principal, rec_peek):
         raise HTTPException(404, "Recording not found")
-    request_cancellation(recording, datetime.now(UTC))
-    synced_for_rec = db.scalars(
-        select(CalendarSyncedEvent)
-        .where(CalendarSyncedEvent.recording_id == recording.id)
-        .order_by(CalendarSyncedEvent.id.asc())
-        .with_for_update(key_share=True)
-    ).all()
-    for sev in synced_for_rec:
-        sev.recording_id = None
-        sev.user_override = False
-        sev.auto_record = False
+    recording = cancel_recording_and_unlink_calendar(db, recording_id, datetime.now(UTC))
+    if recording is None:
+        raise HTTPException(404, "Recording not found")
     db.commit()
     return recording_json(recording)
 
 
 @app.delete("/v1/recordings/{recording_id}")
 def delete_recording(recording_id: uuid.UUID, db: Db, principal: AuthPrincipal):
+    rec_peek = db.get(Recording, recording_id)
+    if rec_peek is None or not can_access_recording(db, principal, rec_peek):
+        raise HTTPException(404, "Recording not found")
+    synced_for_rec = db.scalars(
+        select(CalendarSyncedEvent)
+        .where(CalendarSyncedEvent.recording_id == recording_id)
+        .order_by(CalendarSyncedEvent.id.asc())
+        .with_for_update()
+    ).all()
     recording = db.scalar(select(Recording).where(Recording.id == recording_id).with_for_update())
-    if recording is None or not can_access_recording(db, principal, recording):
+    if recording is None:
         raise HTTPException(404, "Recording not found")
     if recording.participation in ("starting", "joining", "waiting_admission", "capturing"):
         raise HTTPException(409, "Stop active recording before deleting")
@@ -1751,12 +1636,6 @@ def delete_recording(recording_id: uuid.UUID, db: Db, principal: AuthPrincipal):
             db.execute(delete(AudioStream).where(AudioStream.id.in_(stream_ids)))
         db.execute(delete(Attempt).where(Attempt.id.in_(attempt_ids)))
     db.execute(delete(Delivery).where(Delivery.recording_id == recording.id))
-    synced_for_rec = db.scalars(
-        select(CalendarSyncedEvent)
-        .where(CalendarSyncedEvent.recording_id == recording.id)
-        .order_by(CalendarSyncedEvent.id.asc())
-        .with_for_update(key_share=True)
-    ).all()
     for sev in synced_for_rec:
         sev.recording_id = None
         sev.user_override = False
@@ -1870,25 +1749,22 @@ def update_recording_protocol(
         raise HTTPException(404, "Recording not found")
     if recording.metadata_deleted_at or recording.transcript_deleted_at:
         raise HTTPException(410, "Recording retention expired")
-    if body.title is not None:
-        cleaned_title = body.title.strip()
-        recording.title = cleaned_title or None
     meta = dict(recording.protocol_meta or {})
-    if body.language is not None:
-        raw_lang = body.language.strip()
-        if not raw_lang:
-            meta.pop("asr_language", None)
-        else:
-            try:
-                norm_lang = normalize_asr_language(raw_lang)
-            except ValueError as exc:
-                raise HTTPException(422, str(exc)) from None
-            if norm_lang:
-                meta["asr_language"] = norm_lang
-            else:
-                meta.pop("asr_language", None)
-    if body.notes is not None:
-        meta["notes"] = body.notes[:20000]
+    try:
+        meta = apply_protocol_metadata_fields(
+            recording,
+            meta,
+            title=body.title,
+            has_title=body.title is not None,
+            language=body.language,
+            has_language=body.language is not None,
+            notes=body.notes,
+            has_notes=body.notes is not None,
+            speaker_overrides=body.speaker_overrides,
+            term_replacements=body.term_replacements,
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
     if body.summary is not None:
         cleaned_summary_text = body.summary.summary.strip()
         cleaned_topics = [
@@ -1921,30 +1797,6 @@ def update_recording_protocol(
             }
         else:
             meta.pop("summary", None)
-    if body.speaker_overrides is not None:
-        cur_speakers = dict(meta.get("speaker_overrides") or {})
-        for k, v in body.speaker_overrides.items():
-            key = str(k).strip()[:200]
-            if not key:
-                continue
-            val = str(v).strip()[:120]
-            if val:
-                cur_speakers[key] = val
-            else:
-                cur_speakers.pop(key, None)
-        meta["speaker_overrides"] = cur_speakers
-    if body.term_replacements is not None:
-        cur_terms = dict(meta.get("term_replacements") or {})
-        for k, v in body.term_replacements.items():
-            key = str(k).strip()[:120]
-            if not key:
-                continue
-            val = str(v).strip()[:120]
-            if val and val != key:
-                cur_terms[key] = val
-            else:
-                cur_terms.pop(key, None)
-        meta["term_replacements"] = cur_terms
     if body.segment_edits is not None:
         prior_turn_ends = {
             str(seg.get("segment_id") or seg.get("id") or ""): float(seg["end"])
@@ -2014,11 +1866,9 @@ def create_recording_summary(
         )
         raise HTTPException(502, f"KI-Zusammenfassung fehlgeschlagen ({reason})") from None
     try:
-        locked_rec = db.scalar(
-            select(Recording).where(Recording.id == recording_id).with_for_update()
-        )
-        if locked_rec is not None:
-            publish_protocol_link_to_calendar_events(db, locked_rec)
+        fresh_rec = db.get(Recording, recording_id)
+        if fresh_rec is not None:
+            publish_protocol_link_to_calendar_events(db, fresh_rec)
             db.commit()
     except Exception:
         db.rollback()
@@ -2031,9 +1881,7 @@ def link_recording_in_calendar(
     db: Db,
     principal: AuthPrincipal,
 ):
-    recording = db.scalar(
-        select(Recording).where(Recording.id == recording_id).with_for_update(key_share=True)
-    )
+    recording = db.get(Recording, recording_id)
     if recording is None or not can_access_recording(db, principal, recording):
         raise HTTPException(404, "Recording not found")
     if recording.transcript_deleted_at or recording.metadata_deleted_at:
@@ -2334,7 +2182,9 @@ def build_chat_intro(
 ) -> str | None:
     if not settings.enable_chat_intro:
         return None
-    base_url = settings.api_url.rstrip("/")
+    from wortlaut.settings import get_public_base_url
+
+    base_url = get_public_base_url(settings)
     cred = chat_reader_token(recording)
     token_param = (
         f"&token=wortlaut-read-{recording.id}.{cred.removeprefix('wortlaut-read-')}"
@@ -2602,43 +2452,52 @@ def worker_status(
     record_worker_status_telemetry(recording, attempt, body)
     live_transcript: list[dict] = []
     if body.participation == "capturing" and not transcript_deleted:
-        is_en = settings.default_locale == "en"
-        exported = export_data(db, recording, tail_segments_limit=48)
-        last_spk_key: tuple[str, str] | None = None
-        for seg in exported["segments"][-24:]:
-            if seg.get("attribution_unknown") and seg.get("source_kind") != "share_audio":
-                continue
-            text_val = " ".join(str(seg.get("text") or "").split())
-            if not text_val:
-                continue
-            if seg.get("source_kind") == "share_audio":
-                spk = "Screen Share" if is_en else "Freigabe-Audio"
-                spk_identity = "share_audio"
-            else:
-                clean_name = " ".join(str(seg.get("participant_name") or "").split())
-                spk = (
-                    clean_name
-                    if clean_name
-                    else ("Participant" if is_en else "Teilnehmer")
-                )[:80]
-                spk_identity = str(seg.get("participant_id") or seg["speaker_id"])
-            cur_key = (spk_identity, spk)
-            if (
-                live_transcript
-                and last_spk_key == cur_key
-                and len(live_transcript[-1]["text"]) + 1 + len(text_val) <= 420
-            ):
-                live_transcript[-1]["text"] = f"{live_transcript[-1]['text']} {text_val}"
-            else:
-                live_transcript.append(
-                    {
-                        "speaker": spk,
-                        "text": text_val[:420],
-                        "start": round(float(seg["start"]), 2),
-                    }
-                )
-                last_spk_key = cur_key
-        live_transcript = live_transcript[-8:]
+        has_any_segment = db.scalar(
+            select(TranscriptSegment.id)
+            .join(AsrJob, AsrJob.id == TranscriptSegment.id)
+            .join(AudioStream, AudioStream.id == AsrJob.stream_id)
+            .join(Attempt, Attempt.id == AudioStream.attempt_id)
+            .where(Attempt.recording_id == recording.id)
+            .limit(1)
+        )
+        if has_any_segment is not None:
+            is_en = settings.default_locale == "en"
+            exported = export_data(db, recording, tail_segments_limit=48)
+            last_spk_key: tuple[str, str] | None = None
+            for seg in exported["segments"][-24:]:
+                if seg.get("attribution_unknown") and seg.get("source_kind") != "share_audio":
+                    continue
+                text_val = " ".join(str(seg.get("text") or "").split())
+                if not text_val:
+                    continue
+                if seg.get("source_kind") == "share_audio":
+                    spk = "Screen Share" if is_en else "Freigabe-Audio"
+                    spk_identity = "share_audio"
+                else:
+                    clean_name = " ".join(str(seg.get("participant_name") or "").split())
+                    spk = (
+                        clean_name
+                        if clean_name
+                        else ("Participant" if is_en else "Teilnehmer")
+                    )[:80]
+                    spk_identity = str(seg.get("participant_id") or seg["speaker_id"])
+                cur_key = (spk_identity, spk)
+                if (
+                    live_transcript
+                    and last_spk_key == cur_key
+                    and len(live_transcript[-1]["text"]) + 1 + len(text_val) <= 420
+                ):
+                    live_transcript[-1]["text"] = f"{live_transcript[-1]['text']} {text_val}"
+                else:
+                    live_transcript.append(
+                        {
+                            "speaker": spk,
+                            "text": text_val[:420],
+                            "start": round(float(seg["start"]), 2),
+                        }
+                    )
+                    last_spk_key = cur_key
+            live_transcript = live_transcript[-8:]
     return {
         "accepted": True,
         "stop_requested": stop_requested,
