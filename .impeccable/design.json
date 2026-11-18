@@ -1,0 +1,132 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-18T12:29:00Z",
+  "title": "Design System: Wortlaut.cloud",
+  "extensions": {
+    "colorMeta": {
+      "emerald-accent": {
+        "role": "primary",
+        "displayName": "Acoustic Emerald",
+        "canonical": "#059669",
+        "tonalRamp": ["#022c22", "#064e3b", "#047857", "#059669", "#10b981", "#34d399", "#6ee7b7", "#d1fae5"]
+      },
+      "amber-notice": {
+        "role": "secondary",
+        "displayName": "Off-the-Record Amber",
+        "canonical": "#d97706",
+        "tonalRamp": ["#451a03", "#78350f", "#b45309", "#d97706", "#f59e0b", "#fbbf24", "#fde68a", "#fef3c7"]
+      },
+      "stone-ground-dark": {
+        "role": "neutral",
+        "displayName": "Stone Ground",
+        "canonical": "#111113",
+        "tonalRamp": ["#111113", "#181920", "#23252f", "#2b2d38", "#57534e", "#a8a29e", "#e7e5e4", "#fafaf9"]
+      }
+    },
+    "typographyMeta": {
+      "display": { "displayName": "Display", "purpose": "Active speaker focus on the 1280x720 conference video tile and hero headings." },
+      "headline": { "displayName": "Headline", "purpose": "Workspace section headers and meeting protocol titles." },
+      "title": { "displayName": "Title", "purpose": "Speaker turn headers and canonical glossary terms." },
+      "body": { "displayName": "Body", "purpose": "Transcript paragraphs and summaries (65-72ch max measure)." },
+      "label": { "displayName": "Monospace Label & Keycap", "purpose": "Tabular timestamps and literal in-call chat command keycaps." }
+    },
+    "shadows": [
+      {
+        "name": "dispatch-bar",
+        "value": "0 4px 16px -6px rgba(0, 0, 0, 0.28)",
+        "purpose": "Subtle resting depth on primary quick-dispatch and glossary input bars."
+      }
+    ],
+    "motion": [
+      {
+        "name": "ease-dispatch",
+        "value": "cubic-bezier(0.16, 1, 0.3, 1)",
+        "purpose": "180ms border-color transition on focus-within and status transitions."
+      }
+    ],
+    "breakpoints": [
+      { "name": "sm", "value": "640px" },
+      { "name": "md", "value": "768px" },
+      { "name": "lg", "value": "1024px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Action Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "High-contrast pill button for singular primary actions.",
+      "html": "<button class=\"ds-btn-primary\">+ Neue Aufnahme</button>",
+      "css": ".ds-btn-primary { background: #fafaf9; color: #111113; padding: 7px 16px; border-radius: 999px; border: 1px solid transparent; font-size: 13px; font-weight: 600; cursor: pointer; transition: opacity 160ms ease; } .ds-btn-primary:hover { opacity: 0.9; } .ds-btn-primary:focus-visible { outline: 2px solid #10b981; outline-offset: 2px; }"
+    },
+    {
+      "name": "Speaker Filter Chip",
+      "kind": "chip",
+      "refersTo": "chip-speaker",
+      "description": "Interactive speaker filter pill with tabular speech-time share.",
+      "html": "<button class=\"ds-speaker-chip active\"><span>Maria Becker</span><span class=\"ds-pct\">42 %</span></button>",
+      "css": ".ds-speaker-chip { display: inline-flex; align-items: center; gap: 7px; padding: 5px 11px; border-radius: 999px; font-size: 13px; font-weight: 500; border: 1px solid #2b2d38; background: transparent; color: #fafaf9; cursor: pointer; transition: border-color 160ms ease, background-color 160ms ease; } .ds-speaker-chip:hover { border-color: #a8a29e; } .ds-speaker-chip.active { border-color: #10b981; background: rgba(16, 185, 129, 0.14); } .ds-speaker-chip:focus-visible { outline: 2px solid #10b981; outline-offset: 2px; } .ds-pct { color: #a8a29e; font-variant-numeric: tabular-nums; }"
+    },
+    {
+      "name": "Chat Command Keycap",
+      "kind": "chip",
+      "refersTo": "keycap-command",
+      "description": "Distance-legible monospace keycap used for in-call chat controls.",
+      "html": "<span class=\"ds-keycap\">#pause</span>",
+      "css": ".ds-keycap { display: inline-block; font-family: ui-monospace, monospace; font-size: 15px; font-weight: 700; color: #fafaf9; background: rgba(255, 255, 255, 0.07); border: 1px solid rgba(255, 255, 255, 0.18); border-radius: 6px; padding: 4px 10px; }"
+    },
+    {
+      "name": "Dispatch Input Bar",
+      "kind": "card",
+      "refersTo": "card-dispatch",
+      "description": "Elevated action strip for meeting URL dispatch and glossary entry.",
+      "html": "<div class=\"ds-dispatch\"><input class=\"ds-input\" placeholder=\"Meeting-Link oder Fachbegriff…\" /><button class=\"ds-btn-primary\">Starten</button></div>",
+      "css": ".ds-dispatch { display: flex; gap: 10px; align-items: center; border-radius: 12px; border: 1px solid #2b2d38; background: #181920; padding: 14px 16px; box-shadow: 0 4px 16px -6px rgba(0,0,0,0.28); transition: border-color 180ms cubic-bezier(0.16, 1, 0.3, 1); } .ds-dispatch:focus-within { border-color: #10b981; } .ds-input { flex: 1; background: #111113; color: #fafaf9; border: 1px solid #2b2d38; border-radius: 6px; padding: 7px 11px; font-size: 13px; } .ds-input:focus-visible { outline: 2px solid #10b981; outline-offset: 1px; }"
+    },
+    {
+      "name": "Acoustic Horizon Indicator",
+      "kind": "custom",
+      "refersTo": "emerald-signal-dark",
+      "description": "Full-width emerald acoustic horizon line with symmetrical voice-reactive center bars.",
+      "html": "<div class=\"ds-horizon\"><span class=\"ds-rule\"></span><span class=\"ds-bars\"><i style=\"height:10px\"></i><i style=\"height:22px\"></i><i style=\"height:30px\"></i><i style=\"height:22px\"></i><i style=\"height:10px\"></i></span><span class=\"ds-rule\"></span></div>",
+      "css": ".ds-horizon { display: flex; align-items: center; gap: 14px; width: 100%; padding: 12px 0; background: #111113; } .ds-rule { flex: 1; height: 1px; background: rgba(52, 211, 153, 0.36); } .ds-bars { display: inline-flex; align-items: center; gap: 6px; height: 32px; } .ds-bars i { display: block; width: 4px; border-radius: 4px; background: #34d399; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Quiet Acoustic Ledger",
+    "overview": "Wortlaut.cloud pairs the calm editorial restraint of an archival minutes ledger with live acoustic telemetry. Across both the Astryx Stone web workspace (worker/src/ui/) and the 1280×720 WebRTC conference video tile (worker/runtime/video-tile.ts), neutral Stone grounds carry the structure through 1px hairlines and clear typographic scale rather than nested card boxes or decorative gradients.\n\nColor acts strictly as state proof: emerald (--wl-accent) signals active speech capture and verified brand presence, while warm amber (--wl-warn-text) appears exclusively when a bot waits for host admission or a participant pauses capture Off-the-Record (#pause). Cold navy-slate cards, rainbow speaker side-stripes, and model-name jargon are explicitly rejected.",
+    "keyCharacteristics": [
+      "Warm-neutral Stone surfaces (light / dark / system) built on @astryxdesign/core and @astryxdesign/theme-stone.",
+      "Flat editorial sectioning divided by 1px hairlines (var(--color-border)), reserving elevated containers for primary input bars (.wl-dispatch-bar).",
+      "Emerald acoustic signal (#059669 light / #10b981 & #34d399 dark) for live voice waveforms, focus rings, and active speaker states.",
+      "Distance-legible conference video tile (Ruhiger Sprach-Horizont) engineered for 2×2–3×3 gallery grids."
+    ],
+    "rules": [
+      {
+        "name": "The State-Only Chroma Rule",
+        "body": "Saturated emerald and amber appear only when proving live capture state, active speech, focus, or Off-the-Record pause—never as decorative card fills or per-speaker rainbow stripes.",
+        "section": "colors"
+      },
+      {
+        "name": "The Gallery-Distance Rule",
+        "body": "On the 1280×720 conference video tile, primary status pills and chat command keycaps never drop below 21px (~7px inside a 3×3 grid cell), and headings carry no uppercase eyebrows or kickers.",
+        "section": "typography"
+      },
+      {
+        "name": "The No-Nested-Card Rule",
+        "body": "Never place a bordered card inside another bordered card; group subsections with spacing and 1px horizontal rules.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "Do use dir=\"auto\" and .wl-break-anywhere on user-authored titles, speaker names, transcript turns, and glossary terms/aliases.",
+      "Do guard async form submissions with a synchronous useRef lock alongside loading state, and provide Undo or restore paths for 1-click deletions.",
+      "Do keep bottom-left safe-area clearance (x < 520, y > 620) on the 1280×720 conference video tile so provider nameplates never obscure content."
+    ],
+    "donts": [
+      "Don't render colored border-left stripes (> 1px), nested card-in-card wrappers, or uppercase kicker/eyebrow labels above headings.",
+      "Don't expose internal model names (Qwen3-ASR) in everyday operator subtitles where plain domain language (\"Spracherkennung\") suffices.",
+      "Don't crowd the 1280×720 conference video tile with multi-paragraph transcript walls that become illegible inside a 3×3 gallery grid."
+    ]
+  }
+}

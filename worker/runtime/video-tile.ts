@@ -95,9 +95,8 @@ export async function installVideoTile(
     const isEn = /^en\b/i.test(cfg.locale);
     const WIDTH = 1280;
     const HEIGHT = 720;
-    const FONT_SANS = 'Inter, "Liberation Sans", "DejaVu Sans", system-ui, -apple-system, sans-serif';
+    const FONT_SANS = 'system-ui, -apple-system, "Liberation Sans", "DejaVu Sans", sans-serif';
     const FONT_MONO = '"Liberation Mono", "DejaVu Sans Mono", ui-monospace, monospace';
-    const SPEAKER_COLORS = ['#60a5fa', '#34d399', '#f472b6', '#fbbf24', '#a78bfa', '#38bdf8'];
 
     const canvas = document.createElement('canvas');
     canvas.width = WIDTH;
@@ -168,12 +167,12 @@ export async function installVideoTile(
       c.closePath();
     };
 
-    const speakerColor = (name: string): string => {
-      let hash = 0;
-      for (let i = 0; i < name.length; i++) {
-        hash = (hash * 31 + name.charCodeAt(i)) | 0;
-      }
-      return SPEAKER_COLORS[Math.abs(hash) % SPEAKER_COLORS.length];
+    const speakerInitials = (name: string): string => {
+      const cleaned = name.replace(/\(.*?\)/g, '').trim();
+      const parts = cleaned.split(/[\s._-]+/).filter(Boolean);
+      if (parts.length === 0) return 'T';
+      if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+      return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
     };
 
     const formatTimestamp = (sec: number): string => {
@@ -234,31 +233,17 @@ export async function installVideoTile(
       frameCount += 1;
       const pulse = 0.55 + 0.45 * Math.sin(frameCount * 0.65);
 
-      // Outer backdrop
-      const bgGrad = ctx.createLinearGradient(0, 0, WIDTH, HEIGHT);
-      bgGrad.addColorStop(0, '#0c0e14');
-      bgGrad.addColorStop(1, '#131824');
+      // Astryx Stone dark ground (#111113 -> #151518)
+      const bgGrad = ctx.createLinearGradient(0, 0, 0, HEIGHT);
+      bgGrad.addColorStop(0, '#111113');
+      bgGrad.addColorStop(1, '#151518');
       ctx.fillStyle = bgGrad;
       ctx.fillRect(0, 0, WIDTH, HEIGHT);
 
-      // Safe-area card container (avoids bottom-left conference name overlays & 4:3 crop edges)
-      const cardX = 68;
-      const cardY = 32;
-      const cardW = 1144;
-      const cardH = 636;
-      roundRect(ctx, cardX, cardY, cardW, cardH, 22);
-      ctx.fillStyle = '#161b26';
-      ctx.fill();
-      ctx.lineWidth = 1.5;
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
-      ctx.stroke();
-
-      // Header background subtle highlight
-      ctx.save();
-      roundRect(ctx, cardX, cardY, cardW, cardH, 22);
-      ctx.clip();
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.02)';
-      ctx.fillRect(cardX, cardY, cardW, 92);
+      // Safe-area horizontal bounds (clears 4:3 crop edges & bottom-left conference nameplate)
+      const padX = 84;
+      const contentW = WIDTH - padX * 2; // 1112px (x: 84..1196)
+      const contentRight = padX + contentW;
 
       const nowPerf = performance.now();
       const isJoining = participation === 'joining' || participation === 'preparing';
@@ -269,31 +254,32 @@ export async function installVideoTile(
         !isPausedActive &&
         !isPendingEntry &&
         (liveAudioLevel >= 0.02 || nowPerf - lastVoiceAt <= 650);
-      const shownLevel = voiceActive ? Math.max(0.14, liveAudioLevel) : 0;
+      const shownLevel = voiceActive ? Math.max(0.22, liveAudioLevel) : 0;
       const currentSpeaker =
         voiceActive && nowPerf <= activeSpeakerUntil && activeSpeaker ? activeSpeaker : null;
 
-      // Brand icon badge (AudioLines mark)
-      const logoX = 96;
-      const logoY = 50;
-      const logoSize = 54;
-      roundRect(ctx, logoX, logoY, logoSize, logoSize, 14);
-      ctx.fillStyle = voiceActive ? 'rgba(16, 185, 129, 0.22)' : 'rgba(37, 99, 235, 0.20)';
+      // 1. Top Header (y: 42..106) — Brand + Meeting Context on left, Distance-Legible Status Pill on right
+      const logoX = padX;
+      const logoY = 44;
+      const logoSize = 48;
+      const isAmberState = isPendingEntry || isPausedActive;
+      roundRect(ctx, logoX, logoY, logoSize, logoSize, 12);
+      ctx.fillStyle = isAmberState ? 'rgba(245, 158, 11, 0.15)' : 'rgba(16, 185, 129, 0.15)';
       ctx.fill();
-      ctx.lineWidth = 1.5;
-      ctx.strokeStyle = voiceActive ? 'rgba(52, 211, 153, 0.65)' : 'rgba(96, 165, 250, 0.50)';
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = isAmberState ? 'rgba(251, 191, 36, 0.42)' : 'rgba(52, 211, 153, 0.42)';
       ctx.stroke();
 
-      const baseBarHeights = [12, 24, 32, 20, 14];
-      ctx.strokeStyle = voiceActive ? '#34d399' : '#60a5fa';
-      ctx.lineWidth = 3.6;
+      const baseBarHeights = [12, 22, 28, 18];
+      ctx.strokeStyle = isAmberState ? '#fbbf24' : '#34d399';
+      ctx.lineWidth = 3.2;
       ctx.lineCap = 'round';
       for (let i = 0; i < baseBarHeights.length; i++) {
-        const bx = logoX + 13 + i * 7;
+        const bx = logoX + 13.5 + i * 7;
         const dynScale = voiceActive
-          ? 0.55 + 0.65 * shownLevel * (0.65 + 0.35 * Math.sin(frameCount * 1.3 + i * 1.1))
+          ? 0.58 + 0.62 * shownLevel * (0.65 + 0.35 * Math.sin(frameCount * 1.3 + i * 1.1))
           : 0.72;
-        const bh = Math.max(8, Math.min(36, baseBarHeights[i] * dynScale));
+        const bh = Math.max(7, Math.min(30, baseBarHeights[i] * dynScale));
         const by = logoY + logoSize / 2;
         ctx.beginPath();
         ctx.moveTo(bx, by - bh / 2);
@@ -301,424 +287,383 @@ export async function installVideoTile(
         ctx.stroke();
       }
 
-      // Brand title & "Eingeladen von ..." subtitle
-      const titleX = logoX + logoSize + 18;
-      ctx.fillStyle = '#f8fafc';
-      ctx.font = `700 30px ${FONT_SANS}`;
-      ctx.textBaseline = 'alphabetic';
-      ctx.fillText('Wortlaut.cloud', titleX, 74);
-
-      const langLabel =
-        !asrLanguage || asrLanguage === 'auto' || asrLanguage === '*'
-          ? (isEn ? 'Auto (30 langs)' : 'Auto (30 Sprachen)')
-          : asrLanguage.replace(/,/g, ' + ');
-      let subtitle = '';
-      if (cfg.invitedBy) {
-        subtitle = isEn
-          ? `Invited by ${cfg.invitedBy} · ASR: ${langLabel}`
-          : `Eingeladen von ${cfg.invitedBy} · ASR: ${langLabel}`;
-      } else if (cfg.meetingTitle) {
-        subtitle = `${cfg.meetingTitle} · ASR: ${langLabel}`;
-      } else {
-        subtitle = isEn
-          ? `Automated Meeting Transcript · ASR: ${langLabel}`
-          : `Automatisches Konferenz-Protokoll · ASR: ${langLabel}`;
-      }
-      ctx.font = `500 18px ${FONT_SANS}`;
-      ctx.fillStyle = '#94a3b8';
-      ctx.fillText(truncateText(ctx, subtitle, 590), titleX, 100);
-
-      // Status pill (top right)
-      const isAmberPill = isPendingEntry || isPausedActive;
       const statusText = inLobby
         ? (isEn ? 'Waiting in lobby' : 'Wartet im Warteraum')
         : isJoining
           ? (isEn ? 'Joining meeting…' : 'Tritt Konferenz bei…')
           : isPausedActive
-            ? (isEn ? 'Paused · Off the Record' : 'Pausiert · Off the Record')
-            : voiceActive
-              ? (isEn ? 'Recording Audio' : 'Ton wird aufgezeichnet')
-              : (isEn ? 'Live Transcript Active' : 'Wortprotokoll aktiv');
-      ctx.font = `600 19px ${FONT_SANS}`;
+            ? 'Off the Record'
+            : (isEn ? 'Recording active' : 'Aufzeichnung aktiv');
+      ctx.font = `700 21px ${FONT_SANS}`;
       const statusTextW = ctx.measureText(statusText).width;
-      const pillW = statusTextW + 48;
-      const pillH = 42;
-      const pillX = cardX + cardW - 28 - pillW;
-      const pillY = 56;
+      const pillW = statusTextW + 52;
+      const pillH = 44;
+      const pillX = contentRight - pillW;
+      const pillY = 46;
 
-      roundRect(ctx, pillX, pillY, pillW, pillH, 21);
-      ctx.fillStyle = isAmberPill ? 'rgba(245, 158, 11, 0.18)' : 'rgba(16, 185, 129, 0.16)';
+      roundRect(ctx, pillX, pillY, pillW, pillH, 22);
+      ctx.fillStyle = isAmberState ? 'rgba(245, 158, 11, 0.16)' : 'rgba(16, 185, 129, 0.14)';
       ctx.fill();
-      ctx.lineWidth = 1.5;
-      ctx.strokeStyle = isAmberPill ? 'rgba(251, 191, 36, 0.55)' : 'rgba(52, 211, 153, 0.48)';
+      ctx.lineWidth = 1.25;
+      ctx.strokeStyle = isAmberState ? 'rgba(251, 191, 36, 0.46)' : 'rgba(52, 211, 153, 0.42)';
       ctx.stroke();
 
-      const dotX = pillX + 21;
+      const dotX = pillX + 22;
       const dotY = pillY + pillH / 2;
-      ctx.beginPath();
-      ctx.arc(dotX, dotY, 7.5, 0, Math.PI * 2);
-      ctx.fillStyle = isAmberPill
-        ? `rgba(251, 191, 36, ${(0.28 * pulse).toFixed(2)})`
-        : `rgba(52, 211, 153, ${(0.28 * pulse).toFixed(2)})`;
-      ctx.fill();
-      ctx.beginPath();
-      ctx.arc(dotX, dotY, 4.8, 0, Math.PI * 2);
-      ctx.fillStyle = isAmberPill ? '#fbbf24' : '#34d399';
-      ctx.fill();
-
-      ctx.fillStyle = isAmberPill ? '#fef3c7' : '#d1fae5';
-      ctx.fillText(statusText, pillX + 35, pillY + 27);
-
-      // Single compact on-screen chat instruction strip ("no"/"opt out" & #pause/#resume)
-      const stripY = 124;
-      const stripH = 44;
-      ctx.fillStyle = isPausedActive ? 'rgba(245, 158, 11, 0.13)' : '#1c2333';
-      ctx.fillRect(cardX, stripY, cardW, stripH);
-      ctx.strokeStyle = isPausedActive ? 'rgba(251, 191, 36, 0.42)' : 'rgba(255, 255, 255, 0.09)';
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(cardX, stripY);
-      ctx.lineTo(cardX + cardW, stripY);
-      ctx.moveTo(cardX, stripY + stripH);
-      ctx.lineTo(cardX + cardW, stripY + stripH);
-      ctx.stroke();
-
-      const CHIP_STYLES = {
-        amber: {fill: 'rgba(245, 158, 11, 0.20)', stroke: 'rgba(251, 191, 36, 0.45)', fg: '#fde68a'},
-        emerald: {fill: 'rgba(16, 185, 129, 0.18)', stroke: 'rgba(52, 211, 153, 0.42)', fg: '#a7f3d0'},
-        blue: {fill: 'rgba(59, 130, 246, 0.18)', stroke: 'rgba(96, 165, 250, 0.42)', fg: '#bfdbfe'},
-      } as const;
-
-      const drawInstructionRow = (rowY: number, dotColor: string, items: string[]) => {
+      if (voiceActive || isAmberState) {
         ctx.beginPath();
-        ctx.arc(104, rowY - 5.5, 4, 0, Math.PI * 2);
-        ctx.fillStyle = dotColor;
+        ctx.arc(dotX, dotY, 8.5, 0, Math.PI * 2);
+        ctx.fillStyle = isAmberState
+          ? `rgba(251, 191, 36, ${(0.28 * pulse).toFixed(2)})`
+          : `rgba(52, 211, 153, ${(0.30 * pulse).toFixed(2)})`;
         ctx.fill();
+      }
+      ctx.beginPath();
+      ctx.arc(dotX, dotY, 5, 0, Math.PI * 2);
+      ctx.fillStyle = isAmberState ? '#fbbf24' : '#34d399';
+      ctx.fill();
 
-        let curX = 118;
-        const maxRight = cardX + cardW - 24;
-        for (const raw of items) {
-          if (curX >= maxRight) break;
-          const chipMatch = /^\[(amber|emerald|blue):(.+)\]$/.exec(raw);
-          if (chipMatch) {
-            const palette = CHIP_STYLES[chipMatch[1] as keyof typeof CHIP_STYLES];
-            const label = chipMatch[2];
-            ctx.font = `600 15px ${FONT_MONO}`;
-            const chipW = ctx.measureText(label).width + 14;
-            if (curX + chipW > maxRight) break;
-            roundRect(ctx, curX, rowY - 17, chipW, 22, 6);
-            ctx.fillStyle = palette.fill;
-            ctx.fill();
-            ctx.strokeStyle = palette.stroke;
-            ctx.lineWidth = 1;
-            ctx.stroke();
-            ctx.fillStyle = palette.fg;
-            ctx.fillText(label, curX + 7, rowY - 1);
-            curX += chipW + 6;
-          } else {
-            const bold = raw.startsWith('*') && raw.endsWith('*') && raw.length > 2;
-            const text = bold ? raw.slice(1, -1) : raw;
-            ctx.font = `${bold ? 600 : 500} 16px ${FONT_SANS}`;
-            ctx.fillStyle = bold ? '#f8fafc' : '#cbd5e1';
-            const clipped = truncateText(ctx, text, maxRight - curX);
-            ctx.fillText(clipped, curX, rowY);
-            curX += ctx.measureText(clipped).width + 6;
-          }
-        }
-      };
+      ctx.textBaseline = 'alphabetic';
+      ctx.fillStyle = isAmberState ? '#fef3c7' : '#d1fae5';
+      ctx.fillText(statusText, pillX + 36, pillY + 29);
 
-      if (isPausedActive) {
-        drawInstructionRow(
-          stripY + 28,
-          '#fbbf24',
-          isEn
-            ? ['*OFF THE RECORD — Paused.*', 'Type', '[amber:#resume]', 'to continue  ·', '[blue:no]', '/', '[blue:opt out]', 'exclude yourself']
-            : ['*OFF THE RECORD — Pausiert.*', 'Im Chat', '[amber:#resume]', 'zum Fortsetzen  ·', '[blue:no]', '/', '[blue:opt out]', 'Widerspruch'],
-        );
-      } else {
-        drawInstructionRow(
-          stripY + 28,
-          '#60a5fa',
-          isEn
-            ? ['*Chat:*', '[blue:no]', '/', '[blue:opt out]', 'exclude your own voice  ·', '[amber:#pause]', '/', '[amber:#resume]', 'off-the-record']
-            : ['*Chat:*', '[blue:no]', '/', '[blue:opt out]', 'eigene Stimme ausnehmen  ·', '[amber:#pause]', '/', '[amber:#resume]', 'Off-the-Record-Pause'],
+      const titleX = logoX + logoSize + 16;
+      const headerTextMaxW = Math.max(240, pillX - titleX - 24);
+      ctx.fillStyle = '#fafaf9';
+      ctx.font = `700 27px ${FONT_SANS}`;
+      ctx.fillText('Wortlaut.cloud', titleX, 68);
+
+      const metaParts: string[] = [];
+      if (cfg.meetingTitle) {
+        metaParts.push(cfg.meetingTitle);
+      }
+      if (cfg.invitedBy) {
+        metaParts.push(isEn ? `Invited by ${cfg.invitedBy}` : `Eingeladen von ${cfg.invitedBy}`);
+      }
+      if (asrLanguage && asrLanguage !== 'auto' && asrLanguage !== '*') {
+        metaParts.push(asrLanguage.replace(/,/g, ' + '));
+      }
+      if (metaParts.length === 0) {
+        metaParts.push(
+          isEn ? 'Speaker-isolated meeting transcript' : 'Sprechergetrenntes Wortprotokoll',
         );
       }
+      ctx.font = `400 17px ${FONT_SANS}`;
+      ctx.fillStyle = '#a8a29e';
+      ctx.fillText(truncateText(ctx, metaParts.join('  ·  '), headerTextMaxW), titleX, 92);
 
-      // Transcript viewport (leaves dedicated footer bar at y=612..668 for live audio activity)
-      const bodyTop = 180;
-      const bodyBottom = 602;
-      const bodyLeft = 96;
-      const bodyWidth = cardW - 56;
+      // 2. Prominent 3×3-Legible Chat Command Band (y: 120..188)
+      const stripY = 120;
+      const stripH = 68;
+      if (isPausedActive) {
+        ctx.fillStyle = 'rgba(245, 158, 11, 0.08)';
+        ctx.fillRect(padX, stripY, contentW, stripH);
+      }
+      ctx.strokeStyle = isPausedActive ? 'rgba(251, 191, 36, 0.34)' : 'rgba(255, 255, 255, 0.09)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(padX, stripY);
+      ctx.lineTo(contentRight, stripY);
+      ctx.moveTo(padX, stripY + stripH);
+      ctx.lineTo(contentRight, stripY + stripH);
+      ctx.stroke();
 
+      const drawKeycap = (x: number, centerY: number, label: string, highlightAmber = false): number => {
+        ctx.font = `700 21.5px ${FONT_MONO}`;
+        const kw = ctx.measureText(label).width + 24;
+        const kh = 34;
+        roundRect(ctx, x, centerY - kh / 2, kw, kh, 7);
+        ctx.fillStyle = highlightAmber ? 'rgba(245, 158, 11, 0.20)' : 'rgba(255, 255, 255, 0.07)';
+        ctx.fill();
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = highlightAmber ? 'rgba(251, 191, 36, 0.48)' : 'rgba(255, 255, 255, 0.18)';
+        ctx.stroke();
+        ctx.fillStyle = highlightAmber ? '#fde68a' : '#fafaf9';
+        ctx.fillText(label, x + 12, centerY + 7.5);
+        return kw;
+      };
+
+      const cmdCenterY = stripY + stripH / 2;
+      // Left group: [no] [opt out] Eigene Stimme ausnehmen
+      let lx = padX;
+      lx += drawKeycap(lx, cmdCenterY, 'no') + 8;
+      lx += drawKeycap(lx, cmdCenterY, 'opt out') + 14;
+      ctx.font = `500 18.5px ${FONT_SANS}`;
+      ctx.fillStyle = '#d6d3d1';
+      ctx.fillText(
+        isEn ? 'Exclude your voice' : 'Eigene Stimme ausnehmen',
+        lx,
+        cmdCenterY + 6.5,
+      );
+
+      // Right group (right-aligned): [#pause] [#resume] Off-the-Record-Pause (or Fortsetzen when paused)
+      const rightDesc = isPausedActive
+        ? (isEn ? 'Resume in chat' : 'Im Chat fortsetzen')
+        : (isEn ? 'Off-the-Record in chat' : 'Off-the-Record im Chat');
+      ctx.font = `500 18.5px ${FONT_SANS}`;
+      const rightDescW = ctx.measureText(rightDesc).width;
+      ctx.font = `700 21.5px ${FONT_MONO}`;
+      const k1Label = isPausedActive ? '#resume' : '#pause';
+      const k2Label = isPausedActive ? (isEn ? '#continue' : '#weiter') : '#resume';
+      const k1W = ctx.measureText(k1Label).width + 24;
+      const k2W = isPausedActive && isEn ? 0 : ctx.measureText(k2Label).width + 24;
+      const totalRightW = k1W + (k2W ? 8 + k2W : 0) + 14 + rightDescW;
+      let rx = Math.max(lx + 240, contentRight - totalRightW);
+      rx += drawKeycap(rx, cmdCenterY, k1Label, isPausedActive) + 8;
+      if (k2W > 0) {
+        rx += drawKeycap(rx, cmdCenterY, k2Label, isPausedActive) + 14;
+      } else {
+        rx += 6;
+      }
+      ctx.font = `500 18.5px ${FONT_SANS}`;
+      ctx.fillStyle = isPausedActive ? '#fde68a' : '#d6d3d1';
+      ctx.fillText(rightDesc, rx, cmdCenterY + 6.5);
+
+      // 3. Central Stage — Ruhiger Sprach-Horizont (y: 215..472) & Subordinate Proof Line (y: 496..588)
       const entries = segments.slice(-8);
+      const latest = entries.length > 0 ? entries[entries.length - 1] : null;
+      const centerX = WIDTH / 2;
 
       if (isPausedActive) {
-        const boxX = cardX + 64;
+        const boxW = 860;
+        const boxH = 316;
+        const boxX = (WIDTH - boxW) / 2;
         const boxY = 232;
-        const boxW = cardW - 128;
-        const boxH = 348;
-        roundRect(ctx, boxX, boxY, boxW, boxH, 20);
+        roundRect(ctx, boxX, boxY, boxW, boxH, 16);
         ctx.fillStyle = 'rgba(245, 158, 11, 0.08)';
         ctx.fill();
-        ctx.lineWidth = 1.5;
+        ctx.lineWidth = 1.25;
         ctx.strokeStyle = 'rgba(251, 191, 36, 0.38)';
         ctx.stroke();
 
-        const centerX = WIDTH / 2;
-        const badgeSize = 64;
+        const badgeSize = 56;
         const badgeX = centerX - badgeSize / 2;
-        const badgeY = boxY + 34;
-        roundRect(ctx, badgeX, badgeY, badgeSize, badgeSize, 18);
-        ctx.fillStyle = 'rgba(245, 158, 11, 0.20)';
+        const badgeY = boxY + 32;
+        roundRect(ctx, badgeX, badgeY, badgeSize, badgeSize, 14);
+        ctx.fillStyle = 'rgba(245, 158, 11, 0.18)';
         ctx.fill();
-        ctx.strokeStyle = 'rgba(251, 191, 36, 0.55)';
-        ctx.lineWidth = 1.5;
+        ctx.strokeStyle = 'rgba(251, 191, 36, 0.52)';
+        ctx.lineWidth = 1;
         ctx.stroke();
 
-        // Pause icon bars (||)
         ctx.fillStyle = '#fbbf24';
-        roundRect(ctx, centerX - 12, badgeY + 18, 8, 28, 3);
+        roundRect(ctx, centerX - 10, badgeY + 16, 7, 24, 3);
         ctx.fill();
-        roundRect(ctx, centerX + 4, badgeY + 18, 8, 28, 3);
+        roundRect(ctx, centerX + 3, badgeY + 16, 7, 24, 3);
         ctx.fill();
 
         ctx.textAlign = 'center';
-        ctx.font = `700 27px ${FONT_SANS}`;
+        ctx.font = `700 28px ${FONT_SANS}`;
         ctx.fillStyle = '#fef3c7';
         const pausedHeadline = isEn
-          ? 'OFF THE RECORD — Recording Paused'
-          : 'OFF THE RECORD — Aufnahme pausiert';
+          ? 'OFF THE RECORD · Recording Paused'
+          : 'OFF THE RECORD · Aufnahme pausiert';
         ctx.fillText(pausedHeadline, centerX, badgeY + badgeSize + 44);
 
-        ctx.font = `400 19px ${FONT_SANS}`;
-        ctx.fillStyle = '#cbd5e1';
+        ctx.font = `400 18.5px ${FONT_SANS}`;
+        ctx.fillStyle = '#d6d3d1';
         const pausedBody = isEn
           ? 'Spoken audio and shared screens are discarded in memory and never stored.'
           : 'Gesprochenes Audio und geteilte Bildschirme werden sofort verworfen und nicht gespeichert.';
-        ctx.fillText(pausedBody, centerX, badgeY + badgeSize + 80);
+        ctx.fillText(pausedBody, centerX, badgeY + badgeSize + 78);
 
-        const resumeHint = isEn
-          ? 'Type "#resume" in meeting chat to resume transcription'
-          : 'Im Konferenz-Chat „#resume“ oder „#weiter“ schreiben, um fortzufahren';
-        ctx.font = `600 18px ${FONT_SANS}`;
-        const hintW = ctx.measureText(resumeHint).width + 44;
-        const hintH = 42;
-        const hintX = centerX - hintW / 2;
-        const hintY = boxY + boxH - 68;
-        roundRect(ctx, hintX, hintY, hintW, hintH, 21);
-        ctx.fillStyle = 'rgba(245, 158, 11, 0.18)';
-        ctx.fill();
-        ctx.strokeStyle = 'rgba(251, 191, 36, 0.48)';
-        ctx.lineWidth = 1.2;
+        // Muted broken amber horizon line inside paused stage
+        const pHorizY = boxY + boxH - 64;
+        ctx.strokeStyle = 'rgba(251, 191, 36, 0.34)';
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([8, 8]);
+        ctx.beginPath();
+        ctx.moveTo(boxX + 64, pHorizY);
+        ctx.lineTo(boxX + boxW - 64, pHorizY);
         ctx.stroke();
-        ctx.fillStyle = '#fde68a';
-        ctx.fillText(resumeHint, centerX, hintY + 27);
+        ctx.setLineDash([]);
 
+        ctx.font = `600 16.5px ${FONT_SANS}`;
+        ctx.fillStyle = '#fde68a';
+        ctx.fillText(
+          isEn
+            ? 'Send "#resume" in meeting chat to resume'
+            : 'Mit „#resume“ oder „#weiter“ im Chat fortsetzen',
+          centerX,
+          pHorizY + 32,
+        );
         ctx.textAlign = 'left';
         lastRenderedText = pausedHeadline;
-      } else if (entries.length === 0) {
-        const centerX = WIDTH / 2;
-        const centerY = (bodyTop + bodyBottom) / 2 - 6;
-        // Audio-reactive listening waveform: flat calm baseline when silent, dynamic bars when speaking
-        const eqBars = [12, 22, 34, 24, 36, 20, 12];
-        ctx.strokeStyle = isPendingEntry
-          ? 'rgba(251, 191, 36, 0.55)'
+      } else {
+        // Active / Listening / Lobby Acoustic Horizon Stage (no eyebrow/kicker above heading!)
+        const prominentSpeaker =
+          currentSpeaker || (latest?.speaker ? latest.speaker : null);
+        const headlineY = 308;
+        const sublineY = 344;
+        const horizonY = 408;
+
+        ctx.textAlign = 'center';
+        if (isPendingEntry) {
+          ctx.font = `700 38px ${FONT_SANS}`;
+          ctx.fillStyle = '#fef3c7';
+          const lobbyTitle = inLobby
+            ? (isEn ? 'Waiting for host admission…' : 'Wartet auf Einlass…')
+            : (isEn ? 'Connecting to meeting…' : 'Verbindet mit der Konferenz…');
+          ctx.fillText(lobbyTitle, centerX, headlineY);
+
+          ctx.font = `400 18.5px ${FONT_SANS}`;
+          ctx.fillStyle = '#a8a29e';
+          ctx.fillText(
+            isEn
+              ? 'Audio capture remains inactive until admitted to the room'
+              : 'Tonaufzeichnung startet erst nach Zulassung zum Meeting',
+            centerX,
+            sublineY,
+          );
+          lastRenderedText = lobbyTitle;
+        } else if (voiceActive) {
+          const spkHeadline =
+            prominentSpeaker ||
+            (isEn ? 'Recording audio' : 'Ton wird aufgezeichnet');
+          ctx.font = `700 48px ${FONT_SANS}`;
+          ctx.fillStyle = '#fafaf9';
+          ctx.fillText(truncateText(ctx, spkHeadline, contentW - 80), centerX, headlineY);
+
+          ctx.font = `500 18.5px ${FONT_SANS}`;
+          ctx.fillStyle = '#34d399';
+          ctx.fillText(
+            prominentSpeaker
+              ? (isEn
+                  ? 'Speaking now · Isolated WebRTC audio track'
+                  : 'Spricht gerade · Getrennte WebRTC-Audiospur')
+              : (isEn
+                  ? 'Isolated WebRTC audio track · Transcribing live'
+                  : 'Getrennte WebRTC-Audiospur · Live-Erkennung läuft'),
+            centerX,
+            sublineY,
+          );
+          if (!latest) {
+            lastRenderedText = prominentSpeaker
+              ? (isEn ? `Recording audio · ${prominentSpeaker}` : `Ton wird aufgezeichnet · ${prominentSpeaker}`)
+              : spkHeadline;
+          }
+        } else if (latest) {
+          const spkHeadline = latest.speaker || (isEn ? 'Participant' : 'Teilnehmer');
+          ctx.font = `700 42px ${FONT_SANS}`;
+          ctx.fillStyle = '#e7e5e4';
+          ctx.fillText(truncateText(ctx, spkHeadline, contentW - 80), centerX, headlineY);
+
+          ctx.font = `400 18px ${FONT_SANS}`;
+          ctx.fillStyle = '#a8a29e';
+          ctx.fillText(
+            isEn
+              ? `Last speaker (${formatTimestamp(latest.start)}) · Listening for next statement`
+              : `Zuletzt gesprochen (${formatTimestamp(latest.start)}) · Hört weiter zu`,
+            centerX,
+            sublineY,
+          );
+        } else {
+          const readyTitle = isEn
+            ? 'Listening · Ready for the call'
+            : 'Hört zu · Bereit für das Gespräch';
+          ctx.font = `600 36px ${FONT_SANS}`;
+          ctx.fillStyle = '#f5f5f4';
+          ctx.fillText(readyTitle, centerX, headlineY);
+
+          ctx.font = `400 18.5px ${FONT_SANS}`;
+          ctx.fillStyle = '#a8a29e';
+          ctx.fillText(
+            isEn
+              ? 'Isolated per-speaker tracks · Outbound microphone muted'
+              : 'Getrennte Sprecherspuren · Eigenes Mikrofon dauerhaft stumm',
+            centerX,
+            sublineY,
+          );
+          lastRenderedText = readyTitle;
+        }
+        ctx.textAlign = 'left';
+
+        // Full-width Acoustic Horizon Line + Symmetrical Center Wave Bars (horizonY = 408)
+        const waveHeights = [12, 20, 32, 46, 56, 62, 56, 46, 32, 20, 12];
+        const barSpacing = 13;
+        const clusterHalfW = ((waveHeights.length - 1) * barSpacing) / 2 + 24;
+        const ruleColor = isPendingEntry
+          ? 'rgba(251, 191, 36, 0.28)'
           : voiceActive
-            ? '#34d399'
-            : 'rgba(148, 163, 184, 0.45)';
+            ? 'rgba(52, 211, 153, 0.40)'
+            : 'rgba(52, 211, 153, 0.20)';
+
+        ctx.strokeStyle = ruleColor;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(padX, horizonY);
+        ctx.lineTo(centerX - clusterHalfW, horizonY);
+        ctx.moveTo(centerX + clusterHalfW, horizonY);
+        ctx.lineTo(contentRight, horizonY);
+        ctx.stroke();
+
         ctx.lineWidth = 4.2;
         ctx.lineCap = 'round';
-        for (let i = 0; i < eqBars.length; i++) {
-          const h = voiceActive
-            ? Math.max(8, eqBars[i] * shownLevel * (0.65 + 0.35 * Math.sin(frameCount * 1.4 + i * 1.1)))
-            : isPendingEntry
-              ? Math.max(6, eqBars[i] * 0.35 * (0.7 + 0.3 * Math.sin(frameCount * 0.6 + i * 0.9)))
-              : 6;
-          const bx = centerX - ((eqBars.length - 1) * 12) / 2 + i * 12;
+        for (let i = 0; i < waveHeights.length; i++) {
+          const bx = centerX - ((waveHeights.length - 1) * barSpacing) / 2 + i * barSpacing;
+          let bh = 6;
+          if (voiceActive) {
+            const harmonic = 0.62 + 0.38 * Math.sin(frameCount * 1.45 + i * 0.75);
+            bh = Math.max(8, Math.min(62, waveHeights[i] * shownLevel * harmonic));
+            ctx.strokeStyle = '#34d399';
+          } else if (isPendingEntry) {
+            bh = Math.max(6, waveHeights[i] * 0.26 * (0.7 + 0.3 * Math.sin(frameCount * 0.6 + i * 0.8)));
+            ctx.strokeStyle = 'rgba(251, 191, 36, 0.52)';
+          } else {
+            bh = i % 2 === 0 ? 6 : 10;
+            ctx.strokeStyle = 'rgba(52, 211, 153, 0.32)';
+          }
           ctx.beginPath();
-          ctx.moveTo(bx, centerY - 38 - h / 2);
-          ctx.lineTo(bx, centerY - 38 + h / 2);
+          ctx.moveTo(bx, horizonY - bh / 2);
+          ctx.lineTo(bx, horizonY + bh / 2);
           ctx.stroke();
         }
 
-        ctx.textAlign = 'center';
-        ctx.font = `600 23px ${FONT_SANS}`;
-        ctx.fillStyle = voiceActive ? '#d1fae5' : '#e2e8f0';
-        const emptyPrimary = inLobby
-          ? (isEn ? 'Waiting for host admission…' : 'Wartet auf Einlass durch den Organisator…')
-          : isJoining
-            ? (isEn ? 'Connecting to meeting…' : 'Verbindet mit der Konferenz…')
-            : voiceActive
-              ? (isEn
-                  ? (currentSpeaker ? `Recording speech · ${currentSpeaker}` : 'Recording speech — transcribing segment…')
-                  : (currentSpeaker ? `Ton wird aufgezeichnet · ${currentSpeaker}` : 'Ton wird aufgezeichnet – Segment wird transkribiert…'))
-              : (isEn
-                  ? 'Listening — spoken statements appear here live'
-                  : 'Bereit – gesprochene Beiträge erscheinen hier live');
-        ctx.fillText(emptyPrimary, centerX, centerY + 14);
+        // Subordinate Latest-Statement Proof Strip (y: 494..584 — rendered ONLY when speech segments exist!)
+        if (latest) {
+          const quoteRuleY = 486;
+          ctx.strokeStyle = 'rgba(255, 255, 255, 0.07)';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(padX, quoteRuleY);
+          ctx.lineTo(contentRight, quoteRuleY);
+          ctx.stroke();
 
-        ctx.font = `400 18px ${FONT_SANS}`;
-        ctx.fillStyle = '#94a3b8';
-        const emptySecondary = isPendingEntry
-          ? (isEn
-              ? 'Audio capture starts only after admission to the meeting.'
-              : 'Die Audioerfassung startet erst nach Zulassung zum Meeting.')
-          : (isEn
-              ? 'Per-speaker transcription active · Outbound microphone disabled'
-              : 'Getrennte Sprechererkennung aktiv · Eigenes Mikrofon deaktiviert');
-        ctx.fillText(emptySecondary, centerX, centerY + 46);
-        ctx.textAlign = 'left';
-        lastRenderedText = emptyPrimary;
-      } else {
-        ctx.save();
-        ctx.beginPath();
-        ctx.rect(cardX + 4, bodyTop, cardW - 8, bodyBottom - bodyTop);
-        ctx.clip();
-
-        let cursorY = bodyBottom - 6;
-        let overflowedTop = false;
-        const lineHeight = 30;
-        const headerHeight = 26;
-        const turnGap = 15;
-        const textMaxW = bodyWidth - 32;
-
-        for (let idx = entries.length - 1; idx >= 0; idx--) {
-          const seg = entries[idx];
-          ctx.font = `400 22px ${FONT_SANS}`;
-          const lines = wrapLines(ctx, seg.text, textMaxW, 4);
-          if (lines.length === 0) continue;
-
-          const blockH = headerHeight + lines.length * lineHeight;
-          const blockTop = cursorY - blockH;
-
-          if (blockTop < bodyTop - lineHeight * 2) {
-            overflowedTop = true;
-            break;
-          }
-          if (blockTop < bodyTop) {
-            overflowedTop = true;
-          }
-
-          const accent = speakerColor(seg.speaker || 'Teilnehmer');
-          roundRect(ctx, bodyLeft, blockTop + 4, 4, blockH - 6, 2);
-          ctx.fillStyle = accent;
+          const spkRaw = latest.speaker || (isEn ? 'Participant' : 'Teilnehmer');
+          const avR = 15;
+          const avCx = padX + avR;
+          const avCy = 524;
+          ctx.beginPath();
+          ctx.arc(avCx, avCy, avR, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(16, 185, 129, 0.14)';
           ctx.fill();
+          ctx.lineWidth = 1;
+          ctx.strokeStyle = 'rgba(52, 211, 153, 0.44)';
+          ctx.stroke();
 
-          const ts = formatTimestamp(seg.start);
-          ctx.font = `500 16px ${FONT_MONO}`;
-          ctx.fillStyle = '#64748b';
-          ctx.fillText(ts, bodyLeft + 16, blockTop + 19);
-          const tsW = ctx.measureText(ts).width;
+          ctx.textAlign = 'center';
+          ctx.font = `600 12px ${FONT_SANS}`;
+          ctx.fillStyle = '#a7f3d0';
+          ctx.fillText(speakerInitials(spkRaw), avCx, avCy + 4.5);
+          ctx.textAlign = 'left';
 
-          ctx.font = `700 19.5px ${FONT_SANS}`;
-          ctx.fillStyle = accent;
-          const spkLabel = truncateText(ctx, seg.speaker || 'Teilnehmer', 480);
-          ctx.fillText(spkLabel, bodyLeft + 16 + tsW + 12, blockTop + 19);
+          const textX = padX + avR * 2 + 14; // x = 128 (squarely inside x: 96..880 probe window)
+          const quoteMaxW = contentRight - textX;
+          ctx.font = `500 15.5px ${FONT_MONO}`;
+          ctx.fillStyle = '#78716c';
+          const prefixMeta = `${formatTimestamp(latest.start)} · ${truncateText(ctx, spkRaw, 320)}`;
+          ctx.fillText(prefixMeta, textX, 514);
 
-          ctx.font = `400 22px ${FONT_SANS}`;
-          ctx.fillStyle = '#f1f5f9';
-          for (let l = 0; l < lines.length; l++) {
-            ctx.fillText(lines[l], bodyLeft + 16, blockTop + headerHeight + 22 + l * lineHeight);
+          ctx.font = `400 20.5px ${FONT_SANS}`;
+          ctx.fillStyle = '#d6d3d1';
+          const quoteLines = wrapLines(ctx, `„${latest.text}“`, quoteMaxW, 2);
+          for (let l = 0; l < quoteLines.length; l++) {
+            ctx.fillText(quoteLines[l], textX, 544 + l * 28);
           }
 
-          cursorY = blockTop - turnGap;
+          lastRenderedText = `${latest.speaker}: ${latest.text}`;
         }
-
-        if (overflowedTop) {
-          const fade = ctx.createLinearGradient(0, bodyTop, 0, bodyTop + 34);
-          fade.addColorStop(0, '#161b26');
-          fade.addColorStop(1, 'rgba(22, 27, 38, 0)');
-          ctx.fillStyle = fade;
-          ctx.fillRect(cardX + 4, bodyTop, cardW - 8, 34);
-        }
-        ctx.restore();
-        const latest = entries[entries.length - 1];
-        lastRenderedText = `${latest.speaker}: ${latest.text}`;
       }
-
-      // Dedicated persistent Live Audio Activity footer bar (always visible at bottom of card)
-      const footerY = 612;
-      const footerH = 56;
-      ctx.fillStyle = isPausedActive
-        ? 'rgba(245, 158, 11, 0.12)'
-        : voiceActive
-          ? 'rgba(16, 185, 129, 0.13)'
-          : 'rgba(15, 23, 42, 0.65)';
-      ctx.fillRect(cardX, footerY, cardW, footerH);
-      ctx.strokeStyle = isPausedActive
-        ? 'rgba(251, 191, 36, 0.35)'
-        : voiceActive
-          ? 'rgba(52, 211, 153, 0.42)'
-          : 'rgba(255, 255, 255, 0.08)';
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(cardX, footerY);
-      ctx.lineTo(cardX + cardW, footerY);
-      ctx.stroke();
-
-      // 14-bar real-time VU / waveform meter
-      const meterStartX = 196;
-      const meterMidY = footerY + footerH / 2;
-      const meterProfile = [0.45, 0.7, 0.95, 0.65, 1.0, 0.8, 0.55, 0.9, 1.0, 0.72, 0.88, 0.6, 0.78, 0.5];
-      ctx.lineWidth = 3.5;
-      ctx.lineCap = 'round';
-      for (let i = 0; i < meterProfile.length; i++) {
-        const bx = meterStartX + i * 8;
-        let bh = 4;
-        if (voiceActive) {
-          const wave = 0.62 + 0.38 * Math.sin(frameCount * 1.55 + i * 0.85);
-          bh = Math.max(5, Math.min(30, 30 * meterProfile[i] * shownLevel * wave));
-          ctx.strokeStyle = i % 3 === 0 ? '#38bdf8' : '#34d399';
-        } else if (isPausedActive) {
-          ctx.strokeStyle = 'rgba(251, 191, 36, 0.40)';
-        } else {
-          ctx.strokeStyle = 'rgba(148, 163, 184, 0.38)';
-        }
-        ctx.beginPath();
-        ctx.moveTo(bx, meterMidY - bh / 2);
-        ctx.lineTo(bx, meterMidY + bh / 2);
-        ctx.stroke();
-      }
-
-      const meterTextX = meterStartX + meterProfile.length * 8 + 14;
-      ctx.font = `600 17px ${FONT_SANS}`;
-      if (isPausedActive) {
-        ctx.fillStyle = '#fde68a';
-        ctx.fillText(
-          isEn
-            ? 'Paused — incoming audio is muted & discarded'
-            : 'Pausiert — eingehender Ton wird verworfen',
-          meterTextX,
-          meterMidY + 6,
-        );
-      } else if (isPendingEntry) {
-        ctx.fillStyle = '#fcd34d';
-        ctx.fillText(
-          isEn
-            ? 'Audio capture inactive until admitted to the call'
-            : 'Noch keine Tonaufzeichnung bis zum Einlass',
-          meterTextX,
-          meterMidY + 6,
-        );
-      } else if (voiceActive) {
-        ctx.fillStyle = '#a7f3d0';
-        const activeLabel = currentSpeaker
-          ? (isEn ? `Recording audio · ${currentSpeaker}` : `Ton wird aufgezeichnet · ${currentSpeaker}`)
-          : (isEn ? 'Recording audio — voice activity detected' : 'Ton wird aufgezeichnet — Sprachaktivität erkannt');
-        ctx.fillText(truncateText(ctx, activeLabel, cardX + cardW - meterTextX - 36), meterTextX, meterMidY + 6);
-      } else {
-        ctx.fillStyle = '#94a3b8';
-        ctx.fillText(
-          isEn
-            ? 'Audio ready — waiting for speech'
-            : 'Tonempfang bereit — warte auf Sprache',
-          meterTextX,
-          meterMidY + 6,
-        );
-      }
-
-      ctx.restore();
     };
 
     let lastSignature = '';
