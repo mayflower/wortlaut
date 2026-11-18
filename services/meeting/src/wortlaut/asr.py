@@ -287,6 +287,7 @@ def build_asr_context_prompt(
             break
 
     from wortlaut.exports import extract_org_glossary_hints
+    from wortlaut.glossary import resolve_recording_glossary
 
     assistant_hint = " ".join(str(settings.assistant_name or "").split())
     builtin_hints = (
@@ -295,6 +296,7 @@ def build_asr_context_prompt(
         else []
     )
     org_hints = extract_org_glossary_hints(meta.get("attendee_emails"))
+    resolved_glossary_terms, _ = resolve_recording_glossary(db, recording, settings)
     glossary_terms: list[str] = []
     seen_terms: set[str] = set()
     term_replacements = meta.get("term_replacements")
@@ -302,8 +304,8 @@ def build_asr_context_prompt(
         list(term_replacements.values()) if isinstance(term_replacements, dict) else []
     )
     for raw_term in [
-        *(settings.asr_glossary or []),
         *replacement_targets,
+        *resolved_glossary_terms,
         *builtin_hints,
         *org_hints,
     ]:
@@ -350,16 +352,21 @@ def build_asr_context_prompt(
             f"{', '.join(participant_list)}"
         )
     if glossary_terms:
-        parts.append(
-            f"{'Glossar' if use_de_labels else 'Glossary'}: {', '.join(glossary_terms)}"
-        )
+        glossary_line = ""
+        for term in glossary_terms:
+            next_val = f"{glossary_line}, {term}" if glossary_line else term
+            if len(next_val) > 220:
+                break
+            glossary_line = next_val
+        if glossary_line:
+            parts.append(f"{'Glossar' if use_de_labels else 'Glossary'}: {glossary_line}")
     if prior_text:
         parts.append(
             f"{'Vorheriger Kontext' if use_de_labels else 'Prior context'}: {prior_text}"
         )
     if not parts:
         return None
-    return " | ".join(parts)[:500]
+    return " | ".join(parts)[:600]
 
 
 def _resolve_primary_language(

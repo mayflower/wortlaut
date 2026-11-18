@@ -364,6 +364,26 @@ export interface McpGrantsResponse {
   grants: McpGrantItem[];
 }
 
+export type GlossaryScope = 'global' | 'personal';
+
+export interface GlossaryEntryItem {
+  term_key: string;
+  term: string;
+  aliases: string[];
+  source: 'env' | 'custom';
+  updated_at: string | null;
+}
+
+export interface GlossaryOverview {
+  can_edit_global: boolean;
+  has_personal_scope: boolean;
+  default_scope: GlossaryScope;
+  global_entries: GlossaryEntryItem[];
+  personal_entries: GlossaryEntryItem[];
+  suppressed_env_terms?: string[];
+  effective_count: number;
+}
+
 export function formatBotDisplayName(
   recording: { guest_name?: string | null; owner_email?: string | null },
   assistantName = 'wortlaut'

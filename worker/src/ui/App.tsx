@@ -14,6 +14,7 @@ import {
   completeOidcCallbackIfPresent,
   exitReaderModeToAccount,
   fetchCalendar,
+  fetchGlossary,
   fetchMcpGrants,
   fetchRecordingDetail,
   fetchRecordings,
@@ -38,6 +39,7 @@ import {
   ReaderTopBar,
   type NavSection,
 } from './components/HeaderBar';
+import { GlossaryWorkspace } from './components/GlossaryWorkspace';
 import { McpWorkspace } from './components/McpWorkspace';
 import { MeetingDetailView } from './components/MeetingDetailView';
 import { NewRecordingDialog } from './components/NewRecordingDialog';
@@ -402,6 +404,14 @@ export function App() {
     retry: false,
   });
 
+  // Persistent ASR & summary glossary query (operator only)
+  const glossaryQuery = useQuery({
+    queryKey: ['glossary', token],
+    queryFn: () => fetchGlossary(token),
+    enabled: authMode.kind === 'operator',
+    retry: false,
+  });
+
   // Active recording detail + transcript (stop polling once recording is ended & settled)
   const activeRecordingId =
     authMode.kind === 'reader' ? authMode.recordingId : selectedId;
@@ -551,6 +561,29 @@ export function App() {
           action: () => {
             setSelectedId(null);
             setActiveNav('calendar');
+          },
+        },
+      },
+      {
+        id: 'nav:glossary',
+        label: tr(
+          'Zu Glossar & Fachbegriffen wechseln',
+          'Go to Glossary & Domain Terms'
+        ),
+        auxiliaryData: {
+          group: 'Navigation',
+          keywords: [
+            'glossar',
+            'glossary',
+            'fachbegriffe',
+            'wörterbuch',
+            'vokabular',
+            'asr',
+            'korrektur',
+          ],
+          action: () => {
+            setSelectedId(null);
+            setActiveNav('glossary');
           },
         },
       },
@@ -724,6 +757,7 @@ export function App() {
               : upcomingIcsCount
           }
           calendarConnectedCount={calendarConnections.length}
+          glossaryCount={glossaryQuery.data?.effective_count || 0}
           mcpGrantCount={mcpGrantsQuery.data?.grants.length || 0}
           onOpenNewRecording={() => handleOpenNewModal('link')}
           onOpenAuthDialog={() => setAuthDialogOpen(true)}
@@ -751,6 +785,17 @@ export function App() {
             }
             onSelectRecording={handleOpenRecording}
             onOpenImportModal={() => handleOpenNewModal('ics')}
+          />
+        ) : activeNav === 'glossary' ? (
+          <GlossaryWorkspace
+            token={token}
+            glossary={glossaryQuery.data || null}
+            isLoading={glossaryQuery.isLoading}
+            loadError={nonAuthErrorText(glossaryQuery.error)}
+            onRefresh={() => {
+              queryClient.invalidateQueries({ queryKey: ['glossary'] });
+              queryClient.invalidateQueries({ queryKey: ['transcript'] });
+            }}
           />
         ) : activeNav === 'mcp' ? (
           <McpWorkspace
@@ -789,6 +834,11 @@ export function App() {
               setSelectedId(null);
               setFocusKeyframeId(null);
               setActiveNav('calendar');
+            }}
+            onOpenGlossary={() => {
+              setSelectedId(null);
+              setFocusKeyframeId(null);
+              setActiveNav('glossary');
             }}
             onDeleted={() => {
               setSelectedId(null);

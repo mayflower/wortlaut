@@ -935,10 +935,15 @@ try {
       };
 
       const receivers = (window as any).fixtureReceiver.getReceivers() as RTCRtpReceiver[];
-      let r0History: {csi: number; offsetMs: number}[] = [{csi: 7001, offsetMs: 0}];
+      let r0History: {csi: number; offsetMs: number; audioLevel?: number}[] = [{csi: 7001, offsetMs: 0}];
       receivers[0].getContributingSources = () => {
         const now = performance.now();
-        return r0History.map((h) => ({source: h.csi, timestamp: now - h.offsetMs, rtpTimestamp: 0}));
+        return r0History.map((h) => ({
+          source: h.csi,
+          timestamp: now - h.offsetMs,
+          rtpTimestamp: 0,
+          ...(h.audioLevel !== undefined ? {audioLevel: h.audioLevel} : {}),
+        }));
       };
       receivers[1].getContributingSources = () => [{source: 7002, timestamp: performance.now(), rtpTimestamp: 0}];
 
@@ -946,6 +951,7 @@ try {
         {id: 'spaces/testroom/devices/alice', name: 'Alice SFU', csi: 7001},
         {id: 'spaces/testroom/devices/bob', name: 'Bob SFU', csi: 7002},
         {id: 'spaces/testroom/devices/clara', name: 'Clara SFU', csi: 7003},
+        {id: 'spaces/testroom/devices/maria-silent', name: 'Maria Silent', csi: 7099},
       ]);
       // Send a cross-referencing protobuf frame (2 device IDs + sibling name) and a mid-call
       // caption/UI frame for alice; neither may poison Alice's verified participant_name!
@@ -975,14 +981,31 @@ try {
       }
 
       (window as any).switchSfuToClara = () => {
-        // Keep Alice in Chromium's 10s CSRC window with an older timestamp (400ms ago) while Clara is current!
-        r0History = [{csi: 7001, offsetMs: 400}, {csi: 7003, offsetMs: 0}];
+        // Keep Alice in 10s CSRC window AND inject simultaneous silent comfort-noise CSRC (7099, audioLevel=0.0002)
+        // slightly newer than Clara's voiced packet (audioLevel=0.08): Clara must win without ambiguity!
+        r0History = [
+          {csi: 7001, offsetMs: 400, audioLevel: 0.0},
+          {csi: 7003, offsetMs: 15, audioLevel: 0.08},
+          {csi: 7099, offsetMs: 0, audioLevel: 0.0002},
+        ];
+      };
+      (window as any).pauseWithSilentComfortNoise = () => {
+        // During a speech pause, only Maria's unmuted comfort-noise packet (audioLevel=0.0002) arrives;
+        // Receiver 0 must keep Clara rather than hijacking the bind onto Maria Silent!
+        r0History = [
+          {csi: 7003, offsetMs: 350, audioLevel: 0.0},
+          {csi: 7099, offsetMs: 0, audioLevel: 0.0002},
+        ];
       };
       (window as any).lateJoinDavidAndSwitch = async () => {
         await sendCollections([
           {id: 'spaces/testroom/devices/david', name: 'David Late', csi: 7004},
         ]);
-        r0History = [{csi: 7001, offsetMs: 900}, {csi: 7003, offsetMs: 450}, {csi: 7004, offsetMs: 0}];
+        r0History = [
+          {csi: 7001, offsetMs: 900, audioLevel: 0.0},
+          {csi: 7099, offsetMs: 5, audioLevel: 0.0002},
+          {csi: 7004, offsetMs: 0, audioLevel: 0.09},
+        ];
       };
       (window as any).closeSfuCollections = () => {
         dc.close(); offerer.close(); answerer.close();
@@ -997,28 +1020,43 @@ try {
     }, undefined, {timeout: 10000});
     await sfuDynamic.page.waitForTimeout(2300);
 
-    // Phase 2: Loudest-N switches Receiver 0 from Alice -> Clara (flushes Alice's PCM chunk & binds Clara)
+    // Phase 2: Loudest-N switches Receiver 0 from Alice -> Clara while Maria's silent CSRC (0.0002) is ignored
     await sfuDynamic.page.evaluate(() => (window as any).switchSfuToClara());
     await sfuDynamic.page.waitForFunction(() => {
       const rs = window.wortlautMeet.inspect().receiver_sources as any[];
       return rs.some(r => r.signaled_participant_id === 'spaces/testroom/devices/clara') &&
         rs.some(r => r.signaled_participant_id === 'spaces/testroom/devices/bob');
     }, undefined, {timeout: 10000});
-    await sfuDynamic.page.waitForTimeout(2300);
+    await sfuDynamic.page.waitForTimeout(1200);
+
+    // Phase 2b: Pause with only silent comfort-noise CSRC (7099) -> Receiver 0 stays on Clara, never Maria
+    await sfuDynamic.page.evaluate(() => (window as any).pauseWithSilentComfortNoise());
+    await sfuDynamic.page.waitForTimeout(900);
+    {
+      const pauseRs = (await sfuDynamic.meet.inspect()).receiver_sources as any[];
+      assert.ok(
+        pauseRs.some(r => r.signaled_participant_id === 'spaces/testroom/devices/clara'),
+        'Silent comfort-noise CSRC must not displace the last voiced speaker during a pause',
+      );
+      assert.ok(
+        !pauseRs.some(r => r.signaled_participant_id === 'spaces/testroom/devices/maria-silent'),
+        'Silent comfort-noise CSRC must never bind Receiver 0 to Maria Silent',
+      );
+    }
 
     // Phase 3: Mid-call late joiner David arrives via collections delta and takes Receiver 0
     await sfuDynamic.page.evaluate(() => (window as any).lateJoinDavidAndSwitch());
     await sfuDynamic.page.waitForFunction(() => {
       const st = window.wortlautMeet.inspect();
       const rs = st.receiver_sources as any[];
-      return st.participant_sources.total === 4 &&
+      return st.participant_sources.total === 5 &&
         rs.some(r => r.signaled_participant_id === 'spaces/testroom/devices/david');
     }, undefined, {timeout: 10000});
-    await sfuDynamic.page.waitForTimeout(2300);
+    await sfuDynamic.page.waitForTimeout(1200);
 
     const sfuState = await sfuDynamic.meet.inspect();
-    assert.equal(sfuState.streams, 2, '4 speakers across 2 SFU transceivers must keep exactly 2 streams');
-    assert.equal(sfuState.participant_sources.total, 4);
+    assert.equal(sfuState.streams, 2, '5 participants across 2 SFU transceivers must keep exactly 2 streams');
+    assert.equal(sfuState.participant_sources.total, 5);
     await sfuDynamic.meet.stop('normal');
     assert.equal((await sfuDynamic.meet.inspect()).drained, true);
     await sfuDynamic.page.evaluate(async () => {
@@ -1053,6 +1091,11 @@ try {
         `Missing attributed PCM chunk for ${expectedSpeaker.name}`,
       );
     }
+    assert.equal(
+      sfuFrames.filter(f => f.metadata.speaker_id === 'spaces/testroom/devices/maria-silent').length,
+      0,
+      'Silent comfort-noise CSRC must emit zero bind or PCM frames for Maria Silent',
+    );
     const streamOf = (speakerId: string) =>
       sfuFrames.find(f => Boolean(f.pcm) && f.metadata.speaker_id === speakerId)?.metadata.stream_id;
     assert.equal(streamOf('spaces/testroom/devices/alice'), streamOf('spaces/testroom/devices/clara'));

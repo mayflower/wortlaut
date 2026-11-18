@@ -560,6 +560,15 @@ def export_data(
     meta = dict(recording.protocol_meta or {})
     speaker_overrides: dict[str, str] = dict(meta.get("speaker_overrides") or {})
     term_replacements: dict[str, str] = dict(meta.get("term_replacements") or {})
+    from wortlaut.glossary import resolve_recording_glossary
+
+    _, glossary_alias_replacements = resolve_recording_glossary(
+        db, recording, get_settings()
+    )
+    effective_term_replacements: dict[str, str] = {
+        **glossary_alias_replacements,
+        **term_replacements,
+    }
     segment_edits: dict[str, str] = dict(meta.get("segment_edits") or {})
     raw_edit_bounds = meta.get("segment_edit_bounds") or {}
     segment_edit_bounds: dict[str, float] = {
@@ -919,8 +928,10 @@ def export_data(
         seg_id = str(seg.get("segment_id") or seg.get("id") or "")
         if seg_id and seg_id in segment_edits and segment_edits[seg_id].strip():
             seg["text"] = " ".join(segment_edits[seg_id].split())
-        if term_replacements:
-            seg["text"] = _apply_text_replacements(seg.get("text") or "", term_replacements)
+        if effective_term_replacements:
+            seg["text"] = _apply_text_replacements(
+                seg.get("text") or "", effective_term_replacements
+            )
         if speaker_overrides:
             pid = seg.get("participant_id") or seg.get("speaker_id")
             orig_label = seg.get("speaker_label") or ""
@@ -1049,7 +1060,7 @@ def export_data(
         "last_known_audio_utc": max(ends).isoformat() if ends else None,
         "audio_available": audio_available,
         "summary": _resolve_summary(
-            meta.get("summary"), resolved_speaker_overrides, term_replacements
+            meta.get("summary"), resolved_speaker_overrides, effective_term_replacements
         ),
         "notes": meta.get("notes") or "",
         "speaker_overrides": speaker_overrides,
@@ -1144,7 +1155,10 @@ def _pick_representative_sample_text(texts) -> str:
     if not non_empty:
         return ""
     for t in non_empty:
-        if len(t) >= 40 or len(t.split()) >= 5:
+        if len(t) >= 48 and len(t.split()) >= 6:
+            return t[:140]
+    for t in non_empty:
+        if len(t) >= 28:
             return t[:140]
     return max(non_empty, key=len)[:140]
 
@@ -1757,6 +1771,9 @@ def generate_protocol_summary(db: Session, recording_id: uuid.UUID) -> dict:
     prior_meta = dict(recording.protocol_meta or {})
     prior_opted_out = _opted_out_set(prior_meta)
     prior_participation = recording.participation
+    from wortlaut.glossary import resolve_recording_glossary
+
+    resolved_glossary_terms, _ = resolve_recording_glossary(db, recording, settings)
     data = export_data(db, recording)
     title = _single_line(recording.title) or f"Besprechung ({provider_label(recording.provider)})"
     # End the read transaction before calling Ollama so no DB snapshot or row lock is held.
@@ -1903,7 +1920,7 @@ def generate_protocol_summary(db: Session, recording_id: uuid.UUID) -> dict:
     org_hints = extract_org_glossary_hints(prior_meta.get("attendee_emails"))
     merged_glossary: list[str] = []
     seen_glossary: set[str] = set()
-    for raw_term in [*(settings.asr_glossary or []), *repl_values, *builtin_hints, *org_hints]:
+    for raw_term in [*repl_values, *resolved_glossary_terms, *builtin_hints, *org_hints]:
         term = _single_line(raw_term)[:60]
         if term and term.lower() not in seen_glossary and len(merged_glossary) < 40:
             seen_glossary.add(term.lower())

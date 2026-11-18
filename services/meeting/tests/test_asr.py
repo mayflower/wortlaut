@@ -1008,3 +1008,213 @@ def test_per_recording_and_in_call_language_switching_across_30_languages(
         assert "written in Spanish" in captured_sys_prompts[0]
     finally:
         get_settings.cache_clear()
+
+
+def test_persistent_glossary_editor_tenancy_asr_and_export_aliases(
+    client, database, monkeypatch
+):
+    from wortlaut.asr import build_asr_context_prompt
+    from wortlaut.exports import chat_reader_token, export_data
+    from wortlaut.models import Attempt, Recording
+    from wortlaut.oidc import issue_user_session_token
+
+    monkeypatch.setenv("WORTLAUT_ASR_GLOSSARY", "Wortlaut, LegacyEnvTerm")
+    monkeypatch.setenv("WORTLAUT_OIDC_ALLOWED_DOMAINS", '["example.org"]')
+    monkeypatch.setenv("WORTLAUT_OIDC_ADMIN_EMAILS", '["admin@example.org"]')
+    get_settings.cache_clear()
+    try:
+        alice_token, _ = issue_user_session_token(
+            sub="sub-alice", email="alice@example.org", name="Alice"
+        )
+        bob_token, _ = issue_user_session_token(
+            sub="sub-bob", email="bob@example.org", name="Bob"
+        )
+        admin_token, _ = issue_user_session_token(
+            sub="sub-admin", email="admin@example.org", name="Admin"
+        )
+        alice_hdr = {"Authorization": f"Bearer {alice_token}"}
+        bob_hdr = {"Authorization": f"Bearer {bob_token}"}
+        admin_hdr = {"Authorization": f"Bearer {admin_token}"}
+
+        # 1. Baseline env glossary visible; non-admin cannot mutate global scope
+        init_res = client.get("/v1/glossary", headers=alice_hdr)
+        assert init_res.status_code == 200
+        init_body = init_res.json()
+        assert init_body["can_edit_global"] is False
+        assert init_body["has_personal_scope"] is True
+        assert init_body["default_scope"] == "personal"
+        global_terms = {e["term"]: e for e in init_body["global_entries"]}
+        assert "Wortlaut" in global_terms and global_terms["Wortlaut"]["source"] == "env"
+        assert "LegacyEnvTerm" in global_terms
+
+        forbidden = client.post(
+            "/v1/glossary/entries",
+            headers=alice_hdr,
+            json={"scope": "global", "term": "ForbiddenGlobal"},
+        )
+        assert forbidden.status_code == 403
+
+        # 2. Admin bulk-imports team terms, slash terms (S/4HANA), and phonetic aliases,
+        #    and suppresses LegacyEnvTerm via DELETE without touching env config.
+        up_global = client.post(
+            "/v1/glossary/entries",
+            headers=admin_hdr,
+            json={
+                "scope": "global",
+                "raw_text": (
+                    "Mainova, Hertener Stadtwerke, S/4HANA\n"
+                    "Mistack | Maystack -> mAIstack"
+                ),
+            },
+        )
+        assert up_global.status_code == 200
+        del_env = client.delete(
+            "/v1/glossary/entries",
+            headers=admin_hdr,
+            params={"term_key": "legacyenvterm", "scope": "global"},
+        )
+        assert del_env.status_code == 200
+        del_slash = client.delete(
+            "/v1/glossary/entries",
+            headers=admin_hdr,
+            params={"term_key": "s/4hana", "scope": "global"},
+        )
+        assert del_slash.status_code == 200
+
+        after_global = {e["term"]: e for e in del_slash.json()["global_entries"]}
+        assert "LegacyEnvTerm" not in after_global
+        assert del_slash.json()["suppressed_env_terms"] == ["LegacyEnvTerm"]
+        assert "S/4HANA" not in after_global
+        assert "Mainova" in after_global
+        assert "Hertener Stadtwerke" in after_global
+        assert after_global["mAIstack"]["aliases"] == ["Mistack", "Maystack"]
+
+        # 3. Alice adds personal confidential term + alias (scope="auto" routes to personal);
+        #    Bob never sees Alice's personal entries.
+        up_alice = client.post(
+            "/v1/glossary/entries",
+            headers=alice_hdr,
+            json={
+                "scope": "auto",
+                "term": "Projekt Phoenix",
+                "aliases": ["Projekt Fönix"],
+            },
+        )
+        assert up_alice.status_code == 200
+        assert up_alice.json()["scope"] == "personal"
+        assert [e["term"] for e in up_alice.json()["personal_entries"]] == ["Projekt Phoenix"]
+
+        bob_view = client.get("/v1/glossary", headers=bob_hdr).json()
+        assert bob_view["personal_entries"] == []
+
+        # 4. Verify ASR context prompt + lossless export alias normalization + reader rejection
+        now = datetime.now(UTC)
+        with Session(database) as db:
+            rec = Recording(
+                id=uuid.uuid4(),
+                idempotency_key=f"gloss-{uuid.uuid4()}",
+                request_digest="digest-gloss",
+                provider="google_meet",
+                meeting_url="https://meet.google.com/abc-defg-hij",
+                title="Architektur",
+                owner_email="alice@example.org",
+                starts_at=now,
+                ends_at=now + timedelta(hours=1),
+                participation="ended",
+                processing="completed",
+                protocol_meta={},
+            )
+            db.add(rec)
+            db.flush()
+            reader_tok = chat_reader_token(rec)
+            att = Attempt(
+                id=uuid.uuid4(),
+                recording_id=rec.id,
+                credential_hash="h",
+                credential_expires_at=now + timedelta(hours=2),
+                diagnostics={},
+            )
+            db.add(att)
+            db.flush()
+            stream = AudioStream(
+                id=uuid.uuid4(),
+                attempt_id=att.id,
+                stream_id=uuid.uuid4(),
+                epoch=uuid.uuid4(),
+                contract={
+                    "provider_source_id": "meet-rcv-1",
+                    "source_kind": "speaker",
+                    "participant_id": "spk-alice",
+                    "speaker_id": "spk-alice",
+                    "participant_name": "Alice",
+                    "attribution_unknown": False,
+                    "session_utc_origin": now.isoformat(),
+                    "monotonic_origin_ms": 0,
+                    "session_monotonic_origin_ms": 0,
+                },
+            )
+            db.add(stream)
+            db.flush()
+            job = AsrJob(
+                id=str(uuid.uuid4()),
+                stream_id=stream.id,
+                start_sample=0,
+                end_sample=32000,
+                core_start=0,
+                core_end=32000,
+                status="completed",
+                binding=dict(stream.contract),
+            )
+            db.add(job)
+            db.flush()
+            db.add(
+                TranscriptSegment(
+                    id=job.id,
+                    result={
+                        "id": job.id,
+                        "stream_id": str(stream.stream_id),
+                        "epoch": str(stream.epoch),
+                        "provider_source_id": "meet-rcv-1",
+                        "source_kind": "speaker",
+                        "participant_id": "spk-alice",
+                        "speaker_id": "spk-alice",
+                        "participant_name": "Alice",
+                        "attribution_unknown": False,
+                        "session_utc_origin": now.isoformat(),
+                        "start": 0.0,
+                        "end": 2.0,
+                        "start_sample": 0,
+                        "end_sample": 32000,
+                        "confidence": 0.92,
+                        "text": "Wir nutzen Mistack fuer Projekt Fönix bei Mainova.",
+                        "words": [],
+                    },
+                )
+            )
+            db.commit()
+
+            prompt = build_asr_context_prompt(db, job, stream, get_settings())
+            assert prompt is not None
+            assert "Projekt Phoenix" in prompt
+            assert "mAIstack" in prompt
+            assert "Mainova" in prompt
+            assert "LegacyEnvTerm" not in prompt
+
+            exported = export_data(db, rec)
+            assert (
+                exported["segments"][0]["text"]
+                == "Wir nutzen mAIstack fuer Projekt Phoenix bei Mainova."
+            )
+            # Raw segment in DB stays untouched (lossless display-time normalization)
+            raw_seg = db.get(TranscriptSegment, job.id)
+            assert raw_seg.result["text"] == "Wir nutzen Mistack fuer Projekt Fönix bei Mainova."
+
+        assert (
+            client.get(
+                "/v1/glossary",
+                headers={"Authorization": f"Bearer {reader_tok}"},
+            ).status_code
+            == 401
+        )
+    finally:
+        get_settings.cache_clear()

@@ -2407,19 +2407,64 @@ function install(config: MeetCaptureConfig) {
     },
     error: (reason) => { state.reason = reason; }};
 
-  function recentRtpSources(items: RTCRtpContributingSource[]): number[] {
-    if (!items.length) return [];
+  const MIN_RTP_VOICE_LEVEL = 0.004;
+
+  function classifyRecentRtpSources(items: RTCRtpContributingSource[]): {
+    sources: number[];
+    onlySilent: boolean;
+  } {
+    if (!items.length) return {sources: [], onlySilent: false};
     let maxTs = -Infinity;
+    let maxVoicedTs = -Infinity;
     for (const item of items) {
-      if (typeof item.timestamp === 'number' && Number.isFinite(item.timestamp) && item.timestamp > maxTs) {
-        maxTs = item.timestamp;
+      const ts = typeof item.timestamp === 'number' && Number.isFinite(item.timestamp) ? item.timestamp : null;
+      if (ts !== null && ts > maxTs) maxTs = ts;
+      if (
+        typeof item.audioLevel === 'number' &&
+        Number.isFinite(item.audioLevel) &&
+        item.audioLevel >= MIN_RTP_VOICE_LEVEL
+      ) {
+        if (ts !== null && ts > maxVoicedTs) maxVoicedTs = ts;
       }
     }
-    const filtered = Number.isFinite(maxTs)
-      ? items.filter((item) =>
-          typeof item.timestamp !== 'number' || !Number.isFinite(item.timestamp) || maxTs - item.timestamp <= 25)
-      : items;
-    return filtered.map((item) => item.source);
+    const withinMs = (item: RTCRtpContributingSource, refTs: number, windowMs: number) =>
+      !Number.isFinite(refTs) ||
+      typeof item.timestamp !== 'number' ||
+      !Number.isFinite(item.timestamp) ||
+      refTs - item.timestamp <= windowMs;
+
+    if (Number.isFinite(maxVoicedTs) && (!Number.isFinite(maxTs) || maxTs - maxVoicedTs <= 120)) {
+      const voiced = items
+        .filter(
+          (item) =>
+            typeof item.audioLevel === 'number' &&
+            Number.isFinite(item.audioLevel) &&
+            item.audioLevel >= MIN_RTP_VOICE_LEVEL &&
+            withinMs(item, maxVoicedTs, 60),
+        )
+        .map((item) => item.source);
+      if (voiced.length > 0) {
+        return {sources: voiced, onlySilent: false};
+      }
+    }
+
+    const recent = items.filter((item) => withinMs(item, maxTs, 25));
+    if (!recent.length) return {sources: [], onlySilent: false};
+
+    const unmeasuredOrVoiced = recent.filter(
+      (item) =>
+        typeof item.audioLevel !== 'number' ||
+        !Number.isFinite(item.audioLevel) ||
+        item.audioLevel >= MIN_RTP_VOICE_LEVEL,
+    );
+    if (unmeasuredOrVoiced.length > 0) {
+      return {sources: unmeasuredOrVoiced.map((item) => item.source), onlySilent: false};
+    }
+    return {sources: recent.map((item) => item.source), onlySilent: true};
+  }
+
+  function recentRtpSources(items: RTCRtpContributingSource[]): number[] {
+    return classifyRecentRtpSources(items).sources;
   }
 
   const lastResolvedBindings = new WeakMap<RTCRtpReceiver, {
@@ -2434,25 +2479,35 @@ function install(config: MeetCaptureConfig) {
     if (!participants.size) {
       return {csi: null, signaled_participant_id: null, participant_name: null, source_kind: 'speaker', bound: false};
     }
+    const previous = lastResolvedBindings.get(receiver);
     const lastFrame = observations.get(receiver)?.evidence.last_frame;
     const hookedMeta = encodedFrameMeta?.get(receiver);
-    const recentCsrcs = recentRtpSources(receiver.getContributingSources()).filter(validCsi);
+    const rawCsrcs = receiver.getContributingSources();
+    const csrcInfo = classifyRecentRtpSources(rawCsrcs);
+    const activeRecentCsrcs = csrcInfo.onlySilent ? [] : csrcInfo.sources.filter(validCsi);
     const csrcs = [...new Set(
-      recentCsrcs.length > 0
-        ? recentCsrcs
-        : (Array.isArray(lastFrame?.contributing_sources)
-            ? (lastFrame.contributing_sources as number[])
-            : (hookedMeta?.csrcs ?? [])
-          ).filter(validCsi),
+      activeRecentCsrcs.length > 0
+        ? activeRecentCsrcs
+        : csrcInfo.onlySilent
+          ? []
+          : (Array.isArray(lastFrame?.contributing_sources)
+              ? (lastFrame.contributing_sources as number[])
+              : (hookedMeta?.csrcs ?? [])
+            ).filter(validCsi),
     )];
-    const recentSsrcs = recentRtpSources(receiver.getSynchronizationSources()).filter(validCsi);
+    const ssrcInfo = classifyRecentRtpSources(receiver.getSynchronizationSources());
+    const allowSilentSsrc = rawCsrcs.length === 0 && !previous;
+    const activeRecentSsrcs =
+      ssrcInfo.onlySilent && !allowSilentSsrc ? [] : ssrcInfo.sources.filter(validCsi);
     const ssrcs = [...new Set(
-      recentSsrcs.length > 0
-        ? recentSsrcs
-        : (validCsi(lastFrame?.synchronization_source)
-            ? [lastFrame.synchronization_source]
-            : validCsi(hookedMeta?.ssrc) ? [hookedMeta.ssrc] : []
-          ).filter(validCsi),
+      activeRecentSsrcs.length > 0
+        ? activeRecentSsrcs
+        : ssrcInfo.onlySilent && !allowSilentSsrc
+          ? []
+          : (validCsi(lastFrame?.synchronization_source)
+              ? [lastFrame.synchronization_source]
+              : validCsi(hookedMeta?.ssrc) ? [hookedMeta.ssrc] : []
+            ).filter(validCsi),
     )];
 
     const matchByCsi = (candidates: number[]) => {
@@ -2514,7 +2569,6 @@ function install(config: MeetCaptureConfig) {
       return remember({csi: firstCsi, signaled_participant_id: p.participant_id,
         participant_name: p.participant_name, source_kind: 'speaker', bound: true});
     }
-    const previous = lastResolvedBindings.get(receiver);
     if (previous && csrcs.length === 0 && previous.signaled_participant_id) {
       const latestParticipant = participants.get(previous.signaled_participant_id);
       return {

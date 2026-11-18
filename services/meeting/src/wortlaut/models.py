@@ -408,3 +408,25 @@ class RecordingKeyframe(Base):
     sha256: Mapped[str] = mapped_column(String(64))
     object_key: Mapped[str] = mapped_column(String(512))
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class GlossaryEntry(Base):
+    __tablename__ = "glossary_entries"
+    __table_args__ = (
+        UniqueConstraint(
+            "owner_email", "term_key", name="uq_glossary_entries_owner_term"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    owner_email: Mapped[str] = mapped_column(String(320), index=True, default="")
+    term_key: Mapped[str] = mapped_column(String(80))
+    term: Mapped[str] = mapped_column(String(80))
+    aliases: Mapped[list] = mapped_column(JSONB, default=list)
+    disabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), server_default=func.now()
+    )

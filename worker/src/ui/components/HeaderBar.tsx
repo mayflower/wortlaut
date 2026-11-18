@@ -2,6 +2,7 @@ import React from 'react';
 import {
   ArrowLeft,
   AudioLines,
+  BookOpen,
   Calendar,
   FileText,
   HelpCircle,
@@ -35,7 +36,7 @@ import type { AuthMode } from '../types';
 import { useI18n, type UiLang } from '../i18n';
 import { useThemeMode, type ThemeMode } from './ui/primitives';
 
-export type NavSection = 'meetings' | 'calendar' | 'mcp' | 'system';
+export type NavSection = 'meetings' | 'calendar' | 'glossary' | 'mcp' | 'system';
 
 export interface HeaderBarProps {
   healthy: boolean;
@@ -49,6 +50,7 @@ export interface HeaderBarProps {
   activeLiveCount: number;
   calendarCount: number;
   calendarConnectedCount?: number;
+  glossaryCount?: number;
   mcpGrantCount?: number;
   onOpenNewRecording: () => void;
   onOpenAuthDialog: () => void;
@@ -209,6 +211,7 @@ export function HeaderBar({
   activeLiveCount,
   calendarCount,
   calendarConnectedCount = 0,
+  glossaryCount = 0,
   mcpGrantCount = 0,
   onOpenNewRecording,
   onOpenAuthDialog,
@@ -387,6 +390,17 @@ export function HeaderBar({
                   <Token size="sm" label={String(calendarCount)} />
                 </span>
               </HStack>
+            }
+          />
+          <SideNavItem
+            label={tr('Glossar', 'Glossary')}
+            icon={<BookOpen className="h-4 w-4" />}
+            isSelected={activeNav === 'glossary'}
+            onClick={() => onChangeNav('glossary')}
+            endContent={
+              glossaryCount > 0 ? (
+                <Token size="sm" label={String(glossaryCount)} />
+              ) : undefined
             }
           />
           <SideNavItem

@@ -4,6 +4,8 @@ import type {
   CalendarConnectionInfo,
   CalendarEvent,
   CalendarSyncedEventInfo,
+  GlossaryOverview,
+  GlossaryScope,
   InstanceInfo,
   McpGrantsResponse,
   ProtocolSummary,
@@ -446,7 +448,7 @@ export function exitReaderModeToAccount(): string {
   return getSavedAccountToken();
 }
 
-export type UiNavView = 'meetings' | 'calendar' | 'mcp' | 'system';
+export type UiNavView = 'meetings' | 'calendar' | 'glossary' | 'mcp' | 'system';
 
 export function readNavStateFromHash(): {
   view: UiNavView;
@@ -465,7 +467,10 @@ export function readNavStateFromHash(): {
   const id = params.get('id') || params.get('recording');
   const kf = params.get('keyframe');
   const view: UiNavView =
-    rawView === 'calendar' || rawView === 'mcp' || rawView === 'system'
+    rawView === 'calendar' ||
+    rawView === 'glossary' ||
+    rawView === 'mcp' ||
+    rawView === 'system'
       ? rawView
       : 'meetings';
   return {
@@ -1008,6 +1013,41 @@ export async function updateRecordingProtocol(
       body: JSON.stringify(payload),
     }
   );
+}
+
+export async function fetchGlossary(token: string): Promise<GlossaryOverview> {
+  return apiRequest('/v1/glossary', token);
+}
+
+export async function upsertGlossaryEntries(
+  token: string,
+  payload: {
+    scope?: GlossaryScope | 'auto';
+    term?: string;
+    aliases?: string[] | string;
+    raw_text?: string;
+    replace_aliases?: boolean;
+    previous_term_key?: string;
+  }
+): Promise<GlossaryOverview & { scope: GlossaryScope }> {
+  return apiRequest('/v1/glossary/entries', token, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function deleteGlossaryEntry(
+  token: string,
+  termKey: string,
+  scope: GlossaryScope | 'auto' = 'auto'
+): Promise<GlossaryOverview & { deleted: boolean; scope: GlossaryScope }> {
+  const params = new URLSearchParams({
+    term_key: termKey,
+    scope,
+  });
+  return apiRequest(`/v1/glossary/entries?${params.toString()}`, token, {
+    method: 'DELETE',
+  });
 }
 
 export async function generateRecordingSummary(

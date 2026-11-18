@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  BookOpen,
   Check,
   CheckSquare,
   Copy,
@@ -40,6 +41,7 @@ import {
   matchesKeyframeSourceFilter,
   matchesSourceFilter,
   updateRecordingProtocol,
+  upsertGlossaryEntries,
 } from '../api';
 import { KEYFRAME_STRINGS, localizeAttributionStatus, useI18n } from '../i18n';
 import type {
@@ -99,6 +101,7 @@ export interface TranscriptTabProps {
   selectedSourceFilter: string;
   onSelectedSourceFilterChange: (sourceId: string) => void;
   onProtocolUpdated?: () => void;
+  onOpenGlossary?: () => void;
 }
 
 interface TurnParagraph {
@@ -289,6 +292,7 @@ export function TranscriptTab({
   selectedSourceFilter,
   onSelectedSourceFilterChange,
   onProtocolUpdated,
+  onOpenGlossary,
 }: TranscriptTabProps) {
   const { lang, tr } = useI18n();
   const kStr = KEYFRAME_STRINGS[lang];
@@ -326,7 +330,10 @@ export function TranscriptTab({
   const [showTermBar, setShowTermBar] = useState(false);
   const [termFrom, setTermFrom] = useState('');
   const [termTo, setTermTo] = useState('');
+  const [saveTermGlobally, setSaveTermGlobally] = useState(true);
+  const [termSavedNotice, setTermSavedNotice] = useState<string | null>(null);
   const [savingTerm, setSavingTerm] = useState(false);
+  const savingTermRef = useRef(false);
 
   // Screen-share keyframe blob URLs, preview modal & operator deletion state
   const [keyframeBlobUrls, setKeyframeBlobUrls] = useState<
@@ -349,6 +356,7 @@ export function TranscriptTab({
   useEffect(() => {
     setEditingSummary(false);
     setSummaryError(null);
+    setTermSavedNotice(null);
     setEditingTurnId(null);
     setPreviewKeyframe(null);
     setConfirmDeleteKeyframe(null);
@@ -771,21 +779,40 @@ export function TranscriptTab({
 
   const handleAddTermReplacement = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!token || savingTerm || !termFrom.trim() || !termTo.trim()) return;
+    const cleanFrom = termFrom.trim();
+    const cleanTo = termTo.trim();
+    if (!token || savingTermRef.current || !cleanFrom || !cleanTo) return;
+    savingTermRef.current = true;
     setSummaryError(null);
+    setTermSavedNotice(null);
     setSavingTerm(true);
     try {
-      await updateRecordingProtocol(token, recordingId, {
-        term_replacements: {
-          [termFrom.trim()]: termTo.trim(),
-        },
-      });
+      if (saveTermGlobally && cleanFrom.length >= 2 && cleanFrom !== cleanTo) {
+        await upsertGlossaryEntries(token, {
+          scope: 'auto',
+          term: cleanTo,
+          aliases: [cleanFrom],
+        });
+        setTermSavedNotice(
+          tr(
+            `„${cleanFrom} → ${cleanTo}“ dauerhaft im Glossar gespeichert.`,
+            `Saved “${cleanFrom} → ${cleanTo}” permanently to Glossary.`
+          )
+        );
+      } else {
+        await updateRecordingProtocol(token, recordingId, {
+          term_replacements: {
+            [cleanFrom]: cleanTo,
+          },
+        });
+      }
       setTermFrom('');
       setTermTo('');
       onProtocolUpdated?.();
     } catch (err) {
       setSummaryError(err instanceof Error ? err.message : String(err));
     } finally {
+      savingTermRef.current = false;
       setSavingTerm(false);
     }
   };
@@ -1174,8 +1201,8 @@ export function TranscriptTab({
               icon={<Replace className="h-3.5 w-3.5" />}
               label={
                 activeTermEntries.length > 0
-                  ? `${tr('Glossar', 'Glossary')} (${activeTermEntries.length})`
-                  : tr('Glossar', 'Glossary')
+                  ? `${tr('Korrekturen', 'Corrections')} (${activeTermEntries.length})`
+                  : tr('Korrekturen', 'Corrections')
               }
               onClick={() => setShowTermBar((v) => !v)}
             />
@@ -1265,7 +1292,40 @@ export function TranscriptTab({
                   isDisabled={!termFrom.trim() || !termTo.trim()}
                   label={tr('Ersetzen', 'Replace')}
                 />
+                <label className="inline-flex min-h-[32px] items-center gap-2 py-1 text-[13px] text-[var(--color-text-secondary)] cursor-pointer select-none ml-1">
+                  <input
+                    type="checkbox"
+                    checked={saveTermGlobally}
+                    onChange={(e) => setSaveTermGlobally(e.target.checked)}
+                    style={{ accentColor: 'var(--wl-accent)' }}
+                    className="h-4 w-4 rounded border-[var(--color-border)] cursor-pointer"
+                  />
+                  <span>
+                    {tr(
+                      'Auch dauerhaft ins Glossar übernehmen',
+                      'Also save permanently to Glossary'
+                    )}
+                  </span>
+                </label>
+                {onOpenGlossary && (
+                  <div className="ml-auto">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      icon={<BookOpen className="h-3.5 w-3.5" />}
+                      label={tr('Glossar öffnen', 'Open Glossary')}
+                      onClick={onOpenGlossary}
+                    />
+                  </div>
+                )}
               </form>
+
+              {termSavedNotice && (
+                <Text type="supporting" color="secondary">
+                  {termSavedNotice}
+                </Text>
+              )}
 
               {activeTermEntries.length > 0 && (
                 <HStack gap={1.5} wrap="wrap" vAlign="center">

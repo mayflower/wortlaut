@@ -78,6 +78,7 @@ export interface MeetingDetailViewProps {
   onDeleted: () => void;
   onBackToOverview?: () => void;
   onOpenCalendar?: () => void;
+  onOpenGlossary?: () => void;
 }
 
 export function MeetingDetailView({
@@ -91,6 +92,7 @@ export function MeetingDetailView({
   onDeleted,
   onBackToOverview,
   onOpenCalendar,
+  onOpenGlossary,
 }: MeetingDetailViewProps) {
   const { lang, localeTag, tr } = useI18n();
   const [activeTab, setActiveTab] = useState<
@@ -1011,6 +1013,7 @@ export function MeetingDetailView({
                     selectedSourceFilter={selectedSourceFilter}
                     onSelectedSourceFilterChange={setSelectedSourceFilter}
                     onProtocolUpdated={onRefresh}
+                    onOpenGlossary={onOpenGlossary}
                   />
                 )}
 

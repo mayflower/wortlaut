@@ -71,6 +71,12 @@ from wortlaut.exports import (
     render_export,
     verify_recording_reader_token,
 )
+from wortlaut.glossary import (
+    GlossaryScopeInput,
+    delete_glossary_entry,
+    get_glossary_overview,
+    upsert_glossary_entries,
+)
 from wortlaut.ingest import (
     MAX_KEYFRAME_BYTES,
     KeyframeIngestMetadata,
@@ -275,6 +281,19 @@ class CalendarOAuthExchangeRequest(BaseModel):
 
 class CalendarEventToggleRequest(BaseModel):
     enabled: bool
+
+
+class GlossaryUpsertRequest(BaseModel):
+    scope: GlossaryScopeInput = "auto"
+    term: str | None = Field(default=None, max_length=200)
+    aliases: (
+        Annotated[list[Annotated[str, Field(max_length=120)]], Field(max_length=64)]
+        | Annotated[str, Field(max_length=2048)]
+        | None
+    ) = None
+    raw_text: str | None = Field(default=None, max_length=16384)
+    replace_aliases: bool = False
+    previous_term_key: str | None = Field(default=None, max_length=120)
 
 
 class RecordingRequest(BaseModel):
@@ -818,6 +837,44 @@ def auth_me(principal: AuthPrincipal):
         "name": principal.name,
         "is_admin": principal.is_admin,
     }
+
+
+@app.get("/v1/glossary")
+def get_glossary_endpoint(db: Db, response: Response, principal: AuthPrincipal):
+    response.headers["Cache-Control"] = "no-store"
+    return get_glossary_overview(db, principal)
+
+
+@app.post("/v1/glossary/entries")
+def upsert_glossary_endpoint(
+    body: GlossaryUpsertRequest,
+    db: Db,
+    response: Response,
+    principal: AuthPrincipal,
+):
+    response.headers["Cache-Control"] = "no-store"
+    return upsert_glossary_entries(
+        db,
+        principal,
+        scope=body.scope,
+        term=body.term,
+        aliases=body.aliases,
+        raw_text=body.raw_text,
+        replace_aliases=body.replace_aliases,
+        previous_term_key=body.previous_term_key,
+    )
+
+
+@app.delete("/v1/glossary/entries")
+def delete_glossary_endpoint(
+    db: Db,
+    response: Response,
+    principal: AuthPrincipal,
+    term_key: Annotated[str, Query(min_length=1, max_length=120)],
+    scope: GlossaryScopeInput = "auto",
+):
+    response.headers["Cache-Control"] = "no-store"
+    return delete_glossary_entry(db, principal, term_key=term_key, scope=scope)
 
 
 @app.get("/health/live")
