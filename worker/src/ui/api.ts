@@ -451,17 +451,19 @@ export type UiNavView = 'meetings' | 'calendar' | 'mcp' | 'system';
 export function readNavStateFromHash(): {
   view: UiNavView;
   recordingId: string | null;
+  keyframeId: string | null;
 } {
   if (typeof window === 'undefined') {
-    return { view: 'meetings', recordingId: null };
+    return { view: 'meetings', recordingId: null, keyframeId: null };
   }
   const raw = window.location.hash.replace(/^#/, '');
   if (!raw || raw.includes('token=')) {
-    return { view: 'meetings', recordingId: null };
+    return { view: 'meetings', recordingId: null, keyframeId: null };
   }
   const params = new URLSearchParams(raw);
   const rawView = params.get('view');
   const id = params.get('id') || params.get('recording');
+  const kf = params.get('keyframe');
   const view: UiNavView =
     rawView === 'calendar' || rawView === 'mcp' || rawView === 'system'
       ? rawView
@@ -469,6 +471,7 @@ export function readNavStateFromHash(): {
   return {
     view,
     recordingId: id && id.trim() ? id.trim() : null,
+    keyframeId: kf && kf.trim() ? kf.trim() : null,
   };
 }
 

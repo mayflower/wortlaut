@@ -710,6 +710,8 @@ def test_rejoin_timeline_exports_access_controls_optout_retention_and_mcp(
     assert (
         f"> **[00:12] Screen share (Dr. Clara Diagramm):** "
         f"[https://wortlaut.example.org/ui#view=meetings&id={rec_id}]"
+        f"(https://wortlaut.example.org/ui#view=meetings&id={rec_id}&keyframe={kf1_id})"
+        f" _(Folie 1/2)_"
     ) in md_text
     assert "token=" not in md_text
     assert "![Screen" not in md_text
@@ -1013,3 +1015,99 @@ def test_deferred_delete_resilience_and_silent_share_quality(
             select(RecordingKeyframe).where(RecordingKeyframe.recording_id == rec_id)
         ).all()
         assert all(r.deleted_at is not None and r.object_key == "" for r in rows)
+
+
+def test_desktop_pip_face_anonymization_before_s3_persistence(client, database, storage):
+    import numpy as np
+
+    from wortlaut.keyframe_privacy import _decode_png_8bit, _encode_png_8bit, detect_faces_rgb
+
+    h, w = 360, 640
+    img = np.full((h, w, 3), 246, dtype=np.uint8)
+    img[40:300:22, 40:420] = 60
+    img[230:345, 450:625] = [32, 33, 36]
+    yy, xx = np.ogrid[:h, :w]
+    cx, cy, rx, ry = 538.0, 286.0, 26.0, 34.0
+    r2 = ((xx - cx) / rx) ** 2 + ((yy - cy) / ry) ** 2
+    hair = (((xx - cx) / (rx * 1.12)) ** 2 + ((yy - (cy - 10)) / (ry * 1.05)) ** 2) <= 1.0
+    img[hair] = [38, 28, 22]
+    shoulders = (np.abs(xx - cx) < 46) & (yy >= 316) & (yy < 345)
+    img[shoulders] = [55, 85, 130]
+    neck = (np.abs(xx - cx) < 12) & (yy >= 308) & (yy < 324)
+    img[neck] = [198, 152, 126]
+    skin_mask = r2 <= 1.0
+    nz = np.sqrt(np.clip(1.0 - r2, 0.0, 1.0))
+    shade = 0.68 + 0.34 * nz - 0.08 * ((xx - cx) / rx)
+    for c, base in enumerate((228, 178, 150)):
+        img[:, :, c] = np.where(skin_mask, np.clip(base * shade, 0, 255), img[:, :, c]).astype(
+            np.uint8
+        )
+    for sgn in (-1, 1):
+        ex = cx + sgn * 10.5
+        brow = (((xx - ex) / 6.5) ** 2 + ((yy - (cy - 10.5)) / 1.8) ** 2) <= 1.0
+        img[brow] = [48, 34, 26]
+        sclera = (((xx - ex) / 5.2) ** 2 + ((yy - (cy - 5.5)) / 2.6) ** 2) <= 1.0
+        img[sclera] = [242, 240, 238]
+        iris = (((xx - ex) / 2.4) ** 2 + ((yy - (cy - 5.5)) / 2.4) ** 2) <= 1.0
+        img[iris] = [32, 26, 22]
+    nose_shadow = (np.abs(xx - cx) <= 3.5) & (yy >= cy - 4) & (yy <= cy + 7)
+    img[nose_shadow] = (img[nose_shadow].astype(np.float32) * 0.88).astype(np.uint8)
+    for sgn in (-1, 1):
+        nostril = (((xx - (cx + sgn * 3.2)) / 2.0) ** 2 + ((yy - (cy + 7.5)) / 1.4) ** 2) <= 1.0
+        img[nostril] = [95, 62, 50]
+    lips = (((xx - cx) / 8.5) ** 2 + ((yy - (cy + 16.5)) / 3.2) ** 2) <= 1.0
+    img[lips] = [176, 92, 88]
+    mouth_line = (np.abs(xx - cx) <= 7.5) & (np.abs(yy - (cy + 16.5)) <= 0.8)
+    img[mouth_line] = [110, 48, 46]
+
+    assert len(detect_faces_rgb(img)) == 1
+    raw_pip_png = _encode_png_8bit(img, 2)
+    raw_pip_sha = hashlib.sha256(raw_pip_png).hexdigest()
+
+    op_hdrs = {"Authorization": "Bearer fixture-api-token"}
+    rec_id, att_id, cred = _create_claimed_attempt(client, op_hdrs)
+    worker_hdrs = {
+        "Authorization": f"Bearer {cred}",
+        "X-Worker-ID": "worker-kf-1",
+        "Content-Type": "image/png",
+    }
+    meta = {
+        "sequence": 0,
+        "provider_source_id": "rtc:slides:desktop",
+        "participant_id": "spaces/meet/devices/vidya",
+        "participant_name": "Vidya Presenter",
+        "captured_at": datetime.now(UTC).isoformat(),
+        "width": w,
+        "height": h,
+        "sha256": raw_pip_sha,
+    }
+    up = client.post(
+        f"/v1/attempts/{att_id}/keyframes",
+        headers={**worker_hdrs, "X-Wortlaut-Keyframe": _encode_meta_header(meta)},
+        content=raw_pip_png,
+    )
+    assert up.status_code == 201
+    kf_id = up.json()["id"]
+
+    # Stored S3 object has face blurred out before persistence; document area is untouched
+    s3_png = storage.read(f"keyframes/{rec_id}/{att_id}/0000.png")
+    assert s3_png != raw_pip_png
+    decoded_s3 = _decode_png_8bit(s3_png)
+    assert decoded_s3 is not None
+    redacted_arr, _ = decoded_s3
+    assert detect_faces_rgb(redacted_arr) == []
+    assert np.array_equal(redacted_arr[:, :420, :], img[:, :420, :])
+
+    # Serving endpoint verifies redacted SHA-256 and returns the anonymized PNG
+    served = client.get(f"/v1/recordings/{rec_id}/keyframes/{kf_id}.png", headers=op_hdrs)
+    assert served.status_code == 200
+    assert served.content == s3_png
+
+    # Idempotent worker retry with original PNG & SHA-256 succeeds (200 duplicate=True)
+    retry = client.post(
+        f"/v1/attempts/{att_id}/keyframes",
+        headers={**worker_hdrs, "X-Wortlaut-Keyframe": _encode_meta_header(meta)},
+        content=raw_pip_png,
+    )
+    assert retry.status_code == 200
+    assert retry.json()["duplicate"] is True

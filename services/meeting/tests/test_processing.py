@@ -1166,3 +1166,96 @@ def test_timeline_coalesces_same_speaker_chunks_when_participant_name_resolves(
         assert runs[0].start == 0 and runs[0].end == 64000
         assert runs[0].binding["speaker_id"] == "spaces/room/devices/192"
         assert runs[0].binding["participant_name"] == "Johann Peter Hartmann"
+
+
+def test_floor_holding_backchannels_and_multiplexed_sources_summary():
+    from wortlaut.exports import (
+        _build_sources_summary,
+        _coalesce_protocol_segments,
+        _format_markdown_source_ids,
+    )
+
+    # Listener's isolated <=1.25s backchannel in a pause inside an >=8s non-question monologue
+    # bridges the presenter's paragraph cleanly, while preserving real questions.
+    monologue_with_pause_backchannel = [
+        {
+            "id": "m-part1",
+            "stream_id": "st-vidya",
+            "speaker_id": "spk-vidya",
+            "speaker_label": "Vidya Munde-Müller",
+            "start": 100.0,
+            "end": 106.0,
+            "text": "Hier im Word-Dokument haben wir die Datenschutzanforderungen",
+            "words": [],
+        },
+        {
+            "id": "m-bc",
+            "stream_id": "st-nico",
+            "speaker_id": "spk-nico",
+            "speaker_label": "Nico Briegel",
+            "start": 106.4,
+            "end": 107.1,
+            "text": "Mhm.",
+            "words": [],
+        },
+        {
+            "id": "m-part2",
+            "stream_id": "st-vidya",
+            "speaker_id": "spk-vidya",
+            "speaker_label": "Vidya Munde-Müller",
+            "start": 107.5,
+            "end": 114.0,
+            "text": "für den PoC im Detail zusammengefasst.",
+            "words": [],
+        },
+    ]
+    merged = _coalesce_protocol_segments(monologue_with_pause_backchannel)
+    assert len(merged) == 1
+    assert merged[0]["speaker_label"] == "Vidya Munde-Müller"
+    assert (
+        merged[0]["text"]
+        == "Hier im Word-Dokument haben wir die Datenschutzanforderungen "
+        "für den PoC im Detail zusammengefasst."
+    )
+
+    # Multiplexed SFU receivers upgrade sample_text past 1-word interjections and list all slots.
+    rec_id = "c126f396-4035-40de-bbe5-a3dae8e3889f"
+    segs = [
+        {
+            "provider_source_id": f"google_meet:{rec_id}:receiver:3",
+            "participant_id": "p-nico",
+            "speaker_id": "p-nico",
+            "participant_name": "Nico Briegel",
+            "speaker_label": "Nico Briegel",
+            "start": 10.0,
+            "end": 10.6,
+            "text": "ja",
+        },
+        {
+            "provider_source_id": f"google_meet:{rec_id}:receiver:1",
+            "participant_id": "p-nico",
+            "speaker_id": "p-nico",
+            "participant_name": "Nico Briegel",
+            "speaker_label": "Nico Briegel",
+            "start": 45.0,
+            "end": 54.0,
+            "text": "Aus Komm.ONE-Sicht ist uns wichtig, dass kein Kamerabild gespeichert wird.",
+        },
+    ]
+    sources = _build_sources_summary(
+        attempts=[],
+        streams=[],
+        qualities=[],
+        segments=segs,
+        participant_names={"p-nico": "Nico Briegel"},
+    )
+    assert len(sources) == 1
+    assert (
+        sources[0]["sample_text"]
+        == "Aus Komm.ONE-Sicht ist uns wichtig, dass kein Kamerabild gespeichert wird."
+    )
+    assert sources[0]["provider_source_ids"] == [
+        f"google_meet:{rec_id}:receiver:3",
+        f"google_meet:{rec_id}:receiver:1",
+    ]
+    assert _format_markdown_source_ids(sources[0], rec_id) == "receiver:3, receiver:1"

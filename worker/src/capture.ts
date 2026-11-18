@@ -246,7 +246,8 @@ export class AudioCapture {
       }
       const sample = chunker.finalSample;
       const urgentOptOutSwitch = Boolean(sink.isOptedOut?.(pendingBinding) && !sink.isOptedOut?.(currentBinding));
-      const minRebindDelta = urgentOptOutSwitch ? 1 : 16000 * 0.8;
+      const resolvingUnknown = currentBinding.attribution_unknown && !pendingBinding.attribution_unknown;
+      const minRebindDelta = urgentOptOutSwitch ? 1 : resolvingUnknown ? 1600 : 16000 * 0.8;
       if (sample <= lastBoundSample || (lastBoundSample > 0 && sample - lastBoundSample < minRebindDelta)) return;
       chunker.flush();
       currentBinding = {...pendingBinding};

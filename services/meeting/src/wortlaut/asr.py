@@ -266,6 +266,13 @@ def build_asr_context_prompt(
             ):
                 continue
             raw_names[f"override:{ov_key}"] = clean_ov
+    for idx_att, att_name in enumerate(meta.get("attendee_names") or []):
+        clean_att = " ".join(str(att_name or "").split())
+        if not clean_att:
+            continue
+        if is_speaker_opted_out(opted_out_norm, participant_name=clean_att):
+            continue
+        raw_names.setdefault(f"attendee:{idx_att}", clean_att)
 
     participant_list: list[str] = []
     seen_names: set[str] = set()
@@ -279,13 +286,27 @@ def build_asr_context_prompt(
         if len(participant_list) >= 16:
             break
 
+    from wortlaut.exports import extract_org_glossary_hints
+
+    assistant_hint = " ".join(str(settings.assistant_name or "").split())
+    builtin_hints = (
+        [assistant_hint]
+        if assistant_hint and assistant_hint.lower() != "wortlaut"
+        else []
+    )
+    org_hints = extract_org_glossary_hints(meta.get("attendee_emails"))
     glossary_terms: list[str] = []
     seen_terms: set[str] = set()
     term_replacements = meta.get("term_replacements")
     replacement_targets = (
         list(term_replacements.values()) if isinstance(term_replacements, dict) else []
     )
-    for raw_term in [*(settings.asr_glossary or []), *replacement_targets]:
+    for raw_term in [
+        *(settings.asr_glossary or []),
+        *replacement_targets,
+        *builtin_hints,
+        *org_hints,
+    ]:
         term = " ".join(str(raw_term or "").split())[:60]
         if term and term.lower() not in seen_terms and len(glossary_terms) < 40:
             seen_terms.add(term.lower())

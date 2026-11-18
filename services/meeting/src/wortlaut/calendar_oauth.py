@@ -639,6 +639,19 @@ def _parse_google_items(
                 ),
             }
         )
+        attendee_names = sorted(
+            {
+                clean_n
+                for raw_n in (
+                    org.get("displayName"),
+                    *(a.get("displayName") for a in raw_attendees if isinstance(a, dict)),
+                )
+                if isinstance(raw_n, str)
+                and (clean_n := " ".join(raw_n.split())[:80])
+                and "@" not in clean_n
+                and not is_notetaker_bot("", clean_n)
+            }
+        )
         title = " ".join(str(item.get("summary") or "").split())[:200] or None
         parsed.append(
             {
@@ -649,6 +662,7 @@ def _parse_google_items(
                 "ends_at": ends_at,
                 "organizer_email": org_email,
                 "attendee_emails": attendee_emails,
+                "attendee_names": attendee_names,
                 "is_self_organized": is_self,
                 "default_auto_record": is_self and has_confirmed_attendee,
                 "meeting_provider": meeting_provider,
@@ -732,6 +746,23 @@ def _parse_microsoft_items(
                 ),
             }
         )
+        attendee_names = sorted(
+            {
+                clean_n
+                for raw_n in (
+                    org.get("name"),
+                    *(
+                        ((a.get("emailAddress") or {}).get("name"))
+                        for a in raw_attendees
+                        if isinstance(a, dict)
+                    ),
+                )
+                if isinstance(raw_n, str)
+                and (clean_n := " ".join(raw_n.split())[:80])
+                and "@" not in clean_n
+                and not is_notetaker_bot("", clean_n)
+            }
+        )
         title = " ".join(str(item.get("subject") or "").split())[:200] or None
         parsed.append(
             {
@@ -742,6 +773,7 @@ def _parse_microsoft_items(
                 "ends_at": ends_at,
                 "organizer_email": org_email,
                 "attendee_emails": attendee_emails,
+                "attendee_names": attendee_names,
                 "is_self_organized": is_self,
                 "default_auto_record": is_self and has_confirmed_attendee,
                 "meeting_provider": meeting_provider,
@@ -752,19 +784,49 @@ def _parse_microsoft_items(
     return parsed
 
 
-def _merge_recording_attendees(recording: Recording, emails: list[str] | set[str]) -> None:
+def _merge_recording_attendees(
+    recording: Recording,
+    emails: list[str] | set[str],
+    names: list[str] | set[str] | None = None,
+) -> None:
     clean = {str(e).strip().lower() for e in emails if e and "@" in str(e)}
-    if not clean:
+    clean_names = {
+        cn
+        for n in (names or ())
+        if isinstance(n, str) and (cn := " ".join(n.split())[:80]) and "@" not in cn
+    }
+    if not clean and not clean_names:
         return
     meta = dict(recording.protocol_meta or {})
-    existing = {
-        str(e).strip().lower()
-        for e in (meta.get("attendee_emails") or [])
-        if e and "@" in str(e)
-    }
-    merged = sorted(existing | clean)
-    if merged != meta.get("attendee_emails"):
-        meta["attendee_emails"] = merged
+    changed = False
+    if clean:
+        existing = {
+            str(e).strip().lower()
+            for e in (meta.get("attendee_emails") or [])
+            if e and "@" in str(e)
+        }
+        merged = sorted(existing | clean)
+        if merged != meta.get("attendee_emails"):
+            meta["attendee_emails"] = merged
+            changed = True
+    if clean_names:
+        opted_out_low = {
+            str(x).strip().lower()
+            for x in (meta.get("opted_out_speakers") or [])
+            if str(x).strip()
+        }
+        existing_names = {
+            " ".join(str(n).split())[:80]
+            for n in (meta.get("attendee_names") or [])
+            if isinstance(n, str) and " ".join(str(n).split())
+        }
+        merged_names = sorted(
+            n for n in (existing_names | clean_names) if n.lower() not in opted_out_low
+        )[:32]
+        if merged_names != meta.get("attendee_names"):
+            meta["attendee_names"] = merged_names
+            changed = True
+    if changed:
         recording.protocol_meta = meta
 
 
@@ -799,6 +861,7 @@ def _reconcile_synced_event_recording(
     ev: CalendarSyncedEvent,
     now: datetime,
     attendee_emails: list[str] | None = None,
+    attendee_names: list[str] | None = None,
 ) -> Recording | None:
     recording = db.get(Recording, ev.recording_id) if ev.recording_id else None
     if recording is not None and recording.metadata_deleted_at is not None:
@@ -806,6 +869,7 @@ def _reconcile_synced_event_recording(
         ev.recording_id = None
 
     all_emails = set(attendee_emails or [])
+    all_names = set(attendee_names or [])
     if ev.owner_email:
         all_emails.add(ev.owner_email.strip().lower())
     if ev.organizer_email:
@@ -831,7 +895,7 @@ def _reconcile_synced_event_recording(
 
     if ev.ends_at <= now:
         if recording is not None:
-            _merge_recording_attendees(recording, all_emails)
+            _merge_recording_attendees(recording, all_emails, all_names)
         return recording
 
     canonical = _find_canonical_meeting_recording(db, ev)
@@ -844,7 +908,8 @@ def _reconcile_synced_event_recording(
         and recording.cancelled_at is None
     ):
         prev_emails = list((recording.protocol_meta or {}).get("attendee_emails") or [])
-        _merge_recording_attendees(canonical, prev_emails)
+        prev_names = list((recording.protocol_meta or {}).get("attendee_names") or [])
+        _merge_recording_attendees(canonical, prev_emails, prev_names)
         ev.recording_id = canonical.id
         other_refs = db.scalar(
             select(CalendarSyncedEvent.id)
@@ -877,6 +942,11 @@ def _reconcile_synced_event_recording(
             if recording is None:
                 if capacity_reached(db):
                     return None
+                init_meta: dict = {}
+                if all_emails:
+                    init_meta["attendee_emails"] = sorted(all_emails)
+                if all_names:
+                    init_meta["attendee_names"] = sorted(all_names)[:32]
                 recording = Recording(
                     idempotency_key=idemp_key,
                     request_digest=idemp_hash,
@@ -887,13 +957,13 @@ def _reconcile_synced_event_recording(
                     title=ev.title,
                     starts_at=ev.starts_at,
                     ends_at=ev.ends_at,
-                    protocol_meta={"attendee_emails": sorted(all_emails)} if all_emails else {},
+                    protocol_meta=init_meta,
                 )
                 db.add(recording)
                 db.flush()
         ev.recording_id = recording.id
 
-    _merge_recording_attendees(recording, all_emails)
+    _merge_recording_attendees(recording, all_emails, all_names)
 
     if (
         (
@@ -1009,8 +1079,15 @@ def apply_synced_events(
             )
             ev.updated_at = now
         event_attendees = item.get("attendee_emails") or []
-        _reconcile_synced_event_recording(db, ev, now, attendee_emails=event_attendees)
-        if event_attendees:
+        event_attendee_names = item.get("attendee_names") or []
+        _reconcile_synced_event_recording(
+            db,
+            ev,
+            now,
+            attendee_emails=event_attendees,
+            attendee_names=event_attendee_names,
+        )
+        if event_attendees or event_attendee_names:
             matching_recs = db.scalars(
                 select(Recording)
                 .where(
@@ -1023,7 +1100,7 @@ def apply_synced_events(
                 .with_for_update(key_share=True)
             ).all()
             for mrec in matching_recs:
-                _merge_recording_attendees(mrec, event_attendees)
+                _merge_recording_attendees(mrec, event_attendees, event_attendee_names)
         synced.append(ev)
 
     # Mark previously synced future events in this window that disappeared as cancelled

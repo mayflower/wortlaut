@@ -93,6 +93,7 @@ export interface TranscriptTabProps {
   termReplacements?: Record<string, string>;
   segments: TranscriptSegment[];
   keyframes?: RecordingKeyframe[];
+  focusKeyframeId?: string | null;
   pauseWindows?: PauseWindow[];
   sources: SourceSummary[];
   selectedSourceFilter: string;
@@ -282,6 +283,7 @@ export function TranscriptTab({
   termReplacements = {},
   segments,
   keyframes = [],
+  focusKeyframeId = null,
   pauseWindows = [],
   sources,
   selectedSourceFilter,
@@ -413,6 +415,20 @@ export function TranscriptTab({
     },
     [token]
   );
+
+  useEffect(() => {
+    if (!focusKeyframeId || keyframes.length === 0) return;
+    const target = keyframes.find((k) => k.id === focusKeyframeId);
+    if (!target) return;
+    requestKeyframeImage(target);
+    const frame = window.requestAnimationFrame(() => {
+      const el = document.getElementById(`keyframe-${focusKeyframeId}`);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [focusKeyframeId, keyframes, requestKeyframeImage]);
 
   const handleConfirmDeleteKeyframe = async () => {
     if (!confirmDeleteKeyframe || !token) return;

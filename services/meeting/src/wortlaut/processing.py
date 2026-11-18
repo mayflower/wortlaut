@@ -44,6 +44,7 @@ OVERLAP = 3200  # 200 ms, words assigned by midpoint in the disjoint core.
 SILENCE_CHECKPOINT = RATE * 10
 DRAIN_SECONDS = 20
 MAX_CHUNK = RATE * 5
+ONSET_BIND_MAX_SAMPLES = RATE
 SCAN_WINDOW = SILENCE_CHECKPOINT + MAX_SEGMENT + OVERLAP
 MAX_SCAN_STEPS = 8
 if not (POST_ROLL <= SOFT_SILENCE <= SILENCE):
@@ -328,12 +329,22 @@ def timeline(db: Session, stream: AudioStream, *, incremental: bool = False):
                     or prev_binding.get("participant_name") == binding.get("participant_name")
                 )
             )
+            can_adopt_onset = (
+                prev_binding is not None
+                and bool(prev_binding.get("attribution_unknown"))
+                and not binding.get("attribution_unknown")
+                and bool(binding.get("participant_id") or binding.get("speaker_id"))
+                and prev_binding.get("provider_source_id") == binding.get("provider_source_id")
+                and prev_binding.get("source_kind") == binding.get("source_kind")
+                and (runs[-1].end - runs[-1].start) <= ONSET_BIND_MAX_SAMPLES
+                and (not incremental or stream.scan_sample <= runs[-1].start)
+            )
             if (
                 runs
                 and runs[-1].end == start
-                and (prev_binding == binding or same_verified_speaker)
+                and (prev_binding == binding or same_verified_speaker or can_adopt_onset)
             ):
-                if (
+                if can_adopt_onset or (
                     prev_binding is not None
                     and not prev_binding.get("participant_name")
                     and binding.get("participant_name")
@@ -669,16 +680,76 @@ def purge_opted_out_transcript_segments(
             select(AudioStream).where(AudioStream.attempt_id.in_([a.id for a in attempts]))
         ).all()
     )
-    participant_names, bind_controls = collect_stream_participant_names(db, streams)
+    participant_names, bind_controls = collect_stream_participant_names(
+        db, streams, order_binds=True
+    )
     _, opted_out_norm = collect_opted_out_speakers(recording, attempts, participant_names)
-    if not opted_out_norm or not streams:
+    if not opted_out_norm:
+        return 0
+    if isinstance(recording.protocol_meta, dict) and recording.protocol_meta.get("attendee_names"):
+        kept_att_names = [
+            n
+            for n in (recording.protocol_meta.get("attendee_names") or [])
+            if not is_speaker_opted_out(opted_out_norm, participant_name=str(n))
+        ]
+        if kept_att_names != recording.protocol_meta.get("attendee_names"):
+            next_meta = dict(recording.protocol_meta)
+            next_meta["attendee_names"] = kept_att_names
+            recording.protocol_meta = next_meta
+    if not streams:
         return 0
 
     stream_ids = [s.id for s in streams]
     unambiguous_by_stream: dict[tuple[str, str], tuple[str, str | None]] = {}
+    onset_windows_by_stream: dict[int, list[tuple[int, int, str, str | None]]] = {}
     for s in streams:
         key = (str(s.stream_id), str(s.epoch))
         observed: set[tuple[str, str | None]] = set()
+        s_binds = [c for c in bind_controls if c.stream_id == s.id]
+        intervals: list[tuple[int, int | None, dict]] = []
+        first_s = (
+            (
+                int(s_binds[0].start_sample)
+                if s_binds[0].start_sample is not None
+                else int((s_binds[0].contract or {}).get("start_sample") or 0)
+            )
+            if s_binds
+            else None
+        )
+        if first_s is None or first_s > 0:
+            intervals.append((0, first_s, s.contract))
+        for idx, ctrl in enumerate(s_binds):
+            cur_s = (
+                int(ctrl.start_sample)
+                if ctrl.start_sample is not None
+                else int((ctrl.contract or {}).get("start_sample") or 0)
+            )
+            nxt_s = (
+                (
+                    int(s_binds[idx + 1].start_sample)
+                    if s_binds[idx + 1].start_sample is not None
+                    else int((s_binds[idx + 1].contract or {}).get("start_sample") or 0)
+                )
+                if idx + 1 < len(s_binds)
+                else None
+            )
+            intervals.append((cur_s, nxt_s, ctrl.contract))
+        onsets: list[tuple[int, int, str, str | None]] = []
+        for idx in range(len(intervals) - 1):
+            iv_start, iv_end, cdict = intervals[idx]
+            _, _, nxt_cdict = intervals[idx + 1]
+            if (
+                iv_end is not None
+                and cdict.get("attribution_unknown")
+                and not nxt_cdict.get("attribution_unknown")
+                and 0 < (iv_end - iv_start) <= ONSET_BIND_MAX_SAMPLES
+            ):
+                npid = nxt_cdict.get("participant_id") or nxt_cdict.get("speaker_id")
+                if npid:
+                    npname = nxt_cdict.get("participant_name") or participant_names.get(str(npid))
+                    onsets.append((iv_start, iv_end, str(npid), npname))
+        if onsets and s.id is not None:
+            onset_windows_by_stream[s.id] = onsets
         if not s.contract.get("attribution_unknown"):
             pid = s.contract.get("participant_id") or s.contract.get("speaker_id")
             if pid:
@@ -696,20 +767,31 @@ def purge_opted_out_transcript_segments(
             unambiguous_by_stream[key] = next(iter(observed))
 
     deleted = 0
-    seg_rows = list(
-        db.scalars(
-            select(TranscriptSegment)
+    seg_pairs = list(
+        db.execute(
+            select(TranscriptSegment, AsrJob)
             .join(AsrJob, AsrJob.id == TranscriptSegment.id)
             .where(AsrJob.stream_id.in_(stream_ids))
         ).all()
     )
-    for seg_row in seg_rows:
+    for seg_row, job_row in seg_pairs:
         res = seg_row.result if isinstance(seg_row.result, dict) else {}
         pid = res.get("participant_id") or res.get("speaker_id")
         pname = res.get("participant_name") or (participant_names.get(str(pid)) if pid else None)
         skey = (str(res.get("stream_id") or ""), str(res.get("epoch") or ""))
         if not pid and skey in unambiguous_by_stream:
             pid, pname = unambiguous_by_stream[skey]
+        if not pid and job_row.stream_id in onset_windows_by_stream:
+            matched_onset = next(
+                (
+                    w
+                    for w in onset_windows_by_stream[job_row.stream_id]
+                    if job_row.core_start >= w[0] - 800 and job_row.core_end <= w[1] + 800
+                ),
+                None,
+            )
+            if matched_onset is not None:
+                pid, pname = matched_onset[2], matched_onset[3]
         spk = res.get("speaker_id")
         psid = res.get("provider_source_id")
         if is_speaker_opted_out(
@@ -906,6 +988,13 @@ def segment_stream(db: Session, stream: AudioStream):
         if run.binding is None:
             stream.scan_sample = run.end
             continue
+        if (
+            not terminal
+            and index == len(runs) - 1
+            and bool(run.binding.get("attribution_unknown"))
+            and (run.end - run.start) <= ONSET_BIND_MAX_SAMPLES
+        ):
+            return
         if stream_binding_opted_out(db, stream, run.binding):
             stream.scan_sample = run.end
             continue

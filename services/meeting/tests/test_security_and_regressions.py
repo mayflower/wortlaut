@@ -740,3 +740,361 @@ def test_docker_runtime_recovers_running_worker_after_process_restart(
     detail = client.get(f"/v1/recordings/{rec_id}", headers=API).json()
     assert detail["active_attempt_id"] == str(first_attempt_id)
     assert detail["participation_reason"] is None
+
+
+def test_csrc_onset_binding_and_optout_purge_and_calendar_attendee_context(
+    client, database, storage
+):
+    from wortlaut.asr import build_asr_context_prompt
+    from wortlaut.calendar_oauth import _merge_recording_attendees
+    from wortlaut.models import (
+        AsrJob,
+        Attempt,
+        AudioChunk,
+        AudioControl,
+        AudioStream,
+        Recording,
+        TranscriptSegment,
+    )
+    from wortlaut.processing import purge_opted_out_transcript_segments
+
+    now = datetime.now(UTC)
+    origin_iso = (now - timedelta(minutes=8)).isoformat()
+    rec_id = uuid.uuid4()
+    att_id = uuid.uuid4()
+    stream_pk = uuid.uuid4()
+    stream_ext = uuid.uuid4()
+    epoch = uuid.uuid4()
+    prov_src = f"google_meet:{rec_id}:receiver:3"
+
+    init_contract = {
+        "source_kind": "speaker",
+        "provider_source_id": prov_src,
+        "speaker_id": None,
+        "participant_id": None,
+        "participant_name": None,
+        "attribution_unknown": True,
+        "session_utc_origin": origin_iso,
+        "monotonic_origin_ms": 0,
+        "session_monotonic_origin_ms": 0,
+    }
+    pcm_bytes = b"\x18\x00" * (16000 * 10)  # 10.0 s of 16 kHz PCM
+    pcm_key = f"audio/{rec_id}/{att_id}/{stream_ext}/000000.pcm"
+    pcm_sha = storage.put(pcm_key, pcm_bytes, init_contract)
+
+    with Session(database) as db:
+        rec = Recording(
+            id=rec_id,
+            idempotency_key="csrc-onset-test",
+            request_digest="d-onset",
+            meeting_url="https://meet.google.com/csrc-onset-demo",
+            provider="google_meet",
+            title="Demo Webex Transkription",
+            starts_at=now - timedelta(minutes=8),
+            ends_at=now - timedelta(minutes=2),
+            participation="ended",
+            processing="completed",
+            protocol_meta={},
+        )
+        _merge_recording_attendees(
+            rec,
+            ["nico.briegel@komm.one", "vidya@example.org"],
+            ["Nico Briegel", "Vidya Munde-Müller", "Eve OptedOut"],
+        )
+        att = Attempt(
+            id=att_id,
+            recording_id=rec_id,
+            credential_hash="unused",
+            credential_expires_at=now,
+            ended_at=now - timedelta(minutes=2),
+            end_reason="normal",
+        )
+        stream = AudioStream(
+            id=stream_pk,
+            attempt_id=att_id,
+            stream_id=stream_ext,
+            epoch=epoch,
+            final_sample=16000 * 10,
+            last_sequence=0,
+            scan_sample=16000 * 10,
+            scan_complete=True,
+            contract=init_contract,
+        )
+        db.add(rec)
+        db.flush()
+        db.add(att)
+        db.flush()
+        db.add(stream)
+        db.flush()
+
+        # 0.0..0.801s (0..12818): CSRC onset unbound -> 12818: bind Volkmar
+        # 5.0s (80000): unbind -> 5.801s (92816): bind Eve (who later opts out!)
+        db.add_all(
+            [
+                AudioControl(
+                    id=f"{att_id}/{stream_ext}/{epoch}/12818/bind",
+                    stream_id=stream_pk,
+                    kind="bind",
+                    sequence=12818,
+                    start_sample=12818,
+                    contract={
+                        "type": "bind",
+                        "start_sample": 12818,
+                        "source_kind": "speaker",
+                        "provider_source_id": prov_src,
+                        "speaker_id": "volkmar-id",
+                        "participant_id": "volkmar-id",
+                        "participant_name": "Volkmar Erben",
+                        "attribution_unknown": False,
+                    },
+                ),
+                AudioControl(
+                    id=f"{att_id}/{stream_ext}/{epoch}/80000/bind",
+                    stream_id=stream_pk,
+                    kind="bind",
+                    sequence=80000,
+                    start_sample=80000,
+                    contract={
+                        "type": "bind",
+                        "start_sample": 80000,
+                        "source_kind": "speaker",
+                        "provider_source_id": prov_src,
+                        "speaker_id": None,
+                        "participant_id": None,
+                        "participant_name": None,
+                        "attribution_unknown": True,
+                    },
+                ),
+                AudioControl(
+                    id=f"{att_id}/{stream_ext}/{epoch}/92816/bind",
+                    stream_id=stream_pk,
+                    kind="bind",
+                    sequence=92816,
+                    start_sample=92816,
+                    contract={
+                        "type": "bind",
+                        "start_sample": 92816,
+                        "source_kind": "speaker",
+                        "provider_source_id": prov_src,
+                        "speaker_id": "eve-id",
+                        "participant_id": "eve-id",
+                        "participant_name": "Eve OptedOut",
+                        "attribution_unknown": False,
+                    },
+                ),
+                AudioChunk(
+                    id=f"{stream_pk}:0",
+                    stream_id=stream_pk,
+                    sequence=0,
+                    start_sample=0,
+                    sample_count=16000 * 10,
+                    checksum=pcm_sha,
+                    contract=init_contract,
+                    object_key=pcm_key,
+                    object_size=len(pcm_bytes),
+                ),
+            ]
+        )
+
+        j_v_onset = AsrJob(
+            id="a" * 64,
+            stream_id=stream_pk,
+            start_sample=0,
+            end_sample=12818,
+            core_start=0,
+            core_end=12818,
+            binding=init_contract,
+            status="completed",
+        )
+        j_v_cont = AsrJob(
+            id="b" * 64,
+            stream_id=stream_pk,
+            start_sample=12818,
+            end_sample=64000,
+            core_start=12818,
+            core_end=64000,
+            binding={
+                "source_kind": "speaker",
+                "provider_source_id": prov_src,
+                "speaker_id": "volkmar-id",
+                "participant_id": "volkmar-id",
+                "participant_name": "Volkmar Erben",
+                "attribution_unknown": False,
+            },
+            status="completed",
+        )
+        j_e_onset = AsrJob(
+            id="c" * 64,
+            stream_id=stream_pk,
+            start_sample=80000,
+            end_sample=92816,
+            core_start=80000,
+            core_end=92816,
+            binding=init_contract,
+            status="completed",
+        )
+        j_other1 = AsrJob(
+            id="d" * 64,
+            stream_id=stream_pk,
+            start_sample=64000,
+            end_sample=72000,
+            core_start=64000,
+            core_end=72000,
+            binding=j_v_cont.binding,
+            status="completed",
+        )
+        j_other2 = AsrJob(
+            id="e" * 64,
+            stream_id=stream_pk,
+            start_sample=72000,
+            end_sample=78000,
+            core_start=72000,
+            core_end=78000,
+            binding=j_v_cont.binding,
+            status="completed",
+        )
+        db.add_all([j_v_onset, j_v_cont, j_e_onset, j_other1, j_other2])
+        db.flush()
+        db.add_all(
+            [
+                TranscriptSegment(
+                    id=j_v_onset.id,
+                    result={
+                        "id": j_v_onset.id,
+                        "stream_id": str(stream_ext),
+                        "epoch": str(epoch),
+                        "session_utc_origin": origin_iso,
+                        "source_kind": "speaker",
+                        "provider_source_id": prov_src,
+                        "participant_id": None,
+                        "participant_name": None,
+                        "speaker_id": None,
+                        "attribution_unknown": True,
+                        "start": 0.12,
+                        "end": 0.80,
+                        "text": "Na, wollte ich.",
+                        "words": [],
+                    },
+                ),
+                TranscriptSegment(
+                    id=j_v_cont.id,
+                    result={
+                        "id": j_v_cont.id,
+                        "stream_id": str(stream_ext),
+                        "epoch": str(epoch),
+                        "session_utc_origin": origin_iso,
+                        "source_kind": "speaker",
+                        "provider_source_id": prov_src,
+                        "participant_id": "volkmar-id",
+                        "participant_name": "Volkmar Erben",
+                        "speaker_id": "volkmar-id",
+                        "attribution_unknown": False,
+                        "start": 0.81,
+                        "end": 3.60,
+                        "text": "nur sagen, die haben sich intern zusammengesetzt.",
+                        "words": [],
+                    },
+                ),
+                TranscriptSegment(
+                    id=j_other1.id,
+                    result={
+                        "id": j_other1.id,
+                        "stream_id": str(stream_ext),
+                        "epoch": str(epoch),
+                        "session_utc_origin": origin_iso,
+                        "source_kind": "speaker",
+                        "provider_source_id": prov_src,
+                        "participant_id": "volkmar-id",
+                        "participant_name": "Volkmar Erben",
+                        "speaker_id": "volkmar-id",
+                        "attribution_unknown": False,
+                        "start": 4.0,
+                        "end": 4.4,
+                        "text": "Genau.",
+                        "words": [],
+                    },
+                ),
+                TranscriptSegment(
+                    id=j_other2.id,
+                    result={
+                        "id": j_other2.id,
+                        "stream_id": str(stream_ext),
+                        "epoch": str(epoch),
+                        "session_utc_origin": origin_iso,
+                        "source_kind": "speaker",
+                        "provider_source_id": prov_src,
+                        "participant_id": "volkmar-id",
+                        "participant_name": "Volkmar Erben",
+                        "speaker_id": "volkmar-id",
+                        "attribution_unknown": False,
+                        "start": 4.5,
+                        "end": 4.8,
+                        "text": "Danke.",
+                        "words": [],
+                    },
+                ),
+                TranscriptSegment(
+                    id=j_e_onset.id,
+                    result={
+                        "id": j_e_onset.id,
+                        "stream_id": str(stream_ext),
+                        "epoch": str(epoch),
+                        "session_utc_origin": origin_iso,
+                        "source_kind": "speaker",
+                        "provider_source_id": prov_src,
+                        "participant_id": None,
+                        "participant_name": None,
+                        "speaker_id": None,
+                        "attribution_unknown": True,
+                        "start": 5.05,
+                        "end": 5.80,
+                        "text": "Aber ich möchte nicht.",
+                        "words": [],
+                    },
+                ),
+            ]
+        )
+        db.commit()
+
+        # Eve opts out -> <=1.0s CSRC onset segment is purged + removed from context
+        rec_db = db.get(Recording, rec_id)
+        rec_db.protocol_meta = {
+            **dict(rec_db.protocol_meta or {}),
+            "opted_out_speakers": ["eve-id"],
+        }
+        purged = purge_opted_out_transcript_segments(db, rec_db, [att])
+        assert purged == 1
+        assert db.get(TranscriptSegment, j_e_onset.id) is None
+
+        ctx_prompt = build_asr_context_prompt(db, j_v_cont, stream)
+        assert ctx_prompt is not None
+        assert "Nico Briegel" in ctx_prompt
+        assert "Vidya Munde-Müller" in ctx_prompt
+        assert "Komm.ONE" in ctx_prompt
+        assert "Eve OptedOut" not in ctx_prompt
+        db.commit()
+
+    tx = client.get(f"/v1/recordings/{rec_id}/transcript", headers=API).json()
+    assert tx["quality"]["attribution_unknown"] is False
+    assert len(tx["segments"]) == 1
+    assert tx["segments"][0]["speaker_label"] == "Volkmar Erben"
+    assert (
+        tx["segments"][0]["text"]
+        == "Na, wollte ich nur sagen, die haben sich intern zusammengesetzt. Genau. Danke."
+    )
+
+    # Audio snippet across Volkmar's 0.801s onset succeeds; Eve's onset is 404 blocked
+    v_wav = client.get(
+        f"/v1/recordings/{rec_id}/audio-snippet",
+        params={"stream_id": str(stream_ext), "start": 0.12, "end": 3.6},
+        headers=API,
+    )
+    assert v_wav.status_code == 200
+    assert v_wav.content[:4] == b"RIFF"
+
+    e_wav = client.get(
+        f"/v1/recordings/{rec_id}/audio-snippet",
+        params={"stream_id": str(stream_ext), "start": 5.05, "end": 5.80},
+        headers=API,
+    )
+    assert e_wav.status_code == 404

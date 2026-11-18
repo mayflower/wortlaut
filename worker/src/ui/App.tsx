@@ -71,6 +71,9 @@ export function App() {
   const [selectedId, setSelectedId] = useState<string | null>(
     initialNav.recordingId
   );
+  const [focusKeyframeId, setFocusKeyframeId] = useState<string | null>(
+    initialNav.keyframeId
+  );
   const [newRecordingOpen, setNewRecordingOpen] = useState<boolean>(false);
   const [newRecordingTab, setNewRecordingTab] = useState<'link' | 'ics'>(
     'link'
@@ -162,6 +165,7 @@ export function App() {
       const next = readNavStateFromHash();
       setActiveNav(next.view);
       setSelectedId(next.recordingId);
+      setFocusKeyframeId(next.keyframeId);
     };
     window.addEventListener('popstate', onUrlChange);
     window.addEventListener('hashchange', onUrlChange);
@@ -772,15 +776,23 @@ export function App() {
             authMode={authMode}
             recording={detailQuery.data || null}
             transcript={transcriptQuery.data || null}
+            focusKeyframeId={focusKeyframeId}
             isLoading={detailQuery.isLoading || transcriptQuery.isLoading}
             loadError={detailLoadError}
             onRefresh={handleManualRefresh}
             onBackToOverview={() => {
               setSelectedId(null);
+              setFocusKeyframeId(null);
               setActiveNav('meetings');
+            }}
+            onOpenCalendar={() => {
+              setSelectedId(null);
+              setFocusKeyframeId(null);
+              setActiveNav('calendar');
             }}
             onDeleted={() => {
               setSelectedId(null);
+              setFocusKeyframeId(null);
               handleManualRefresh();
             }}
           />

@@ -26,6 +26,7 @@ from wortlaut.models import (
 )
 from wortlaut.processing import (
     MAX_CHUNK,
+    ONSET_BIND_MAX_SAMPLES,
     RATE,
     collect_opted_out_speakers,
     collect_stream_participant_names,
@@ -123,6 +124,7 @@ def wall_clock_time_de(origin_iso: str | None, offset_seconds: float) -> str:
 # for sub-300 ms fragments on shared SFU streams.
 MIN_EXPORT_SEGMENT_CONFIDENCE = 0.25
 MIN_SHORT_FRAGMENT_CONFIDENCE = 0.55
+ONSET_BIND_MAX_SECONDS = ONSET_BIND_MAX_SAMPLES / RATE + 0.05
 _MAX_ADJACENT_TURN_GAP_SECONDS = 4.5
 _MAX_COALESCED_TURN_DURATION_SECONDS = 45.0
 
@@ -159,6 +161,51 @@ def _coalesce_speaker_key(seg: dict) -> tuple[str, str]:
 def _is_short_backchannel_candidate(seg: dict) -> bool:
     dur = max(0.0, seg["end"] - seg["start"])
     return dur <= 1.6 and len(seg["text"].split()) <= 3
+
+
+def _is_floor_holding_backchannel(
+    seg: dict,
+    speaker_merged: list[dict],
+    by_speaker: dict[tuple[str, str], list[dict]],
+) -> bool:
+    """Detect brief isolated listener acknowledgments inside another speaker's monologue."""
+    dur = max(0.0, seg["end"] - seg["start"])
+    text = seg.get("text") or ""
+    if dur > 1.25 or "?" in text or len(text.split()) > 2:
+        return False
+    seg_key = _coalesce_speaker_key(seg)
+    for own in by_speaker.get(seg_key, ()):
+        if own is seg or own.get("id") == seg.get("id"):
+            continue
+        if own["end"] <= seg["start"] and (seg["start"] - own["end"]) < 5.0:
+            return False
+        if own["start"] >= seg["end"] and (own["start"] - seg["end"]) < 5.0:
+            return False
+
+    by_merged_speaker: dict[tuple[str, str], list[dict]] = {}
+    for item in speaker_merged:
+        by_merged_speaker.setdefault(_coalesce_speaker_key(item), []).append(item)
+
+    for other_key, other_turns in by_merged_speaker.items():
+        if other_key == seg_key or len(other_turns) < 2:
+            continue
+        for idx in range(len(other_turns) - 1):
+            pre = other_turns[idx]
+            post = other_turns[idx + 1]
+            if pre["start"] >= seg["start"] or post["end"] <= seg["end"]:
+                continue
+            if (pre.get("text") or "").rstrip().endswith("?"):
+                continue
+            if (seg["start"] - pre["end"]) > 2.5 or (post["start"] - seg["end"]) > 2.5:
+                continue
+            if (post["start"] - pre["end"]) > _MAX_ADJACENT_TURN_GAP_SECONDS:
+                continue
+            combined_floor = max(0.0, pre["end"] - pre["start"]) + max(
+                0.0, post["end"] - post["start"]
+            )
+            if combined_floor >= 8.0:
+                return True
+    return False
 
 
 def _overlap_seconds(a_start: float, a_end: float, b_start: float, b_end: float) -> float:
@@ -266,7 +313,7 @@ def _coalesce_protocol_segments(
                 >= min_ov
                 for other in speaker_merged
             )
-            if overlapped:
+            if overlapped or _is_floor_holding_backchannel(seg, speaker_merged, by_speaker):
                 continue
         non_backchannel.append(seg)
 
@@ -605,6 +652,9 @@ def export_data(
     unambiguous_stream_bindings: dict[tuple[str, str], tuple[str, str | None, str]] = {}
     observed_by_stream: dict[tuple[str, str], set[tuple[str, str | None, str]]] = {}
     stream_bind_timeline: dict[tuple[str, str], list[tuple[float, str, str, str, str | None]]] = {}
+    stream_onset_windows: dict[
+        tuple[str, str], list[tuple[float, float, str, str, str, str | None]]
+    ] = {}
     for s in streams:
         key = (str(s.stream_id), str(s.epoch))
         s_delta = (
@@ -614,8 +664,71 @@ def export_data(
             s.contract.get("monotonic_origin_ms", 0)
             - s.contract.get("session_monotonic_origin_ms", 0)
         ) / 1000.0
+        s_base_sec = s_delta + s_mono_delta
         observed: set[tuple[str, str | None, str]] = set()
         timeline: list[tuple[float, str, str, str, str | None]] = []
+        s_binds = sorted(
+            [c for c in bind_controls if c.stream_id == s.id],
+            key=lambda c: (
+                int(c.start_sample)
+                if c.start_sample is not None
+                else int((c.contract or {}).get("start_sample") or 0)
+            ),
+        )
+        ctrl_intervals: list[tuple[float, float | None, dict]] = []
+        first_s = (
+            (
+                int(s_binds[0].start_sample)
+                if s_binds[0].start_sample is not None
+                else int((s_binds[0].contract or {}).get("start_sample") or 0)
+            )
+            if s_binds
+            else None
+        )
+        if first_s is None or first_s > 0:
+            first_end = (s_base_sec + first_s / RATE) if first_s is not None else None
+            ctrl_intervals.append((s_base_sec, first_end, s.contract))
+        for idx, ctrl in enumerate(s_binds):
+            cur_s = (
+                int(ctrl.start_sample)
+                if ctrl.start_sample is not None
+                else int((ctrl.contract or {}).get("start_sample") or 0)
+            )
+            nxt_s = (
+                (
+                    int(s_binds[idx + 1].start_sample)
+                    if s_binds[idx + 1].start_sample is not None
+                    else int((s_binds[idx + 1].contract or {}).get("start_sample") or 0)
+                )
+                if idx + 1 < len(s_binds)
+                else None
+            )
+            ctrl_intervals.append(
+                (
+                    s_base_sec + cur_s / RATE,
+                    (s_base_sec + nxt_s / RATE) if nxt_s is not None else None,
+                    ctrl.contract,
+                )
+            )
+        onset_list: list[tuple[float, float, str, str, str, str | None]] = []
+        for idx in range(len(ctrl_intervals) - 1):
+            iv_start, iv_end, cdict = ctrl_intervals[idx]
+            _, _, nxt_cdict = ctrl_intervals[idx + 1]
+            if (
+                iv_end is not None
+                and cdict.get("attribution_unknown")
+                and not nxt_cdict.get("attribution_unknown")
+                and 0.0 < (iv_end - iv_start) <= ONSET_BIND_MAX_SECONDS
+                and cdict.get("source_kind", "speaker") == nxt_cdict.get("source_kind", "speaker")
+            ):
+                nxt_pid = nxt_cdict.get("participant_id") or nxt_cdict.get("speaker_id")
+                if nxt_pid:
+                    nxt_spk = nxt_cdict.get("speaker_id") or nxt_pid
+                    nxt_kind = nxt_cdict.get("source_kind", "speaker")
+                    nxt_name = nxt_cdict.get("participant_name") or participant_names.get(nxt_pid)
+                    onset_list.append((iv_start, iv_end, nxt_pid, nxt_spk, nxt_kind, nxt_name))
+        if onset_list:
+            stream_onset_windows[key] = onset_list
         if not s.contract.get("attribution_unknown"):
             pid = s.contract.get("participant_id") or s.contract.get("speaker_id")
             if pid:
@@ -714,6 +827,31 @@ def export_data(
             segment["source_kind"] = resolved_kind
             if resolved_name and not segment.get("participant_name"):
                 segment["participant_name"] = resolved_name
+        elif segment.get("attribution_unknown") and stream_key in stream_onset_windows:
+            matched_onset = next(
+                (
+                    w
+                    for w in stream_onset_windows[stream_key]
+                    if segment["start"] >= w[0] - 0.08 and segment["end"] <= w[1] + 0.08
+                ),
+                None,
+            )
+            if matched_onset is not None:
+                _, _, w_pid, w_spk, w_kind, w_name = matched_onset
+                segment["attribution_unknown"] = False
+                segment["participant_id"] = w_pid
+                segment["speaker_id"] = w_spk if w_kind == "speaker" else None
+                segment["source_kind"] = w_kind
+                if w_name and not segment.get("participant_name"):
+                    segment["participant_name"] = w_name
+            elif (
+                not is_protected
+                and bool(stream_bind_timeline.get(stream_key))
+                and dur <= 0.30
+                and isinstance(seg_conf, (int, float))
+                and seg_conf < MIN_SHORT_FRAGMENT_CONFIDENCE
+            ):
+                continue
         elif (
             not is_protected
             and segment.get("attribution_unknown")
@@ -1000,6 +1138,34 @@ def export_data(
     }
 
 
+def _pick_representative_sample_text(texts) -> str:
+    cleaned = [" ".join(str(t or "").split()) for t in texts]
+    non_empty = [t for t in cleaned if t]
+    if not non_empty:
+        return ""
+    for t in non_empty:
+        if len(t) >= 40 or len(t.split()) >= 5:
+            return t[:140]
+    return max(non_empty, key=len)[:140]
+
+
+def _format_markdown_source_ids(src: dict, recording_id: str | None = None) -> str:
+    raw_ids = [
+        str(s)
+        for s in (src.get("provider_source_ids") or [src.get("provider_source_id") or ""])
+        if str(s).strip()
+    ]
+    if not raw_ids:
+        return "–"
+    if len(raw_ids) == 1:
+        return raw_ids[0]
+    prefix = f":{recording_id}:" if recording_id else ""
+    if prefix and all(prefix in s for s in raw_ids):
+        short = [s.split(prefix, 1)[1] for s in raw_ids]
+        return ", ".join(short)
+    return ", ".join(raw_ids)
+
+
 def _build_sources_summary(
     attempts,
     streams,
@@ -1120,17 +1286,13 @@ def _build_sources_summary(
                     or (participant_names.get(eff_sig_id) if eff_sig_id else None)
                     or part_name
                 )
-                sample_txt = next(
-                    (
-                        " ".join(g.get("text", "").split())[:140]
-                        for g in group_segs
-                        if " ".join(g.get("text", "").split())
-                    ),
-                    "",
+                sample_txt = _pick_representative_sample_text(
+                    g.get("text", "") for g in group_segs
                 )
                 summary.append(
                     {
                         "provider_source_id": sid,
+                        "provider_source_ids": [sid],
                         "participant_name": eff_name,
                         "signaled_participant_id": eff_sig_id,
                         "speaker_label": (
@@ -1151,6 +1313,7 @@ def _build_sources_summary(
             summary.append(
                 {
                     "provider_source_id": sid,
+                    "provider_source_ids": [sid],
                     "participant_name": part_name,
                     "signaled_participant_id": sig_id,
                     "speaker_label": part_name or sig_id or sid,
@@ -1173,10 +1336,16 @@ def _build_sources_summary(
             existing["speech_seconds"] = round(
                 existing["speech_seconds"] + item["speech_seconds"], 2
             )
+            for src_id in item.get("provider_source_ids") or []:
+                if src_id not in existing["provider_source_ids"]:
+                    existing["provider_source_ids"].append(src_id)
             if not existing.get("participant_name") and item.get("participant_name"):
                 existing["participant_name"] = item["participant_name"]
-            if not existing.get("sample_text") and item.get("sample_text"):
-                existing["sample_text"] = item["sample_text"]
+            cand_sample = _pick_representative_sample_text(
+                [existing.get("sample_text") or "", item.get("sample_text") or ""]
+            )
+            if cand_sample:
+                existing["sample_text"] = cand_sample
         else:
             if pid:
                 by_participant[pid] = item
@@ -1375,7 +1544,9 @@ def render_export(data, format):
             for src in sources:
                 p_name = (src.get("participant_name") or "–").replace("|", "\\|")
                 sig_id = (src.get("signaled_participant_id") or "–").replace("|", "\\|")
-                prov_id = (src.get("provider_source_id") or "–").replace("|", "\\|")
+                prov_id = _format_markdown_source_ids(src, data.get("recording_id")).replace(
+                    "|", "\\|"
+                )
                 seg_count = src["segment_count"]
                 speech_sec = src["speech_seconds"]
                 lines.append(
@@ -1393,6 +1564,7 @@ def render_export(data, format):
         else:
             ui_url = f"{get_settings().public_base_url()}/ui"
             protocol_link = f"{ui_url}#view=meetings&id={data['recording_id']}"
+            total_slides = len(keyframes_list)
             timeline_items: list[tuple[float, int, int, str, dict]] = []
             for idx, kf in enumerate(keyframes_list):
                 timeline_items.append(
@@ -1407,13 +1579,18 @@ def render_export(data, format):
                     (float(segment.get("start") or 0.0), 2, idx, "segment", segment)
                 )
             timeline_items.sort(key=lambda item: (item[0], item[1], item[2]))
-            for _, _, _, kind, item in timeline_items:
+            for _, _, item_idx, kind, item in timeline_items:
                 if kind == "keyframe":
                     ts = short_timestamp(float(item.get("offset_seconds") or 0.0))
                     pres = _single_line(item.get("presenter")) or "Teilnehmer"
+                    kf_id = _single_line(item.get("id"))
+                    kf_link = f"{protocol_link}&keyframe={kf_id}" if kf_id else protocol_link
+                    slide_suffix = (
+                        f" _(Folie {item_idx + 1}/{total_slides})_" if total_slides > 1 else ""
+                    )
                     lines.append(
                         f"> **[{ts}] Screen share ({pres}):** "
-                        f"[{protocol_link}]({protocol_link})"
+                        f"[{protocol_link}]({kf_link}){slide_suffix}"
                     )
                     lines.append("")
                 elif kind == "pause":
@@ -1518,6 +1695,59 @@ def _opted_out_set(meta: object) -> set[str]:
     }
 
 
+_FREEMAIL_DOMAINS = frozenset(
+    {
+        "gmail.com",
+        "googlemail.com",
+        "outlook.com",
+        "outlook.de",
+        "hotmail.com",
+        "live.com",
+        "icloud.com",
+        "me.com",
+        "gmx.de",
+        "gmx.net",
+        "web.de",
+        "t-online.de",
+        "yahoo.com",
+        "proton.me",
+        "protonmail.com",
+        "posteo.de",
+        "mailbox.org",
+        "localhost",
+        "example.org",
+        "example.com",
+    }
+)
+
+
+def extract_org_glossary_hints(attendee_emails: object) -> list[str]:
+    if not isinstance(attendee_emails, list):
+        return []
+    hints: list[str] = []
+    seen: set[str] = set()
+    for raw in attendee_emails:
+        email = str(raw or "").strip().lower()
+        if "@" not in email:
+            continue
+        domain = email.rsplit("@", 1)[1].strip(".")
+        if not domain or domain in _FREEMAIL_DOMAINS:
+            continue
+        parts = [p for p in domain.split(".") if p]
+        generic_tlds = ("com", "org", "net", "edu", "gov")
+        if len(parts) == 2 and len(parts[1]) >= 3 and parts[1] not in generic_tlds:
+            cand = f"{parts[0].capitalize()}.{parts[1].upper()}"
+        else:
+            stem = parts[-2] if len(parts) >= 2 else parts[0]
+            if len(stem) < 3:
+                continue
+            cand = stem.capitalize()
+        if cand.lower() not in seen:
+            seen.add(cand.lower())
+            hints.append(cand[:60])
+    return hints
+
+
 def generate_protocol_summary(db: Session, recording_id: uuid.UUID) -> dict:
     settings = get_settings()
     recording = db.get(Recording, recording_id)
@@ -1553,6 +1783,29 @@ def generate_protocol_summary(db: Session, recording_id: uuid.UUID) -> dict:
             seen_speakers.add(spk.lower())
             known_speakers.append(spk)
         transcript_lines.append(f"[{t0}] {spk}: {txt}")
+    for src in data.get("sources_summary") or []:
+        if src.get("opted_out"):
+            continue
+        s_name = _single_line(src.get("participant_name") or src.get("speaker_label"))
+        if (
+            s_name
+            and s_name.lower() not in seen_speakers
+            and not s_name.lower().startswith(
+                ("sprecher", "teilnehmer", "freigabe-audio", "screen share", "quelle ")
+            )
+            and s_name.lower() not in prior_opted_out
+        ):
+            seen_speakers.add(s_name.lower())
+            known_speakers.append(s_name)
+    for att_name in prior_meta.get("attendee_names") or []:
+        clean_att = _single_line(att_name)[:60]
+        if (
+            clean_att
+            and clean_att.lower() not in seen_speakers
+            and clean_att.lower() not in prior_opted_out
+        ):
+            seen_speakers.add(clean_att.lower())
+            known_speakers.append(clean_att)
     if not transcript_lines:
         raise ValueError("Kein Transkript für die KI-Zusammenfassung vorhanden.")
 
@@ -1601,7 +1854,12 @@ def generate_protocol_summary(db: Session, recording_id: uuid.UUID) -> dict:
             "- Erfinde keine Fakten, Fristen oder Namen, die nicht im Transkript vorkommen.\n"
             "- Wenn keine konkreten Aufgaben oder nächsten Schritte vereinbart wurden, "
             'gib ein leeres Array `"action_items": []` zurück.\n'
-            "- Übernimm die exakte Schreibweise der Teilnehmendennamen und Fachbegriffe."
+            "- Übernimm die exakte Schreibweise der Teilnehmendennamen und Fachbegriffe; "
+            "korrigiere offensichtliche phonetische Spracherkennungsfehler bei bekannten "
+            "Eigennamen, Konferenzplattformen und Glossarbegriffen anhand des Gesprächskontexts "
+            "(z. B. Jitsi statt 'Jetzti'/'Chitzy', Wortlaut statt 'Wordlaut'/'Boardlaut').\n"
+            "- Trenne Nebenbemerkungen zu Alternativmodellen oder Drittsystemen sauber von der "
+            "tatsächlich besprochenen bzw. gezeigten Architektur."
         )
     else:
         system_prompt = (
@@ -1624,16 +1882,28 @@ def generate_protocol_summary(db: Session, recording_id: uuid.UUID) -> dict:
             "Rules:\n"
             "- Never invent facts, deadlines, or names not present in the transcript.\n"
             "- If no concrete action items were agreed, return `\"action_items\": []`.\n"
-            "- Preserve exact spelling of participant names and domain terminology."
+            "- Preserve exact spelling of participant names and domain terminology; normalize "
+            "unambiguous phonetic ASR misspellings of known platforms, proper nouns, and glossary "
+            "terms from context (e.g. Jitsi instead of 'Jetzti'/'Chitzy', Wortlaut instead of "
+            "'Wordlaut'/'Boardlaut').\n"
+            "- Keep side remarks about alternative models or third-party tools clearly distinct "
+            "from the properties of the demonstrated solution."
         )
     meta_lines = [f"Titel der Besprechung: {title}"]
     if known_speakers:
         meta_lines.append(f"Bekannte Teilnehmende: {', '.join(known_speakers)}")
     term_repls = prior_meta.get("term_replacements")
     repl_values = list(term_repls.values()) if isinstance(term_repls, dict) else []
+    assistant_hint = _single_line(settings.assistant_name)
+    builtin_hints = (
+        [assistant_hint]
+        if assistant_hint and assistant_hint.lower() != "wortlaut"
+        else []
+    )
+    org_hints = extract_org_glossary_hints(prior_meta.get("attendee_emails"))
     merged_glossary: list[str] = []
     seen_glossary: set[str] = set()
-    for raw_term in [*(settings.asr_glossary or []), *repl_values]:
+    for raw_term in [*(settings.asr_glossary or []), *repl_values, *builtin_hints, *org_hints]:
         term = _single_line(raw_term)[:60]
         if term and term.lower() not in seen_glossary and len(merged_glossary) < 40:
             seen_glossary.add(term.lower())
@@ -1818,8 +2088,19 @@ def extract_audio_snippet_wav(
 
         eff_start = padded_start
         eff_end = padded_end
-        for iv_start, iv_end, cdict in intervals:
-            reason = _interval_block_reason(cdict)
+        for idx, (iv_start, iv_end, cdict) in enumerate(intervals):
+            eval_cdict = cdict
+            if (
+                cdict.get("attribution_unknown")
+                and iv_end is not None
+                and 0 < (iv_end - iv_start) <= ONSET_BIND_MAX_SAMPLES
+                and idx + 1 < len(intervals)
+                and not intervals[idx + 1][2].get("attribution_unknown")
+                and cdict.get("source_kind", "speaker")
+                == intervals[idx + 1][2].get("source_kind", "speaker")
+            ):
+                eval_cdict = intervals[idx + 1][2]
+            reason = _interval_block_reason(eval_cdict)
             if reason is None:
                 continue
             # If the core segment itself overlaps a blocked interval, reject immediately.

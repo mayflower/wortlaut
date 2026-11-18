@@ -562,9 +562,17 @@ def ingest_keyframe(
     if existing is not None:
         if existing.deleted_at is not None:
             raise HTTPException(409, "presenter_opted_out")
-        if existing.sha256 != meta.sha256:
-            raise HTTPException(409, "keyframe_sequence_conflict")
-        return existing, True
+        if existing.sha256 == meta.sha256:
+            return existing, True
+        if settings.redact_keyframe_faces:
+            from wortlaut.keyframe_privacy import redact_faces_in_png
+
+            redacted_retry, count_retry = redact_faces_in_png(
+                png_bytes, max_bytes=MAX_KEYFRAME_BYTES
+            )
+            if count_retry > 0 and hashlib.sha256(redacted_retry).hexdigest() == existing.sha256:
+                return existing, True
+        raise HTTPException(409, "keyframe_sequence_conflict")
 
     attempts = list(db.scalars(select(Attempt).where(Attempt.recording_id == recording.id)).all())
     streams = (
@@ -600,6 +608,14 @@ def ingest_keyframe(
     if (active_count or 0) >= MAX_KEYFRAMES_PER_RECORDING:
         raise HTTPException(409, "keyframe_limit_reached")
 
+    stored_sha = meta.sha256
+    if settings.redact_keyframe_faces:
+        from wortlaut.keyframe_privacy import redact_faces_in_png
+
+        png_bytes, redacted_count = redact_faces_in_png(png_bytes, max_bytes=MAX_KEYFRAME_BYTES)
+        if redacted_count > 0:
+            stored_sha = hashlib.sha256(png_bytes).hexdigest()
+
     captured_utc = meta.captured_at.astimezone(UTC)
     contract = {
         "kind": "keyframe",
@@ -611,7 +627,7 @@ def ingest_keyframe(
         "captured_at": captured_utc.isoformat(),
         "width": meta.width,
         "height": meta.height,
-        "sha256": meta.sha256,
+        "sha256": stored_sha,
     }
     object_size = len(png_bytes) + 13 + len(canonical(contract).encode())
     if capacity_reached(db, 0, object_size):
@@ -642,7 +658,7 @@ def ingest_keyframe(
         width=meta.width,
         height=meta.height,
         byte_size=object_size,
-        sha256=meta.sha256,
+        sha256=stored_sha,
         object_key=key,
     )
     db.add(kf)

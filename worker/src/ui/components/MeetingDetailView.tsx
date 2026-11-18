@@ -71,22 +71,26 @@ export interface MeetingDetailViewProps {
   authMode: AuthMode;
   recording: RecordingDetail | null;
   transcript: TranscriptExport | null;
+  focusKeyframeId?: string | null;
   isLoading: boolean;
   loadError?: unknown;
   onRefresh: () => void;
   onDeleted: () => void;
   onBackToOverview?: () => void;
+  onOpenCalendar?: () => void;
 }
 
 export function MeetingDetailView({
   authMode,
   recording,
   transcript,
+  focusKeyframeId,
   isLoading,
   loadError,
   onRefresh,
   onDeleted,
   onBackToOverview,
+  onOpenCalendar,
 }: MeetingDetailViewProps) {
   const { lang, localeTag, tr } = useI18n();
   const [activeTab, setActiveTab] = useState<
@@ -96,6 +100,8 @@ export function MeetingDetailView({
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const busyActionRef = useRef(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [dismissedCalendarScopeNotice, setDismissedCalendarScopeNotice] =
+    useState(false);
   const [copiedTranscript, setCopiedTranscript] = useState(false);
   const [copiedShareLink, setCopiedShareLink] = useState(false);
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
@@ -290,11 +296,20 @@ export function MeetingDetailView({
               line: `> **[${startLbl} – ${endLbl}] ${tr('Off-the-Record-Pause', 'Off-the-Record Pause')}${bySuffix}:** ${tr('Aufnahme im Chat pausiert.', 'Recording paused via chat.')}`,
             };
           }),
-          ...kfs.map((kf) => ({
-            offset: kf.offset_seconds,
-            rank: 1,
-            line: `> **[${formatWallClockTime(kf.offset_seconds, timeOriginUtc)}] ${tr('Bildschirmfreigabe', 'Screen share')} (${singleLine(kf.presenter)}):** [${protocolViewUrl}](${protocolViewUrl})`,
-          })),
+          ...kfs.map((kf, idx) => {
+            const kfTarget = kf.id
+              ? `${protocolViewUrl}&keyframe=${encodeURIComponent(kf.id)}`
+              : protocolViewUrl;
+            const slideSuffix =
+              kfs.length > 1
+                ? ` _(${tr('Folie', 'Slide')} ${idx + 1}/${kfs.length})_`
+                : '';
+            return {
+              offset: kf.offset_seconds,
+              rank: 1,
+              line: `> **[${formatWallClockTime(kf.offset_seconds, timeOriginUtc)}] ${tr('Bildschirmfreigabe', 'Screen share')} (${singleLine(kf.presenter)}):** [${protocolViewUrl}](${kfTarget})${slideSuffix}`,
+            };
+          }),
           ...segs.map((s) => ({
             offset: s.start,
             rank: 2,
@@ -945,6 +960,38 @@ export function MeetingDetailView({
                     />
                   )}
 
+                {isOperator &&
+                  !dismissedCalendarScopeNotice &&
+                  !transcript.calendar_link_synced_at &&
+                  transcript.calendar_link_error ===
+                    'insufficient_calendar_write_scope' && (
+                    <Banner
+                      status="warning"
+                      container="card"
+                      isDismissable
+                      onDismiss={() => setDismissedCalendarScopeNotice(true)}
+                      title={tr(
+                        'Protokoll-Link konnte nicht automatisch im Kalender eingetragen werden',
+                        'Protocol link could not be written back to your calendar automatically'
+                      )}
+                      description={tr(
+                        'Ihre Kalender-Verbindung nutzt noch eine ältere Nur-Lesen-Berechtigung. Verbinden Sie Ihren Kalender einmalig neu, um Protokoll-Links automatisch in Termine zu schreiben.',
+                        'Your calendar connection still uses read-only permissions. Reconnect your calendar once to automatically add protocol links to calendar events.'
+                      )}
+                      endContent={
+                        onOpenCalendar ? (
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            icon={<Link2 className="h-3.5 w-3.5" />}
+                            label={tr('Zum Kalender', 'Open Calendar')}
+                            onClick={onOpenCalendar}
+                          />
+                        ) : undefined
+                      }
+                    />
+                  )}
+
                 {activeTab === 'transcript' && (
                   <TranscriptTab
                     recordingId={recording.id}
@@ -958,6 +1005,7 @@ export function MeetingDetailView({
                     termReplacements={transcript.term_replacements}
                     segments={transcript.segments || []}
                     keyframes={transcript.keyframes ?? []}
+                    focusKeyframeId={focusKeyframeId}
                     pauseWindows={transcript.pause_windows ?? []}
                     sources={transcript.sources_summary || []}
                     selectedSourceFilter={selectedSourceFilter}
