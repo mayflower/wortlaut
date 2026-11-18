@@ -410,3 +410,294 @@ test('Web-UI renders live Off-the-Record paused banner, inline chat markers & pa
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });
+
+test('Web-UI automatically refetches settled transcript summary and 1-click Google Calendar reconnect banner when detailQuery finishes after transcriptQuery', async () => {
+  const workerRoot = fileURLToPath(new URL('..', import.meta.url));
+  const uiDistDir = join(workerRoot, 'dist', 'ui');
+  if (!existsSync(join(uiDistDir, 'app.js'))) {
+    await build({
+      root: workerRoot,
+      configFile: fileURLToPath(new URL('../vite.ui.config.ts', import.meta.url)),
+      logLevel: 'silent',
+    });
+  }
+
+  const recordingId = randomUUID();
+  let backendCompleted = false;
+
+  const bootPayload = {
+    failureReasons: {},
+    instance: {
+      assistantName: 'wortlaut',
+      defaultLocale: 'de',
+      botEmail: null,
+      providers: {
+        google_meet: true,
+        google_meet_auth_session: false,
+        teams: true,
+        webex: true,
+        zoom: true,
+      },
+      mail: {imapEnabled: false, smtpEnabled: false, senderAuth: 'gateway', allowedDomains: []},
+      limits: {maxActiveMeetings: 15, lobbyTimeoutSeconds: 600, emptyRoomTimeoutSeconds: 300},
+      retention: {audioHours: 24, transcriptDays: 30},
+      oidc: {enabled: false, issuer: '', clientId: 'wortlaut', allowedDomains: []},
+      calendarOAuth: {
+        googleEnabled: true,
+        microsoftEnabled: false,
+        googleClientId: 'google-client-123',
+        microsoftClientId: '',
+        microsoftTenantId: 'common',
+      },
+      privacyUrl: '/privacy',
+      enable_keyframes: true,
+      llmSummaryEnabled: true,
+      llmModel: 'qwen3.8:latest',
+    },
+  };
+
+  const uiHtml = `<!DOCTYPE html>
+<html lang="de" data-theme="dark" data-astryx-theme="stone">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>wortlaut UI Completion Race Test</title>
+  <link rel="stylesheet" href="/sdk/ui/app.css">
+</head>
+<body>
+  <div id="root"></div>
+  <script>window.__WORTLAUT_BOOT__ = ${JSON.stringify(bootPayload)};</script>
+  <script type="module" src="/sdk/ui/app.js"></script>
+</body>
+</html>`;
+
+  const server = createServer(async (req, res) => {
+    const u = new URL(req.url ?? '/', 'http://127.0.0.1');
+    if (u.pathname === '/ui') {
+      res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8'});
+      res.end(uiHtml);
+      return;
+    }
+    if (u.pathname.startsWith('/sdk/ui/')) {
+      const rel = normalize(u.pathname.slice('/sdk/ui/'.length)).replace(/^(\.\.(\/|\\|$))+/, '');
+      const fullPath = join(uiDistDir, rel);
+      try {
+        const bytes = await readFile(fullPath);
+        res.writeHead(200, {
+          'Content-Type': MIME_BY_EXT[extname(fullPath)] ?? 'application/octet-stream',
+        });
+        res.end(bytes);
+      } catch {
+        res.writeHead(404);
+        res.end();
+      }
+      return;
+    }
+    if (u.pathname === '/health/ready') {
+      res.writeHead(200, {'Content-Type': 'application/json'});
+      res.end(JSON.stringify({status: 'ready'}));
+      return;
+    }
+    if (u.pathname === '/v1/mcp/grants') {
+      res.writeHead(200, {'Content-Type': 'application/json'});
+      res.end(JSON.stringify({endpoint: 'http://127.0.0.1/mcp', grants: []}));
+      return;
+    }
+    if (u.pathname === '/v1/glossary') {
+      res.writeHead(200, {'Content-Type': 'application/json'});
+      res.end(
+        JSON.stringify({
+          entries: [],
+          builtin_terms: [],
+          effective_terms: [],
+          effective_replacements: {},
+          effective_count: 0,
+          can_manage_global: true,
+        }),
+      );
+      return;
+    }
+    if (u.pathname === '/v1/calendar') {
+      res.writeHead(200, {'Content-Type': 'application/json'});
+      res.end(
+        JSON.stringify({
+          events: [],
+          connections: [
+            {
+              id: randomUUID(),
+              provider: 'google',
+              account_email: 'johann@mayflower.de',
+              owner_email: 'johann@mayflower.de',
+              last_synced_at: '2026-11-18T13:45:00Z',
+              sync_error: null,
+              created_at: '2026-11-09T14:53:33Z',
+            },
+          ],
+          synced_events: [],
+        }),
+      );
+      return;
+    }
+    if (u.pathname === '/v1/recordings' && req.method === 'GET') {
+      res.writeHead(200, {'Content-Type': 'application/json'});
+      res.end(
+        JSON.stringify({
+          items: [
+            {
+              id: recordingId,
+              provider: 'google_meet',
+              title: 'Gruppe-DEV Zweekly',
+              guest_name: 'wortlaut',
+              language: 'de',
+              owner_email: 'johann@mayflower.de',
+              starts_at: '2026-11-18T13:00:00Z',
+              ends_at: '2026-11-18T14:00:00Z',
+              participation: 'ended',
+              processing: backendCompleted ? 'completed' : 'processing',
+              processing_error: null,
+              participation_reason: 'room_empty',
+              cancelled_at: null,
+              audio_deleted_at: null,
+              transcript_deleted_at: null,
+              metadata_deleted_at: null,
+              active_attempt_id: null,
+              calendar_entry_id: null,
+              calendar_conflict: false,
+              recurrence_key: null,
+            },
+          ],
+          next_cursor: null,
+        }),
+      );
+      return;
+    }
+    if (u.pathname === `/v1/recordings/${recordingId}` && req.method === 'GET') {
+      res.writeHead(200, {'Content-Type': 'application/json'});
+      res.end(
+        JSON.stringify({
+          id: recordingId,
+          provider: 'google_meet',
+          meeting_url: 'https://meet.google.com/zweekly-room',
+          title: 'Gruppe-DEV Zweekly',
+          guest_name: 'wortlaut',
+          language: 'de',
+          owner_email: 'johann@mayflower.de',
+          starts_at: '2026-11-18T13:00:00Z',
+          ends_at: '2026-11-18T14:00:00Z',
+          participation: 'ended',
+          processing: backendCompleted ? 'completed' : 'processing',
+          processing_error: null,
+          participation_reason: 'room_empty',
+          cancelled_at: null,
+          audio_deleted_at: null,
+          transcript_deleted_at: null,
+          metadata_deleted_at: null,
+          active_attempt_id: null,
+          calendar_entry_id: null,
+          calendar_conflict: false,
+          recurrence_key: null,
+          attempts: [],
+          audio: [],
+          ingest: {durable_sample_count: 160000, finalized_gap_count: 0},
+          delivery: null,
+        }),
+      );
+      return;
+    }
+    if (u.pathname === `/v1/recordings/${recordingId}/transcript` && req.method === 'GET') {
+      const done = backendCompleted;
+      // Flip backendCompleted right AFTER the initial pre-completion transcript fetch returns!
+      if (!backendCompleted) {
+        backendCompleted = true;
+      }
+      res.writeHead(200, {'Content-Type': 'application/json'});
+      res.end(
+        JSON.stringify({
+          recording_id: recordingId,
+          provider: 'google_meet',
+          title: 'Gruppe-DEV Zweekly',
+          language: 'de',
+          participation: 'ended',
+          participation_reason: 'room_empty',
+          processing: done ? 'completed' : 'processing',
+          processing_error: null,
+          scheduled_period: {start: '2026-11-18T13:00:00Z', end: '2026-11-18T14:00:00Z'},
+          time_origin_utc: '2026-11-18T13:00:00Z',
+          last_known_audio_utc: '2026-11-18T13:44:45Z',
+          audio_available: true,
+          summary: done
+            ? {
+                summary: 'Automatisch erstellte Zusammenfassung des Zweekly.',
+                topics: [{title: 'Glossar', details: 'Neuer Glossar-Editor vorgestellt.'}],
+                action_items: [],
+                model: 'qwen3.8:latest',
+                generated_at: '2026-11-18T13:45:19Z',
+              }
+            : null,
+          calendar_link_synced_at: null,
+          calendar_link_error: done ? 'insufficient_calendar_write_scope' : null,
+          calendar_link_provider: done ? 'google' : null,
+          quality: {
+            no_audio_received: false,
+            has_audio_gaps: false,
+            audio_clock_interrupted: false,
+            capture_end_unknown: false,
+            attribution_unknown: false,
+            source_coverage: 'verified',
+            incomplete_drain: false,
+            unprocessed_audio: false,
+            failed_asr_ranges: [],
+          },
+          sources_summary: [],
+          segments: [
+            {
+              id: 'seg-1',
+              stream_id: randomUUID(),
+              start: 5,
+              end: 9,
+              text: 'Kurzes Update zum Glossar-Editor.',
+              speaker_label: 'Johann Peter Hartmann',
+              participant_name: 'Johann Peter Hartmann',
+              attribution_unknown: false,
+            },
+          ],
+          keyframes: [],
+          pause_windows: [],
+        }),
+      );
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const addr = server.address();
+  assert.ok(addr && typeof addr === 'object');
+  const baseUrl = `http://127.0.0.1:${addr.port}`;
+
+  const browser = await chromium.launch({headless: true});
+  try {
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    await page.goto(`${baseUrl}/ui#view=meetings&id=${recordingId}&token=operator-secret-token`);
+
+    // Initial /transcript returned processing='processing' & summary=null, then flipped backendCompleted=true.
+    // On the next detailQuery poll (~3s), detailQuery sees 'completed' and MUST immediately refetch /transcript!
+    await page.getByText('Automatisch erstellte Zusammenfassung des Zweekly.').waitFor({
+      state: 'visible',
+      timeout: 8000,
+    });
+    await page.getByRole('button', {name: 'Google Kalender neu verbinden'}).waitFor({
+      state: 'visible',
+      timeout: 5000,
+    });
+
+    await context.close();
+  } finally {
+    await browser.close();
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});

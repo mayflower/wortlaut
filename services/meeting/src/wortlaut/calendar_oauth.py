@@ -38,9 +38,8 @@ from wortlaut.validation import normalize_meeting_url
 CalendarOAuthProvider = Literal["google", "microsoft"]
 
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
-GOOGLE_CALENDAR_EVENTS_URL = (
-    "https://www.googleapis.com/calendar/v3/calendars/primary/events"
-)
+GOOGLE_CALENDARS_BASE_URL = "https://www.googleapis.com/calendar/v3/calendars"
+GOOGLE_CALENDAR_EVENTS_URL = f"{GOOGLE_CALENDARS_BASE_URL}/primary/events"
 GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
 
 
@@ -351,11 +350,40 @@ def exchange_calendar_oauth_code(
         conn.sync_error = None
         db.flush()
 
+    conn_id = conn.id
     synced_events = sync_connection(db, conn, now=now)
     db.commit()
+
+    _retry_pending_protocol_writebacks(db, conn_id)
+
+    refreshed_conn = db.get(CalendarConnection, conn_id) or conn
+    synced_event_ids = [ev.id for ev in synced_events]
+    refreshed_events = (
+        db.scalars(
+            select(CalendarSyncedEvent)
+            .where(CalendarSyncedEvent.id.in_(synced_event_ids))
+            .order_by(CalendarSyncedEvent.starts_at.asc())
+        ).all()
+        if synced_event_ids
+        else []
+    )
+    linked_rec_ids = [ev.recording_id for ev in refreshed_events if ev.recording_id]
+    rec_by_id = (
+        {
+            r.id: r
+            for r in db.scalars(
+                select(Recording).where(Recording.id.in_(linked_rec_ids))
+            ).all()
+        }
+        if linked_rec_ids
+        else {}
+    )
     return {
-        "connection": connection_json(conn),
-        "synced_events": [synced_event_json(ev) for ev in synced_events],
+        "connection": connection_json(refreshed_conn),
+        "synced_events": [
+            synced_event_json(ev, rec_by_id.get(ev.recording_id) if ev.recording_id else None)
+            for ev in refreshed_events
+        ],
     }
 
 
@@ -1299,34 +1327,76 @@ def _inject_protocol_block_html(
     return f"{base}\n{block}"
 
 
+def _is_insufficient_scope_response(resp: httpx.Response) -> bool:
+    if resp.status_code != 403:
+        return False
+    body_lower = (resp.text or "").lower()
+    if "forbiddenfornonorganizer" in body_lower or "cannotchange" in body_lower:
+        return False
+    return True
+
+
+def _format_google_event_description(
+    current_desc: str, protocol_url: str, summary_text: str | None
+) -> str:
+    looks_html = bool(
+        re.search(r"<(a|br|p|div|hr|ul|li)\b", current_desc, re.IGNORECASE)
+        or HTML_MARKER_START in current_desc
+    )
+    return (
+        _inject_protocol_block_html(current_desc, protocol_url, summary_text)
+        if looks_html
+        else _inject_protocol_block_plain(current_desc, protocol_url, summary_text)
+    )
+
+
 def _patch_provider_event_protocol_link(
     conn: CalendarConnection | ConnectionSnapshot,
     ev: CalendarSyncedEvent,
     protocol_url: str,
     summary_text: str | None,
     now: datetime,
-) -> None:
+) -> bool:
     access_token = _ensure_access_token(conn, now)
     headers = {"Authorization": f"Bearer {access_token}", "Accept": "application/json"}
     encoded_id = quote(ev.external_event_id, safe="")
 
     try:
         if conn.provider == "google":
+            org_email = (ev.organizer_email or "").strip().lower()
+            if org_email.endswith("@group.calendar.google.com") and not ev.is_self_organized:
+                group_event_url = (
+                    f"{GOOGLE_CALENDARS_BASE_URL}/{quote(org_email, safe='')}/events/{encoded_id}"
+                )
+                group_get = httpx.get(group_event_url, headers=headers, timeout=10.0)
+                if group_get.status_code == 200:
+                    group_desc = str(group_get.json().get("description") or "")
+                    updated_group_desc = _format_google_event_description(
+                        group_desc, protocol_url, summary_text
+                    )
+                    group_patch = httpx.patch(
+                        group_event_url,
+                        params={"sendUpdates": "none"},
+                        json={"description": updated_group_desc},
+                        headers=headers,
+                        timeout=10.0,
+                    )
+                    if group_patch.status_code in (200, 201):
+                        return True
+
             event_url = f"{GOOGLE_CALENDAR_EVENTS_URL}/{encoded_id}"
             get_resp = httpx.get(event_url, headers=headers, timeout=10.0)
             if get_resp.status_code == 403:
-                raise ValueError("insufficient_calendar_write_scope")
+                raise ValueError(
+                    "insufficient_calendar_write_scope"
+                    if _is_insufficient_scope_response(get_resp)
+                    else "calendar_event_not_editable_by_guest"
+                )
             if get_resp.status_code != 200:
                 raise ValueError(f"google_event_get_http_{get_resp.status_code}")
             current_desc = str(get_resp.json().get("description") or "")
-            looks_html = bool(
-                re.search(r"<(a|br|p|div|hr|ul|li)\b", current_desc, re.IGNORECASE)
-                or HTML_MARKER_START in current_desc
-            )
-            updated_desc = (
-                _inject_protocol_block_html(current_desc, protocol_url, summary_text)
-                if looks_html
-                else _inject_protocol_block_plain(current_desc, protocol_url, summary_text)
+            updated_desc = _format_google_event_description(
+                current_desc, protocol_url, summary_text
             )
             send_updates = "all" if ev.is_self_organized else "none"
             patch_resp = httpx.patch(
@@ -1337,10 +1407,14 @@ def _patch_provider_event_protocol_link(
                 timeout=10.0,
             )
             if patch_resp.status_code == 403:
-                raise ValueError("insufficient_calendar_write_scope")
+                raise ValueError(
+                    "insufficient_calendar_write_scope"
+                    if _is_insufficient_scope_response(patch_resp)
+                    else "calendar_event_not_editable_by_guest"
+                )
             if patch_resp.status_code not in (200, 201):
                 raise ValueError(f"google_event_patch_http_{patch_resp.status_code}")
-            return
+            return bool(ev.is_self_organized)
 
         event_url = f"{MICROSOFT_EVENTS_URL}/{encoded_id}"
         get_resp = httpx.get(
@@ -1376,8 +1450,54 @@ def _patch_provider_event_protocol_link(
             raise ValueError("insufficient_calendar_write_scope")
         if patch_resp.status_code not in (200, 201, 204):
             raise ValueError(f"microsoft_event_patch_http_{patch_resp.status_code}")
+        return bool(ev.is_self_organized)
     except httpx.HTTPError as exc:
         raise ValueError(f"calendar_network_{type(exc).__name__}") from None
+
+
+def _retry_pending_protocol_writebacks(db: Session, connection_id: uuid.UUID) -> int:
+    candidate_rows = db.scalars(
+        select(Recording)
+        .join(CalendarSyncedEvent, CalendarSyncedEvent.recording_id == Recording.id)
+        .where(
+            CalendarSyncedEvent.connection_id == connection_id,
+            CalendarSyncedEvent.status == "confirmed",
+            Recording.processing == "completed",
+            Recording.cancelled_at.is_(None),
+            Recording.metadata_deleted_at.is_(None),
+            Recording.transcript_deleted_at.is_(None),
+        )
+        .order_by(Recording.starts_at.desc())
+        .limit(25)
+    ).all()
+    retry_ids: list[uuid.UUID] = []
+    seen: set[uuid.UUID] = set()
+    for rec in candidate_rows:
+        if rec.id in seen:
+            continue
+        seen.add(rec.id)
+        meta = rec.protocol_meta if isinstance(rec.protocol_meta, dict) else {}
+        if (
+            not meta.get("calendar_link_synced_at")
+            and meta.get("calendar_link_error") == "insufficient_calendar_write_scope"
+        ):
+            retry_ids.append(rec.id)
+    # Release read transaction before issuing outbound HTTP PATCH calls.
+    db.rollback()
+    linked_count = 0
+    for rec_id in retry_ids:
+        try:
+            rec = db.get(Recording, rec_id)
+            if rec is None:
+                db.rollback()
+                continue
+            res = publish_protocol_link_to_calendar_events(db, rec)
+            db.commit()
+            if res.get("status") == "linked":
+                linked_count += 1
+        except Exception:
+            db.rollback()
+    return linked_count
 
 
 def publish_protocol_link_to_calendar_events(
@@ -1451,6 +1571,7 @@ def publish_protocol_link_to_calendar_events(
     updated_count = 0
     organizer_patched = False
     last_error: str | None = None
+    last_error_provider: str | None = None
     event_ids_to_link = [ev.id for ev in events if ev.recording_id is None]
 
     for ev in events:
@@ -1460,15 +1581,16 @@ def publish_protocol_link_to_calendar_events(
         if snap is None:
             continue
         try:
-            _patch_provider_event_protocol_link(
+            shared_updated = _patch_provider_event_protocol_link(
                 snap, ev, protocol_url, summary_text, now
             )
             updated_count += 1
-            if ev.is_self_organized:
+            if shared_updated or ev.is_self_organized:
                 organizer_patched = True
         except Exception as exc:
             err_code = str(exc)[:120] if isinstance(exc, ValueError) else type(exc).__name__
             last_error = err_code
+            last_error_provider = snap.provider
             logging.getLogger("wortlaut").warning(
                 "calendar_protocol_link_failed recording=%s event=%s error=%s",
                 rec_id,
@@ -1511,6 +1633,7 @@ def publish_protocol_link_to_calendar_events(
     if updated_count > 0:
         fresh_meta["calendar_link_synced_at"] = now.isoformat()
         fresh_meta.pop("calendar_link_error", None)
+        fresh_meta.pop("calendar_link_provider", None)
         target_rec.protocol_meta = fresh_meta
         return {
             "updated_events": updated_count,
@@ -1521,6 +1644,8 @@ def publish_protocol_link_to_calendar_events(
 
     if last_error:
         fresh_meta["calendar_link_error"] = last_error
+        if last_error_provider in ("google", "microsoft"):
+            fresh_meta["calendar_link_provider"] = last_error_provider
         target_rec.protocol_meta = fresh_meta
     return {
         "updated_events": 0,

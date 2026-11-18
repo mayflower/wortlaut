@@ -1098,3 +1098,177 @@ def test_csrc_onset_binding_and_optout_purge_and_calendar_attendee_context(
         headers=API,
     )
     assert e_wav.status_code == 404
+
+
+def test_group_calendar_writeback_and_oauth_reconnect_backfill(
+    client, database, monkeypatch
+):
+    from wortlaut import calendar_oauth as cal_oauth
+    from wortlaut.models import CalendarConnection, CalendarSyncedEvent, Recording
+    from wortlaut.oidc import Principal
+    from wortlaut.settings import get_settings
+
+    monkeypatch.setenv("WORTLAUT_GOOGLE_CALENDAR_CLIENT_ID", "g-client-id")
+    monkeypatch.setenv("WORTLAUT_GOOGLE_CALENDAR_CLIENT_SECRET", "g-client-secret")
+    get_settings.cache_clear()
+
+    now = datetime.now(UTC)
+    group_cal = "mayflower.de_brd1c7uol47s7r083108auess8@group.calendar.google.com"
+    ext_event_id = "j8td45g2mak59ua5tq5nkhaahu_20261118T130000Z"
+    rec_id = uuid.uuid4()
+
+    with Session(database) as db:
+        conn = CalendarConnection(
+            owner_sub="sub-johann",
+            owner_email="johann@mayflower.de",
+            provider="google",
+            account_email="johann@mayflower.de",
+            encrypted_access_token=cal_oauth.encrypt_secret("readonly-access-token"),
+            encrypted_refresh_token=cal_oauth.encrypt_secret("readonly-refresh-token"),
+            token_expires_at=now + timedelta(hours=1),
+        )
+        rec = Recording(
+            id=rec_id,
+            idempotency_key="zweekly-group-cal-test",
+            request_digest="digest-zweekly",
+            meeting_url="https://meet.google.com/zweekly-room",
+            provider="google_meet",
+            title="Gruppe-DEV Zweekly",
+            owner_sub="sub-johann",
+            owner_email="johann@mayflower.de",
+            starts_at=now - timedelta(hours=1),
+            ends_at=now,
+            participation="ended",
+            processing="completed",
+            export_reader_nonce=uuid.uuid4(),
+            protocol_meta={
+                "summary": {
+                    "summary": "Fortschritte bei Wortlaut und Glossar-Editor besprochen.",
+                    "topics": [],
+                    "action_items": [],
+                }
+            },
+        )
+        db.add_all([conn, rec])
+        db.flush()
+        ev = CalendarSyncedEvent(
+            connection_id=conn.id,
+            owner_sub="sub-johann",
+            owner_email="johann@mayflower.de",
+            calendar_provider="google",
+            external_event_id=ext_event_id,
+            title="Gruppe-DEV Zweekly",
+            starts_at=now - timedelta(hours=1),
+            ends_at=now,
+            organizer_email=group_cal,
+            is_self_organized=False,
+            meeting_provider="google_meet",
+            meeting_url="https://meet.google.com/zweekly-room",
+            status="confirmed",
+            auto_record=True,
+            recording_id=rec_id,
+        )
+        db.add(ev)
+        db.commit()
+        conn_id = conn.id
+        ev_id = ev.id
+
+    class _Resp:
+        def __init__(self, status_code: int, body: dict):
+            self.status_code = status_code
+            self._body = body
+            import json as _json
+
+            self.text = _json.dumps(body)
+
+        def json(self):
+            return self._body
+
+    patched_calls: list[tuple[str, dict, dict]] = []
+    mode = {"scope": "readonly"}
+
+    def fake_get(url: str, **kwargs):
+        if "oauth2/v3/userinfo" in url:
+            return _Resp(200, {"email": "johann@mayflower.de"})
+        return _Resp(200, {"id": ext_event_id, "description": "Wöchentlicher Sync"})
+
+    def fake_patch(url: str, **kwargs):
+        if mode["scope"] == "readonly":
+            return _Resp(
+                403,
+                {"error": {"code": 403, "message": "Insufficient Permission"}},
+            )
+        patched_calls.append((url, kwargs.get("params") or {}, kwargs.get("json") or {}))
+        return _Resp(200, {"id": ext_event_id})
+
+    def fake_post(url: str, **kwargs):
+        return _Resp(
+            200,
+            {
+                "access_token": "events-write-access-token",
+                "refresh_token": "events-write-refresh-token",
+                "expires_in": 3600,
+            },
+        )
+
+    monkeypatch.setattr(cal_oauth.httpx, "get", fake_get)
+    monkeypatch.setattr(cal_oauth.httpx, "patch", fake_patch)
+    monkeypatch.setattr(cal_oauth.httpx, "post", fake_post)
+
+    # 1. With readonly scope, writeback fails and records error + provider
+    with Session(database) as db:
+        rec_row = db.get(Recording, rec_id)
+        assert rec_row is not None
+        res1 = cal_oauth.publish_protocol_link_to_calendar_events(db, rec_row)
+        db.commit()
+        assert res1["status"] == "error"
+        assert res1["error"] == "insufficient_calendar_write_scope"
+
+    tx1 = client.get(f"/v1/recordings/{rec_id}/transcript", headers=API).json()
+    assert tx1["calendar_link_error"] == "insufficient_calendar_write_scope"
+    assert tx1["calendar_link_provider"] == "google"
+    assert tx1["calendar_link_synced_at"] is None
+
+    # 2. Reconnecting OAuth upgrades token AND automatically backfills pending writeback
+    #    directly onto the shared @group.calendar.google.com calendar event!
+    mode["scope"] = "events"
+
+    def fake_sync(db_sess, c, now=None):
+        ev_row = db_sess.get(CalendarSyncedEvent, ev_id)
+        return [ev_row] if ev_row is not None else []
+
+    monkeypatch.setattr(cal_oauth, "sync_connection", fake_sync)
+
+    principal = Principal(
+        kind="user",
+        sub="sub-johann",
+        email="johann@mayflower.de",
+        name="Johann",
+        is_admin=True,
+    )
+    with Session(database) as db:
+        exch = cal_oauth.exchange_calendar_oauth_code(
+            db,
+            principal=principal,
+            provider="google",
+            code="fresh-consent-code",
+            code_verifier="w" * 48,
+            redirect_uri="https://wortlaut.data.mayflower.tech/auth/callback",
+        )
+
+    assert len(patched_calls) == 1
+    patched_url, patched_params, patched_json = patched_calls[0]
+    assert "mayflower.de_brd1c7uol47s7r083108auess8%40group.calendar.google.com" in patched_url
+    assert patched_params == {"sendUpdates": "none"}
+    assert str(rec_id) in patched_json["description"]
+    assert "Fortschritte bei Wortlaut" in patched_json["description"]
+
+    assert len(exch["synced_events"]) == 1
+    assert exch["synced_events"][0]["calendar_link_synced_at"] is not None
+    assert exch["synced_events"][0]["calendar_link_error"] is None
+
+    tx2 = client.get(f"/v1/recordings/{rec_id}/transcript", headers=API).json()
+    assert tx2["calendar_link_synced_at"] is not None
+    assert tx2["calendar_link_error"] is None
+    assert tx2["calendar_link_provider"] is None
+    assert conn_id is not None

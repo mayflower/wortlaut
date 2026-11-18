@@ -49,6 +49,7 @@ import {
   linkRecordingInCalendar,
   rejoinRecording,
   retryMailDelivery,
+  startCalendarOAuthConnect,
   updateRecordingProtocol,
 } from '../api';
 import {
@@ -59,6 +60,7 @@ import {
 import {
   formatBotDisplayName,
   type AuthMode,
+  type CalendarConnectionInfo,
   type RecordingDetail,
   type TranscriptExport,
 } from '../types';
@@ -71,6 +73,7 @@ export interface MeetingDetailViewProps {
   authMode: AuthMode;
   recording: RecordingDetail | null;
   transcript: TranscriptExport | null;
+  calendarConnections?: CalendarConnectionInfo[];
   focusKeyframeId?: string | null;
   isLoading: boolean;
   loadError?: unknown;
@@ -85,6 +88,7 @@ export function MeetingDetailView({
   authMode,
   recording,
   transcript,
+  calendarConnections = [],
   focusKeyframeId,
   isLoading,
   loadError,
@@ -966,33 +970,84 @@ export function MeetingDetailView({
                   !dismissedCalendarScopeNotice &&
                   !transcript.calendar_link_synced_at &&
                   transcript.calendar_link_error ===
-                    'insufficient_calendar_write_scope' && (
-                    <Banner
-                      status="warning"
-                      container="card"
-                      isDismissable
-                      onDismiss={() => setDismissedCalendarScopeNotice(true)}
-                      title={tr(
-                        'Protokoll-Link konnte nicht automatisch im Kalender eingetragen werden',
-                        'Protocol link could not be written back to your calendar automatically'
-                      )}
-                      description={tr(
-                        'Ihre Kalender-Verbindung nutzt noch eine ältere Nur-Lesen-Berechtigung. Verbinden Sie Ihren Kalender einmalig neu, um Protokoll-Links automatisch in Termine zu schreiben.',
-                        'Your calendar connection still uses read-only permissions. Reconnect your calendar once to automatically add protocol links to calendar events.'
-                      )}
-                      endContent={
-                        onOpenCalendar ? (
-                          <Button
-                            variant="secondary"
-                            size="sm"
-                            icon={<Link2 className="h-3.5 w-3.5" />}
-                            label={tr('Zum Kalender', 'Open Calendar')}
-                            onClick={onOpenCalendar}
-                          />
-                        ) : undefined
-                      }
-                    />
-                  )}
+                    'insufficient_calendar_write_scope' && (() => {
+                    const reconnectProvider: 'google' | 'microsoft' | null =
+                      transcript.calendar_link_provider === 'google' ||
+                      transcript.calendar_link_provider === 'microsoft'
+                        ? transcript.calendar_link_provider
+                        : calendarConnections.length === 1
+                          ? calendarConnections[0].provider
+                          : recording.provider === 'google_meet' &&
+                              calendarConnections.some(
+                                (c) => c.provider === 'google'
+                              )
+                            ? 'google'
+                            : recording.provider === 'teams' &&
+                                calendarConnections.some(
+                                  (c) => c.provider === 'microsoft'
+                                )
+                              ? 'microsoft'
+                              : null;
+                    const reconnectLabel =
+                      reconnectProvider === 'google'
+                        ? tr(
+                            'Google Kalender neu verbinden',
+                            'Reconnect Google Calendar'
+                          )
+                        : reconnectProvider === 'microsoft'
+                          ? tr(
+                              'Microsoft 365 neu verbinden',
+                              'Reconnect Microsoft 365'
+                            )
+                          : null;
+                    return (
+                      <Banner
+                        status="warning"
+                        container="card"
+                        isDismissable
+                        onDismiss={() => setDismissedCalendarScopeNotice(true)}
+                        title={tr(
+                          'Protokoll-Link konnte nicht automatisch im Kalender eingetragen werden',
+                          'Protocol link could not be written back to your calendar automatically'
+                        )}
+                        description={tr(
+                          'Ihre Kalender-Verbindung nutzt noch eine ältere Nur-Lesen-Berechtigung. Nach einmaligem Neuverbinden trägt Wortlaut den Protokoll-Link automatisch nach.',
+                          'Your calendar connection still uses read-only permissions. Reconnecting once automatically writes the protocol link back into the event.'
+                        )}
+                        endContent={
+                          reconnectProvider && reconnectLabel ? (
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              isLoading={busyAction === 'reconnect-calendar'}
+                              isDisabled={busyAction !== null}
+                              icon={<Link2 className="h-3.5 w-3.5" />}
+                              label={reconnectLabel}
+                              onClick={() => {
+                                void runExclusiveAction(
+                                  'reconnect-calendar',
+                                  async () => {
+                                    await startCalendarOAuthConnect(
+                                      reconnectProvider,
+                                      recording.id
+                                    );
+                                  }
+                                );
+                              }}
+                            />
+                          ) : onOpenCalendar ? (
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              icon={<Link2 className="h-3.5 w-3.5" />}
+                              label={tr('Zum Kalender', 'Open Calendar')}
+                              onClick={onOpenCalendar}
+                            />
+                          ) : undefined
+                        }
+                      />
+                    );
+                  })()}
 
                 {activeTab === 'transcript' && (
                   <TranscriptTab

@@ -1068,6 +1068,7 @@ def export_data(
         "opted_out_speakers": opted_out_list,
         "calendar_link_synced_at": meta.get("calendar_link_synced_at"),
         "calendar_link_error": meta.get("calendar_link_error"),
+        "calendar_link_provider": meta.get("calendar_link_provider"),
         "attempts": [
             {
                 "id": str(a.id),

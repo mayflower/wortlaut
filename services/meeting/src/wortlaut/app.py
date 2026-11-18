@@ -1962,6 +1962,12 @@ def link_recording_in_calendar(
                 "Bitte verbinden Sie Ihren Kalender im Tab „Kalender“ einmalig neu, "
                 "um das Eintragen von Protokoll-Links zu aktivieren.",
             )
+        if err == "calendar_event_not_editable_by_guest":
+            raise HTTPException(
+                403,
+                "Dieser Kalendereintrag lässt das Bearbeiten der Beschreibung "
+                "durch Gäste nicht zu.",
+            )
         raise HTTPException(
             502, f"Kalendereintrag konnte nicht aktualisiert werden ({err})."
         )

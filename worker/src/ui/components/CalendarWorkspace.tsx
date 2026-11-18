@@ -525,109 +525,144 @@ export function CalendarWorkspace({
     titleLabel: string,
     conn: CalendarConnectionInfo | null,
     enabled: boolean | undefined
-  ) => (
-    <Card>
-      <VStack gap={2}>
-        <HStack justify="between" vAlign="center" gap={2}>
-          <Text type="body" weight="semibold" color="primary">
-            {titleLabel}
-          </Text>
+  ) => {
+    const needsWriteUpgrade =
+      conn != null &&
+      syncedEvents.some(
+        (ev) =>
+          ev.connection_id === conn.id &&
+          !ev.calendar_link_synced_at &&
+          ev.calendar_link_error === 'insufficient_calendar_write_scope'
+      );
+    return (
+      <Card>
+        <VStack gap={2}>
+          <HStack justify="between" vAlign="center" gap={2}>
+            <Text type="body" weight="semibold" color="primary">
+              {titleLabel}
+            </Text>
+            {conn ? (
+              needsWriteUpgrade ? (
+                <StatusIndicator
+                  variant="warning"
+                  weight="medium"
+                  label={tr(
+                    'Nur Lesen · Schreibzugriff erneuern',
+                    'Read-only · Reconnect for write access'
+                  )}
+                />
+              ) : (
+                <StatusIndicator
+                  variant="success"
+                  weight="medium"
+                  label={tr('Verbunden', 'Connected')}
+                />
+              )
+            ) : null}
+          </HStack>
+
           {conn ? (
-            <StatusIndicator
-              variant="success"
-              weight="medium"
-              label={tr('Verbunden', 'Connected')}
-            />
-          ) : null}
-        </HStack>
+            <HStack justify="between" vAlign="center" wrap="wrap" gap={2}>
+              <VStack gap={0.5}>
+                <Text type="supporting" weight="semibold" color="primary">
+                  {conn.account_email}
+                </Text>
+                {conn.sync_error ? (
+                  <Text type="supporting" color="secondary">
+                    {conn.sync_error}
+                  </Text>
+                ) : conn.last_synced_at ? (
+                  <Text
+                    type="supporting"
+                    color="secondary"
+                    hasTabularNumbers
+                  >
+                    {tr('Sync', 'Synced')}:{' '}
+                    {new Date(conn.last_synced_at).toLocaleTimeString(localeTag, {
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })}
+                  </Text>
+                ) : null}
+              </VStack>
 
-        {conn ? (
-          <HStack justify="between" vAlign="center" wrap="wrap" gap={2}>
-            <VStack gap={0.5}>
-              <Text type="supporting" weight="semibold" color="primary">
-                {conn.account_email}
+              <HStack gap={1.5} vAlign="center">
+                {needsWriteUpgrade && (
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    isLoading={oauthBusy === `connect-${provider}`}
+                    isDisabled={oauthBusy !== null}
+                    icon={<Link2 className="h-3.5 w-3.5" />}
+                    label={tr(
+                      'Schreibzugriff aktivieren',
+                      'Enable write access'
+                    )}
+                    onClick={() => handleConnectOAuth(provider)}
+                  />
+                )}
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  isLoading={oauthBusy === `sync-${conn.id}`}
+                  isDisabled={oauthBusy !== null}
+                  icon={<RefreshCw className="h-3.5 w-3.5" />}
+                  label={tr('Synchronisieren', 'Sync')}
+                  onClick={() => handleSyncConnection(conn.id)}
+                />
+                <MoreMenu
+                  size="sm"
+                  variant="ghost"
+                  alignment="end"
+                  label={tr('Konto-Aktionen', 'Account actions')}
+                  items={[
+                    {
+                      id: 'reconnect',
+                      label: tr(
+                        'Berechtigung erneuern',
+                        'Reconnect permissions'
+                      ),
+                      icon: <Link2 className="h-3.5 w-3.5" />,
+                      onClick: () => handleConnectOAuth(provider),
+                    },
+                    {
+                      id: 'disconnect',
+                      label: tr('Verbindung trennen', 'Disconnect'),
+                      variant: 'destructive',
+                      icon: <Trash2 className="h-3.5 w-3.5" />,
+                      onClick: () => handleDisconnectConnection(conn.id),
+                    },
+                  ]}
+                />
+              </HStack>
+            </HStack>
+          ) : (
+            <HStack justify="between" vAlign="center" wrap="wrap" gap={2}>
+              <Text type="supporting" color="secondary">
+                {tr(
+                  'Termine synchronisieren & Protokoll-Link automatisch hinterlegen.',
+                  'Sync meetings & write protocol link back into calendar.'
+                )}
               </Text>
-              {conn.sync_error ? (
-                <Text type="supporting" color="secondary">
-                  {conn.sync_error}
-                </Text>
-              ) : conn.last_synced_at ? (
-                <Text
-                  type="supporting"
-                  color="secondary"
-                  hasTabularNumbers
-                >
-                  {tr('Sync', 'Synced')}:{' '}
-                  {new Date(conn.last_synced_at).toLocaleTimeString(localeTag, {
-                    hour: '2-digit',
-                    minute: '2-digit',
-                  })}
-                </Text>
-              ) : null}
-            </VStack>
-
-            <HStack gap={1.5} vAlign="center">
               <Button
                 variant="secondary"
                 size="sm"
-                isLoading={oauthBusy === `sync-${conn.id}`}
-                isDisabled={oauthBusy !== null}
-                icon={<RefreshCw className="h-3.5 w-3.5" />}
-                label={tr('Synchronisieren', 'Sync')}
-                onClick={() => handleSyncConnection(conn.id)}
-              />
-              <MoreMenu
-                size="sm"
-                variant="ghost"
-                alignment="end"
-                label={tr('Konto-Aktionen', 'Account actions')}
-                items={[
-                  {
-                    id: 'reconnect',
-                    label: tr(
-                      'Berechtigung erneuern',
-                      'Reconnect permissions'
-                    ),
-                    icon: <Link2 className="h-3.5 w-3.5" />,
-                    onClick: () => handleConnectOAuth(provider),
-                  },
-                  {
-                    id: 'disconnect',
-                    label: tr('Verbindung trennen', 'Disconnect'),
-                    variant: 'destructive',
-                    icon: <Trash2 className="h-3.5 w-3.5" />,
-                    onClick: () => handleDisconnectConnection(conn.id),
-                  },
-                ]}
+                isLoading={oauthBusy === `connect-${provider}`}
+                isDisabled={oauthBusy !== null || !enabled}
+                icon={<Link2 className="h-3.5 w-3.5" />}
+                label={
+                  enabled
+                    ? tr('Verbinden', 'Connect')
+                    : tr('Nicht konfiguriert', 'Not configured')
+                }
+                onClick={() => handleConnectOAuth(provider)}
               />
             </HStack>
-          </HStack>
-        ) : (
-          <HStack justify="between" vAlign="center" wrap="wrap" gap={2}>
-            <Text type="supporting" color="secondary">
-              {tr(
-                'Termine synchronisieren & Protokoll-Link automatisch hinterlegen.',
-                'Sync meetings & write protocol link back into calendar.'
-              )}
-            </Text>
-            <Button
-              variant="secondary"
-              size="sm"
-              isLoading={oauthBusy === `connect-${provider}`}
-              isDisabled={oauthBusy !== null || !enabled}
-              icon={<Link2 className="h-3.5 w-3.5" />}
-              label={
-                enabled
-                  ? tr('Verbinden', 'Connect')
-                  : tr('Nicht konfiguriert', 'Not configured')
-              }
-              onClick={() => handleConnectOAuth(provider)}
-            />
-          </HStack>
-        )}
-      </VStack>
-    </Card>
-  );
+          )}
+        </VStack>
+      </Card>
+    );
+  };
 
   return (
     <Layout

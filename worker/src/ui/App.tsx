@@ -143,9 +143,16 @@ export function App() {
         setToken(res.token);
       } else if (res.calendarConnected) {
         setAuthError(null);
-        setActiveNav('calendar');
-        setSelectedId(null);
+        if (res.returnRecordingId) {
+          setActiveNav('meetings');
+          setSelectedId(res.returnRecordingId);
+        } else {
+          setActiveNav('calendar');
+          setSelectedId(null);
+        }
         queryClient.invalidateQueries({ queryKey: ['calendar'] });
+        queryClient.invalidateQueries({ queryKey: ['transcript'] });
+        queryClient.invalidateQueries({ queryKey: ['recordings'] });
       }
     });
     return () => {
@@ -446,10 +453,62 @@ export function App() {
     queryFn: () => fetchTranscript(token, activeRecordingId!),
     enabled:
       authMode.kind !== 'unauthenticated' && Boolean(activeRecordingId),
-    refetchInterval: !isSelectedRecordingSettled ? 3000 : false,
+    refetchInterval: (query) => {
+      const t = query.state.data;
+      if (
+        isSelectedRecordingSettled &&
+        t &&
+        (t.processing === 'completed' || t.processing === 'failed')
+      ) {
+        return false;
+      }
+      return 3000;
+    },
     refetchIntervalInBackground: false,
     retry: false,
   });
+
+  useEffect(() => {
+    if (!activeRecordingId || !isSelectedRecordingSettled) return;
+    if (
+      transcriptQuery.data?.processing !== detailQuery.data?.processing &&
+      !transcriptQuery.isFetching
+    ) {
+      queryClient.invalidateQueries({
+        queryKey: ['transcript', token, activeRecordingId],
+      });
+      if (authMode.kind === 'operator') {
+        queryClient.invalidateQueries({ queryKey: ['recordings'] });
+        queryClient.invalidateQueries({ queryKey: ['calendar'] });
+      }
+    }
+    if (
+      detailQuery.data?.processing === 'completed' &&
+      !transcriptQuery.data?.calendar_link_synced_at &&
+      !transcriptQuery.data?.calendar_link_error
+    ) {
+      const timer = window.setTimeout(() => {
+        queryClient.invalidateQueries({
+          queryKey: ['transcript', token, activeRecordingId],
+        });
+        if (authMode.kind === 'operator') {
+          queryClient.invalidateQueries({ queryKey: ['calendar'] });
+        }
+      }, 2500);
+      return () => window.clearTimeout(timer);
+    }
+  }, [
+    activeRecordingId,
+    authMode.kind,
+    detailQuery.data?.processing,
+    isSelectedRecordingSettled,
+    queryClient,
+    token,
+    transcriptQuery.data?.calendar_link_error,
+    transcriptQuery.data?.calendar_link_synced_at,
+    transcriptQuery.data?.processing,
+    transcriptQuery.isFetching,
+  ]);
 
   useEffect(() => {
     const err = detailQuery.error || transcriptQuery.error;
@@ -821,6 +880,7 @@ export function App() {
             authMode={authMode}
             recording={detailQuery.data || null}
             transcript={transcriptQuery.data || null}
+            calendarConnections={calendarConnections}
             focusKeyframeId={focusKeyframeId}
             isLoading={detailQuery.isLoading || transcriptQuery.isLoading}
             loadError={detailLoadError}

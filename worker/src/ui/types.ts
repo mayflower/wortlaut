@@ -216,6 +216,7 @@ export interface TranscriptExport {
   opted_out_speakers?: string[];
   calendar_link_synced_at?: string | null;
   calendar_link_error?: string | null;
+  calendar_link_provider?: 'google' | 'microsoft' | null;
   quality: {
     no_audio_received: boolean;
     has_audio_gaps: boolean;
@@ -283,6 +284,7 @@ export interface CalendarSyncedEventInfo {
   protocol_url?: string | null;
   calendar_link_synced_at?: string | null;
   calendar_link_error?: string | null;
+  calendar_link_provider?: 'google' | 'microsoft' | null;
 }
 
 export interface UserIdentity {

@@ -156,7 +156,8 @@ export async function startOidcLogin(): Promise<void> {
 }
 
 export async function startCalendarOAuthConnect(
-  provider: 'google' | 'microsoft'
+  provider: 'google' | 'microsoft',
+  returnRecordingId?: string
 ): Promise<void> {
   const instance = getInstanceInfo();
   const calOAuth = instance.calendarOAuth;
@@ -172,7 +173,7 @@ export async function startCalendarOAuthConnect(
 
   sessionStorage.setItem(
     CALENDAR_OAUTH_PKCE_STORAGE_KEY,
-    JSON.stringify({ provider, verifier, state, redirectUri })
+    JSON.stringify({ provider, verifier, state, redirectUri, returnRecordingId })
   );
 
   if (provider === 'google') {
@@ -228,6 +229,7 @@ export async function startCalendarOAuthConnect(
 export async function completeOidcCallbackIfPresent(): Promise<{
   token?: string;
   calendarConnected?: CalendarConnectionInfo;
+  returnRecordingId?: string;
   error?: string;
 } | null> {
   if (typeof window === 'undefined') return null;
@@ -244,33 +246,42 @@ export async function completeOidcCallbackIfPresent(): Promise<{
   const rawCalStored = sessionStorage.getItem(CALENDAR_OAUTH_PKCE_STORAGE_KEY);
   if (rawCalStored) {
     sessionStorage.removeItem(CALENDAR_OAUTH_PKCE_STORAGE_KEY);
-    const clearToCalendar = () => {
-      window.history.replaceState(null, '', '/ui#view=calendar');
+    const clearToTarget = (recId?: string) => {
+      if (recId) {
+        window.history.replaceState(
+          null,
+          '',
+          `/ui#view=meetings&id=${encodeURIComponent(recId)}`
+        );
+      } else {
+        window.history.replaceState(null, '', '/ui#view=calendar');
+      }
     };
-    if (errParam) {
-      clearToCalendar();
-      return {
-        error: `Kalender-Verknüpfung fehlgeschlagen: ${errDesc || errParam}`,
-      };
-    }
-    if (!code) {
-      clearToCalendar();
-      return null;
-    }
     let calStored: {
       provider: 'google' | 'microsoft';
       verifier: string;
       state: string;
       redirectUri: string;
+      returnRecordingId?: string;
     };
     try {
       calStored = JSON.parse(rawCalStored);
     } catch {
-      clearToCalendar();
+      clearToTarget();
       return { error: 'Ungültiger lokaler Kalender-OAuth-PKCE-Status.' };
     }
+    if (errParam) {
+      clearToTarget(calStored.returnRecordingId);
+      return {
+        error: `Kalender-Verknüpfung fehlgeschlagen: ${errDesc || errParam}`,
+      };
+    }
+    if (!code) {
+      clearToTarget(calStored.returnRecordingId);
+      return null;
+    }
     if (!state || state !== calStored.state) {
-      clearToCalendar();
+      clearToTarget(calStored.returnRecordingId);
       return { error: 'Ungültiger Kalender-OAuth-State-Parameter.' };
     }
     const activeToken = getSavedAccountToken() || loadInitialToken();
@@ -287,10 +298,13 @@ export async function completeOidcCallbackIfPresent(): Promise<{
           redirect_uri: calStored.redirectUri,
         }),
       });
-      clearToCalendar();
-      return { calendarConnected: res.connection };
+      clearToTarget(calStored.returnRecordingId);
+      return {
+        calendarConnected: res.connection,
+        returnRecordingId: calStored.returnRecordingId,
+      };
     } catch (err) {
-      clearToCalendar();
+      clearToTarget(calStored.returnRecordingId);
       return {
         error:
           err instanceof Error
