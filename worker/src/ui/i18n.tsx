@@ -340,3 +340,21 @@ export function localizeKeyframeCapability(
   }
   return fallbackDe[capability] || capability;
 }
+
+const PROCESSING_EN: Record<string, string> = {
+  pending: 'Pending',
+  processing: 'Transcribing',
+  completed: 'Completed',
+  failed: 'Failed',
+};
+
+export function localizeProcessing(
+  status: string,
+  lang: UiLang,
+  fallbackDe: Record<string, string>
+): string {
+  if (lang === 'en') {
+    return PROCESSING_EN[status] || status;
+  }
+  return fallbackDe[status] || status;
+}

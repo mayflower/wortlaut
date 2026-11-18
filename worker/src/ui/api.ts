@@ -1,3 +1,4 @@
+import { getCurrentLang } from './i18n';
 import type {
   AuthMode,
   CalendarConnectionInfo,
@@ -102,7 +103,11 @@ export async function startOidcLogin(): Promise<void> {
   const instance = getInstanceInfo();
   const oidc = instance.oidc;
   if (!oidc?.enabled || !oidc.issuer || !oidc.clientId) {
-    throw new Error('OIDC-Anmeldung ist auf dieser Instanz nicht konfiguriert.');
+    throw new Error(
+      getCurrentLang() === 'en'
+        ? 'OIDC sign-in is not configured on this instance.'
+        : 'OIDC-Anmeldung ist auf dieser Instanz nicht konfiguriert.'
+    );
   }
   const verifier = randomBase64Url(32);
   const state = randomBase64Url(16);
@@ -171,7 +176,9 @@ export async function startCalendarOAuthConnect(
   if (provider === 'google') {
     if (!calOAuth?.googleEnabled || !calOAuth.googleClientId) {
       throw new Error(
-        'Google-Calendar-OAuth ist auf dieser Instanz noch nicht mit einer Client-ID konfiguriert.'
+        getCurrentLang() === 'en'
+          ? 'Google Calendar OAuth is not configured with a client ID on this instance.'
+          : 'Google-Calendar-OAuth ist auf dieser Instanz noch nicht mit einer Client-ID konfiguriert.'
       );
     }
     const authUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
@@ -193,7 +200,9 @@ export async function startCalendarOAuthConnect(
 
   if (!calOAuth?.microsoftEnabled || !calOAuth.microsoftClientId) {
     throw new Error(
-      'Microsoft-365-Kalender-OAuth ist auf dieser Instanz noch nicht mit einer Client-ID konfiguriert.'
+      getCurrentLang() === 'en'
+        ? 'Microsoft 365 Calendar OAuth is not configured with a client ID on this instance.'
+        : 'Microsoft-365-Kalender-OAuth ist auf dieser Instanz noch nicht mit einer Client-ID konfiguriert.'
     );
   }
   const tenant = calOAuth.microsoftTenantId || 'common';
@@ -437,31 +446,26 @@ export function exitReaderModeToAccount(): string {
   return getSavedAccountToken();
 }
 
-export type UiNavView = 'home' | 'meetings' | 'calendar' | 'mcp' | 'system';
+export type UiNavView = 'meetings' | 'calendar' | 'mcp' | 'system';
 
 export function readNavStateFromHash(): {
   view: UiNavView;
   recordingId: string | null;
 } {
   if (typeof window === 'undefined') {
-    return { view: 'home', recordingId: null };
+    return { view: 'meetings', recordingId: null };
   }
   const raw = window.location.hash.replace(/^#/, '');
   if (!raw || raw.includes('token=')) {
-    return { view: 'home', recordingId: null };
+    return { view: 'meetings', recordingId: null };
   }
   const params = new URLSearchParams(raw);
   const rawView = params.get('view');
   const id = params.get('id') || params.get('recording');
   const view: UiNavView =
-    rawView === 'meetings' ||
-    rawView === 'calendar' ||
-    rawView === 'mcp' ||
-    rawView === 'system'
+    rawView === 'calendar' || rawView === 'mcp' || rawView === 'system'
       ? rawView
-      : id && id.trim()
-        ? 'meetings'
-        : 'home';
+      : 'meetings';
   return {
     view,
     recordingId: id && id.trim() ? id.trim() : null,
@@ -478,7 +482,7 @@ export function writeNavStateToHash(
     return;
   }
   const params = new URLSearchParams();
-  if (view !== 'home') {
+  if (view !== 'meetings' || recordingId) {
     params.set('view', view);
   }
   if (recordingId) {
@@ -583,7 +587,49 @@ export const PROVIDER_LABELS: Record<Provider, string> = {
   zoom: 'Zoom',
 };
 
-export function formatApiErrorDetail(raw: unknown, status: number): string {
+const DEFAULT_FETCH_TIMEOUT_MS = 25000;
+
+function withDefaultTimeout(
+  options: RequestInit = {},
+  timeoutMs = DEFAULT_FETCH_TIMEOUT_MS
+): RequestInit {
+  if (options.signal || typeof AbortSignal.timeout !== 'function') {
+    return options;
+  }
+  return { ...options, signal: AbortSignal.timeout(timeoutMs) };
+}
+
+export function normalizeFetchError(err: unknown): Error {
+  if (err instanceof ApiError) return err;
+  const en = getCurrentLang() === 'en';
+  if (err && typeof err === 'object' && 'name' in err) {
+    const name = String((err as { name?: unknown }).name);
+    if (name === 'TimeoutError' || name === 'AbortError') {
+      return new ApiError(
+        408,
+        en
+          ? 'The server did not respond in time. Please check your connection and try again.'
+          : 'Zeitüberschreitung bei der Serveranfrage. Bitte Verbindung prüfen und erneut versuchen.'
+      );
+    }
+  }
+  if (err instanceof TypeError) {
+    return new ApiError(
+      0,
+      en
+        ? 'Network connection failed. Please check your internet connection and try again.'
+        : 'Keine Netzwerkverbindung zum Server. Bitte Verbindung prüfen und erneut versuchen.'
+    );
+  }
+  return err instanceof Error ? err : new Error(String(err));
+}
+
+export function formatApiErrorDetail(
+  raw: unknown,
+  status: number,
+  retryAfterHeader?: string | null
+): string {
+  const en = getCurrentLang() === 'en';
   if (Array.isArray(raw)) {
     const msgs = raw
       .map((item) => {
@@ -593,26 +639,93 @@ export function formatApiErrorDetail(raw: unknown, status: number): string {
         return JSON.stringify(item);
       })
       .join('; ');
-    return formatApiErrorDetail(msgs, status);
+    return formatApiErrorDetail(msgs, status, retryAfterHeader);
   }
-  const text = typeof raw === 'string' ? raw.trim() : JSON.stringify(raw);
-  if (!text) return `HTTP-Fehler ${status}`;
+  const text =
+    raw == null
+      ? ''
+      : typeof raw === 'string'
+        ? raw.trim()
+        : JSON.stringify(raw);
+  if (status === 429) {
+    const waitHint = retryAfterHeader ? ` (${retryAfterHeader}s)` : '';
+    return en
+      ? `Too many requests${waitHint}. Please wait a moment and try again.`
+      : `Zu viele Anfragen${waitHint}. Bitte einen Moment warten und erneut versuchen.`;
+  }
+  if (status === 413) {
+    return en
+      ? 'The uploaded payload exceeds the maximum allowed size.'
+      : 'Die übertragene Datei überschreitet die zulässige Maximalgröße.';
+  }
+  if (status === 502 || status === 503 || status === 504) {
+    return en
+      ? `Service temporarily unavailable (HTTP ${status}). Please try again shortly.`
+      : `Dienst vorübergehend nicht erreichbar (HTTP ${status}). Bitte in Kürze erneut versuchen.`;
+  }
+  if (
+    !text ||
+    text.startsWith('<!DOCTYPE') ||
+    text.startsWith('<html') ||
+    text === 'Internal Server Error'
+  ) {
+    if (status >= 500) {
+      return en
+        ? `Server error (HTTP ${status}). Please try again.`
+        : `Serverfehler (HTTP ${status}). Bitte erneut versuchen.`;
+    }
+    return en ? `HTTP error ${status}` : `HTTP-Fehler ${status}`;
+  }
   if (text.includes('ends_at must be after starts_at')) {
-    return 'Die Endzeit muss nach der Startzeit liegen.';
+    return en
+      ? 'End time must be after start time.'
+      : 'Die Endzeit muss nach der Startzeit liegen.';
   }
   if (text.includes('Meeting URL does not match provider')) {
-    return 'Die eingegebene Meeting-URL passt nicht zum gewählten Konferenzsystem (Google Meet, Microsoft Teams, Webex oder Zoom).';
+    return en
+      ? 'The meeting URL does not match a supported conference provider (Google Meet, Microsoft Teams, Webex, or Zoom).'
+      : 'Die eingegebene Meeting-URL passt nicht zum gewählten Konferenzsystem (Google Meet, Microsoft Teams, Webex oder Zoom).';
   }
   if (text.includes('Recording duration exceeds maximum')) {
-    return 'Die geplante Aufnahmedauer überschreitet das zulässige Maximum.';
+    return en
+      ? 'The scheduled recording duration exceeds the configured maximum.'
+      : 'Die geplante Aufnahmedauer überschreitet das zulässige Maximum.';
   }
   if (text.includes('Active meeting capacity reached')) {
-    return 'Die maximale Anzahl gleichzeitiger Meeting-Aufzeichnungen auf dem Cluster ist erreicht.';
+    return en
+      ? 'Maximum concurrent meeting capacity reached on this cluster.'
+      : 'Die maximale Anzahl gleichzeitiger Meeting-Aufzeichnungen auf dem Cluster ist erreicht.';
   }
   if (text.includes('Provider is not enabled')) {
-    return 'Dieses Konferenzsystem ist auf dieser Instanz derzeit nicht aktiviert.';
+    return en
+      ? 'This conference provider is currently disabled on this instance.'
+      : 'Dieses Konferenzsystem ist auf dieser Instanz derzeit nicht aktiviert.';
   }
   return text;
+}
+
+export function validateMeetingUrlClient(rawUrl: string): string | null {
+  const trimmed = rawUrl.trim();
+  const en = getCurrentLang() === 'en';
+  if (!trimmed) {
+    return en
+      ? 'Please enter a meeting link.'
+      : 'Bitte einen Konferenz-Link eingeben.';
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    return en
+      ? 'Please enter a complete URL starting with https:// (e.g. https://meet.google.com/…).'
+      : 'Bitte eine vollständige URL mit https:// eingeben (z. B. https://meet.google.com/…).';
+  }
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+    return en
+      ? 'Only http:// and https:// meeting links are supported.'
+      : 'Es werden nur Konferenz-Links mit https:// oder http:// unterstützt.';
+  }
+  return null;
 }
 
 export function detectProviderFromUrl(url: string): Provider | null {
@@ -647,17 +760,24 @@ export async function apiRequest<T>(
   if (options.body && typeof options.body === 'string' && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json');
   }
-  const res = await fetch(path, { ...options, headers });
+  let res: Response;
+  try {
+    res = await fetch(path, withDefaultTimeout({ ...options, headers }));
+  } catch (err) {
+    throw normalizeFetchError(err);
+  }
   if (!res.ok) {
-    let detail = res.statusText;
+    const retryAfter = res.headers.get('retry-after');
+    let rawDetail: unknown = res.statusText;
     try {
       const err = await res.json();
-      if (err?.detail) {
-        detail = formatApiErrorDetail(err.detail, res.status);
+      if (err?.detail !== undefined) {
+        rawDetail = err.detail;
       }
     } catch {
       // ignore non-json error bodies
     }
+    const detail = formatApiErrorDetail(rawDetail, res.status, retryAfter);
     throw new ApiError(res.status, detail || `HTTP ${res.status}`);
   }
   return (await res.json()) as T;
@@ -914,14 +1034,31 @@ export async function fetchAudioSnippetBlobUrl(
   if (streamId) {
     params.set('stream_id', streamId);
   }
-  const res = await fetch(
-    `/v1/recordings/${encodeURIComponent(recordingId)}/audio-snippet?${params.toString()}`,
-    {
-      headers: { Authorization: `Bearer ${normalizeBearerToken(token)}` },
-    }
-  );
+  let res: Response;
+  try {
+    res = await fetch(
+      `/v1/recordings/${encodeURIComponent(recordingId)}/audio-snippet?${params.toString()}`,
+      withDefaultTimeout({
+        headers: { Authorization: `Bearer ${normalizeBearerToken(token)}` },
+      })
+    );
+  } catch (err) {
+    throw normalizeFetchError(err);
+  }
   if (!res.ok) {
-    throw new ApiError(res.status, 'Audio-Ausschnitt nicht verfügbar.');
+    const en = getCurrentLang() === 'en';
+    if (res.status === 404 || res.status === 410) {
+      throw new ApiError(
+        res.status,
+        en
+          ? 'Audio snippet unavailable (raw audio may have expired under retention policy).'
+          : 'Audio-Ausschnitt nicht verfügbar (Roh-Audio evtl. nach Aufbewahrungsfrist gelöscht).'
+      );
+    }
+    throw new ApiError(
+      res.status,
+      formatApiErrorDetail(res.statusText, res.status, res.headers.get('retry-after'))
+    );
   }
   const blob = await res.blob();
   return URL.createObjectURL(blob);
@@ -935,9 +1072,17 @@ export async function fetchKeyframeBlobUrl(
   if (token) {
     headers.Authorization = `Bearer ${normalizeBearerToken(token)}`;
   }
-  const res = await fetch(imagePath, { headers });
+  let res: Response;
+  try {
+    res = await fetch(imagePath, withDefaultTimeout({ headers }));
+  } catch (err) {
+    throw normalizeFetchError(err);
+  }
   if (!res.ok) {
-    throw new ApiError(res.status, 'Folie nicht verfügbar.');
+    throw new ApiError(
+      res.status,
+      getCurrentLang() === 'en' ? 'Slide unavailable.' : 'Folie nicht verfügbar.'
+    );
   }
   const blob = await res.blob();
   return URL.createObjectURL(blob);
@@ -952,24 +1097,32 @@ export async function deleteRecordingKeyframe(
   if (token) {
     headers.Authorization = `Bearer ${normalizeBearerToken(token)}`;
   }
-  const res = await fetch(
-    `/v1/recordings/${encodeURIComponent(recordingId)}/keyframes/${encodeURIComponent(keyframeId)}`,
-    {
-      method: 'DELETE',
-      headers,
-    }
-  );
+  let res: Response;
+  try {
+    res = await fetch(
+      `/v1/recordings/${encodeURIComponent(recordingId)}/keyframes/${encodeURIComponent(keyframeId)}`,
+      withDefaultTimeout({
+        method: 'DELETE',
+        headers,
+      })
+    );
+  } catch (err) {
+    throw normalizeFetchError(err);
+  }
   if (!res.ok) {
-    let detail = res.statusText;
+    let rawDetail: unknown = res.statusText;
     try {
       const err = await res.json();
-      if (err?.detail) {
-        detail = formatApiErrorDetail(err.detail, res.status);
+      if (err?.detail !== undefined) {
+        rawDetail = err.detail;
       }
     } catch {
       // ignore empty/non-JSON error bodies
     }
-    throw new ApiError(res.status, detail || `HTTP ${res.status}`);
+    throw new ApiError(
+      res.status,
+      formatApiErrorDetail(rawDetail, res.status, res.headers.get('retry-after'))
+    );
   }
 }
 
@@ -999,20 +1152,31 @@ export async function importCalendarPayload(
     Authorization: `Bearer ${token}`,
     'Content-Type': 'message/rfc822',
   });
-  const res = await fetch('/v1/calendar/messages', {
-    method: 'POST',
-    headers,
-    body,
-  });
+  let res: Response;
+  try {
+    res = await fetch(
+      '/v1/calendar/messages',
+      withDefaultTimeout({
+        method: 'POST',
+        headers,
+        body,
+      })
+    );
+  } catch (err) {
+    throw normalizeFetchError(err);
+  }
   if (!res.ok) {
-    let detail = res.statusText;
+    let rawDetail: unknown = res.statusText;
     try {
       const err = await res.json();
-      if (err?.detail) detail = formatApiErrorDetail(err.detail, res.status);
+      if (err?.detail !== undefined) rawDetail = err.detail;
     } catch {
       // ignore
     }
-    throw new ApiError(res.status, detail);
+    throw new ApiError(
+      res.status,
+      formatApiErrorDetail(rawDetail, res.status, res.headers.get('retry-after'))
+    );
   }
   return (await res.json()) as { events: CalendarEvent[] };
 }
@@ -1022,21 +1186,29 @@ export async function fetchExportText(
   recordingId: string,
   format: 'txt' | 'vtt' | 'json' | 'md'
 ): Promise<string> {
-  const res = await fetch(
-    `/v1/recordings/${encodeURIComponent(recordingId)}/exports/${format}`,
-    {
-      headers: { Authorization: `Bearer ${normalizeBearerToken(token)}` },
-    }
-  );
+  let res: Response;
+  try {
+    res = await fetch(
+      `/v1/recordings/${encodeURIComponent(recordingId)}/exports/${format}`,
+      withDefaultTimeout({
+        headers: { Authorization: `Bearer ${normalizeBearerToken(token)}` },
+      })
+    );
+  } catch (err) {
+    throw normalizeFetchError(err);
+  }
   if (!res.ok) {
-    let detail = res.statusText;
+    let rawDetail: unknown = res.statusText;
     try {
       const err = await res.json();
-      if (err?.detail) detail = String(err.detail);
+      if (err?.detail !== undefined) rawDetail = err.detail;
     } catch {
       // ignore
     }
-    throw new ApiError(res.status, detail);
+    throw new ApiError(
+      res.status,
+      formatApiErrorDetail(rawDetail, res.status, res.headers.get('retry-after'))
+    );
   }
   return await res.text();
 }
@@ -1150,6 +1322,18 @@ export function formatDurationHuman(seconds: number): string {
   return s > 0 ? `${m}m ${s}s` : `${m}m`;
 }
 
+export function isProblemRecording(r: RecordingSummary): boolean {
+  const reason = r.participation_reason;
+  const samples = r.quality?.durable_sample_count || 0;
+  const cleanStop =
+    !reason ||
+    reason === 'normal' ||
+    reason === 'room_empty' ||
+    reason === 'source_binding_unverified' ||
+    ((reason === 'cancelled' || reason === 'deadline') && samples > 0);
+  return r.processing === 'failed' || (r.participation === 'ended' && !cleanStop);
+}
+
 export function formatRecordingTitle(rec: {
   title: string | null;
   provider: Provider;
@@ -1158,7 +1342,8 @@ export function formatRecordingTitle(rec: {
   if (rec.title && rec.title.trim()) {
     return rec.title.trim();
   }
-  const dateStr = new Date(rec.starts_at).toLocaleString('de-DE', {
+  const locale = getCurrentLang() === 'en' ? 'en-US' : 'de-DE';
+  const dateStr = new Date(rec.starts_at).toLocaleString(locale, {
     day: '2-digit',
     month: '2-digit',
     hour: '2-digit',

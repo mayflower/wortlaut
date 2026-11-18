@@ -1,6 +1,5 @@
 import React from 'react';
 import { BookOpen, RefreshCw } from 'lucide-react';
-import { Section } from '@astryxdesign/core/Section';
 import {
   MetadataList,
   MetadataListItem,
@@ -26,7 +25,9 @@ import {
 } from '../api';
 import {
   KEYFRAME_STRINGS,
+  localizeDeliveryStatus,
   localizeKeyframeCapability,
+  localizeProcessing,
   useI18n,
 } from '../i18n';
 import type { AttemptInfo, RecordingDetail, TranscriptExport } from '../types';
@@ -48,7 +49,7 @@ export function DiagnosticsTab({
   onRetryMail,
   retryingMail,
 }: DiagnosticsTabProps) {
-  const { lang, tr } = useI18n();
+  const { lang, localeTag, tr } = useI18n();
   const kStr = KEYFRAME_STRINGS[lang];
   const origin = typeof window !== 'undefined' ? window.location.origin : '';
   const curlSnippet = `curl --fail -H "Authorization: Bearer $WORTLAUT_API_TOKEN" "${origin}/v1/recordings/${recording.id}/exports/json"`;
@@ -76,13 +77,13 @@ export function DiagnosticsTab({
       width: pixel(140),
       renderCell: (a) => (
         <Text type="supporting" color="primary" hasTabularNumbers>
-          {a.id.slice(0, 8)}…
+          {a.id ? `${String(a.id).slice(0, 8)}…` : '–'}
         </Text>
       ),
     },
     {
       key: 'job_name',
-      header: 'Kubernetes-Job',
+      header: tr('Kubernetes-Job', 'Kubernetes Job'),
       width: proportional(1.5, { minWidth: 200 }),
       renderCell: (a) => (
         <Text type="supporting" color="secondary">
@@ -92,167 +93,201 @@ export function DiagnosticsTab({
     },
     {
       key: 'end_reason',
-      header: 'Endgrund',
+      header: tr('Endgrund', 'End reason'),
       width: pixel(160),
       renderCell: (a) => (
         <Text type="supporting" color="primary">
-          {a.end_reason || 'aktiv'}
+          {a.end_reason || tr('aktiv', 'active')}
         </Text>
       ),
     },
     {
       key: 'ended_at',
-      header: 'Beendet',
+      header: tr('Beendet', 'Ended'),
       width: pixel(130),
       renderCell: (a) => (
         <Text type="supporting" color="secondary" hasTabularNumbers>
           {a.ended_at
-            ? new Date(a.ended_at).toLocaleTimeString('de-DE')
-            : 'läuft'}
+            ? new Date(a.ended_at).toLocaleTimeString(localeTag)
+            : tr('läuft', 'running')}
         </Text>
       ),
     },
   ];
 
   return (
-    <VStack gap={4}>
-      <Section variant="section">
-        <VStack gap={3}>
-          <HStack justify="between" vAlign="center" wrap="wrap" gap={2}>
-            <Heading level={3}>Pipeline, WebRTC &amp; Zustellung</Heading>
-            {canRetryMail && (
-              <span id="retry-mail-btn">
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  isLoading={retryingMail}
-                  icon={<RefreshCw className="h-3.5 w-3.5" />}
-                  label="E-Mail erneut senden"
-                  onClick={onRetryMail}
-                />
-              </span>
-            )}
-          </HStack>
+    <VStack gap={5}>
+      <VStack gap={3}>
+        <HStack justify="between" vAlign="center" wrap="wrap" gap={2}>
+          <Heading level={2}>
+            {tr('Pipeline, WebRTC & Zustellung', 'Pipeline, WebRTC & Delivery')}
+          </Heading>
+          {canRetryMail && (
+            <span id="retry-mail-btn">
+              <Button
+                variant="secondary"
+                size="sm"
+                isLoading={retryingMail}
+                icon={<RefreshCw className="h-3.5 w-3.5" />}
+                label={tr('E-Mail erneut senden', 'Retry email delivery')}
+                onClick={onRetryMail}
+              />
+            </span>
+          )}
+        </HStack>
 
-          <MetadataList columns={3}>
-            <MetadataListItem label="Persistierte Samples">
-              {sampleCount.toLocaleString('de-DE')} ({sampleSec}s)
-            </MetadataListItem>
-            <MetadataListItem label="Persistierte Chunks">
+        <MetadataList columns="multi">
+          <MetadataListItem
+            label={tr('Persistierte Samples', 'Persisted samples')}
+          >
+            <span className="tabular-nums">
+              {sampleCount.toLocaleString(localeTag)} ({sampleSec}s)
+            </span>
+          </MetadataListItem>
+          <MetadataListItem
+            label={tr('Persistierte Chunks', 'Persisted chunks')}
+          >
+            <span className="tabular-nums">
               {recording.ingest?.durable_chunk_count ?? 0}
-            </MetadataListItem>
-            <MetadataListItem label="ASR-Jobs (offen / fertig / fehler)">
+            </span>
+          </MetadataListItem>
+          <MetadataListItem
+            label={tr(
+              'ASR-Jobs (offen / fertig / Fehler)',
+              'ASR jobs (pending / done / failed)'
+            )}
+          >
+            <span className="tabular-nums">
               {recording.asr?.pending ?? 0} / {recording.asr?.completed ?? 0} /{' '}
               {recording.asr?.failed ?? 0}
-            </MetadataListItem>
-            <MetadataListItem label="Verarbeitungsstatus">
-              {PROCESSING_LABELS[recording.processing] || recording.processing}
-            </MetadataListItem>
-            <MetadataListItem label="Gebundene Receiver">
-              {live?.bound_receivers ?? 0} / {live?.total_receivers ?? 0} (mit
-              Name: {live?.bound_named_receivers ?? 0})
-            </MetadataListItem>
-            <MetadataListItem label="Erkannte Teilnehmer">
+            </span>
+          </MetadataListItem>
+          <MetadataListItem label={tr('Verarbeitung', 'Processing')}>
+            {localizeProcessing(recording.processing, lang, PROCESSING_LABELS)}
+          </MetadataListItem>
+          <MetadataListItem
+            label={tr('Gebundene Receiver', 'Bound receivers')}
+          >
+            <span className="tabular-nums">
+              {live?.bound_receivers ?? 0} / {live?.total_receivers ?? 0} (
+              {tr('benannt', 'named')}: {live?.bound_named_receivers ?? 0})
+            </span>
+          </MetadataListItem>
+          <MetadataListItem
+            label={tr('Erkannte Teilnehmer', 'Detected participants')}
+          >
+            <span className="tabular-nums">
               {live?.dom_or_signaled_participants ?? 0} (DOM:{' '}
               {live?.dom_participants ?? 0})
-            </MetadataListItem>
-            <MetadataListItem label="SDP / DataChannels">
+            </span>
+          </MetadataListItem>
+          <MetadataListItem label="SDP / DataChannels">
+            <span className="tabular-nums">
               {live?.sdp_descriptions ?? 0} / {live?.data_channel_count ?? 0}
-            </MetadataListItem>
-            <MetadataListItem label="Letzter Worker-Heartbeat">
+            </span>
+          </MetadataListItem>
+          <MetadataListItem
+            label={tr('Letzter Heartbeat', 'Last worker heartbeat')}
+          >
+            <span className="tabular-nums">
               {live?.last_heartbeat_at
-                ? new Date(live.last_heartbeat_at).toLocaleTimeString('de-DE')
+                ? new Date(live.last_heartbeat_at).toLocaleTimeString(localeTag)
                 : '–'}
-            </MetadataListItem>
-            <MetadataListItem label="E-Mail-Zustellung">
-              {DELIVERY_STATUS_LABELS[
-                recording.delivery?.status ?? 'pending'
-              ] ||
-                (recording.delivery?.status ?? 'pending')}
-              {recording.delivery?.error
-                ? ` (${recording.delivery.error})`
-                : ''}
-            </MetadataListItem>
-          </MetadataList>
-        </VStack>
-      </Section>
+            </span>
+          </MetadataListItem>
+          <MetadataListItem label={tr('E-Mail-Zustellung', 'Email delivery')}>
+            {localizeDeliveryStatus(
+              recording.delivery?.status ?? 'pending',
+              lang,
+              DELIVERY_STATUS_LABELS
+            )}
+            {recording.delivery?.error ? ` (${recording.delivery.error})` : ''}
+          </MetadataListItem>
+        </MetadataList>
+      </VStack>
 
       {recording.attempts && recording.attempts.length > 0 && (
-        <Section variant="section">
-          <VStack gap={2}>
-            <Heading level={3}>
-              Worker-Attempts ({recording.attempts.length})
-            </Heading>
-            <Table<AttemptRow>
-              idKey="id"
-              density="compact"
-              dividers="rows"
-              data={recording.attempts as AttemptRow[]}
-              columns={attemptColumns}
-            />
-          </VStack>
-        </Section>
+        <VStack gap={2}>
+          <Heading level={2}>
+            {tr(
+              `Worker-Versuche (${recording.attempts.length})`,
+              `Worker Attempts (${recording.attempts.length})`
+            )}
+          </Heading>
+          <Table<AttemptRow>
+            idKey="id"
+            density="compact"
+            dividers="rows"
+            data={recording.attempts as AttemptRow[]}
+            columns={attemptColumns}
+          />
+        </VStack>
       )}
 
       {recording.attempts?.some((a) => Boolean(a.diagnostics?.keyframes)) && (
-        <Section variant="section">
-          <VStack gap={3}>
-            <Heading level={3}>{kStr.diagHeading}</Heading>
-            {recording.attempts
-              .filter((a) => Boolean(a.diagnostics?.keyframes))
-              .map((attempt) => {
-                const kfDiag = attempt.diagnostics!.keyframes!;
-                return (
-                  <div key={`kf-diag-${attempt.id}`} className="space-y-1.5">
-                    {recording.attempts.length > 1 && (
-                      <Text type="supporting" weight="semibold" color="secondary" hasTabularNumbers>
-                        Attempt {attempt.id.slice(0, 8)}…
-                      </Text>
-                    )}
-                    <MetadataList columns={4}>
-                      <MetadataListItem label={kStr.diagCapability}>
-                        {localizeKeyframeCapability(
-                          kfDiag.capability,
-                          lang,
-                          KEYFRAME_CAPABILITY_LABELS
-                        )}
-                      </MetadataListItem>
-                      <MetadataListItem label={kStr.diagActiveShare}>
-                        {kfDiag.active_share
-                          ? tr('Ja', 'Yes')
-                          : tr('Nein', 'No')}
-                      </MetadataListItem>
-                      <MetadataListItem label={kStr.diagEvaluatedTicks}>
-                        {kfDiag.evaluated_ticks}
-                      </MetadataListItem>
-                      <MetadataListItem label={kStr.diagEmitted}>
-                        {kfDiag.emitted}
-                      </MetadataListItem>
-                      <MetadataListItem label={kStr.diagUploaded}>
-                        {kfDiag.uploaded}
-                      </MetadataListItem>
-                      <MetadataListItem label={kStr.diagDroppedUnverified}>
-                        {kfDiag.dropped_unverified}
-                      </MetadataListItem>
-                      <MetadataListItem label={kStr.diagDroppedOptedOut}>
-                        {kfDiag.dropped_opted_out}
-                      </MetadataListItem>
-                      <MetadataListItem label={kStr.diagDroppedQueueFull}>
-                        {kfDiag.dropped_queue_full}
-                      </MetadataListItem>
-                    </MetadataList>
-                  </div>
-                );
-              })}
-          </VStack>
-        </Section>
+        <VStack gap={3}>
+          <Heading level={2}>{kStr.diagHeading}</Heading>
+          {recording.attempts
+            .filter((a) => Boolean(a.diagnostics?.keyframes))
+            .map((attempt) => {
+              const kfDiag = attempt.diagnostics!.keyframes!;
+              return (
+                <div key={`kf-diag-${attempt.id}`} className="space-y-1.5">
+                  {recording.attempts.length > 1 && (
+                    <Text
+                      type="supporting"
+                      weight="semibold"
+                      color="secondary"
+                      hasTabularNumbers
+                    >
+                      Attempt {attempt.id.slice(0, 8)}…
+                    </Text>
+                  )}
+                  <MetadataList columns={4}>
+                    <MetadataListItem label={kStr.diagCapability}>
+                      {localizeKeyframeCapability(
+                        kfDiag.capability,
+                        lang,
+                        KEYFRAME_CAPABILITY_LABELS
+                      )}
+                    </MetadataListItem>
+                    <MetadataListItem label={kStr.diagActiveShare}>
+                      {kfDiag.active_share
+                        ? tr('Ja', 'Yes')
+                        : tr('Nein', 'No')}
+                    </MetadataListItem>
+                    <MetadataListItem label={kStr.diagEvaluatedTicks}>
+                      {kfDiag.evaluated_ticks}
+                    </MetadataListItem>
+                    <MetadataListItem label={kStr.diagEmitted}>
+                      {kfDiag.emitted}
+                    </MetadataListItem>
+                    <MetadataListItem label={kStr.diagUploaded}>
+                      {kfDiag.uploaded}
+                    </MetadataListItem>
+                    <MetadataListItem label={kStr.diagDroppedUnverified}>
+                      {kfDiag.dropped_unverified}
+                    </MetadataListItem>
+                    <MetadataListItem label={kStr.diagDroppedOptedOut}>
+                      {kfDiag.dropped_opted_out}
+                    </MetadataListItem>
+                    <MetadataListItem label={kStr.diagDroppedQueueFull}>
+                      {kfDiag.dropped_queue_full}
+                    </MetadataListItem>
+                  </MetadataList>
+                </div>
+              );
+            })}
+        </VStack>
       )}
 
       <Divider variant="subtle" />
 
       <VStack gap={2}>
         <HStack justify="between" vAlign="center" wrap="wrap" gap={2}>
-          <Heading level={4}>REST-API Abruf (cURL)</Heading>
+          <Heading level={2}>
+            {tr('REST-API Abruf (cURL)', 'REST API Export (cURL)')}
+          </Heading>
           <Button
             variant="ghost"
             size="sm"
@@ -260,7 +295,7 @@ export function DiagnosticsTab({
             target="_blank"
             rel="noreferrer"
             icon={<BookOpen className="h-3.5 w-3.5" />}
-            label="OpenAPI-Dokumentation (/docs)"
+            label={tr('OpenAPI (/docs)', 'OpenAPI (/docs)')}
           />
         </HStack>
         <CodeBlock
@@ -272,7 +307,12 @@ export function DiagnosticsTab({
         />
       </VStack>
 
-      <Collapsible trigger="WebRTC-Receiver & Worker-Diagnose (Roh-JSON)">
+      <Collapsible
+        trigger={tr(
+          'WebRTC-Receiver & Worker-Diagnose (Roh-JSON)',
+          'WebRTC Receiver & Worker Diagnostics (Raw JSON)'
+        )}
+      >
         <div className="pt-2">
           <CodeBlock
             language="json"

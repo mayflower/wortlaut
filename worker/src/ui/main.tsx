@@ -6,7 +6,11 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Theme } from '@astryxdesign/core/theme';
 import { stoneTheme } from '@astryxdesign/theme-stone/built';
 import { App } from './App';
-import { ThemeModeContext, type ThemeMode } from './components/ui/primitives';
+import {
+  ThemeModeContext,
+  UiErrorBoundary,
+  type ThemeMode,
+} from './components/ui/primitives';
 import { I18nProvider } from './i18n';
 
 const THEME_STORAGE_KEY = 'wortlaut_theme_mode';
@@ -49,7 +53,9 @@ function Root() {
       <I18nProvider>
         <Theme theme={stoneTheme} mode={mode}>
           <QueryClientProvider client={queryClient}>
-            <App />
+            <UiErrorBoundary>
+              <App />
+            </UiErrorBoundary>
           </QueryClientProvider>
         </Theme>
       </I18nProvider>

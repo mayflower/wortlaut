@@ -21,14 +21,11 @@ import { HStack } from '@astryxdesign/core/HStack';
 import { VStack } from '@astryxdesign/core/VStack';
 import { Text } from '@astryxdesign/core/Text';
 import { Heading } from '@astryxdesign/core/Heading';
-import { Card } from '@astryxdesign/core/Card';
 import { Avatar } from '@astryxdesign/core/Avatar';
 import { Token } from '@astryxdesign/core/Token';
 import { TextInput } from '@astryxdesign/core/TextInput';
-import { Selector } from '@astryxdesign/core/Selector';
 import { IconButton } from '@astryxdesign/core/IconButton';
 import { EmptyState } from '@astryxdesign/core/EmptyState';
-import { Divider } from '@astryxdesign/core/Divider';
 import { Button } from '@astryxdesign/core/Button';
 import { Banner } from '@astryxdesign/core/Banner';
 import {
@@ -56,13 +53,25 @@ import type {
 } from '../types';
 import { LiveWaveform } from './ui/primitives';
 
+function foldSearchText(raw: string): string {
+  // Preserve U+200C (ZWNJ) while normalizing Arabic/Persian Yeh & Kaf variants
+  return raw
+    .replace(/\u064a/g, '\u06cc')
+    .replace(/\u0643/g, '\u06a9')
+    .toLowerCase();
+}
+
 function renderHighlightedText(text: string, query: string): React.ReactNode {
   const q = query.trim();
   if (!q) return text;
-  const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const escaped = q
+    .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    .replace(/[\u064a\u06cc]/g, '[\u064a\u06cc]')
+    .replace(/[\u0643\u06a9]/g, '[\u0643\u06a9]');
+  const foldedQuery = foldSearchText(q);
   const parts = text.split(new RegExp(`(${escaped})`, 'gi'));
   return parts.map((part, idx) =>
-    part.toLowerCase() === q.toLowerCase() ? (
+    foldSearchText(part) === foldedQuery ? (
       <mark key={idx} className="wl-search-hit">
         {part}
       </mark>
@@ -180,7 +189,7 @@ function KeyframeTimelineCard({
     <div
       ref={containerRef}
       id={`keyframe-${keyframe.id}`}
-      className="group wl-turn-row wl-fade-in"
+      className="group wl-turn-row"
     >
       <HStack gap={3} vAlign="start">
         <Avatar size="sm" shape="circle" name={keyframe.presenter} />
@@ -190,10 +199,10 @@ function KeyframeTimelineCard({
               <button
                 type="button"
                 onClick={onToggleFilter}
-                className={`font-semibold text-sm cursor-pointer ${
+                className={`font-semibold text-[14px] leading-snug cursor-pointer ${
                   isActiveFilter
-                    ? 'text-[var(--color-text-accent)]'
-                    : 'text-[var(--color-text-primary)] hover:text-[var(--color-text-accent)]'
+                    ? 'wl-text-accent'
+                    : 'text-[var(--color-text-primary)] wl-hover-accent'
                 }`}
               >
                 {keyframe.presenter}
@@ -207,7 +216,7 @@ function KeyframeTimelineCard({
             <HStack
               gap={1}
               vAlign="center"
-              className="opacity-0 group-hover:opacity-100 transition-opacity"
+              className="wl-row-actions"
             >
               {blobUrl && (
                 <IconButton
@@ -249,7 +258,7 @@ function KeyframeTimelineCard({
                 />
               </button>
             ) : (
-              <div className="inline-flex items-center gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-background-muted)] px-3.5 py-2.5 text-xs text-[var(--color-text-secondary)]">
+              <div className="inline-flex items-center gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-background-muted)] px-3.5 py-2.5 text-[13px] text-[var(--color-text-secondary)]">
                 <MonitorUp className="h-4 w-4 shrink-0" />
                 <span>{hasError ? unavailableLabel : loadingLabel}</span>
               </div>
@@ -434,36 +443,12 @@ export function TranscriptTab({
   };
 
   const allSpeakersLabel = tr(
-    `Alle Sprecher (${sources.length})`,
-    `All speakers (${sources.length})`
+    `Alle (${sources.length})`,
+    `All (${sources.length})`
   );
 
-  const sourceOptions = useMemo(() => {
-    const base = [
-      { value: 'all', label: allSpeakersLabel },
-      ...sources.map((src) => ({
-        value: getSourceFilterKey(src),
-        label: `${src.participant_name || src.speaker_label || src.provider_source_id} (${src.segment_count})`,
-      })),
-    ];
-    const knownKeys = new Set(base.map((opt) => opt.value));
-    for (const kf of keyframes) {
-      const kfKey = kf.participant_id
-        ? `participant:${kf.participant_id}`
-        : `source:${kf.provider_source_id}`;
-      if (!knownKeys.has(kfKey)) {
-        knownKeys.add(kfKey);
-        base.push({
-          value: kfKey,
-          label: `${kf.presenter} (${kStr.screenShareBadge})`,
-        });
-      }
-    }
-    return base;
-  }, [sources, keyframes, allSpeakersLabel, kStr.screenShareBadge]);
-
   const filteredKeyframes = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
+    const q = foldSearchText(searchQuery.trim());
     return keyframes.filter((kf) => {
       if (
         selectedSourceFilter &&
@@ -472,14 +457,15 @@ export function TranscriptTab({
         return false;
       }
       if (!q) return true;
-      const hay =
-        `${kf.presenter} ${kf.provider_source_id} bildschirmfreigabe screen share folie slide`.toLowerCase();
+      const hay = foldSearchText(
+        `${kf.presenter} ${kf.provider_source_id} bildschirmfreigabe screen share folie slide`
+      );
       return hay.includes(q);
     });
   }, [keyframes, selectedSourceFilter, searchQuery]);
 
   const filteredSegments = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
+    const q = foldSearchText(searchQuery.trim());
     return segments.filter((seg) => {
       if (
         selectedSourceFilter &&
@@ -488,8 +474,9 @@ export function TranscriptTab({
         return false;
       }
       if (!q) return true;
-      const hay =
-        `${seg.speaker_label} ${seg.participant_name || seg.speaker_name || ''} ${seg.text}`.toLowerCase();
+      const hay = foldSearchText(
+        `${seg.speaker_label} ${seg.participant_name || seg.speaker_name || ''} ${seg.text}`
+      );
       return hay.includes(q);
     });
   }, [segments, selectedSourceFilter, searchQuery]);
@@ -608,7 +595,7 @@ export function TranscriptTab({
   };
 
   const handlePlaySnippet = async (turn: GroupedTurn) => {
-    if (!token) return;
+    if (!token || loadingAudioTurnId) return;
     if (playingTurnId === turn.id && audioRef.current) {
       audioRef.current.pause();
       setPlayingTurnId(null);
@@ -622,11 +609,13 @@ export function TranscriptTab({
       URL.revokeObjectURL(audioBlobUrlRef.current);
       audioBlobUrlRef.current = null;
     }
+    const targetRecId = recordingId;
+    setSummaryError(null);
     setLoadingAudioTurnId(turn.id);
     try {
       const url = await fetchAudioSnippetBlobUrl(
         token,
-        recordingId,
+        targetRecId,
         turn.streamId,
         turn.start,
         turn.end
@@ -638,15 +627,19 @@ export function TranscriptTab({
       audio.onerror = () => setPlayingTurnId(null);
       setPlayingTurnId(turn.id);
       await audio.play();
-    } catch {
+    } catch (err) {
       setPlayingTurnId(null);
+      if (err && typeof err === 'object' && 'name' in err && err.name === 'AbortError') {
+        return;
+      }
+      setSummaryError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoadingAudioTurnId(null);
     }
   };
 
   const handleGenerateSummary = async () => {
-    if (!token) return;
+    if (!token || generatingSummary) return;
     setSummaryError(null);
     setGeneratingSummary(true);
     try {
@@ -683,7 +676,7 @@ export function TranscriptTab({
   };
 
   const handleSaveSummaryDraft = async () => {
-    if (!token) return;
+    if (!token || savingSummary) return;
     setSummaryError(null);
     setSavingSummary(true);
     try {
@@ -725,7 +718,8 @@ export function TranscriptTab({
   };
 
   const handleSaveTurnEdit = async (turn: GroupedTurn) => {
-    if (!token) return;
+    if (!token || savingEdit) return;
+    setSummaryError(null);
     setSavingEdit(true);
     try {
       const payload: {
@@ -752,6 +746,8 @@ export function TranscriptTab({
         onProtocolUpdated?.();
       }
       setEditingTurnId(null);
+    } catch (err) {
+      setSummaryError(err instanceof Error ? err.message : String(err));
     } finally {
       setSavingEdit(false);
     }
@@ -759,7 +755,8 @@ export function TranscriptTab({
 
   const handleAddTermReplacement = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!token || !termFrom.trim() || !termTo.trim()) return;
+    if (!token || savingTerm || !termFrom.trim() || !termTo.trim()) return;
+    setSummaryError(null);
     setSavingTerm(true);
     try {
       await updateRecordingProtocol(token, recordingId, {
@@ -770,13 +767,16 @@ export function TranscriptTab({
       setTermFrom('');
       setTermTo('');
       onProtocolUpdated?.();
+    } catch (err) {
+      setSummaryError(err instanceof Error ? err.message : String(err));
     } finally {
       setSavingTerm(false);
     }
   };
 
   const handleRemoveTermReplacement = async (key: string) => {
-    if (!token) return;
+    if (!token || savingTerm) return;
+    setSummaryError(null);
     setSavingTerm(true);
     try {
       await updateRecordingProtocol(token, recordingId, {
@@ -785,6 +785,8 @@ export function TranscriptTab({
         },
       });
       onProtocolUpdated?.();
+    } catch (err) {
+      setSummaryError(err instanceof Error ? err.message : String(err));
     } finally {
       setSavingTerm(false);
     }
@@ -802,47 +804,44 @@ export function TranscriptTab({
   const llmSummaryEnabled = Boolean(instance.llmSummaryEnabled);
 
   return (
-    <VStack gap={3}>
-      {/* 1. Structured AI Protocol Summary & Action Items */}
+    <VStack gap={4}>
+      {summaryError && (
+        <Banner
+          status="error"
+          container="card"
+          title={summaryError}
+          isDismissable
+          onDismiss={() => setSummaryError(null)}
+        />
+      )}
+
+      {/* 1. Flat Editorial Summary & Action Items (no nested cards) */}
       {(summary || (isOperator && segments.length > 0)) && (
-        <Card>
+        <section className="pb-4 border-b border-[var(--color-border)]">
           <VStack gap={3}>
             <HStack justify="between" vAlign="center" wrap="wrap" gap={2}>
-              <HStack gap={2} vAlign="center" wrap="wrap">
-                <Sparkles className="h-4 w-4 text-[var(--color-text-accent)]" />
-                <Heading level={4}>
-                  {tr(
-                    'Zusammenfassung & To-Do-Liste',
-                    'Executive Summary & To-Do List'
-                  )}
-                </Heading>
-                {summary ? (
-                  summary.model ? (
-                    <Token
-                      size="sm"
-                      color="green"
-                      label={`${tr('Lokal', 'Local')} · ${summary.model}`}
-                    />
-                  ) : (
-                    <Token
-                      size="sm"
-                      color="gray"
-                      label={tr('Manuell', 'Manual')}
-                    />
-                  )
-                ) : llmSummaryEnabled && instance.llmModel ? (
-                  <Token
-                    size="sm"
-                    color="green"
-                    label={`${tr('Lokal', 'Local')} · ${instance.llmModel}`}
-                  />
-                ) : null}
-              </HStack>
+              <Heading level={2}>
+                {tr('Zusammenfassung', 'Summary')}
+              </Heading>
 
               {isOperator && !editingSummary && (
                 <HStack gap={1.5} vAlign="center" wrap="wrap">
+                  {llmSummaryEnabled && segments.length > 0 && (
+                    <Button
+                      variant={summary ? 'ghost' : 'secondary'}
+                      size="sm"
+                      isLoading={generatingSummary}
+                      icon={<Sparkles className="h-3.5 w-3.5" />}
+                      label={
+                        summary
+                          ? tr('Neu erstellen', 'Regenerate')
+                          : tr('KI-Zusammenfassung', 'AI summary')
+                      }
+                      onClick={handleGenerateSummary}
+                    />
+                  )}
                   <Button
-                    variant="secondary"
+                    variant="ghost"
                     size="sm"
                     icon={<Edit3 className="h-3.5 w-3.5" />}
                     label={
@@ -852,59 +851,39 @@ export function TranscriptTab({
                     }
                     onClick={handleStartEditSummary}
                   />
-                  {llmSummaryEnabled && segments.length > 0 && (
-                    <Button
-                      variant={summary ? 'ghost' : 'primary'}
-                      size="sm"
-                      isLoading={generatingSummary}
-                      icon={<Sparkles className="h-3.5 w-3.5" />}
-                      label={
-                        summary
-                          ? tr(
-                              'KI-Zusammenfassung aktualisieren',
-                              'Regenerate AI summary'
-                            )
-                          : tr(
-                              'KI-Zusammenfassung erstellen',
-                              'Generate AI summary'
-                            )
-                      }
-                      onClick={handleGenerateSummary}
-                    />
-                  )}
                 </HStack>
               )}
             </HStack>
-
-            {summaryError && (
-              <Banner status="error" container="card" title={summaryError} />
-            )}
 
             {editingSummary ? (
               <VStack gap={3}>
                 <VStack gap={1}>
                   <Text type="supporting" weight="semibold" color="secondary">
-                    {tr('Zusammenfassung', 'Summary')}
+                    {tr('Überblick', 'Overview')}
                   </Text>
                   <textarea
                     rows={3}
+                    dir="auto"
                     value={summaryDraft}
                     onChange={(e) => setSummaryDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+                        e.preventDefault();
+                        void handleSaveSummaryDraft();
+                      }
+                    }}
                     placeholder={tr(
-                      'Prägnante Zusammenfassung des Gesprächs (wird direkt im .md-Export hinterlegt)…',
-                      'Concise executive summary (included directly in .md export)…'
+                      'Prägnante Zusammenfassung des Gesprächs…',
+                      'Concise executive summary…'
                     )}
-                    className="w-full rounded-md border border-[var(--color-border)] bg-[var(--color-background-default)] px-3 py-2 text-sm text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-text-accent)]"
+                    className="w-full rounded-md border border-[var(--color-border)] bg-[var(--color-background-surface)] px-3 py-2 text-[16px] md:text-[14px] leading-relaxed text-[var(--color-text-primary)] wl-focus-accent"
                   />
                 </VStack>
 
                 <VStack gap={2}>
                   <HStack justify="between" vAlign="center">
                     <Text type="supporting" weight="semibold" color="secondary">
-                      {tr(
-                        'Besprochene Themen & Beschlüsse',
-                        'Key Topics & Decisions'
-                      )}
+                      {tr('Themen & Beschlüsse', 'Topics & Decisions')}
                     </Text>
                     <Button
                       variant="ghost"
@@ -938,12 +917,12 @@ export function TranscriptTab({
                               )
                             )
                           }
-                          placeholder={tr('Thementitel', 'Topic title')}
+                          placeholder={tr('Thema', 'Topic')}
                         />
                       </div>
                       <div className="sm:col-span-7">
                         <TextInput
-                          label={tr('Ergebnis / Details', 'Details / Decision')}
+                          label={tr('Ergebnis', 'Decision')}
                           isLabelHidden
                           size="sm"
                           value={topic.details}
@@ -955,8 +934,8 @@ export function TranscriptTab({
                             )
                           }
                           placeholder={tr(
-                            'Besprochene Inhalte & Beschlüsse',
-                            'Discussed points & decisions'
+                            'Ergebnis / Beschluss',
+                            'Decision / details'
                           )}
                         />
                       </div>
@@ -964,7 +943,7 @@ export function TranscriptTab({
                         <IconButton
                           variant="ghost"
                           size="sm"
-                          label={tr('Thema entfernen', 'Remove topic')}
+                          label={tr('Entfernen', 'Remove')}
                           icon={<Trash2 className="h-3.5 w-3.5" />}
                           onClick={() =>
                             setTopicsDraft((prev) =>
@@ -980,10 +959,7 @@ export function TranscriptTab({
                 <VStack gap={2}>
                   <HStack justify="between" vAlign="center">
                     <Text type="supporting" weight="semibold" color="secondary">
-                      {tr(
-                        'To-Do-Liste (Aufgaben & nächste Schritte)',
-                        'To-Do List (Action Items)'
-                      )}
+                      {tr('Aufgaben', 'Action Items')}
                     </Text>
                     <Button
                       variant="ghost"
@@ -1006,7 +982,7 @@ export function TranscriptTab({
                     >
                       <div className="sm:col-span-3">
                         <TextInput
-                          label={tr('Verantwortlich', 'Owner')}
+                          label={tr('Person', 'Owner')}
                           isLabelHidden
                           size="sm"
                           value={item.owner}
@@ -1033,10 +1009,7 @@ export function TranscriptTab({
                               )
                             )
                           }
-                          placeholder={tr(
-                            'Vereinbarte Aufgabe / nächster Schritt',
-                            'Agreed task / next step'
-                          )}
+                          placeholder={tr('Aufgabe', 'Task')}
                         />
                       </div>
                       <div className="sm:col-span-2">
@@ -1052,14 +1025,14 @@ export function TranscriptTab({
                               )
                             )
                           }
-                          placeholder={tr('Frist (opt.)', 'Due (opt.)')}
+                          placeholder={tr('Frist', 'Due')}
                         />
                       </div>
                       <div className="sm:col-span-1 flex justify-end">
                         <IconButton
                           variant="ghost"
                           size="sm"
-                          label={tr('Aufgabe entfernen', 'Remove item')}
+                          label={tr('Entfernen', 'Remove')}
                           icon={<Trash2 className="h-3.5 w-3.5" />}
                           onClick={() =>
                             setActionItemsDraft((prev) =>
@@ -1085,7 +1058,7 @@ export function TranscriptTab({
                     size="sm"
                     isLoading={savingSummary}
                     icon={<Check className="h-3.5 w-3.5" />}
-                    label={tr('Speichern (für .md Export)', 'Save (for .md export)')}
+                    label={tr('Speichern', 'Save')}
                     onClick={handleSaveSummaryDraft}
                   />
                 </HStack>
@@ -1093,272 +1066,233 @@ export function TranscriptTab({
             ) : summary ? (
               <VStack gap={3}>
                 {summary.summary && (
-                  <Text type="body" color="primary">
-                    {summary.summary}
-                  </Text>
+                  <div dir="auto" className="max-w-[72ch] wl-break-anywhere">
+                    <Text type="body" color="primary">
+                      {summary.summary}
+                    </Text>
+                  </div>
                 )}
 
                 {summary.topics && summary.topics.length > 0 && (
-                  <VStack gap={1.5}>
-                    <Text type="supporting" weight="semibold" color="secondary">
-                      {tr(
-                        'Besprochene Themen & Beschlüsse',
-                        'Key Topics & Decisions'
-                      )}
-                    </Text>
-                    <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
-                      {summary.topics.map((t, idx) => (
-                        <div
-                          key={idx}
-                          className="rounded-md border border-[var(--color-border)] bg-[var(--color-background-muted)] p-2.5"
-                        >
-                          <VStack gap={0.5}>
-                            {t.title ? (
-                              <Text type="supporting" weight="semibold" color="primary">
-                                {t.title}
-                              </Text>
-                            ) : null}
-                            {t.details ? (
-                              <Text type="supporting" color="secondary">
-                                {t.details}
-                              </Text>
-                            ) : null}
-                          </VStack>
-                        </div>
-                      ))}
-                    </div>
-                  </VStack>
+                  <ul
+                    dir="auto"
+                    className="m-0 list-disc pl-5 space-y-1.5 max-w-[72ch] text-[14px] leading-relaxed text-[var(--color-text-secondary)]"
+                  >
+                    {summary.topics.map((t, idx) => (
+                      <li key={idx}>
+                        {t.title && (
+                          <strong className="font-semibold text-[var(--color-text-primary)]">
+                            {t.title}
+                          </strong>
+                        )}
+                        {t.title && t.details ? ' — ' : ''}
+                        {t.details}
+                      </li>
+                    ))}
+                  </ul>
                 )}
 
-                <VStack gap={1.5}>
-                  <Text type="supporting" weight="semibold" color="secondary">
-                    {tr(
-                      `To-Do-Liste (${summary.action_items?.length || 0})`,
-                      `To-Do List (${summary.action_items?.length || 0})`
-                    )}
-                  </Text>
-                  {summary.action_items && summary.action_items.length > 0 ? (
-                    <VStack gap={1}>
-                      {summary.action_items.map((item, idx) => (
-                        <HStack key={idx} gap={2} vAlign="start">
-                          <CheckSquare className="h-4 w-4 shrink-0 mt-0.5 text-[var(--color-text-accent)]" />
-                          <Text type="supporting" color="primary">
-                            <strong className="font-semibold">
-                              {item.owner}:
-                            </strong>{' '}
-                            {item.task}
-                            {item.due ? (
-                              <span className="text-[var(--color-text-secondary)]">
-                                {' '}
-                                ({tr('Fällig', 'Due')}: {item.due})
-                              </span>
-                            ) : null}
-                          </Text>
-                        </HStack>
-                      ))}
-                    </VStack>
-                  ) : (
-                    <Text type="supporting" color="secondary">
-                      {tr(
-                        'Keine offenen Aufgaben vereinbart.',
-                        'No open action items recorded.'
-                      )}
-                    </Text>
-                  )}
-                </VStack>
+                {summary.action_items && summary.action_items.length > 0 && (
+                  <VStack gap={1}>
+                    {summary.action_items.map((item, idx) => (
+                      <HStack
+                        key={idx}
+                        gap={2}
+                        vAlign="start"
+                        className="max-w-[72ch]"
+                      >
+                        <CheckSquare className="h-4 w-4 shrink-0 mt-0.5 wl-text-accent" />
+                        <Text type="supporting" color="primary">
+                          <strong className="font-semibold">
+                            {item.owner}:
+                          </strong>{' '}
+                          {item.task}
+                          {item.due ? (
+                            <span className="text-[var(--color-text-secondary)]">
+                              {' '}
+                              ({item.due})
+                            </span>
+                          ) : null}
+                        </Text>
+                      </HStack>
+                    ))}
+                  </VStack>
+                )}
               </VStack>
             ) : (
               <Text type="supporting" color="secondary">
-                {llmSummaryEnabled
-                  ? tr(
-                      'Erstellen Sie eine KI-Zusammenfassung samt To-Do-Liste oder pflegen Sie Aufgaben manuell — beides wird direkt im Markdown-Export (.md) hinterlegt.',
-                      'Generate an AI summary and to-do list or add tasks manually — both are included directly in the Markdown (.md) export.'
-                    )
-                  : tr(
-                      'Hinterlegen Sie eine Zusammenfassung und To-Do-Liste, damit das Markdown-Protokoll (.md) direkt an Gesprächspartner weitergeleitet werden kann.',
-                      'Add a summary and to-do list so the Markdown (.md) protocol can be sent directly to meeting participants.'
-                    )}
+                {tr(
+                  'Noch keine Zusammenfassung hinterlegt.',
+                  'No summary added yet.'
+                )}
               </Text>
             )}
           </VStack>
-        </Card>
+        </section>
       )}
 
-      {/* Interactive Speaker Filter Chips */}
-      {sources.length > 0 && (
-        <HStack gap={2} wrap="wrap" vAlign="center">
-          <button
-            type="button"
-            onClick={() => onSelectedSourceFilterChange('')}
-            className={`wl-speaker-chip ${!selectedSourceFilter ? 'active' : ''}`}
-          >
-            <span>{allSpeakersLabel}</span>
-          </button>
-          {sources.map((src) => {
-            const filterKey = getSourceFilterKey(src);
-            const isSelected = selectedSourceFilter === filterKey;
-            const pct = Math.min(
-              100,
-              Math.round(((src.speech_seconds || 0) / totalSpeechSec) * 100)
-            );
-            const name =
-              src.participant_name ||
-              src.speaker_label ||
-              src.provider_source_id;
-            return (
-              <button
-                key={filterKey}
-                type="button"
-                onClick={() =>
-                  onSelectedSourceFilterChange(isSelected ? '' : filterKey)
-                }
-                className={`wl-speaker-chip ${isSelected ? 'active' : ''}`}
-              >
-                <Avatar size="sm" shape="circle" name={name} />
-                <span>{name}</span>
-                <span className="opacity-70 tabular-nums">
-                  ({lang === 'en' ? `${pct}%` : `${pct} %`})
-                </span>
-              </button>
-            );
-          })}
-        </HStack>
-      )}
+      {/* Single Unified Search + Speaker Filter Toolbar */}
+      <VStack gap={2}>
+        <HStack justify="between" vAlign="center" wrap="wrap" gap={2}>
+          <div id="segment-search" className="flex-1 min-w-[240px] max-w-md">
+            <TextInput
+              type="search"
+              size="sm"
+              label={tr('Im Transkript suchen', 'Search transcript')}
+              isLabelHidden
+              value={searchQuery}
+              onChange={setSearchQuery}
+              hasClear
+              placeholder={tr(
+                'Im Protokoll suchen…',
+                'Search protocol…'
+              )}
+              startIcon={<Search className="h-3.5 w-3.5" />}
+            />
+          </div>
 
-      {/* Sticky Filter & Search Toolbar */}
-      <HStack justify="between" vAlign="center" wrap="wrap" gap={2}>
-        <div id="segment-search" className="flex-1 min-w-[240px]">
-          <TextInput
-            type="search"
-            size="sm"
-            label={tr('Im Transkript suchen', 'Search transcript')}
-            isLabelHidden
-            value={searchQuery}
-            onChange={setSearchQuery}
-            hasClear
-            placeholder={tr(
-              'Im Transkript nach Begriffen oder Sprechern suchen…',
-              'Search transcript by keyword or speaker…'
-            )}
-            startIcon={<Search className="h-3.5 w-3.5" />}
-          />
-        </div>
-
-        <HStack gap={2} vAlign="center" wrap="wrap">
           {isOperator && (
             <Button
-              variant={
-                showTermBar || activeTermEntries.length > 0
-                  ? 'secondary'
-                  : 'ghost'
-              }
+              variant={showTermBar ? 'secondary' : 'ghost'}
               size="sm"
               icon={<Replace className="h-3.5 w-3.5" />}
               label={
                 activeTermEntries.length > 0
-                  ? `${tr('Begriffe korrigieren', 'Replace terms')} (${activeTermEntries.length})`
-                  : tr('Begriffe korrigieren', 'Replace terms')
+                  ? `${tr('Glossar', 'Glossary')} (${activeTermEntries.length})`
+                  : tr('Glossar', 'Glossary')
               }
               onClick={() => setShowTermBar((v) => !v)}
             />
           )}
-
-          {sources.length > 0 && (
-            <div className="w-64">
-              <Selector
-                size="sm"
-                label={tr('Sprecher filtern', 'Filter speaker')}
-                isLabelHidden
-                options={sourceOptions}
-                value={selectedSourceFilter || 'all'}
-                onChange={(v) =>
-                  onSelectedSourceFilterChange(v === 'all' ? '' : v)
-                }
-              />
-            </div>
-          )}
         </HStack>
-      </HStack>
 
-      {/* Term Replacement Bar */}
-      {isOperator && (showTermBar || activeTermEntries.length > 0) && (
-        <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-background-muted)] p-3">
-          <VStack gap={2}>
-            <form
-              onSubmit={handleAddTermReplacement}
-              className="flex flex-wrap items-center gap-2"
+        {sources.length > 0 && (
+          <HStack gap={1.5} wrap="wrap" vAlign="center">
+            <button
+              type="button"
+              aria-pressed={!selectedSourceFilter}
+              onClick={() => onSelectedSourceFilterChange('')}
+              className={`wl-speaker-chip ${!selectedSourceFilter ? 'active' : ''}`}
             >
-              <Text type="supporting" weight="semibold" color="primary">
-                {tr(
-                  'Fachbegriff / Name im gesamten Protokoll ersetzen:',
-                  'Replace domain term or name across entire protocol:'
-                )}
-              </Text>
-              <div className="w-44">
-                <TextInput
-                  size="sm"
-                  label={tr('Falsch erkannt', 'Misheard term')}
-                  isLabelHidden
-                  value={termFrom}
-                  onChange={setTermFrom}
-                  placeholder={tr('z. B. OmniSA', 'e.g. OmniSA')}
-                />
-              </div>
-              <span className="text-xs text-[var(--color-text-secondary)]">
-                →
-              </span>
-              <div className="w-44">
-                <TextInput
-                  size="sm"
-                  label={tr('Korrekte Schreibweise', 'Correct spelling')}
-                  isLabelHidden
-                  value={termTo}
-                  onChange={setTermTo}
-                  placeholder={tr('z. B. OmniASR', 'e.g. OmniASR')}
-                />
-              </div>
-              <Button
-                type="submit"
-                variant="secondary"
-                size="sm"
-                isLoading={savingTerm}
-                isDisabled={!termFrom.trim() || !termTo.trim()}
-                label={tr('Übernehmen', 'Apply')}
-              />
-            </form>
-
-            {activeTermEntries.length > 0 && (
-              <HStack gap={1.5} wrap="wrap" vAlign="center">
-                {activeTermEntries.map(([fromTerm, toTerm]) => (
-                  <span
-                    key={fromTerm}
-                    className="inline-flex items-center gap-1.5 rounded-full border border-[var(--color-border)] bg-[var(--color-background-surface)] px-2.5 py-0.5 text-xs"
-                  >
-                    <span className="line-through opacity-70">{fromTerm}</span>
-                    <span>→</span>
-                    <strong className="font-semibold">{toTerm}</strong>
-                    <button
-                      type="button"
-                      onClick={() => handleRemoveTermReplacement(fromTerm)}
-                      className="ml-0.5 opacity-60 hover:opacity-100 cursor-pointer"
-                      title={tr('Ersetzung entfernen', 'Remove replacement')}
-                    >
-                      <X className="h-3 w-3" />
-                    </button>
+              <span>{allSpeakersLabel}</span>
+            </button>
+            {sources.map((src, idx) => {
+              const filterKey = getSourceFilterKey(src);
+              const isSelected = selectedSourceFilter === filterKey;
+              const pct = Math.min(
+                100,
+                Math.round(((src.speech_seconds || 0) / totalSpeechSec) * 100)
+              );
+              const name =
+                src.participant_name ||
+                src.speaker_label ||
+                tr(`Teilnehmer ${idx + 1}`, `Participant ${idx + 1}`);
+              return (
+                <button
+                  key={filterKey}
+                  type="button"
+                  aria-pressed={isSelected}
+                  onClick={() =>
+                    onSelectedSourceFilterChange(isSelected ? '' : filterKey)
+                  }
+                  className={`wl-speaker-chip ${isSelected ? 'active' : ''}`}
+                  title={name}
+                >
+                  <span className="wl-speaker-chip-label" dir="auto">
+                    {name}
                   </span>
-                ))}
-              </HStack>
-            )}
-          </VStack>
-        </div>
-      )}
+                  <span className="wl-speaker-chip-pct">
+                    {lang === 'en' ? `${pct}%` : `${pct} %`}
+                  </span>
+                </button>
+              );
+            })}
+          </HStack>
+        )}
 
-      <Divider variant="subtle" />
+        {/* Progressive-Disclosure Term Replacement Bar */}
+        {isOperator && showTermBar && (
+          <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-background-surface)] p-3">
+            <VStack gap={2}>
+              <form
+                onSubmit={handleAddTermReplacement}
+                className="flex flex-wrap items-center gap-2"
+              >
+                <div className="w-44 max-w-full">
+                  <TextInput
+                    size="sm"
+                    label={tr('Falsch erkannt', 'Misheard term')}
+                    isLabelHidden
+                    value={termFrom}
+                    onChange={setTermFrom}
+                    placeholder={tr('Falsch erkannt…', 'Misheard…')}
+                  />
+                </div>
+                <span className="text-[13px] text-[var(--color-text-secondary)]">
+                  →
+                </span>
+                <div className="w-44 max-w-full">
+                  <TextInput
+                    size="sm"
+                    label={tr('Korrektur', 'Replacement')}
+                    isLabelHidden
+                    value={termTo}
+                    onChange={setTermTo}
+                    placeholder={tr('Korrektur…', 'Replacement…')}
+                  />
+                </div>
+                <Button
+                  type="submit"
+                  variant="secondary"
+                  size="sm"
+                  isLoading={savingTerm}
+                  isDisabled={!termFrom.trim() || !termTo.trim()}
+                  label={tr('Ersetzen', 'Replace')}
+                />
+              </form>
+
+              {activeTermEntries.length > 0 && (
+                <HStack gap={1.5} wrap="wrap" vAlign="center">
+                  {activeTermEntries.map(([fromTerm, toTerm]) => (
+                    <span
+                      key={fromTerm}
+                      className="inline-flex items-center gap-1.5 rounded-full border border-[var(--color-border)] bg-[var(--color-background-muted)] px-2.5 py-0.5 text-[12px]"
+                    >
+                      <span className="line-through text-[var(--color-text-secondary)]">
+                        {fromTerm}
+                      </span>
+                      <span className="text-[var(--color-text-secondary)]">
+                        →
+                      </span>
+                      <strong className="font-semibold text-[var(--color-text-primary)]">
+                        {toTerm}
+                      </strong>
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveTermReplacement(fromTerm)}
+                        className="ml-0.5 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] cursor-pointer"
+                        aria-label={tr(
+                          `${fromTerm} entfernen`,
+                          `Remove ${fromTerm}`
+                        )}
+                        title={tr('Entfernen', 'Remove')}
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </span>
+                  ))}
+                </HStack>
+              )}
+            </VStack>
+          </div>
+        )}
+      </VStack>
 
       {/* Editorial Transcript Stream */}
       <div id="transcript-view">
         {timelineItems.length === 0 ? (
           <EmptyState
+            headingLevel={2}
             icon={
               participation === 'capturing' ? (
                 <LiveWaveform />
@@ -1432,10 +1366,10 @@ export function TranscriptTab({
                 return (
                   <div
                     key={`pause-${item.index}-${pw.started_at}`}
-                    className="wl-turn-row wl-fade-in"
+                    className="wl-turn-row"
                   >
                     <HStack gap={3} vAlign="start">
-                      <span className="mt-0.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400">
+                      <span className="mt-0.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full wl-warn-badge">
                         <Pause className="h-3.5 w-3.5" />
                       </span>
                       <div className="min-w-0 flex-1">
@@ -1520,7 +1454,7 @@ export function TranscriptTab({
                 <div
                   key={turn.id}
                   id={`seg-${turn.id}`}
-                  className="group wl-turn-row wl-fade-in"
+                  className="group wl-turn-row"
                 >
                   <HStack gap={3} vAlign="start">
                     <Avatar
@@ -1545,7 +1479,11 @@ export function TranscriptTab({
                                   : turn.filterKey
                               )
                             }
-                            className="font-semibold text-sm text-[var(--color-text-primary)] hover:text-[var(--color-text-accent)] cursor-pointer"
+                            className={`font-semibold text-[14px] leading-snug cursor-pointer ${
+                              selectedSourceFilter === turn.filterKey
+                                ? 'wl-text-accent'
+                                : 'text-[var(--color-text-primary)] wl-hover-accent'
+                            }`}
                           >
                             {turn.speakerLabel}
                           </button>
@@ -1564,9 +1502,9 @@ export function TranscriptTab({
                               type="button"
                               onClick={() => handlePlaySnippet(turn)}
                               disabled={isLoadingAudio}
-                              className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium transition-colors cursor-pointer ${
+                              className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-[12px] leading-4 font-medium transition-colors cursor-pointer ${
                                 isPlaying
-                                  ? 'bg-[var(--color-background-accent-emphasis,#059669)] text-white'
+                                  ? 'bg-emerald-600 text-white'
                                   : 'bg-[var(--color-background-muted)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]'
                               }`}
                               title={tr(
@@ -1605,7 +1543,7 @@ export function TranscriptTab({
                         <HStack
                           gap={1}
                           vAlign="center"
-                          className="opacity-0 group-hover:opacity-100 transition-opacity"
+                          className="wl-row-actions"
                         >
                           {isOperator && (
                             <IconButton
@@ -1647,7 +1585,7 @@ export function TranscriptTab({
                       {isEditing ? (
                         <div className="mt-2 rounded-md border border-[var(--color-border)] bg-[var(--color-background-muted)] p-3">
                           <VStack gap={2}>
-                            <div className="w-72">
+                            <div className="w-72 max-w-full">
                               <TextInput
                                 size="sm"
                                 label={tr(
@@ -1659,19 +1597,26 @@ export function TranscriptTab({
                               />
                             </div>
                             <div>
-                              <label className="block text-xs font-medium text-[var(--color-text-secondary)] mb-1">
+                              <label className="block text-[12px] font-medium text-[var(--color-text-secondary)] mb-1">
                                 {tr(
                                   'Protokolltext dieses Beitrags',
                                   'Statement text'
                                 )}
                               </label>
                               <textarea
+                                dir="auto"
                                 value={editTurnText}
                                 onChange={(e) =>
                                   setEditTurnText(e.target.value)
                                 }
+                                onKeyDown={(e) => {
+                                  if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+                                    e.preventDefault();
+                                    void handleSaveTurnEdit(turn);
+                                  }
+                                }}
                                 rows={3}
-                                className="w-full rounded-md border border-[var(--color-border)] bg-[var(--color-background-surface)] p-2 text-sm text-[var(--color-text-primary)]"
+                                className="w-full rounded-md border border-[var(--color-border)] bg-[var(--color-background-surface)] p-2 text-[16px] md:text-[14px] leading-relaxed text-[var(--color-text-primary)] wl-focus-accent"
                               />
                             </div>
                             <HStack gap={2}>
@@ -1692,9 +1637,13 @@ export function TranscriptTab({
                           </VStack>
                         </div>
                       ) : (
-                        <VStack gap={1.5} paddingBlockStart={1}>
+                        <VStack gap={1.5} paddingBlockStart={1} className="max-w-[74ch]">
                           {turn.paragraphs.map((para) => (
-                            <div key={para.id}>
+                            <div
+                              key={para.id}
+                              dir="auto"
+                              className="wl-break-anywhere"
+                            >
                               <Text type="body" color="primary">
                                 {renderHighlightedText(para.text, searchQuery)}
                               </Text>
@@ -1709,7 +1658,7 @@ export function TranscriptTab({
             })}
 
             {participation === 'capturing' && (
-              <div className="py-3.5 px-2 flex items-center gap-2.5 text-sm text-[var(--color-text-secondary)]">
+              <div className="py-3.5 px-2 flex items-center gap-2.5 text-[14px] text-[var(--color-text-secondary)]">
                 <LiveWaveform />
                 <span>
                   {tr(
@@ -1778,7 +1727,7 @@ export function TranscriptTab({
                   className="max-h-[82vh] max-w-[88vw] object-contain"
                 />
               ) : (
-                <div className="p-8 text-sm text-white/80">
+                <div className="p-8 text-[14px] text-white/80">
                   {keyframeErrors[previewKeyframe.id]
                     ? kStr.slideUnavailable
                     : kStr.loadingSlide}

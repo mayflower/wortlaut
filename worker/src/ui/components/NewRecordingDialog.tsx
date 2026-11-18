@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { CalendarPlus, Link2, Upload, Video } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { CalendarPlus, Check, Link2, Upload, Video } from 'lucide-react';
 import { Dialog, DialogHeader } from '@astryxdesign/core/Dialog';
 import { Layout, LayoutContent } from '@astryxdesign/core/Layout';
 import { FormLayout } from '@astryxdesign/core/FormLayout';
@@ -20,11 +20,9 @@ import {
   detectProviderFromUrl,
   getInstanceInfo,
   importCalendarPayload,
+  validateMeetingUrlClient,
 } from '../api';
-import {
-  buildAsrLanguageOptions,
-  useI18n,
-} from '../i18n';
+import { buildAsrLanguageOptions, useI18n } from '../i18n';
 import type { RecordingSummary } from '../types';
 import { ProviderBadge } from './ui/primitives';
 
@@ -35,6 +33,25 @@ export interface NewRecordingDialogProps {
   initialTab?: 'link' | 'ics';
   onCreatedRecording: (recordingId: string) => void;
   onImportedCalendar: (recordingId: string | null) => void;
+}
+
+function toLocalDateTimeValue(date: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function buildDefaultScheduleRange(): { start: string; end: string; min: string } {
+  const now = new Date();
+  const nextSlot = new Date(now);
+  nextSlot.setSeconds(0, 0);
+  const mins = nextSlot.getMinutes();
+  nextSlot.setMinutes(mins < 30 ? 30 : 60);
+  const endSlot = new Date(nextSlot.getTime() + 60 * 60000);
+  return {
+    start: toLocalDateTimeValue(nextSlot),
+    end: toLocalDateTimeValue(endSlot),
+    min: toLocalDateTimeValue(now),
+  };
 }
 
 export function NewRecordingDialog({
@@ -53,12 +70,6 @@ export function NewRecordingDialog({
       ? instance.defaultAsrLanguage
       : 'auto';
 
-  useEffect(() => {
-    if (open) {
-      setTab(initialTab);
-    }
-  }, [open, initialTab]);
-
   const [meetingUrl, setMeetingUrl] = useState('');
   const [title, setTitle] = useState('');
   const [guestName, setGuestName] = useState('');
@@ -67,9 +78,33 @@ export function NewRecordingDialog({
   const [durationMin, setDurationMin] = useState('60');
   const [startsAt, setStartsAt] = useState('');
   const [endsAt, setEndsAt] = useState('');
+  const [minDateTime, setMinDateTime] = useState('');
   const [icsText, setIcsText] = useState('');
+  const [icsFileName, setIcsFileName] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const submittingRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (open) {
+      setTab(initialTab);
+      setError(null);
+      const defaults = buildDefaultScheduleRange();
+      setMinDateTime(defaults.min);
+      if (!startsAt) setStartsAt(defaults.start);
+      if (!endsAt) setEndsAt(defaults.end);
+    }
+  }, [open, initialTab]);
+
+  const handleChangeJoinMode = (next: 'live' | 'scheduled') => {
+    setJoinMode(next);
+    if (next === 'scheduled' && (!startsAt || !endsAt)) {
+      const defaults = buildDefaultScheduleRange();
+      setMinDateTime(defaults.min);
+      setStartsAt(defaults.start);
+      setEndsAt(defaults.end);
+    }
+  };
 
   const detectedProvider = detectProviderFromUrl(meetingUrl);
   const asrLanguageOptions = buildAsrLanguageOptions(lang, asrLanguage);
@@ -94,6 +129,13 @@ export function NewRecordingDialog({
 
   const handleDispatchSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submittingRef.current) return;
+    const urlErr = validateMeetingUrlClient(meetingUrl);
+    if (urlErr) {
+      setError(urlErr);
+      return;
+    }
+    submittingRef.current = true;
     setError(null);
     setSubmitting(true);
     try {
@@ -115,6 +157,14 @@ export function NewRecordingDialog({
         }
         const startDate = new Date(startsAt);
         const endDate = new Date(endsAt);
+        if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
+          throw new Error(
+            tr(
+              'Bitte ein gültiges Start- und Enddatum angeben.',
+              'Please enter valid start and end dates.'
+            )
+          );
+        }
         if (endDate <= startDate) {
           throw new Error(
             tr(
@@ -130,8 +180,8 @@ export function NewRecordingDialog({
         meeting_url: meetingUrl.trim(),
         starts_at: startIso,
         ends_at: endIso,
-        title: title.trim() || null,
-        guest_name: guestName.trim() || null,
+        title: title.trim().slice(0, 240) || null,
+        guest_name: guestName.trim().slice(0, 120) || null,
         language: asrLanguage || 'auto',
       });
       setMeetingUrl('');
@@ -141,12 +191,14 @@ export function NewRecordingDialog({
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
+      submittingRef.current = false;
       setSubmitting(false);
     }
   };
 
   const handleIcsSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submittingRef.current) return;
     if (!icsText.trim()) {
       setError(
         tr(
@@ -156,17 +208,20 @@ export function NewRecordingDialog({
       );
       return;
     }
+    submittingRef.current = true;
     setError(null);
     setSubmitting(true);
     try {
       const result = await importCalendarPayload(token, icsText);
       const firstAccepted = (result.events || []).find((ev) => ev.recording_id);
       setIcsText('');
+      setIcsFileName(null);
       onImportedCalendar(firstAccepted?.recording_id || null);
       onOpenChange(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
+      submittingRef.current = false;
       setSubmitting(false);
     }
   };
@@ -174,6 +229,18 @@ export function NewRecordingDialog({
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    if (file.size > 2 * 1024 * 1024) {
+      setError(
+        tr(
+          'Die ausgewählte Datei ist größer als 2 MB. Bitte eine gültige .ics- oder .eml-Einladung wählen.',
+          'The selected file exceeds 2 MB. Please choose a valid .ics or .eml invitation.'
+        )
+      );
+      e.target.value = '';
+      return;
+    }
+    setError(null);
+    setIcsFileName(file.name);
     const text = await file.text();
     setIcsText(text);
   };
@@ -189,13 +256,10 @@ export function NewRecordingDialog({
         height="auto"
         header={
           <DialogHeader
-            title={tr(
-              'Bot in ein Meeting schicken',
-              'Send Bot to a Meeting'
-            )}
+            title={tr('Neue Aufnahme', 'New Recording')}
             subtitle={tr(
-              'Starten Sie einen Bot sofort per Meeting-Link oder importieren Sie eine Kalendereinladung (.ics / .eml).',
-              'Dispatch an assistant immediately via meeting URL or import a calendar invitation (.ics / .eml).'
+              'Per Konferenz-Link starten/planen oder eine .ics-Einladung importieren.',
+              'Start/schedule via meeting URL or import an .ics invitation.'
             )}
             onOpenChange={onOpenChange}
           />
@@ -213,8 +277,8 @@ export function NewRecordingDialog({
                 <SegmentedControlItem
                   value="link"
                   label={tr(
-                    'Meeting-Link (Ad-hoc / Geplant)',
-                    'Meeting URL (Ad-hoc / Scheduled)'
+                    'Meeting-Link (Sofort / Geplant)',
+                    'Meeting URL (Live / Scheduled)'
                   )}
                   icon={<Link2 className="h-3.5 w-3.5" />}
                 />
@@ -245,19 +309,19 @@ export function NewRecordingDialog({
                       <TextInput
                         type="url"
                         label={tr(
-                          'Meeting-Link (Google Meet, Microsoft Teams, Webex oder Zoom)',
-                          'Meeting URL (Google Meet, Microsoft Teams, Webex, or Zoom)'
+                          'Meeting-Link (Meet, Teams, Webex oder Zoom)',
+                          'Meeting URL (Meet, Teams, Webex, or Zoom)'
                         )}
                         isRequired
                         value={meetingUrl}
                         onChange={setMeetingUrl}
-                        placeholder="https://meet.google.com/..., https://teams.microsoft.com/... / https://zoom.us/j/..."
+                        placeholder="https://meet.google.com/… · https://teams.microsoft.com/… · https://zoom.us/j/…"
                         startIcon={<Video className="h-4 w-4" />}
                       />
                       {detectedProvider && (
                         <HStack gap={1.5} vAlign="center">
                           <Text type="supporting" color="secondary">
-                            {tr('Erkanntes System:', 'Detected provider:')}
+                            {tr('Erkannt:', 'Detected:')}
                           </Text>
                           <ProviderBadge provider={detectedProvider} />
                         </HStack>
@@ -267,7 +331,7 @@ export function NewRecordingDialog({
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                       <TextInput
                         type="text"
-                        label={tr('Meeting-Titel', 'Meeting title')}
+                        label={tr('Titel', 'Title')}
                         isOptional
                         value={title}
                         onChange={setTitle}
@@ -278,7 +342,7 @@ export function NewRecordingDialog({
                       />
                       <TextInput
                         type="text"
-                        label={tr('Bot-Anzeigename', 'Bot display name')}
+                        label={tr('Bot-Name', 'Bot name')}
                         isOptional
                         value={guestName}
                         onChange={setGuestName}
@@ -288,18 +352,17 @@ export function NewRecordingDialog({
 
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                       <Selector
-                        label={tr('Start-Modus', 'Join mode')}
+                        label={tr('Zeitpunkt', 'Timing')}
                         options={joinModeOptions}
                         value={joinMode}
-                        onChange={(v) => setJoinMode(v as 'live' | 'scheduled')}
+                        onChange={(v) =>
+                          handleChangeJoinMode(v as 'live' | 'scheduled')
+                        }
                       />
                       {joinMode === 'live' && (
                         <div id="modal-duration-field">
                           <Selector
-                            label={tr(
-                              'Maximale Aufnahmedauer',
-                              'Maximum recording duration'
-                            )}
+                            label={tr('Aufnahmedauer', 'Duration')}
                             options={durationOptions}
                             value={durationMin}
                             onChange={setDurationMin}
@@ -311,8 +374,8 @@ export function NewRecordingDialog({
                     <div id="modal-asr-language-field">
                       <Selector
                         label={tr(
-                          'Transkriptionssprache (Qwen3-ASR · 30 Sprachen)',
-                          'Transcription language (Qwen3-ASR · 30 languages)'
+                          'Sprache (Qwen3-ASR · 30 Sprachen)',
+                          'Language (Qwen3-ASR · 30 languages)'
                         )}
                         options={asrLanguageOptions}
                         value={asrLanguage}
@@ -329,9 +392,23 @@ export function NewRecordingDialog({
                           <input
                             id="modal-starts-at"
                             type="datetime-local"
+                            min={minDateTime || undefined}
                             value={startsAt}
-                            onChange={(e) => setStartsAt(e.target.value)}
-                            className="w-full rounded-md border border-[var(--color-border)] bg-[var(--color-background-surface)] px-3 py-2 text-sm text-[var(--color-text-primary)]"
+                            onChange={(e) => {
+                              const nextStart = e.target.value;
+                              setStartsAt(nextStart);
+                              if (nextStart && (!endsAt || endsAt <= nextStart)) {
+                                const d = new Date(nextStart);
+                                if (!Number.isNaN(d.getTime())) {
+                                  setEndsAt(
+                                    toLocalDateTimeValue(
+                                      new Date(d.getTime() + 60 * 60000)
+                                    )
+                                  );
+                                }
+                              }
+                            }}
+                            className="w-full rounded-md border border-[var(--color-border)] bg-[var(--color-background-surface)] px-3 py-2 text-[16px] md:text-[14px] tabular-nums text-[var(--color-text-primary)] wl-focus-accent"
                           />
                         </VStack>
                         <VStack gap={1} id="modal-end-field">
@@ -341,9 +418,10 @@ export function NewRecordingDialog({
                           <input
                             id="modal-ends-at"
                             type="datetime-local"
+                            min={startsAt || minDateTime || undefined}
                             value={endsAt}
                             onChange={(e) => setEndsAt(e.target.value)}
-                            className="w-full rounded-md border border-[var(--color-border)] bg-[var(--color-background-surface)] px-3 py-2 text-sm text-[var(--color-text-primary)]"
+                            className="w-full rounded-md border border-[var(--color-border)] bg-[var(--color-background-surface)] px-3 py-2 text-[16px] md:text-[14px] tabular-nums text-[var(--color-text-primary)] wl-focus-accent"
                           />
                         </VStack>
                       </div>
@@ -362,8 +440,10 @@ export function NewRecordingDialog({
                         isLoading={submitting}
                         label={
                           submitting
-                            ? tr('Wird gestartet…', 'Starting…')
-                            : tr('Bot starten', 'Start bot')
+                            ? tr('Wird gespeichert…', 'Saving…')
+                            : joinMode === 'scheduled'
+                              ? tr('Termin einplanen', 'Schedule recording')
+                              : tr('Jetzt starten', 'Start now')
                         }
                       />
                     </HStack>
@@ -375,25 +455,36 @@ export function NewRecordingDialog({
                     {instance.mail.allowedDomains.length > 0 && (
                       <Text type="supporting" color="secondary">
                         {tr(
-                          `Hinweis: Der in der .ics-Datei eingetragene ORGANIZER muss zu einer freigeschalteten Domain gehören (${instance.mail.allowedDomains.map((d) => `@${d}`).join(', ')}). Für externe Termine nutzen Sie bitte den Reiter Meeting-Link.`,
-                          `Note: The ORGANIZER in the .ics file must belong to an allowed domain (${instance.mail.allowedDomains.map((d) => `@${d}`).join(', ')}). For external calls, use the Meeting URL tab.`
+                          `Hinweis: ORGANIZER muss zu ${instance.mail.allowedDomains.map((d) => `@${d}`).join(', ')} gehören. Für externe Termine bitte den Reiter Meeting-Link nutzen.`,
+                          `Note: ORGANIZER must belong to ${instance.mail.allowedDomains.map((d) => `@${d}`).join(', ')}. For external calls, use the Meeting URL tab.`
                         )}
                       </Text>
                     )}
 
-                    <label className="flex cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed border-[var(--color-border)] bg-[var(--color-background-muted)]/40 p-4 text-center hover:border-[var(--color-text-accent)] transition-colors">
-                      <Upload className="mb-1.5 h-5 w-5 text-[var(--color-text-accent)]" />
-                      <Text type="supporting" weight="medium" color="primary">
-                        {tr(
-                          '.ics- oder .eml-Datei auswählen',
-                          'Select .ics or .eml file'
-                        )}
+                    <label className="flex cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed border-[var(--color-border)] bg-[var(--color-background-muted)]/40 p-4 text-center hover:border-[var(--wl-accent)] transition-colors">
+                      {icsFileName ? (
+                        <Check className="mb-1.5 h-5 w-5 wl-text-accent" />
+                      ) : (
+                        <Upload className="mb-1.5 h-5 w-5 wl-text-accent" />
+                      )}
+                      <Text type="supporting" weight="semibold" color="primary">
+                        {icsFileName
+                          ? `${icsFileName}`
+                          : tr(
+                              '.ics- oder .eml-Datei auswählen',
+                              'Select .ics or .eml file'
+                            )}
                       </Text>
                       <Text type="supporting" color="secondary">
-                        {tr(
-                          'Oder Inhalt direkt in das Textfeld unten einfügen',
-                          'Or paste the content directly into the field below'
-                        )}
+                        {icsFileName
+                          ? tr(
+                              'Datei geladen — bereit zum Importieren (Klicken zum Ändern)',
+                              'File loaded — ready to import (click to change)'
+                            )
+                          : tr(
+                              'Oder Inhalt direkt unten einfügen',
+                              'Or paste content directly below'
+                            )}
                       </Text>
                       <input
                         type="file"
@@ -408,9 +499,12 @@ export function NewRecordingDialog({
                         'iCalendar / E-Mail-Inhalt',
                         'iCalendar / Email payload'
                       )}
-                      rows={6}
+                      rows={5}
                       value={icsText}
-                      onChange={setIcsText}
+                      onChange={(val) => {
+                        setIcsText(val);
+                        if (!val.trim()) setIcsFileName(null);
+                      }}
                       placeholder="BEGIN:VCALENDAR..."
                     />
 

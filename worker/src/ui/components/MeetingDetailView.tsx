@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   Check,
   Copy,
@@ -18,7 +18,6 @@ import {
   Layout,
   LayoutContent,
   LayoutHeader,
-  LayoutPanel,
 } from '@astryxdesign/core/Layout';
 import { Breadcrumbs, BreadcrumbItem } from '@astryxdesign/core/Breadcrumbs';
 import { Heading } from '@astryxdesign/core/Heading';
@@ -36,6 +35,7 @@ import { Token } from '@astryxdesign/core/Token';
 import { Banner } from '@astryxdesign/core/Banner';
 import { EmptyState } from '@astryxdesign/core/EmptyState';
 import {
+  ApiError,
   cancelRecording,
   deleteRecording,
   downloadExportFile,
@@ -63,7 +63,6 @@ import {
   type TranscriptExport,
 } from '../types';
 import { DiagnosticsTab } from './DiagnosticsTab';
-import { ParticipationStepper } from './ParticipationStepper';
 import { SourcesTab } from './SourcesTab';
 import { TranscriptTab } from './TranscriptTab';
 import { LiveWaveform, ProviderBadge, StatusBadge } from './ui/primitives';
@@ -73,10 +72,10 @@ export interface MeetingDetailViewProps {
   recording: RecordingDetail | null;
   transcript: TranscriptExport | null;
   isLoading: boolean;
+  loadError?: unknown;
   onRefresh: () => void;
   onDeleted: () => void;
   onBackToOverview?: () => void;
-  onNavigateHome?: () => void;
 }
 
 export function MeetingDetailView({
@@ -84,17 +83,18 @@ export function MeetingDetailView({
   recording,
   transcript,
   isLoading,
+  loadError,
   onRefresh,
   onDeleted,
   onBackToOverview,
-  onNavigateHome,
 }: MeetingDetailViewProps) {
-  const { lang, tr } = useI18n();
+  const { lang, localeTag, tr } = useI18n();
   const [activeTab, setActiveTab] = useState<
     'transcript' | 'sources' | 'diagnostics'
   >('transcript');
   const [selectedSourceFilter, setSelectedSourceFilter] = useState('');
   const [busyAction, setBusyAction] = useState<string | null>(null);
+  const busyActionRef = useRef(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [copiedTranscript, setCopiedTranscript] = useState(false);
   const [copiedShareLink, setCopiedShareLink] = useState(false);
@@ -108,39 +108,73 @@ export function MeetingDetailView({
   const failureReasons = getFailureReasons();
 
   if (!recording || !transcript) {
+    const isNotFound = loadError instanceof ApiError && loadError.status === 404;
+    const errText =
+      loadError instanceof Error
+        ? loadError.message
+        : loadError
+          ? String(loadError)
+          : null;
     return (
       <Layout
         height="fill"
         content={
           <LayoutContent>
             <EmptyState
-              icon={<FolderOpen className="h-8 w-8" />}
+              headingLevel={1}
+              icon={
+                isLoading ? (
+                  <LiveWaveform />
+                ) : (
+                  <FolderOpen className="h-8 w-8" />
+                )
+              }
               title={
                 isLoading
-                  ? tr('Lade Meeting-Details…', 'Loading meeting details…')
-                  : tr('Besprechung nicht gefunden', 'Meeting not found')
+                  ? tr('Lade Protokoll…', 'Loading protocol…')
+                  : isNotFound || !loadError
+                    ? tr('Besprechung nicht gefunden', 'Meeting not found')
+                    : tr(
+                        'Protokoll konnte nicht geladen werden',
+                        'Failed to load protocol'
+                      )
               }
               description={
                 isLoading
                   ? tr(
-                      'Abruf der aktuellen Transkript- und Diagnosedaten…',
-                      'Fetching transcript and diagnostic data…'
+                      'Abruf der aktuellen Transkriptdaten…',
+                      'Fetching transcript data…'
                     )
-                  : tr(
-                      'Wählen Sie eine Aufzeichnung aus der Übersicht oder starten Sie ein neues Meeting.',
-                      'Select a recording from the overview or start a new meeting.'
-                    )
+                  : !isNotFound && errText
+                    ? errText
+                    : tr(
+                        'Das Protokoll ist nicht verfügbar oder Ihre Berechtigung ist abgelaufen.',
+                        'This protocol is unavailable or your access has expired.'
+                      )
               }
               actions={
-                isOperator &&
-                onBackToOverview && (
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    label={tr('Zurück zu den Aufnahmen', 'Back to recordings')}
-                    onClick={onBackToOverview}
-                  />
-                )
+                !isLoading ? (
+                  <HStack gap={2} wrap="wrap" justify="center">
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      icon={<RotateCcw className="h-3.5 w-3.5" />}
+                      label={tr('Erneut laden', 'Retry')}
+                      onClick={onRefresh}
+                    />
+                    {isOperator && onBackToOverview && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        label={tr(
+                          'Zurück zu den Aufnahmen',
+                          'Back to recordings'
+                        )}
+                        onClick={onBackToOverview}
+                      />
+                    )}
+                  </HStack>
+                ) : undefined
               }
             />
           </LayoutContent>
@@ -210,25 +244,14 @@ export function MeetingDetailView({
           mdLines.push('');
         }
       }
-      if (sumText || sumTopics.length > 0 || sumActions.length > 0) {
+      if (sumActions.length > 0) {
         mdLines.push(`## ${tr('To-Do-Liste', 'To-Do List')}`, '');
-        if (sumActions.length > 0) {
-          for (const item of sumActions) {
-            const owner = singleLine(item.owner) || tr('Team', 'Team');
-            const dueVal = singleLine(item.due);
-            const dueSuffix = dueVal
-              ? ` _(${tr('Fällig', 'Due')}: ${dueVal})_`
-              : '';
-            mdLines.push(
-              `- [ ] **${owner}:** ${singleLine(item.task)}${dueSuffix}`
-            );
-          }
-        } else {
+        for (const item of sumActions) {
+          const owner = singleLine(item.owner) || tr('Team', 'Team');
+          const dueVal = singleLine(item.due);
+          const dueSuffix = dueVal ? ` _(${tr('Fällig', 'Due')}: ${dueVal})_` : '';
           mdLines.push(
-            tr(
-              '_Keine offenen Aufgaben vereinbart._',
-              '_No open action items recorded._'
-            )
+            `- [ ] **${owner}:** ${singleLine(item.task)}${dueSuffix}`
           );
         }
         mdLines.push('');
@@ -241,11 +264,7 @@ export function MeetingDetailView({
       const segs = transcript.segments || [];
       const kfs = transcript.keyframes || [];
       const pauses = transcript.pause_windows || [];
-      if (
-        segs.length === 0 &&
-        kfs.length === 0 &&
-        pauses.length === 0
-      ) {
+      if (segs.length === 0 && kfs.length === 0 && pauses.length === 0) {
         mdLines.push(
           tr(
             '_Noch keine transkribierten Segmente vorhanden._',
@@ -256,7 +275,10 @@ export function MeetingDetailView({
         const protocolViewUrl = `${window.location.origin}/ui#view=meetings&id=${encodeURIComponent(recording.id)}`;
         const timeline = [
           ...pauses.map((pw) => {
-            const startLbl = formatWallClockTime(pw.offset_seconds, timeOriginUtc);
+            const startLbl = formatWallClockTime(
+              pw.offset_seconds,
+              timeOriginUtc
+            );
             const endLbl =
               pw.end_offset_seconds != null
                 ? formatWallClockTime(pw.end_offset_seconds, timeOriginUtc)
@@ -294,44 +316,47 @@ export function MeetingDetailView({
     }
   };
 
-  const handleSwitchAsrLanguage = async (nextLang: string) => {
-    if (!token || !nextLang) return;
+  const runExclusiveAction = async (
+    actionKey: string,
+    fn: () => Promise<void>
+  ) => {
+    if (!token || busyActionRef.current) return;
+    busyActionRef.current = true;
     setActionError(null);
-    setBusyAction('language');
+    setBusyAction(actionKey);
     try {
+      await fn();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
+    } finally {
+      busyActionRef.current = false;
+      setBusyAction(null);
+    }
+  };
+
+  const handleSwitchAsrLanguage = async (nextLang: string) => {
+    if (!nextLang) return;
+    await runExclusiveAction('language', async () => {
       await updateRecordingProtocol(token, recording.id, {
         language: nextLang,
       });
       onRefresh();
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusyAction(null);
-    }
+    });
   };
 
   const handleSaveTitle = async () => {
-    if (!token || !titleDraft.trim()) return;
-    setActionError(null);
-    setBusyAction('title');
-    try {
+    if (!titleDraft.trim()) return;
+    await runExclusiveAction('title', async () => {
       await updateRecordingProtocol(token, recording.id, {
-        title: titleDraft.trim(),
+        title: titleDraft.trim().slice(0, 240),
       });
       setIsEditingTitle(false);
       onRefresh();
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusyAction(null);
-    }
+    });
   };
 
   const handleShareReaderLink = async () => {
-    if (!token) return;
-    setActionError(null);
-    setBusyAction('share');
-    try {
+    await runExclusiveAction('share', async () => {
       const res = await issueReaderToken(token, recording.id);
       const shareUrl = `${window.location.origin}/ui#token=${encodeURIComponent(res.ui_token)}`;
       if (navigator.clipboard) {
@@ -339,68 +364,36 @@ export function MeetingDetailView({
       }
       setCopiedShareLink(true);
       setTimeout(() => setCopiedShareLink(false), 2500);
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusyAction(null);
-    }
+    });
   };
 
   const handleRejoin = async () => {
-    if (!token) return;
-    setActionError(null);
-    setBusyAction('rejoin');
-    try {
+    await runExclusiveAction('rejoin', async () => {
       await rejoinRecording(token, recording.id);
       onRefresh();
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusyAction(null);
-    }
+    });
   };
 
   const handleCancel = async () => {
-    if (!token) return;
-    setActionError(null);
-    setBusyAction('cancel');
-    try {
+    await runExclusiveAction('cancel', async () => {
       await cancelRecording(token, recording.id);
       onRefresh();
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusyAction(null);
-    }
+    });
   };
 
   const handleDeleteConfirmed = async () => {
-    if (!token) return;
-    setActionError(null);
-    setBusyAction('delete');
-    try {
+    await runExclusiveAction('delete', async () => {
       await deleteRecording(token, recording.id);
       setConfirmDeleteOpen(false);
       onDeleted();
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusyAction(null);
-    }
+    });
   };
 
   const handleRetryMail = async () => {
-    if (!token) return;
-    setActionError(null);
-    setBusyAction('retry-mail');
-    try {
+    await runExclusiveAction('retry-mail', async () => {
       await retryMailDelivery(token, recording.id);
       onRefresh();
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusyAction(null);
-    }
+    });
   };
 
   const handleDownload = async (format: 'txt' | 'vtt' | 'json' | 'md') => {
@@ -414,17 +407,10 @@ export function MeetingDetailView({
   };
 
   const handleLinkInCalendar = async () => {
-    if (!token) return;
-    setActionError(null);
-    setBusyAction('calendar-link');
-    try {
+    await runExclusiveAction('calendar-link', async () => {
       await linkRecordingInCalendar(token, recording.id);
       onRefresh();
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusyAction(null);
-    }
+    });
   };
 
   const lastAttempt =
@@ -451,6 +437,18 @@ export function MeetingDetailView({
   const botName = formatBotDisplayName(recording, instance.assistantName);
   const live = recording.live_status;
 
+  const startFormatted = new Date(recording.starts_at).toLocaleString(
+    localeTag,
+    {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }
+  );
+
   const operatorMenuItems = [
     ...(isOperator && recording.processing === 'completed'
       ? [
@@ -458,12 +456,12 @@ export function MeetingDetailView({
             id: 'calendar-link',
             label: transcript.calendar_link_synced_at
               ? tr(
-                  'Kalender-Link im Termin aktualisieren',
-                  'Update transcript link in calendar'
+                  'Kalender-Link aktualisieren',
+                  'Update calendar link'
                 )
               : tr(
-                  'Protokoll im Kalendertermin verlinken',
-                  'Link transcript in calendar event'
+                  'Im Kalendertermin verlinken',
+                  'Link in calendar event'
                 ),
             icon: <Link2 className="h-3.5 w-3.5" />,
             onClick: handleLinkInCalendar,
@@ -495,10 +493,7 @@ export function MeetingDetailView({
       : []),
     {
       id: 'delete',
-      label: tr(
-        'Aufnahme & Transkript löschen…',
-        'Delete recording & transcript…'
-      ),
+      label: tr('Aufnahme löschen…', 'Delete recording…'),
       variant: 'destructive' as const,
       icon: <Trash2 className="h-3.5 w-3.5" />,
       onClick: () => setConfirmDeleteOpen(true),
@@ -512,94 +507,224 @@ export function MeetingDetailView({
         header={
           <LayoutHeader hasDivider paddingBlockEnd={0}>
             <div className="wl-page-container">
-            <VStack gap={2}>
-              {isOperator && (onBackToOverview || onNavigateHome) && (
-                <Breadcrumbs
-                  variant="supporting"
-                  label={tr('Pfadnavigation', 'Breadcrumb')}
-                >
-                  {onNavigateHome && (
-                    <BreadcrumbItem onClick={onNavigateHome}>
-                      {tr('Startseite', 'Home')}
-                    </BreadcrumbItem>
-                  )}
-                  {onBackToOverview && (
+              <VStack gap={2}>
+                {isOperator && onBackToOverview && (
+                  <Breadcrumbs
+                    variant="supporting"
+                    label={tr('Pfadnavigation', 'Breadcrumb')}
+                  >
                     <BreadcrumbItem onClick={onBackToOverview}>
                       {tr('Aufnahmen', 'Recordings')}
                     </BreadcrumbItem>
-                  )}
-                  <BreadcrumbItem isCurrent>
-                    {formatRecordingTitle(recording)}
-                  </BreadcrumbItem>
-                </Breadcrumbs>
-              )}
+                    <BreadcrumbItem isCurrent>
+                      {formatRecordingTitle(recording)}
+                    </BreadcrumbItem>
+                  </Breadcrumbs>
+                )}
 
-              <HStack justify="between" vAlign="center" wrap="wrap" gap={3}>
-                <HStack gap={2} vAlign="center" wrap="wrap">
-                  {isEditingTitle ? (
-                    <HStack gap={1.5} vAlign="center">
-                      <div className="w-64">
-                        <TextInput
-                          label={tr('Sitzungstitel', 'Meeting title')}
-                          isLabelHidden
-                          size="sm"
-                          value={titleDraft}
-                          onChange={(val) => setTitleDraft(val)}
-                          placeholder={tr('Sitzungstitel', 'Meeting title')}
-                        />
+                <HStack justify="between" vAlign="start" wrap="wrap" gap={3}>
+                  <VStack gap={1.5} className="min-w-0">
+                    {isEditingTitle ? (
+                      <form
+                        onSubmit={(e) => {
+                          e.preventDefault();
+                          handleSaveTitle();
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Escape') {
+                            setIsEditingTitle(false);
+                          }
+                        }}
+                      >
+                        <HStack gap={1.5} vAlign="center" wrap="wrap">
+                          <div className="w-64 max-w-full">
+                            <TextInput
+                              label={tr('Sitzungstitel', 'Meeting title')}
+                              isLabelHidden
+                              size="sm"
+                              value={titleDraft}
+                              onChange={(val) => setTitleDraft(val)}
+                              placeholder={tr('Sitzungstitel', 'Meeting title')}
+                            />
+                          </div>
+                          <Button
+                            type="submit"
+                            variant="primary"
+                            size="sm"
+                            isLoading={busyAction === 'title'}
+                            icon={<Check className="h-3.5 w-3.5" />}
+                            label={tr('Speichern', 'Save')}
+                          />
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            size="sm"
+                            icon={<X className="h-3.5 w-3.5" />}
+                            label={tr('Abbrechen', 'Cancel')}
+                            onClick={() => setIsEditingTitle(false)}
+                          />
+                        </HStack>
+                      </form>
+                    ) : (
+                      <div
+                        className="flex items-start gap-2 min-w-0 max-w-full"
+                        dir="auto"
+                      >
+                        <div className="min-w-0 flex-1 wl-break-anywhere">
+                          <Heading level={1}>
+                            {formatRecordingTitle(recording)}
+                          </Heading>
+                        </div>
+                        {isOperator && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setTitleDraft(formatRecordingTitle(recording));
+                              setIsEditingTitle(true);
+                            }}
+                            className="shrink-0 rounded p-1 text-[var(--color-text-secondary)] hover:bg-[var(--color-background-muted)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer"
+                            aria-label={tr('Titel bearbeiten', 'Edit title')}
+                            title={tr(
+                              'Titel bearbeiten',
+                              'Edit title'
+                            )}
+                          >
+                            <Edit3 className="h-3.5 w-3.5" />
+                          </button>
+                        )}
                       </div>
+                    )}
+                    <HStack gap={2} vAlign="center" wrap="wrap">
+                      <ProviderBadge provider={recording.provider} />
+                      <StatusBadge
+                        participation={recording.participation}
+                        processing={recording.processing}
+                        hasError={hasError}
+                      />
+                    </HStack>
+                  </VStack>
+
+                  <HStack gap={1.5} vAlign="center" wrap="wrap">
+                    <span id="copy-transcript-btn">
                       <Button
                         variant="primary"
                         size="sm"
-                        isLoading={busyAction === 'title'}
-                        icon={<Check className="h-3.5 w-3.5" />}
-                        label={tr('Speichern', 'Save')}
-                        onClick={handleSaveTitle}
+                        icon={
+                          copiedTranscript ? (
+                            <Check className="h-3.5 w-3.5" />
+                          ) : (
+                            <Copy className="h-3.5 w-3.5" />
+                          )
+                        }
+                        label={
+                          copiedTranscript
+                            ? tr('Markdown kopiert!', 'Markdown copied!')
+                            : tr('Markdown kopieren', 'Copy Markdown')
+                        }
+                        onClick={handleCopyTranscript}
                       />
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        icon={<X className="h-3.5 w-3.5" />}
-                        label={tr('Abbrechen', 'Cancel')}
-                        onClick={() => setIsEditingTitle(false)}
-                      />
-                    </HStack>
-                  ) : (
-                    <>
-                      <Heading level={1}>
-                        {formatRecordingTitle(recording)}
-                      </Heading>
-                      {isOperator && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setTitleDraft(formatRecordingTitle(recording));
-                            setIsEditingTitle(true);
-                          }}
-                          className="rounded p-1 text-slate-400 hover:bg-slate-800/60 hover:text-slate-200 transition-colors"
-                          title={tr(
-                            'Sitzungstitel bearbeiten',
-                            'Edit meeting title'
-                          )}
-                        >
-                          <Edit3 className="h-3.5 w-3.5" />
-                        </button>
-                      )}
-                    </>
-                  )}
-                  <ProviderBadge provider={recording.provider} />
-                  <StatusBadge
-                    participation={recording.participation}
-                    processing={recording.processing}
-                    hasError={hasError}
-                  />
+                    </span>
+
+                    {isOperator && (
+                      <span id="share-reader-link-btn">
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          isLoading={busyAction === 'share'}
+                          icon={
+                            copiedShareLink ? (
+                              <Check className="h-3.5 w-3.5" />
+                            ) : (
+                              <Share2 className="h-3.5 w-3.5" />
+                            )
+                          }
+                          label={
+                            copiedShareLink
+                              ? tr('Link kopiert!', 'Link copied!')
+                              : tr('Teilen', 'Share')
+                          }
+                          onClick={handleShareReaderLink}
+                        />
+                      </span>
+                    )}
+
+                    <DropdownMenu
+                      button={{
+                        label: 'Export',
+                        variant: 'secondary',
+                        size: 'sm',
+                        icon: <Download className="h-3.5 w-3.5" />,
+                      }}
+                      items={[
+                        {
+                          id: 'md',
+                          label: 'Markdown (.md)',
+                          onClick: () => handleDownload('md'),
+                        },
+                        {
+                          id: 'txt',
+                          label: tr('Klartext (.txt)', 'Plain text (.txt)'),
+                          onClick: () => handleDownload('txt'),
+                        },
+                        {
+                          id: 'vtt',
+                          label: 'WebVTT (.vtt)',
+                          onClick: () => handleDownload('vtt'),
+                        },
+                        {
+                          id: 'json',
+                          label: 'JSON (.json)',
+                          onClick: () => handleDownload('json'),
+                        },
+                      ]}
+                    />
+
+                    {isOperator && (
+                      <>
+                        {canCancel && (
+                          <span id="cancel-rec-btn">
+                            <Button
+                              variant="destructive"
+                              size="sm"
+                              isLoading={busyAction === 'cancel'}
+                              icon={<Square className="h-3.5 w-3.5" />}
+                              label={tr('Stopp', 'Stop')}
+                              onClick={handleCancel}
+                            />
+                          </span>
+                        )}
+                        <span id="delete-rec-btn">
+                          <MoreMenu
+                            size="sm"
+                            variant="secondary"
+                            alignment="end"
+                            label={tr('Weitere Aktionen', 'More actions')}
+                            items={operatorMenuItems}
+                          />
+                        </span>
+                      </>
+                    )}
+                  </HStack>
+                </HStack>
+
+                {/* Compact single-line session metadata */}
+                <HStack gap={2} vAlign="center" wrap="wrap">
+                  <Text
+                    type="supporting"
+                    color="secondary"
+                    hasTabularNumbers
+                  >
+                    {startFormatted}
+                    {sampleSec > 0 ? ` · ${formatDurationHuman(sampleSec)}` : ''}
+                  </Text>
+
                   {isOperator ? (
                     <div
                       id="recording-asr-language-switcher"
-                      className="w-56"
+                      className="w-48 max-w-full"
                       title={tr(
-                        'Transkriptionssprache wechseln (wirkt sofort auf kommende Audio-Segmente & Zusammenfassung)',
-                        'Switch transcription language (applies immediately to upcoming segments & summary)'
+                        'Transkriptionssprache wechseln',
+                        'Switch transcription language'
                       )}
                     >
                       <Selector
@@ -631,239 +756,81 @@ export function MeetingDetailView({
                       )}
                     />
                   )}
+
                   {transcript.detected_languages &&
                     transcript.detected_languages.length > 0 && (
-                      <Token
-                        size="sm"
-                        color="blue"
-                        label={`${tr('Erkannt', 'Detected')}: ${transcript.detected_languages
+                      <Text type="supporting" color="secondary">
+                        {`${tr('Erkannt', 'Detected')}: ${transcript.detected_languages
                           .map((dl) => formatAsrLanguageLabel(dl, lang, true))
                           .join(', ')}`}
-                      />
+                      </Text>
                     )}
+
                   {transcript.calendar_link_synced_at && (
-                    <Token
-                      size="sm"
-                      color="green"
-                      label={tr(
-                        'Im Kalender verlinkt',
-                        'Linked in calendar'
-                      )}
-                    />
+                    <Text type="supporting" color="secondary">
+                      · {tr('Im Kalender verlinkt', 'Linked in calendar')}
+                    </Text>
                   )}
                 </HStack>
 
-                <HStack gap={1.5} vAlign="center" wrap="wrap">
-                  <span id="copy-transcript-btn">
-                    <Button
-                      variant="primary"
-                      size="sm"
-                      icon={
-                        copiedTranscript ? (
-                          <Check className="h-3.5 w-3.5" />
-                        ) : (
-                          <Copy className="h-3.5 w-3.5" />
-                        )
-                      }
-                      label={
-                        copiedTranscript
-                          ? tr('Markdown kopiert!', 'Markdown copied!')
-                          : tr('Markdown kopieren', 'Copy Markdown')
-                      }
-                      onClick={handleCopyTranscript}
-                    />
-                  </span>
-
-                  {isOperator && (
-                    <span id="share-reader-link-btn">
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        isLoading={busyAction === 'share'}
-                        icon={
-                          copiedShareLink ? (
-                            <Check className="h-3.5 w-3.5" />
-                          ) : (
-                            <Share2 className="h-3.5 w-3.5" />
-                          )
-                        }
-                        label={
-                          copiedShareLink
-                            ? tr('Lese-Link kopiert!', 'Share link copied!')
-                            : tr('Lese-Link teilen', 'Share read-only link')
-                        }
-                        onClick={handleShareReaderLink}
-                      />
-                    </span>
-                  )}
-
-                  <DropdownMenu
-                    button={{
-                      label: 'Export',
-                      variant: 'secondary',
-                      size: 'sm',
-                      icon: <Download className="h-3.5 w-3.5" />,
-                    }}
-                    items={[
-                      {
-                        id: 'md',
-                        label: 'Markdown (.md)',
-                        description: tr(
-                          'Mit Zusammenfassung, To-Do-Liste & Transkript',
-                          'With summary, to-do list & transcript'
-                        ),
-                        onClick: () => handleDownload('md'),
-                      },
-                      {
-                        id: 'txt',
-                        label: tr('Klartext (.txt)', 'Plain text (.txt)'),
-                        description: tr(
-                          'Mit Zusammenfassung, To-Do-Liste & Zeitstempeln',
-                          'With summary, to-do list & timestamps'
-                        ),
-                        onClick: () => handleDownload('txt'),
-                      },
-                      {
-                        id: 'vtt',
-                        label: tr(
-                          'WebVTT Untertitel (.vtt)',
-                          'WebVTT captions (.vtt)'
-                        ),
-                        description: tr(
-                          'Für Video-Player & Schnittprogramme',
-                          'For video players & editors'
-                        ),
-                        onClick: () => handleDownload('vtt'),
-                      },
-                      {
-                        id: 'json',
-                        label: tr(
-                          'Strukturiertes JSON (.json)',
-                          'Structured JSON (.json)'
-                        ),
-                        description: tr(
-                          'Alle Segmente, Quellen & Qualitätsdaten',
-                          'All segments, tracks & quality metadata'
-                        ),
-                        onClick: () => handleDownload('json'),
-                      },
-                    ]}
+                <TabList
+                  size="md"
+                  hasDivider
+                  isFullBleed
+                  value={activeTab}
+                  onChange={(v) =>
+                    setActiveTab(v as 'transcript' | 'sources' | 'diagnostics')
+                  }
+                >
+                  <Tab
+                    value="transcript"
+                    label={`${tr('Protokoll', 'Protocol')} (${transcript.segments?.length || 0})`}
                   />
-
-                  {isOperator && (
-                    <>
-                      {canCancel && (
-                        <span id="cancel-rec-btn">
-                          <Button
-                            variant="destructive"
-                            size="sm"
-                            isLoading={busyAction === 'cancel'}
-                            icon={<Square className="h-3.5 w-3.5" />}
-                            label={tr('Stopp', 'Stop')}
-                            onClick={handleCancel}
-                          />
-                        </span>
-                      )}
-                      <span id="delete-rec-btn">
-                        <MoreMenu
-                          size="sm"
-                          variant="secondary"
-                          alignment="end"
-                          label={tr('Weitere Aktionen', 'More actions')}
-                          items={operatorMenuItems}
-                        />
-                      </span>
-                    </>
-                  )}
-                </HStack>
-              </HStack>
-
-              <TabList
-                size="md"
-                hasDivider
-                isFullBleed
-                value={activeTab}
-                onChange={(v) =>
-                  setActiveTab(v as 'transcript' | 'sources' | 'diagnostics')
-                }
-              >
-                <Tab
-                  value="transcript"
-                  label={`${tr('Transkript', 'Transcript')} (${transcript.segments?.length || 0})`}
-                />
-                <Tab
-                  value="sources"
-                  label={`${tr('Sprecher & Spuren', 'Speakers & Tracks')} (${transcript.sources_summary?.length || 0})`}
-                />
-                <Tab
-                  value="diagnostics"
-                  label={tr('Technik & Diagnose', 'Diagnostics')}
-                />
-              </TabList>
-            </VStack>
+                  <Tab
+                    value="sources"
+                    label={`${tr('Sprecher', 'Speakers')} (${transcript.sources_summary?.length || 0})`}
+                  />
+                  <Tab
+                    value="diagnostics"
+                    label={tr('Diagnose', 'Diagnostics')}
+                  />
+                </TabList>
+              </VStack>
             </div>
           </LayoutHeader>
-        }
-        end={
-          <LayoutPanel
-            width={340}
-            hasDivider
-            isScrollable
-            role="complementary"
-            label={tr('Sitzungs-Inspektor', 'Session inspector')}
-          >
-            <ParticipationStepper
-              recording={recording}
-              transcript={transcript}
-              isOperator={isOperator}
-              onRejoin={handleRejoin}
-              rejoining={busyAction === 'rejoin'}
-              selectedSourceFilter={selectedSourceFilter}
-              onSelectSourceFilter={(srcId) => {
-                setSelectedSourceFilter(srcId);
-                setActiveTab('transcript');
-              }}
-            />
-          </LayoutPanel>
         }
         content={
           <LayoutContent>
             <div className="wl-page-container">
-            <VStack gap={3}>
-              {actionError && (
-                <Banner
-                  status="error"
-                  container="card"
-                  title={actionError}
-                  isDismissable
-                  onDismiss={() => setActionError(null)}
-                />
-              )}
+              <VStack gap={4}>
+                {actionError && (
+                  <Banner
+                    status="error"
+                    container="card"
+                    title={actionError}
+                    isDismissable
+                    onDismiss={() => setActionError(null)}
+                  />
+                )}
 
-              {(recording.participation === 'starting' ||
-                recording.participation === 'preparing' ||
-                recording.participation === 'joining') && (
-                <div className="wl-joining-card p-3.5 wl-fade-in">
-                  <VStack gap={2}>
-                    <Banner
-                      status="info"
-                      container="card"
-                      title={tr(
-                        `Zuhörer „${botName}“ tritt dem Meeting bei (Dauer ca. 15–30 Sek.)`,
-                        `Assistant “${botName}” is joining the meeting (~15–30s)`
-                      )}
-                      description={tr(
-                        'Der Konferenz-Zuhörer verbindet sich stummgeschaltet mit dem Raum. Falls ein Warteraum aktiv ist, lassen Sie ihn dort bitte kurz zu.',
-                        'The assistant connects muted to the room. If a waiting room is active, please admit it in the meeting window.'
-                      )}
-                    />
-                    <div className="wl-shimmer-bar" />
-                  </VStack>
-                </div>
-              )}
+                {(recording.participation === 'starting' ||
+                  recording.participation === 'preparing' ||
+                  recording.participation === 'joining') && (
+                  <Banner
+                    status="info"
+                    container="card"
+                    title={tr(
+                      `„${botName}“ tritt dem Meeting bei…`,
+                      `“${botName}” is joining the meeting…`
+                    )}
+                    description={tr(
+                      'Falls ein Warteraum aktiv ist, lassen Sie den Zuhörer bitte im Meeting-Fenster zu.',
+                      'If a waiting room is active, please admit the assistant in the meeting window.'
+                    )}
+                  />
+                )}
 
-              {recording.participation === 'waiting_admission' && (
-                <div className="wl-lobby-card p-3.5 wl-fade-in">
+                {recording.participation === 'waiting_admission' && (
                   <Banner
                     status="warning"
                     container="card"
@@ -872,150 +839,156 @@ export function MeetingDetailView({
                       `Waiting room active: Please admit “${botName}” in the meeting`
                     )}
                     description={tr(
-                      `Der Zuhörer wartet im Konferenz-Warteraum auf Einlass durch den Host (max. ${Math.round(instance.limits.lobbyTimeoutSeconds / 60)} Min.).`,
-                      `The assistant is waiting in the lobby for host admission (timeout ${Math.round(instance.limits.lobbyTimeoutSeconds / 60)} min).`
+                      `Timeout nach ${Math.round(instance.limits.lobbyTimeoutSeconds / 60)} Min.`,
+                      `Timeout after ${Math.round(instance.limits.lobbyTimeoutSeconds / 60)} min.`
                     )}
                   />
-                </div>
-              )}
+                )}
 
-              {live?.is_active && recording.participation === 'capturing' && (
-                <div
-                  id="live-status-banner"
-                  className={`${live.paused ? 'wl-lobby-card' : 'wl-live-card'} p-3.5 wl-fade-in`}
-                >
-                  <HStack justify="between" vAlign="center" wrap="wrap" gap={3}>
-                    <HStack gap={live.paused ? 3 : 2} vAlign="center" wrap="wrap">
-                      {live.paused ? (
-                        <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400">
-                          <Pause className="h-4 w-4" />
-                        </span>
-                      ) : (
-                        <LiveWaveform active={Boolean(live.speech_active)} />
-                      )}
-                      <VStack gap={0.5}>
-                        <HStack gap={2} vAlign="center" wrap="wrap">
-                          <Text type="body" weight="bold">
+                {live?.is_active && recording.participation === 'capturing' && (
+                  <div
+                    id="live-status-banner"
+                    className={`${live.paused ? 'wl-lobby-card' : 'wl-live-card'} p-3.5`}
+                  >
+                    <HStack justify="between" vAlign="center" wrap="wrap" gap={3}>
+                      <HStack
+                        gap={3}
+                        vAlign="start"
+                        wrap="nowrap"
+                      >
+                        {live.paused ? (
+                          <span className="mt-0.5 shrink-0 inline-flex h-7 w-7 items-center justify-center rounded-full wl-warn-badge">
+                            <Pause className="h-3.5 w-3.5" />
+                          </span>
+                        ) : (
+                          <span className="mt-1 shrink-0 inline-flex">
+                            <LiveWaveform active={Boolean(live.speech_active)} />
+                          </span>
+                        )}
+                        <VStack gap={0.5} className="min-w-0 flex-1">
+                          <HStack gap={2} vAlign="center" wrap="wrap">
+                            <Text type="body" weight="bold">
+                              {live.paused
+                                ? tr(
+                                    'Off the Record — Aufnahme im Konferenz-Chat pausiert',
+                                    'Off the Record — Recording paused via meeting chat'
+                                  )
+                                : live.speech_active
+                                  ? tr(
+                                      'Ton wird aufgezeichnet — Sprachaktivität erkannt',
+                                      'Recording audio — voice activity detected'
+                                    )
+                                  : tr(
+                                      'Live-Aufnahme bereit — warte auf Sprache',
+                                      'Live capture ready — waiting for speech'
+                                    )}
+                            </Text>
+                            {!live.paused &&
+                              live.speech_active &&
+                              (live.active_speakers?.length ?? 0) > 0 && (
+                                <Token
+                                  size="sm"
+                                  color="green"
+                                  label={live.active_speakers!.join(', ')}
+                                />
+                              )}
+                          </HStack>
+                          <Text type="supporting" color="secondary">
                             {live.paused
                               ? tr(
-                                  'Off the Record — Aufnahme im Konferenz-Chat pausiert',
-                                  'Off the Record — Recording paused via meeting chat'
+                                  'Im Konferenz-Chat „#resume“ oder „#weiter“ senden, um fortzufahren.',
+                                  'Type "#resume" in the meeting chat to continue recording.'
                                 )
-                              : live.speech_active
-                                ? tr(
-                                    'Ton wird aufgezeichnet — Sprachaktivität erkannt',
-                                    'Recording audio — voice activity detected'
-                                  )
-                                : tr(
-                                    'Live-Aufnahme bereit — warte auf Sprache',
-                                    'Live capture ready — waiting for speech'
-                                  )}
+                              : tr(
+                                  `Sprecher zugeordnet: ${live.bound_named_receivers ?? 0}/${live.total_receivers ?? 0} · Sprache: ${formatDurationHuman(live.active_audio_seconds || 0)} · Chat: „no“ (Opt-out), „#pause“ (Pause)`,
+                                  `Bound speakers: ${live.bound_named_receivers ?? 0}/${live.total_receivers ?? 0} · Speech: ${formatDurationHuman(live.active_audio_seconds || 0)} · Chat: “no” (opt-out), “#pause” (pause)`
+                                )}
                           </Text>
-                          {!live.paused && live.speech_active && (live.active_speakers?.length ?? 0) > 0 && (
-                            <Token
-                              size="sm"
-                              color="green"
-                              label={live.active_speakers!.join(', ')}
-                            />
-                          )}
-                        </HStack>
-                        <Text type="supporting" color="secondary">
-                          {live.paused
-                            ? tr(
-                                'Es werden aktuell weder Audio noch Bildschirmfreigaben erfasst. Im Konferenz-Chat „#resume“ oder „#weiter“ senden, um fortzufahren.',
-                                'No audio or screen-share slides are being captured. Type "#resume" in the meeting chat to continue recording.'
-                              )
-                            : tr(
-                                `Erkannte Teilnehmende: ${live.dom_or_signaled_participants ?? 0} · Zugeordnete Sprecher: ${live.bound_named_receivers ?? 0}/${live.total_receivers ?? 0} · Erfasste Sprache: ${formatDurationHuman(live.active_audio_seconds || 0)} (${formatDurationHuman(live.audio_seconds || 0)} gesamt)`,
-                                `Participants: ${live.dom_or_signaled_participants ?? 0} · Bound speakers: ${live.bound_named_receivers ?? 0}/${live.total_receivers ?? 0} · Speech: ${formatDurationHuman(live.active_audio_seconds || 0)} (${formatDurationHuman(live.audio_seconds || 0)} total)`
-                              )}
-                        </Text>
-                      </VStack>
+                        </VStack>
+                      </HStack>
                     </HStack>
-                  </HStack>
-                </div>
-              )}
+                  </div>
+                )}
 
-              {(recording.participation === 'ended' ||
-                recording.participation === 'unknown') &&
-                !isNormalEnd &&
-                (explanation || reason) && (
-                <Banner
-                  status="error"
-                  container="card"
-                  title={tr(
-                    `Sitzungshinweis (${reason})`,
-                    `Session notice (${reason})`
+                {(recording.participation === 'ended' ||
+                  recording.participation === 'unknown') &&
+                  !isNormalEnd &&
+                  (explanation || reason) && (
+                    <Banner
+                      status="error"
+                      container="card"
+                      title={tr(
+                        `Sitzungshinweis (${reason})`,
+                        `Session notice (${reason})`
+                      )}
+                      description={
+                        explanation ||
+                        tr(
+                          'Die Sitzung wurde vorzeitig beendet.',
+                          'The session ended early.'
+                        )
+                      }
+                      endContent={
+                        canRejoin ? (
+                          <span id="rejoin-rec-btn">
+                            <Button
+                              variant="primary"
+                              size="sm"
+                              isLoading={busyAction === 'rejoin'}
+                              icon={<RotateCcw className="h-3.5 w-3.5" />}
+                              label={tr('Erneut beitreten', 'Rejoin meeting')}
+                              onClick={handleRejoin}
+                            />
+                          </span>
+                        ) : undefined
+                      }
+                    />
                   )}
-                  description={
-                    explanation ||
-                    tr(
-                      'Die Sitzung wurde vorzeitig oder mit Hinweis beendet.',
-                      'The session ended early or with a diagnostic notice.'
-                    )
-                  }
-                  endContent={
-                    canRejoin ? (
-                      <Button
-                        variant="primary"
-                        size="sm"
-                        isLoading={busyAction === 'rejoin'}
-                        icon={<RotateCcw className="h-3.5 w-3.5" />}
-                        label={tr(
-                          'Jetzt erneut beitreten',
-                          'Rejoin meeting now'
-                        )}
-                        onClick={handleRejoin}
-                      />
-                    ) : undefined
-                  }
-                />
-              )}
 
-              {activeTab === 'transcript' && (
-                <TranscriptTab
-                  recordingId={recording.id}
-                  token={token}
-                  isOperator={isOperator}
-                  participation={recording.participation}
-                  processing={recording.processing}
-                  timeOriginUtc={timeOriginUtc}
-                  audioAvailable={Boolean(transcript.audio_available)}
-                  summary={transcript.summary}
-                  termReplacements={transcript.term_replacements}
-                  segments={transcript.segments || []}
-                  keyframes={transcript.keyframes ?? []}
-                  pauseWindows={transcript.pause_windows ?? []}
-                  sources={transcript.sources_summary || []}
-                  selectedSourceFilter={selectedSourceFilter}
-                  onSelectedSourceFilterChange={setSelectedSourceFilter}
-                  onProtocolUpdated={onRefresh}
-                />
-              )}
+                {activeTab === 'transcript' && (
+                  <TranscriptTab
+                    recordingId={recording.id}
+                    token={token}
+                    isOperator={isOperator}
+                    participation={recording.participation}
+                    processing={recording.processing}
+                    timeOriginUtc={timeOriginUtc}
+                    audioAvailable={Boolean(transcript.audio_available)}
+                    summary={transcript.summary}
+                    termReplacements={transcript.term_replacements}
+                    segments={transcript.segments || []}
+                    keyframes={transcript.keyframes ?? []}
+                    pauseWindows={transcript.pause_windows ?? []}
+                    sources={transcript.sources_summary || []}
+                    selectedSourceFilter={selectedSourceFilter}
+                    onSelectedSourceFilterChange={setSelectedSourceFilter}
+                    onProtocolUpdated={onRefresh}
+                  />
+                )}
 
-              {activeTab === 'sources' && (
-                <SourcesTab
-                  sources={transcript.sources_summary || []}
-                  selectedSourceFilter={selectedSourceFilter}
-                  onSelectSourceForTranscript={(sourceId) => {
-                    setSelectedSourceFilter(
-                      selectedSourceFilter === sourceId ? '' : sourceId
-                    );
-                    setActiveTab('transcript');
-                  }}
-                />
-              )}
+                {activeTab === 'sources' && (
+                  <SourcesTab
+                    sources={transcript.sources_summary || []}
+                    selectedSourceFilter={selectedSourceFilter}
+                    onSelectSourceForTranscript={(sourceId) => {
+                      setSelectedSourceFilter(
+                        selectedSourceFilter === sourceId ? '' : sourceId
+                      );
+                      setActiveTab('transcript');
+                    }}
+                  />
+                )}
 
-              {activeTab === 'diagnostics' && (
-                <DiagnosticsTab
-                  recording={recording}
-                  transcript={transcript}
-                  isOperator={isOperator}
-                  onRetryMail={handleRetryMail}
-                  retryingMail={busyAction === 'retry-mail'}
-                />
-              )}
-            </VStack>
+                {activeTab === 'diagnostics' && (
+                  <DiagnosticsTab
+                    recording={recording}
+                    transcript={transcript}
+                    isOperator={isOperator}
+                    onRetryMail={handleRetryMail}
+                    retryingMail={busyAction === 'retry-mail'}
+                  />
+                )}
+              </VStack>
             </div>
           </LayoutContent>
         }
@@ -1025,12 +998,12 @@ export function MeetingDetailView({
         isOpen={confirmDeleteOpen}
         onOpenChange={setConfirmDeleteOpen}
         title={tr(
-          'Aufnahme & Transkript unwiderruflich löschen?',
-          'Permanently delete recording & transcript?'
+          'Aufnahme unwiderruflich löschen?',
+          'Permanently delete recording?'
         )}
         description={tr(
-          `Möchten Sie die Aufzeichnung „${formatRecordingTitle(recording)}“ inklusive aller gespeicherten Audiodaten und Transkriptsegmente wirklich dauerhaft löschen?`,
-          `Are you sure you want to permanently delete “${formatRecordingTitle(recording)}” including all stored audio tracks and transcript segments?`
+          `Möchten Sie „${formatRecordingTitle(recording)}“ inklusive aller Audiodaten und Transkriptsegmente dauerhaft löschen?`,
+          `Are you sure you want to permanently delete “${formatRecordingTitle(recording)}” including all audio tracks and transcript segments?`
         )}
         actionLabel={tr('Dauerhaft löschen', 'Delete permanently')}
         cancelLabel={tr('Abbrechen', 'Cancel')}

@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { AppShell } from '@astryxdesign/core/AppShell';
+import { Banner } from '@astryxdesign/core/Banner';
 import { CommandPalette } from '@astryxdesign/core/CommandPalette';
 import {
   createStaticSource,
@@ -19,6 +20,7 @@ import {
   fetchTranscript,
   formatRecordingTitle,
   getSavedAccountToken,
+  isProblemRecording,
   loadInitialToken,
   parseTokenAuthMode,
   readNavStateFromHash,
@@ -45,7 +47,7 @@ import {
 } from './components/RecordingSidebar';
 import { SystemView } from './components/SystemView';
 import { WelcomeLandingView } from './components/WelcomeLandingView';
-import { useThemeMode } from './components/ui/primitives';
+import { UiErrorBoundary, useThemeMode } from './components/ui/primitives';
 import { useI18n } from './i18n';
 
 interface CommandItem
@@ -69,7 +71,6 @@ export function App() {
   const [selectedId, setSelectedId] = useState<string | null>(
     initialNav.recordingId
   );
-  const [livePoll, setLivePoll] = useState<boolean>(true);
   const [newRecordingOpen, setNewRecordingOpen] = useState<boolean>(false);
   const [newRecordingTab, setNewRecordingTab] = useState<'link' | 'ics'>(
     'link'
@@ -79,6 +80,31 @@ export function App() {
   const [providerFilter, setProviderFilter] = useState<string>('');
   const [quickFilter, setQuickFilter] = useState<QuickStatusFilter>('all');
   const [titleSearch, setTitleSearch] = useState<string>('');
+  const [debouncedTitleSearch, setDebouncedTitleSearch] = useState<string>('');
+  const [isOnline, setIsOnline] = useState<boolean>(() =>
+    typeof navigator !== 'undefined' ? navigator.onLine : true
+  );
+
+  useEffect(() => {
+    const t = window.setTimeout(() => {
+      setDebouncedTitleSearch(titleSearch.trim());
+    }, 250);
+    return () => window.clearTimeout(t);
+  }, [titleSearch]);
+
+  useEffect(() => {
+    const handleOnline = () => {
+      setIsOnline(true);
+      queryClient.invalidateQueries();
+    };
+    const handleOffline = () => setIsOnline(false);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, [queryClient]);
 
   const authMode = useMemo(() => parseTokenAuthMode(token), [token]);
   const hasSavedAccount = useMemo(
@@ -193,7 +219,7 @@ export function App() {
       const res = await fetch('/health/ready');
       return res.ok;
     },
-    refetchInterval: livePoll ? 15000 : false,
+    refetchInterval: 15000,
     refetchIntervalInBackground: false,
   });
 
@@ -205,21 +231,23 @@ export function App() {
     undefined
   );
   const [loadingMoreRecordings, setLoadingMoreRecordings] = useState(false);
+  const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
 
   useEffect(() => {
     setOlderRecordings([]);
     setOlderCursor(undefined);
-  }, [token, providerFilter, titleSearch]);
+    setLoadMoreError(null);
+  }, [token, providerFilter, debouncedTitleSearch]);
 
   const recordingsQuery = useQuery({
-    queryKey: ['recordings', token, providerFilter, titleSearch],
+    queryKey: ['recordings', token, providerFilter, debouncedTitleSearch],
     queryFn: () =>
       fetchRecordings(token, {
         provider: providerFilter || undefined,
-        q: titleSearch.trim() || undefined,
+        q: debouncedTitleSearch || undefined,
       }),
     enabled: authMode.kind === 'operator',
-    refetchInterval: livePoll ? 5000 : false,
+    refetchInterval: 5000,
     refetchIntervalInBackground: false,
     retry: false,
   });
@@ -228,14 +256,17 @@ export function App() {
     const err = recordingsQuery.error;
     if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
       setAuthError(
-        'Sitzung abgelaufen oder ungültiger Schlüssel. Bitte melden Sie sich erneut an.'
+        tr(
+          'Sitzung abgelaufen oder ungültiger Schlüssel. Bitte melden Sie sich erneut an.',
+          'Session expired or invalid key. Please sign in again.'
+        )
       );
       saveTokenToStorage('');
       setToken('');
     } else if (recordingsQuery.isSuccess) {
       setAuthError(null);
     }
-  }, [recordingsQuery.error, recordingsQuery.isSuccess]);
+  }, [recordingsQuery.error, recordingsQuery.isSuccess, tr]);
 
   const effectiveNextCursor =
     olderCursor !== undefined
@@ -245,10 +276,11 @@ export function App() {
   const handleLoadMoreRecordings = async () => {
     if (!effectiveNextCursor || loadingMoreRecordings) return;
     setLoadingMoreRecordings(true);
+    setLoadMoreError(null);
     try {
       const page = await fetchRecordings(token, {
         provider: providerFilter || undefined,
-        q: titleSearch.trim() || undefined,
+        q: debouncedTitleSearch || undefined,
         cursor: effectiveNextCursor,
       });
       setOlderRecordings((prev) => {
@@ -257,8 +289,8 @@ export function App() {
         return [...prev, ...added];
       });
       setOlderCursor(page.next_cursor);
-    } catch {
-      // keep existing items on transient load-more failure
+    } catch (err) {
+      setLoadMoreError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoadingMoreRecordings(false);
     }
@@ -339,13 +371,17 @@ export function App() {
     ).length;
   }, [rawRecordings]);
 
-  // Calendar query (operator only) — only poll when viewing Home or Calendar
+  const failedRecordingsCount = useMemo(() => {
+    return rawRecordings.filter(isProblemRecording).length;
+  }, [rawRecordings]);
+
+  // Calendar query (operator only) — poll when viewing Recordings or Calendar
   const calendarQuery = useQuery({
     queryKey: ['calendar', token],
     queryFn: () => fetchCalendar(token),
     enabled: authMode.kind === 'operator',
     refetchInterval:
-      livePoll && !selectedId && (activeNav === 'calendar' || activeNav === 'home')
+      !selectedId && (activeNav === 'calendar' || activeNav === 'meetings')
         ? 15000
         : false,
     refetchIntervalInBackground: false,
@@ -357,7 +393,7 @@ export function App() {
     queryKey: ['mcpGrants', token],
     queryFn: () => fetchMcpGrants(token),
     enabled: authMode.kind === 'operator',
-    refetchInterval: livePoll && activeNav === 'mcp' ? 10000 : false,
+    refetchInterval: activeNav === 'mcp' ? 10000 : false,
     refetchIntervalInBackground: false,
     retry: false,
   });
@@ -372,7 +408,6 @@ export function App() {
     enabled:
       authMode.kind !== 'unauthenticated' && Boolean(activeRecordingId),
     refetchInterval: (query) => {
-      if (!livePoll) return false;
       const d = query.state.data;
       if (
         d &&
@@ -397,7 +432,7 @@ export function App() {
     queryFn: () => fetchTranscript(token, activeRecordingId!),
     enabled:
       authMode.kind !== 'unauthenticated' && Boolean(activeRecordingId),
-    refetchInterval: livePoll && !isSelectedRecordingSettled ? 3000 : false,
+    refetchInterval: !isSelectedRecordingSettled ? 3000 : false,
     refetchIntervalInBackground: false,
     retry: false,
   });
@@ -405,10 +440,15 @@ export function App() {
   useEffect(() => {
     const err = detailQuery.error || transcriptQuery.error;
     if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
-      setAuthError('Ungültiger oder abgelaufener Lese-Link / API-Schlüssel.');
+      setAuthError(
+        tr(
+          'Ungültiger oder abgelaufener Lese-Link / API-Schlüssel.',
+          'Invalid or expired read-only link / API key.'
+        )
+      );
       setAuthDialogOpen(true);
     }
-  }, [detailQuery.error, transcriptQuery.error]);
+  }, [detailQuery.error, transcriptQuery.error, tr]);
 
   const handleSaveToken = (nextToken: string) => {
     saveTokenToStorage(nextToken);
@@ -421,7 +461,7 @@ export function App() {
     const saved = exitReaderModeToAccount();
     setToken(saved);
     setSelectedId(null);
-    setActiveNav('home');
+    setActiveNav('meetings');
     setAuthError(null);
     queryClient.invalidateQueries();
   };
@@ -484,23 +524,11 @@ export function App() {
         },
       },
       {
-        id: 'nav:home',
-        label: tr('Zur Startseite wechseln', 'Go to Home'),
-        auxiliaryData: {
-          group: 'Navigation',
-          keywords: ['startseite', 'home', 'übersicht', 'overview'],
-          action: () => {
-            setSelectedId(null);
-            setActiveNav('home');
-          },
-        },
-      },
-      {
         id: 'nav:meetings',
         label: tr('Zu Aufnahmen wechseln', 'Go to Recordings'),
         auxiliaryData: {
           group: 'Navigation',
-          keywords: ['aufnahmen', 'meetings', 'archiv', 'recordings'],
+          keywords: ['aufnahmen', 'meetings', 'archiv', 'recordings', 'startseite', 'home'],
           action: () => {
             setSelectedId(null);
             setActiveNav('meetings');
@@ -555,8 +583,8 @@ export function App() {
       {
         id: 'theme:toggle',
         label: tr(
-          `Darstellung wechseln (aktuell: ${mode})`,
-          `Toggle theme (current: ${mode})`
+          `Darstellung wechseln (aktuell: ${mode === 'light' ? 'Hell' : mode === 'dark' ? 'Dunkel' : 'Auto'})`,
+          `Toggle theme (current: ${mode === 'light' ? 'Light' : mode === 'dark' ? 'Dark' : 'Auto'})`
         ),
         auxiliaryData: {
           group: tr('Einstellungen', 'Settings'),
@@ -589,6 +617,30 @@ export function App() {
     [commandItems]
   );
 
+  const nonAuthErrorText = (err: unknown): string | null => {
+    if (!err) return null;
+    if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
+      return null;
+    }
+    return err instanceof Error ? err.message : String(err);
+  };
+
+  const detailLoadError = detailQuery.error || transcriptQuery.error || null;
+  const offlineBanner = !isOnline ? (
+    <div className="px-4 pt-3">
+      <div className="wl-page-container">
+        <Banner
+          status="warning"
+          container="card"
+          title={tr(
+            'Keine Internetverbindung — Live-Aktualisierungen werden automatisch fortgesetzt, sobald die Verbindung wiederhergestellt ist.',
+            'Offline — live updates will resume automatically once your connection is restored.'
+          )}
+        />
+      </div>
+    </div>
+  ) : null;
+
   // Reader or unauthenticated top-bar shell
   if (authMode.kind === 'unauthenticated' || authMode.kind === 'reader') {
     return (
@@ -598,7 +650,7 @@ export function App() {
         contentPadding={0}
         topNav={
           <ReaderTopBar
-            healthy={Boolean(healthQuery.data)}
+            healthy={Boolean(healthQuery.data) && isOnline}
             authMode={authMode}
             hasSavedAccount={hasSavedAccount}
             onReturnToAccount={handleReturnToAccount}
@@ -606,24 +658,28 @@ export function App() {
           />
         }
       >
-        {authMode.kind === 'unauthenticated' ? (
-          <WelcomeLandingView
-            healthy={Boolean(healthQuery.data)}
-            authError={authError}
-            onConnectToken={handleSaveToken}
-            onStartOidcLogin={handleStartOidcLogin}
-            onOpenAuthDialog={() => setAuthDialogOpen(true)}
-          />
-        ) : (
-          <MeetingDetailView
-            authMode={authMode}
-            recording={detailQuery.data || null}
-            transcript={transcriptQuery.data || null}
-            isLoading={detailQuery.isLoading || transcriptQuery.isLoading}
-            onRefresh={handleManualRefresh}
-            onDeleted={() => {}}
-          />
-        )}
+        {offlineBanner}
+        <UiErrorBoundary resetKey={`top:${authMode.kind}:${activeRecordingId || 'landing'}`}>
+          {authMode.kind === 'unauthenticated' ? (
+            <WelcomeLandingView
+              healthy={Boolean(healthQuery.data) && isOnline}
+              authError={authError}
+              onConnectToken={handleSaveToken}
+              onStartOidcLogin={handleStartOidcLogin}
+              onOpenAuthDialog={() => setAuthDialogOpen(true)}
+            />
+          ) : (
+            <MeetingDetailView
+              authMode={authMode}
+              recording={detailQuery.data || null}
+              transcript={transcriptQuery.data || null}
+              isLoading={detailQuery.isLoading || transcriptQuery.isLoading}
+              loadError={detailLoadError}
+              onRefresh={handleManualRefresh}
+              onDeleted={() => {}}
+            />
+          )}
+        </UiErrorBoundary>
 
         <AuthGateDialog
           open={authDialogOpen}
@@ -646,7 +702,7 @@ export function App() {
       contentPadding={0}
       sideNav={
         <HeaderBar
-          healthy={Boolean(healthQuery.data)}
+          healthy={Boolean(healthQuery.data) && isOnline}
           authMode={authMode}
           hasSavedAccount={hasSavedAccount}
           onReturnToAccount={handleReturnToAccount}
@@ -665,128 +721,110 @@ export function App() {
           }
           calendarConnectedCount={calendarConnections.length}
           mcpGrantCount={mcpGrantsQuery.data?.grants.length || 0}
-          livePoll={livePoll}
-          onToggleLivePoll={setLivePoll}
-          onManualRefresh={handleManualRefresh}
           onOpenNewRecording={() => handleOpenNewModal('link')}
           onOpenAuthDialog={() => setAuthDialogOpen(true)}
           onOpenCommandPalette={() => setCommandPaletteOpen(true)}
         />
       }
     >
-      {activeNav === 'calendar' ? (
-        <CalendarWorkspace
-          token={token}
-          events={calendarEvents}
-          connections={calendarConnections}
-          syncedEvents={calendarSyncedEvents}
-          onRefreshCalendar={() =>
-            queryClient.invalidateQueries({ queryKey: ['calendar'] })
-          }
-          onSelectRecording={handleOpenRecording}
-          onOpenImportModal={() => handleOpenNewModal('ics')}
-          onNavigateHome={() => {
-            setSelectedId(null);
-            setActiveNav('home');
-          }}
-        />
-      ) : activeNav === 'mcp' ? (
-        <McpWorkspace
-          token={token}
-          endpoint={mcpGrantsQuery.data?.endpoint}
-          grants={mcpGrantsQuery.data?.grants || []}
-          isLoading={mcpGrantsQuery.isLoading}
-          onRefresh={() =>
-            queryClient.invalidateQueries({ queryKey: ['mcpGrants'] })
-          }
-          onNavigateHome={() => {
-            setSelectedId(null);
-            setActiveNav('home');
-          }}
-        />
-      ) : activeNav === 'system' ? (
-        <SystemView
-          healthy={Boolean(healthQuery.data)}
-          authMode={authMode}
-          recordings={rawRecordings}
-          livePoll={livePoll}
-          onToggleLivePoll={setLivePoll}
-          onManualRefresh={handleManualRefresh}
-          onOpenAuthDialog={() => setAuthDialogOpen(true)}
-          onSelectRecording={handleOpenRecording}
-          onNavigateHome={() => {
-            setSelectedId(null);
-            setActiveNav('home');
-          }}
-        />
-      ) : selectedId ? (
-        <MeetingDetailView
-          authMode={authMode}
-          recording={detailQuery.data || null}
-          transcript={transcriptQuery.data || null}
-          isLoading={detailQuery.isLoading || transcriptQuery.isLoading}
-          onRefresh={handleManualRefresh}
-          onBackToOverview={() => {
-            setSelectedId(null);
-            setActiveNav('meetings');
-          }}
-          onNavigateHome={() => {
-            setSelectedId(null);
-            setActiveNav('home');
-          }}
-          onDeleted={() => {
-            setSelectedId(null);
-            handleManualRefresh();
-          }}
-        />
-      ) : (
-        <RecordingSidebar
-          mode={activeNav === 'meetings' ? 'meetings' : 'home'}
-          userName={
-            authMode.kind === 'operator'
-              ? authMode.user?.name || authMode.user?.email || null
-              : null
-          }
-          token={token}
-          recordings={filteredRecordings}
-          totalRecordingsCount={rawRecordings.length}
-          hasMoreRecordings={Boolean(effectiveNextCursor)}
-          isLoadingMoreRecordings={loadingMoreRecordings}
-          onLoadMoreRecordings={handleLoadMoreRecordings}
-          calendarConnections={calendarConnections}
-          calendarSyncedEvents={calendarSyncedEvents}
-          selectedId={selectedId}
-          onSelectRecording={handleOpenRecording}
-          providerFilter={providerFilter}
-          onProviderFilterChange={setProviderFilter}
-          quickFilter={quickFilter}
-          onQuickFilterChange={setQuickFilter}
-          titleSearch={titleSearch}
-          onTitleSearchChange={setTitleSearch}
-          onOpenNewRecording={() => handleOpenNewModal('link')}
-          onOpenIcsImport={() => handleOpenNewModal('ics')}
-          onNavigateHome={() => {
-            setSelectedId(null);
-            setActiveNav('home');
-          }}
-          onNavigateMeetings={() => {
-            setSelectedId(null);
-            setActiveNav('meetings');
-          }}
-          onNavigateCalendar={() => {
-            setSelectedId(null);
-            setActiveNav('calendar');
-          }}
-          onRefreshCalendar={() =>
-            queryClient.invalidateQueries({ queryKey: ['calendar'] })
-          }
-          onCreatedRecording={(id) => {
-            handleManualRefresh();
-            handleOpenRecording(id);
-          }}
-          isLoading={recordingsQuery.isLoading}
-        />
-      )}
+      {offlineBanner}
+      <UiErrorBoundary
+        resetKey={`${activeNav}:${selectedId || 'list'}`}
+        onResetView={() => {
+          setSelectedId(null);
+          setActiveNav('meetings');
+        }}
+      >
+        {activeNav === 'calendar' ? (
+          <CalendarWorkspace
+            token={token}
+            events={calendarEvents}
+            connections={calendarConnections}
+            syncedEvents={calendarSyncedEvents}
+            loadError={nonAuthErrorText(calendarQuery.error)}
+            onRefreshCalendar={() =>
+              queryClient.invalidateQueries({ queryKey: ['calendar'] })
+            }
+            onSelectRecording={handleOpenRecording}
+            onOpenImportModal={() => handleOpenNewModal('ics')}
+          />
+        ) : activeNav === 'mcp' ? (
+          <McpWorkspace
+            token={token}
+            endpoint={mcpGrantsQuery.data?.endpoint}
+            grants={mcpGrantsQuery.data?.grants || []}
+            isLoading={mcpGrantsQuery.isLoading}
+            loadError={nonAuthErrorText(mcpGrantsQuery.error)}
+            onRefresh={() =>
+              queryClient.invalidateQueries({ queryKey: ['mcpGrants'] })
+            }
+          />
+        ) : activeNav === 'system' ? (
+          <SystemView
+            healthy={Boolean(healthQuery.data) && isOnline}
+            authMode={authMode}
+            recordings={rawRecordings}
+            onOpenAuthDialog={() => setAuthDialogOpen(true)}
+            onSelectRecording={handleOpenRecording}
+          />
+        ) : selectedId ? (
+          <MeetingDetailView
+            authMode={authMode}
+            recording={detailQuery.data || null}
+            transcript={transcriptQuery.data || null}
+            isLoading={detailQuery.isLoading || transcriptQuery.isLoading}
+            loadError={detailLoadError}
+            onRefresh={handleManualRefresh}
+            onBackToOverview={() => {
+              setSelectedId(null);
+              setActiveNav('meetings');
+            }}
+            onDeleted={() => {
+              setSelectedId(null);
+              handleManualRefresh();
+            }}
+          />
+        ) : (
+          <RecordingSidebar
+            token={token}
+            recordings={filteredRecordings}
+            totalRecordingsCount={rawRecordings.length}
+            failedRecordingsCount={failedRecordingsCount}
+            hasMoreRecordings={Boolean(effectiveNextCursor)}
+            isLoadingMoreRecordings={loadingMoreRecordings}
+            loadMoreError={loadMoreError}
+            onLoadMoreRecordings={handleLoadMoreRecordings}
+            loadError={nonAuthErrorText(recordingsQuery.error)}
+            onRetry={() =>
+              queryClient.invalidateQueries({ queryKey: ['recordings'] })
+            }
+            calendarConnections={calendarConnections}
+            calendarSyncedEvents={calendarSyncedEvents}
+            selectedId={selectedId}
+            onSelectRecording={handleOpenRecording}
+            providerFilter={providerFilter}
+            onProviderFilterChange={setProviderFilter}
+            quickFilter={quickFilter}
+            onQuickFilterChange={setQuickFilter}
+            titleSearch={titleSearch}
+            onTitleSearchChange={setTitleSearch}
+            onOpenNewRecording={() => handleOpenNewModal('link')}
+            onOpenIcsImport={() => handleOpenNewModal('ics')}
+            onNavigateCalendar={() => {
+              setSelectedId(null);
+              setActiveNav('calendar');
+            }}
+            onRefreshCalendar={() =>
+              queryClient.invalidateQueries({ queryKey: ['calendar'] })
+            }
+            onCreatedRecording={(id) => {
+              handleManualRefresh();
+              handleOpenRecording(id);
+            }}
+            isLoading={recordingsQuery.isLoading}
+          />
+        )}
+      </UiErrorBoundary>
 
       <CommandPalette<CommandItem>
         isOpen={commandPaletteOpen}

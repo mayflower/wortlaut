@@ -1,28 +1,26 @@
 import React from 'react';
 import {
+  ArrowLeft,
   AudioLines,
   Calendar,
-  CalendarPlus,
   FileText,
   HelpCircle,
-  Home,
   KeyRound,
+  Monitor,
   Moon,
-  RefreshCw,
+  Plus,
   Search,
   ShieldCheck,
   Sun,
   Terminal,
 } from 'lucide-react';
 import { Button } from '@astryxdesign/core/Button';
-import { IconButton } from '@astryxdesign/core/IconButton';
 import { Avatar } from '@astryxdesign/core/Avatar';
 import { HStack } from '@astryxdesign/core/HStack';
 import { VStack } from '@astryxdesign/core/VStack';
 import { Text } from '@astryxdesign/core/Text';
 import { StatusDot } from '@astryxdesign/core/StatusDot';
 import { Token } from '@astryxdesign/core/Token';
-import { Switch } from '@astryxdesign/core/Switch';
 import {
   SegmentedControl,
   SegmentedControlItem,
@@ -37,7 +35,7 @@ import type { AuthMode } from '../types';
 import { useI18n, type UiLang } from '../i18n';
 import { useThemeMode, type ThemeMode } from './ui/primitives';
 
-export type NavSection = 'home' | 'meetings' | 'calendar' | 'mcp' | 'system';
+export type NavSection = 'meetings' | 'calendar' | 'mcp' | 'system';
 
 export interface HeaderBarProps {
   healthy: boolean;
@@ -52,12 +50,15 @@ export interface HeaderBarProps {
   calendarCount: number;
   calendarConnectedCount?: number;
   mcpGrantCount?: number;
-  livePoll: boolean;
-  onToggleLivePoll: (enabled: boolean) => void;
-  onManualRefresh: () => void;
   onOpenNewRecording: () => void;
   onOpenAuthDialog: () => void;
   onOpenCommandPalette?: () => void;
+}
+
+function nextThemeMode(cur: ThemeMode): ThemeMode {
+  if (cur === 'dark') return 'light';
+  if (cur === 'light') return 'system';
+  return 'dark';
 }
 
 export function ReaderTopBar({
@@ -77,6 +78,21 @@ export function ReaderTopBar({
   const { mode, setMode } = useThemeMode();
   const { lang, setLang, tr } = useI18n();
 
+  const themeIcon =
+    mode === 'light' ? (
+      <Sun className="h-3.5 w-3.5" />
+    ) : mode === 'dark' ? (
+      <Moon className="h-3.5 w-3.5" />
+    ) : (
+      <Monitor className="h-3.5 w-3.5" />
+    );
+  const themeLabel =
+    mode === 'light'
+      ? tr('Hell', 'Light')
+      : mode === 'dark'
+        ? tr('Dunkel', 'Dark')
+        : 'Auto';
+
   return (
     <HStack
       as="header"
@@ -91,17 +107,24 @@ export function ReaderTopBar({
       <HStack gap={2} vAlign="center" wrap="wrap">
         <a
           id="brand-home-link"
-          href="#view=home"
+          href="#view=meetings"
           onClick={(e) => {
-            if (authMode.kind === 'reader' && hasSavedAccount && onReturnToAccount) {
+            if (
+              authMode.kind === 'reader' &&
+              hasSavedAccount &&
+              onReturnToAccount
+            ) {
               e.preventDefault();
               onReturnToAccount();
             }
           }}
-          title={tr('Zur Wortlaut.cloud Startseite', 'Go to Wortlaut.cloud home')}
-          className="group flex items-center gap-2.5 rounded-lg px-1.5 py-1 no-underline transition-colors hover:bg-[var(--color-background-muted)] focus:outline-none"
+          title={tr(
+            'Zur Wortlaut.cloud Übersicht',
+            'Go to Wortlaut.cloud overview'
+          )}
+          className="group flex items-center gap-2 rounded-lg px-1.5 py-1 no-underline transition-colors hover:bg-[var(--color-background-muted)]"
         >
-          <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-[var(--color-background-accent-subtle,#2563eb1a)] text-[var(--color-text-accent,#3b82f6)] ring-1 ring-[var(--color-border)] transition-transform group-hover:scale-105">
+          <span className="flex h-7 w-7 items-center justify-center rounded-lg wl-brand-badge">
             <AudioLines className="h-4 w-4" />
           </span>
           <HStack gap={1.5} vAlign="center">
@@ -121,20 +144,14 @@ export function ReaderTopBar({
             </span>
           </HStack>
         </a>
-        {authMode.kind === 'reader' ? (
+
+        {authMode.kind === 'reader' && (
           <Token
             size="sm"
             color="blue"
             icon={<ShieldCheck className="h-3 w-3" />}
-            label={tr(
-              'Freigegebenes Transkript (Nur-Lese-Link)',
-              'Shared transcript (read-only link)'
-            )}
+            label={tr('Lese-Ansicht', 'Read-only view')}
           />
-        ) : (
-          <Text type="supporting" color="secondary">
-            Google Meet · Microsoft Teams · Cisco Webex · Zoom
-          </Text>
         )}
       </HStack>
 
@@ -149,47 +166,34 @@ export function ReaderTopBar({
           <SegmentedControlItem value="en" label="EN" />
         </SegmentedControl>
 
-        <SegmentedControl
+        <Button
+          variant="ghost"
           size="sm"
-          label={tr('Farbschema', 'Theme')}
-          value={mode}
-          onChange={(v) => setMode(v as ThemeMode)}
-        >
-          <SegmentedControlItem
-            value="light"
-            label={tr('Hell', 'Light')}
-            icon={<Sun className="h-3.5 w-3.5" />}
-          />
-          <SegmentedControlItem
-            value="dark"
-            label={tr('Dunkel', 'Dark')}
-            icon={<Moon className="h-3.5 w-3.5" />}
-          />
-          <SegmentedControlItem value="system" label="Auto" />
-        </SegmentedControl>
+          icon={themeIcon}
+          label={themeLabel}
+          onClick={() => setMode(nextThemeMode(mode))}
+        />
 
         {authMode.kind === 'reader' && hasSavedAccount && onReturnToAccount && (
           <span id="return-to-account-btn">
             <Button
               variant="primary"
               size="sm"
-              icon={<Home className="h-3.5 w-3.5" />}
-              label={tr('Zurück zu meinem Konto', 'Back to my account')}
+              icon={<ArrowLeft className="h-3.5 w-3.5" />}
+              label={tr('Zu meinem Konto', 'My account')}
               onClick={onReturnToAccount}
             />
           </span>
         )}
-        <Button
-          variant={authMode.kind === 'unauthenticated' ? 'primary' : 'secondary'}
-          size="sm"
-          icon={<KeyRound className="h-3.5 w-3.5" />}
-          label={
-            authMode.kind === 'reader'
-              ? tr('Zugang wechseln', 'Switch access')
-              : tr('Anmelden', 'Sign in')
-          }
-          onClick={onOpenAuthDialog}
-        />
+        {authMode.kind === 'reader' && (
+          <Button
+            variant="secondary"
+            size="sm"
+            icon={<KeyRound className="h-3.5 w-3.5" />}
+            label={tr('Anmelden', 'Sign in')}
+            onClick={onOpenAuthDialog}
+          />
+        )}
       </HStack>
     </HStack>
   );
@@ -206,35 +210,42 @@ export function HeaderBar({
   calendarCount,
   calendarConnectedCount = 0,
   mcpGrantCount = 0,
-  livePoll,
-  onToggleLivePoll,
-  onManualRefresh,
   onOpenNewRecording,
   onOpenAuthDialog,
   onOpenCommandPalette,
 }: HeaderBarProps) {
   const { mode, setMode } = useThemeMode();
   const { lang, setLang, tr } = useI18n();
-  const isHomeSelected = activeNav === 'home' && !hasSelectedRecording;
   const isMeetingsSelected = activeNav === 'meetings' || hasSelectedRecording;
+
+  const themeIcon =
+    mode === 'light' ? (
+      <Sun className="h-3.5 w-3.5" />
+    ) : mode === 'dark' ? (
+      <Moon className="h-3.5 w-3.5" />
+    ) : (
+      <Monitor className="h-3.5 w-3.5" />
+    );
+  const themeLabel =
+    mode === 'light'
+      ? tr('Hell', 'Light')
+      : mode === 'dark'
+        ? tr('Dunkel', 'Dark')
+        : 'Auto';
 
   return (
     <SideNav
       collapsible={{ defaultIsCollapsed: false, hasButton: true }}
       header={
-        <div
-          id="brand-home-link"
-          onClick={() => onChangeNav('home')}
-        >
+        <div id="brand-home-link" onClick={() => onChangeNav('meetings')}>
           <SideNavHeading
             icon={
-              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-[var(--color-background-accent-subtle,#2563eb1a)] text-[var(--color-text-accent,#3b82f6)] ring-1 ring-[var(--color-border)]">
+              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg wl-brand-badge">
                 <AudioLines className="h-4 w-4" />
               </span>
             }
             heading="Wortlaut.cloud"
-            headingHref="#view=home"
-            subheading="Meet · Teams · Webex · Zoom"
+            headingHref="#view=meetings"
             headerEndContent={
               <span id="health-dot">
                 <StatusDot
@@ -259,7 +270,7 @@ export function HeaderBar({
                 variant="primary"
                 size="sm"
                 width="fill"
-                icon={<CalendarPlus className="h-3.5 w-3.5" />}
+                icon={<Plus className="h-3.5 w-3.5" />}
                 label={tr('Neue Aufnahme', 'New recording')}
                 onClick={onOpenNewRecording}
               />
@@ -270,7 +281,7 @@ export function HeaderBar({
                 size="sm"
                 width="fill"
                 icon={<Search className="h-3.5 w-3.5" />}
-                label={tr('Schnellsuche (⌘K)', 'Quick search (⌘K)')}
+                label={tr('Suche (⌘K)', 'Search (⌘K)')}
                 onClick={onOpenCommandPalette}
               />
             )}
@@ -279,51 +290,14 @@ export function HeaderBar({
       }
       footer={
         <VStack gap={2} paddingInline={2} paddingBlock={1.5}>
-          <HStack justify="between" vAlign="center" gap={1}>
-            <Switch
+          <HStack justify="between" vAlign="center" gap={1.5}>
+            <Button
+              variant="ghost"
               size="sm"
-              label={tr('Live-Update (3s)', 'Live sync (3s)')}
-              value={livePoll}
-              onChange={(checked) => onToggleLivePoll(checked)}
+              icon={themeIcon}
+              label={themeLabel}
+              onClick={() => setMode(nextThemeMode(mode))}
             />
-            <input
-              id="auto-refresh"
-              type="checkbox"
-              checked={livePoll}
-              onChange={(e) => onToggleLivePoll(e.target.checked)}
-              className="sr-only"
-              aria-hidden="true"
-              tabIndex={-1}
-            />
-            <span id="refresh-btn">
-              <IconButton
-                variant="ghost"
-                size="sm"
-                label={tr('Daten jetzt aktualisieren', 'Refresh data now')}
-                tooltip={tr('Jetzt aktualisieren', 'Refresh now')}
-                icon={<RefreshCw className="h-3.5 w-3.5" />}
-                onClick={onManualRefresh}
-              />
-            </span>
-          </HStack>
-
-          <HStack gap={1.5} vAlign="center">
-            <div className="flex-1">
-              <SegmentedControl
-                size="sm"
-                layout="fill"
-                label={tr('Farbschema', 'Theme')}
-                value={mode}
-                onChange={(v) => setMode(v as ThemeMode)}
-              >
-                <SegmentedControlItem
-                  value="light"
-                  label={tr('Hell', 'Light')}
-                />
-                <SegmentedControlItem value="dark" label={tr('Dunkel', 'Dark')} />
-                <SegmentedControlItem value="system" label="Auto" />
-              </SegmentedControl>
-            </div>
             <SegmentedControl
               size="sm"
               label={tr('Sprache', 'Language')}
@@ -375,12 +349,6 @@ export function HeaderBar({
       {authMode.kind === 'operator' && (
         <SideNavSection title="Navigation" isHeaderHidden>
           <SideNavItem
-            label={tr('Startseite', 'Home')}
-            icon={<Home className="h-4 w-4" />}
-            isSelected={isHomeSelected}
-            onClick={() => onChangeNav('home')}
-          />
-          <SideNavItem
             label={tr('Aufnahmen', 'Recordings')}
             icon={<FileText className="h-4 w-4" />}
             isSelected={isMeetingsSelected}
@@ -408,7 +376,7 @@ export function HeaderBar({
                 {calendarConnectedCount > 0 && (
                   <StatusDot
                     variant="success"
-                    label={tr('Kalender verbunden', 'Calendar connected')}
+                    label=""
                     tooltip={tr(
                       'Kalender-Synchronisation aktiv',
                       'Calendar sync active'
@@ -422,7 +390,7 @@ export function HeaderBar({
             }
           />
           <SideNavItem
-            label={tr('MCP & KI-Clients', 'MCP & AI Clients')}
+            label="MCP"
             icon={<Terminal className="h-4 w-4" />}
             isSelected={activeNav === 'mcp'}
             onClick={() => onChangeNav('mcp')}
@@ -433,7 +401,7 @@ export function HeaderBar({
             }
           />
           <SideNavItem
-            label={tr('System & Hilfe', 'System & Help')}
+            label="System"
             icon={<HelpCircle className="h-4 w-4" />}
             isSelected={activeNav === 'system'}
             onClick={() => onChangeNav('system')}

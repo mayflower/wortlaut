@@ -1,13 +1,16 @@
 import React, { createContext, useContext } from 'react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
+import { AlertTriangle, RotateCcw } from 'lucide-react';
 import { Token } from '@astryxdesign/core/Token';
 import { StatusDot } from '@astryxdesign/core/StatusDot';
-import { HStack } from '@astryxdesign/core/Stack';
+import { HStack, VStack } from '@astryxdesign/core/Stack';
 import { Text } from '@astryxdesign/core/Text';
+import { Button } from '@astryxdesign/core/Button';
+import { EmptyState } from '@astryxdesign/core/EmptyState';
 import type { ParticipationState, Provider } from '../../types';
 import { PARTICIPATION_LABELS, PROVIDER_LABELS } from '../../api';
-import { localizeParticipation, useI18n } from '../../i18n';
+import { getCurrentLang, localizeParticipation, useI18n } from '../../i18n';
 
 export function cn(...inputs: ClassValue[]): string {
   return twMerge(clsx(inputs));
@@ -40,7 +43,7 @@ export function LiveWaveform({
     return (
       <span
         className={cn(
-          'inline-flex h-4 items-center gap-[2px] text-slate-400 dark:text-slate-500',
+          'inline-flex h-4 items-center gap-[2px] text-[var(--color-text-secondary)]',
           className
         )}
         aria-hidden="true"
@@ -54,7 +57,7 @@ export function LiveWaveform({
   }
   return (
     <span
-      className={cn('wl-waveform text-emerald-500', className)}
+      className={cn('wl-waveform wl-text-accent', className)}
       aria-hidden="true"
     >
       <span className="wl-wave-bar" />
@@ -284,4 +287,79 @@ export function StatusBadge({
       weight="semibold"
     />
   );
+}
+
+interface UiErrorBoundaryProps {
+  children: React.ReactNode;
+  resetKey?: string;
+  onResetView?: () => void;
+}
+
+interface UiErrorBoundaryState {
+  error: Error | null;
+}
+
+export class UiErrorBoundary extends React.Component<
+  UiErrorBoundaryProps,
+  UiErrorBoundaryState
+> {
+  state: UiErrorBoundaryState = { error: null };
+
+  static getDerivedStateFromError(error: Error): UiErrorBoundaryState {
+    return { error };
+  }
+
+  componentDidUpdate(prevProps: UiErrorBoundaryProps): void {
+    if (this.state.error && prevProps.resetKey !== this.props.resetKey) {
+      this.setState({ error: null });
+    }
+  }
+
+  private handleReset = (): void => {
+    this.setState({ error: null });
+    this.props.onResetView?.();
+  };
+
+  render(): React.ReactNode {
+    if (!this.state.error) {
+      return this.props.children;
+    }
+    const en = getCurrentLang() === 'en';
+    return (
+      <VStack paddingBlock={8} paddingInline={4} hAlign="center">
+        <EmptyState
+          headingLevel={2}
+          icon={<AlertTriangle className="h-8 w-8" />}
+          title={
+            en
+              ? 'This view could not be displayed'
+              : 'Diese Ansicht konnte nicht dargestellt werden'
+          }
+          description={
+            this.state.error.message ||
+            (en
+              ? 'An unexpected rendering error occurred.'
+              : 'Beim Darstellen der Daten ist ein unerwarteter Fehler aufgetreten.')
+          }
+          actions={
+            <HStack gap={2} wrap="wrap" justify="center">
+              <Button
+                variant="primary"
+                size="sm"
+                icon={<RotateCcw className="h-3.5 w-3.5" />}
+                label={en ? 'Try again' : 'Erneut versuchen'}
+                onClick={this.handleReset}
+              />
+              <Button
+                variant="secondary"
+                size="sm"
+                label={en ? 'Reload page' : 'Seite neu laden'}
+                onClick={() => window.location.reload()}
+              />
+            </HStack>
+          }
+        />
+      </VStack>
+    );
+  }
 }

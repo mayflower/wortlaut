@@ -1,24 +1,16 @@
 import React from 'react';
-import {
-  ArrowRight,
-  BookOpen,
-  CheckCircle2,
-  KeyRound,
-} from 'lucide-react';
+import { ArrowRight, BookOpen, KeyRound } from 'lucide-react';
 import { Layout, LayoutContent, LayoutHeader } from '@astryxdesign/core/Layout';
-import { Breadcrumbs, BreadcrumbItem } from '@astryxdesign/core/Breadcrumbs';
 import { Heading } from '@astryxdesign/core/Heading';
 import { Text } from '@astryxdesign/core/Text';
 import { HStack } from '@astryxdesign/core/HStack';
 import { VStack } from '@astryxdesign/core/VStack';
-import { Section } from '@astryxdesign/core/Section';
 import {
   MetadataList,
   MetadataListItem,
 } from '@astryxdesign/core/MetadataList';
 import { List, ListItem } from '@astryxdesign/core/List';
 import { Button } from '@astryxdesign/core/Button';
-import { EmptyState } from '@astryxdesign/core/EmptyState';
 import {
   Table,
   pixel,
@@ -29,6 +21,7 @@ import {
   formatRecordingTitle,
   getFailureReasons,
   getInstanceInfo,
+  isProblemRecording,
 } from '../api';
 import { useI18n } from '../i18n';
 import type { AuthMode, RecordingSummary } from '../types';
@@ -38,12 +31,8 @@ export interface SystemViewProps {
   healthy: boolean;
   authMode: AuthMode;
   recordings: RecordingSummary[];
-  livePoll: boolean;
-  onToggleLivePoll: (next: boolean) => void;
-  onManualRefresh: () => void;
   onOpenAuthDialog: () => void;
   onSelectRecording: (id: string) => void;
-  onNavigateHome?: () => void;
 }
 
 type ProblemRow = RecordingSummary & Record<string, unknown>;
@@ -53,7 +42,6 @@ export function SystemView({
   recordings,
   onOpenAuthDialog,
   onSelectRecording,
-  onNavigateHome,
 }: SystemViewProps) {
   const { lang, tr } = useI18n();
   const failureReasons = getFailureReasons();
@@ -75,19 +63,7 @@ export function SystemView({
       (r.participation === 'ended' && r.processing === 'pending')
   );
 
-  const problemRecordings = recordings.filter((r) => {
-    const reason = r.participation_reason;
-    const samples = r.quality?.durable_sample_count || 0;
-    const cleanStop =
-      !reason ||
-      reason === 'normal' ||
-      reason === 'room_empty' ||
-      reason === 'source_binding_unverified' ||
-      ((reason === 'cancelled' || reason === 'deadline') && samples > 0);
-    return (
-      r.processing === 'failed' || (r.participation === 'ended' && !cleanStop)
-    );
-  });
+  const problemRecordings = recordings.filter(isProblemRecording);
 
   const problemColumns: TableColumn<ProblemRow>[] = [
     {
@@ -117,7 +93,7 @@ export function SystemView({
     },
     {
       key: 'participation_reason',
-      header: tr('Hinweis / Abbruchgrund', 'Notice / End reason'),
+      header: tr('Hinweis', 'Reason'),
       width: proportional(2, { minWidth: 220 }),
       renderCell: (row) => {
         const reason = row.participation_reason;
@@ -135,7 +111,7 @@ export function SystemView({
     {
       key: 'action',
       header: '',
-      width: pixel(135),
+      width: pixel(120),
       align: 'end',
       renderCell: (row) => (
         <Button
@@ -149,188 +125,98 @@ export function SystemView({
     },
   ];
 
+  const asrQueueLabel =
+    asrJobs.length === 1
+      ? tr('1 Aufnahme aktiv', '1 recording active')
+      : tr(`${asrJobs.length} Aufnahmen aktiv`, `${asrJobs.length} recordings active`);
+
   return (
     <Layout
       height="fill"
       header={
         <LayoutHeader hasDivider>
           <div className="wl-page-container">
-          <VStack gap={2}>
-            {onNavigateHome && (
-              <Breadcrumbs
-                variant="supporting"
-                label={tr('Pfadnavigation', 'Breadcrumb')}
-              >
-                <BreadcrumbItem onClick={onNavigateHome}>
-                  {tr('Startseite', 'Home')}
-                </BreadcrumbItem>
-                <BreadcrumbItem isCurrent>
-                  {tr('System & Hilfe', 'System & Help')}
-                </BreadcrumbItem>
-              </Breadcrumbs>
-            )}
             <HStack justify="between" vAlign="center" wrap="wrap" gap={3}>
-              <VStack gap={0.5}>
-                <Heading level={1}>
-                  {tr('Hilfe & Systemstatus', 'Help & System Status')}
-                </Heading>
-                <Text type="supporting" color="secondary">
-                  {tr(
-                    'Ablauf einer Aufzeichnung, Datenschutzgarantien, konfigurierte Konferenz-Provider und Systembereitschaft.',
-                    'Recording lifecycle, privacy guarantees, configured conference providers, and runtime readiness.'
-                  )}
-                </Text>
-              </VStack>
+              <Heading level={1}>System</Heading>
 
               <HStack gap={2} vAlign="center" wrap="wrap">
                 <Button
-                  variant="secondary"
+                  variant="ghost"
                   size="sm"
                   href={`/privacy?lang=${lang}`}
                   target="_blank"
                   rel="noreferrer"
-                  label={tr(
-                    'Datenschutzhinweis (/privacy)',
-                    'Privacy notice (/privacy)'
-                  )}
+                  label={tr('Datenschutz', 'Privacy')}
                 />
                 <Button
-                  variant="secondary"
+                  variant="ghost"
                   size="sm"
                   href="/docs"
                   target="_blank"
                   rel="noreferrer"
                   icon={<BookOpen className="h-3.5 w-3.5" />}
-                  label="REST API (/docs)"
+                  label="API (/docs)"
                 />
                 <Button
                   variant="secondary"
                   size="sm"
                   icon={<KeyRound className="h-3.5 w-3.5" />}
-                  label={tr('Zugang & Konto', 'Account & Access')}
+                  label={tr('Konto & Zugang', 'Account & Access')}
                   onClick={onOpenAuthDialog}
                 />
               </HStack>
             </HStack>
-          </VStack>
           </div>
         </LayoutHeader>
       }
       content={
         <LayoutContent>
           <div className="wl-page-container">
-          <VStack gap={4}>
-            <Section variant="section">
-              <VStack gap={3}>
-                <Heading level={3}>
-                  {tr(
-                    `So funktioniert ${instance.assistantName} im Konferenzalltag`,
-                    `How ${instance.assistantName} works in daily meetings`
-                  )}
+            <VStack gap={6}>
+              <VStack gap={2}>
+                <Heading level={2}>
+                  {tr('Laufzeit & Kapazität', 'Runtime & Capacity')}
                 </Heading>
-                <MetadataList columns={2}>
+                <MetadataList columns="multi">
                   <MetadataListItem
-                    label={tr(
-                      '1. Einladen & Warteraum',
-                      '1. Invite & Lobby Admission'
-                    )}
+                    label={tr('API & Datenbank', 'API & Database')}
                   >
-                    {tr(
-                      `Der Bot tritt automatisch zum geplanten Termin oder nach Link-Eingabe als „${instance.assistantName}“ (mit Einladernamen) bei und zeigt Live-Transkript sowie Chat-Befehle direkt auf seiner 1280×720-Videokachel.`,
-                      `The assistant joins automatically at the scheduled time or via URL as “${instance.assistantName}” (with inviter name) and displays live turns plus chat commands directly on its 1280×720 video tile.`
-                    )}
-                  </MetadataListItem>
-                  <MetadataListItem
-                    label={tr(
-                      '2. Echte Sprechertrennung & Folien',
-                      '2. True Speaker Attribution & Slides'
-                    )}
-                  >
-                    {instance.enable_keyframes !== false
-                      ? tr(
-                          'Jede Teilnehmerspur wird vor dem Konferenz-Mix getrennt über WebRTC erfasst (keine Stimmprofile, niemals Teilnehmer-Kameravideo; nur statische Standbilder aktiver Bildschirmfreigaben).',
-                          'Every participant audio track is captured before mixing via WebRTC (zero biometric voiceprints, never camera video; settled snapshots of active screen shares only).'
-                        )
-                      : tr(
-                          'Jede empfangene Teilnehmerspur wird direkt über die WebRTC-Sitzung getrennt erfasst (keine Stimmprofile / Voiceprints, keinerlei Video- oder Bildschirmaufnahme).',
-                          'Every participant audio stream is captured directly from the WebRTC session before mixing (no biometric voiceprints, no camera or screen recording).'
-                        )}
-                  </MetadataListItem>
-                  <MetadataListItem
-                    label={tr(
-                      '3. Live-Steuerung im Konferenz-Chat',
-                      '3. In-Call Chat Controls'
-                    )}
-                  >
-                    {tr(
-                      'Direkt im Meeting-Chat steuerbar: „no“ / „opt out“ löscht sofort die eigene Spur, und „#pause“ / „#resume“ pausiert Off-the-Record.',
-                      'Control right from the meeting chat: “no” / “opt out” purges your own track, and “#pause” / “#resume” toggles off-the-record mode.'
-                    )}
-                  </MetadataListItem>
-                  <MetadataListItem
-                    label={tr(
-                      '4. 100 % Self-Hosted & Löschfristen',
-                      '4. 100% Self-Hosted & Retention'
-                    )}
-                  >
-                    {tr(
-                      `Spracherkennung (lokales Qwen3-ASR, 30 Sprachen) und optionale Ollama-Zusammenfassungen laufen lokal. Roh-Audio wird nach ${instance.retention.audioHours}h, Protokolle & Folien nach ${instance.retention.transcriptDays}d gelöscht.`,
-                      `Speech recognition (local Qwen3-ASR, 30 languages) and optional Ollama summaries run on your infrastructure. Raw audio expires after ${instance.retention.audioHours}h, transcripts & slides after ${instance.retention.transcriptDays}d.`
-                    )}
-                  </MetadataListItem>
-                </MetadataList>
-              </VStack>
-            </Section>
-
-            <Section variant="section">
-              <VStack gap={3}>
-                <Heading level={3}>
-                  {tr(
-                    'Plattform- & Kapazitätsstatus',
-                    'Platform & Capacity Status'
-                  )}
-                </Heading>
-                <MetadataList columns={4}>
-                  <MetadataListItem label={tr('API & Datenbank', 'API & Database')}>
                     <StatusIndicator
                       variant={healthy ? 'success' : 'warning'}
                       weight="medium"
                       label={
                         healthy
-                          ? tr('Bereit (/health/ready)', 'Ready (/health/ready)')
-                          : tr('Prüfe Verbindung…', 'Checking connection…')
+                          ? tr('Bereit', 'Ready')
+                          : tr('Verbinde…', 'Connecting…')
                       }
                     />
                   </MetadataListItem>
                   <MetadataListItem
-                    label={tr('Aktive Meeting-Bots', 'Active Meeting Bots')}
+                    label={tr('Aktive Bots', 'Active Bots')}
                   >
-                    {activeJobs.length} / {instance.limits.maxActiveMeetings}{' '}
-                    max.
+                    <span className="tabular-nums">
+                      {activeJobs.length} / {instance.limits.maxActiveMeetings}
+                    </span>
                   </MetadataListItem>
-                  <MetadataListItem label="ASR Queue">
-                    {tr(
-                      `${asrJobs.length} Aufnahmen in GPU-Erkennung`,
-                      `${asrJobs.length} recordings in GPU queue`
-                    )}
+                  <MetadataListItem label="ASR (GPU)">
+                    {asrQueueLabel}
                   </MetadataListItem>
                   <MetadataListItem
-                    label={tr('Aufbewahrungsfristen', 'Retention Policy')}
+                    label={tr('Aufbewahrung', 'Retention')}
                   >
-                    {instance.retention.audioHours}h{' '}
-                    {tr('Roh-Audio', 'raw audio')} ·{' '}
-                    {instance.retention.transcriptDays}d{' '}
-                    {tr('Transkript', 'transcript')}
+                    <span className="tabular-nums">
+                      {instance.retention.audioHours}h Audio ·{' '}
+                      {instance.retention.transcriptDays}d{' '}
+                      {tr('Protokoll', 'Protocol')}
+                    </span>
                   </MetadataListItem>
                 </MetadataList>
               </VStack>
-            </Section>
 
-            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-              <Section variant="section">
+              <div className="grid grid-cols-1 gap-8 lg:grid-cols-2 items-start">
                 <VStack gap={2}>
-                  <Heading level={3}>
-                    {tr('Konferenz-Provider', 'Conference Providers')}
+                  <Heading level={2}>
+                    {tr('Konferenzsysteme', 'Conference Providers')}
                   </Heading>
                   <List hasDividers edge="flush">
                     <ListItem
@@ -338,13 +224,10 @@ export function SystemView({
                       description={
                         instance.providers.google_meet_auth_session
                           ? tr(
-                              'Playwright/Chromium WebRTC · Gespeicherte Google-Session aktiv',
-                              'Playwright/Chromium WebRTC · Authenticated Google session active'
+                              'Authentifizierte Session',
+                              'Authenticated session'
                             )
-                          : tr(
-                              'Playwright/Chromium WebRTC · Gast-Modus',
-                              'Playwright/Chromium WebRTC · Guest mode'
-                            )
+                          : tr('Gast-Beitritt', 'Guest join')
                       }
                       endContent={
                         <StatusIndicator
@@ -356,18 +239,15 @@ export function SystemView({
                           weight="medium"
                           label={
                             instance.providers.google_meet
-                              ? tr('Aktiviert', 'Enabled')
-                              : tr('Deaktiviert', 'Disabled')
+                              ? tr('Aktiv', 'Enabled')
+                              : tr('Aus', 'Disabled')
                           }
                         />
                       }
                     />
                     <ListItem
                       label="Microsoft Teams"
-                      description={tr(
-                        'Playwright/Chromium Web-Client · Gast-Beitritt',
-                        'Playwright/Chromium Web Client · Guest join'
-                      )}
+                      description={tr('Gast-Beitritt', 'Guest join')}
                       endContent={
                         <StatusIndicator
                           variant={
@@ -376,8 +256,8 @@ export function SystemView({
                           weight="medium"
                           label={
                             instance.providers.teams
-                              ? tr('Aktiviert', 'Enabled')
-                              : tr('Deaktiviert', 'Disabled')
+                              ? tr('Aktiv', 'Enabled')
+                              : tr('Aus', 'Disabled')
                           }
                         />
                       }
@@ -385,8 +265,8 @@ export function SystemView({
                     <ListItem
                       label="Cisco Webex"
                       description={tr(
-                        'Playwright/Chromium Web-Client / Service-Token',
-                        'Playwright/Chromium Web Client / Service token'
+                        'Web-Client / Service-Token',
+                        'Web Client / Service token'
                       )}
                       endContent={
                         <StatusIndicator
@@ -396,8 +276,8 @@ export function SystemView({
                           weight="medium"
                           label={
                             instance.providers.webex
-                              ? tr('Aktiviert', 'Enabled')
-                              : tr('Kein Zugang hinterlegt', 'Not configured')
+                              ? tr('Aktiv', 'Enabled')
+                              : tr('Nicht konfiguriert', 'Not configured')
                           }
                         />
                       }
@@ -407,13 +287,10 @@ export function SystemView({
                       description={
                         instance.providers.zoom_auth_session
                           ? tr(
-                              'Playwright/Chromium Web-Client · Gespeicherte Zoom-Session aktiv',
-                              'Playwright/Chromium Web Client · Authenticated Zoom session active'
+                              'Authentifizierte Session',
+                              'Authenticated session'
                             )
-                          : tr(
-                              'Playwright/Chromium Web-Client · Anonymer Gast-Beitritt',
-                              'Playwright/Chromium Web Client · Guest join'
-                            )
+                          : tr('Gast-Beitritt', 'Guest join')
                       }
                       endContent={
                         <StatusIndicator
@@ -423,124 +300,146 @@ export function SystemView({
                           weight="medium"
                           label={
                             instance.providers.zoom
-                              ? tr('Aktiviert', 'Enabled')
-                              : tr('Deaktiviert', 'Disabled')
+                              ? tr('Aktiv', 'Enabled')
+                              : tr('Aus', 'Disabled')
                           }
                         />
                       }
                     />
                   </List>
                 </VStack>
-              </Section>
 
-              <Section variant="section">
                 <VStack gap={2}>
-                  <Heading level={3}>
-                    {tr(
-                      'Integrationen & Laufzeit-Funktionen',
-                      'Integrations & Runtime Capabilities'
-                    )}
+                  <Heading level={2}>
+                    {tr('Integrationen', 'Integrations')}
                   </Heading>
                   <MetadataList columns="single">
                     <MetadataListItem
-                      label={tr('Bot-Einladungsadresse', 'Bot invite address')}
+                      label={tr('Bot-E-Mail', 'Bot email')}
                     >
-                      {instance.botEmail || tr('Nicht konfiguriert', 'Not configured')}
+                      {instance.botEmail ||
+                        tr('Nicht konfiguriert', 'Not configured')}
                     </MetadataListItem>
                     <MetadataListItem label="Google Calendar OAuth2">
                       {instance.calendarOAuth?.googleEnabled
-                        ? tr('Aktiviert (calendar.events)', 'Enabled (calendar.events)')
+                        ? tr('Aktiv', 'Enabled')
                         : tr('Nicht konfiguriert', 'Not configured')}
                     </MetadataListItem>
                     <MetadataListItem label="Microsoft 365 OAuth2">
                       {instance.calendarOAuth?.microsoftEnabled
-                        ? tr(
-                            'Aktiviert (Calendars.ReadWrite)',
-                            'Enabled (Calendars.ReadWrite)'
-                          )
+                        ? tr('Aktiv', 'Enabled')
                         : tr('Nicht konfiguriert', 'Not configured')}
                     </MetadataListItem>
                     <MetadataListItem label="IMAP / SMTP">
-                      IMAP: {instance.mail.imapEnabled ? tr('Aktiv', 'On') : tr('Aus', 'Off')} ·
-                      SMTP: {instance.mail.smtpEnabled ? tr('Aktiv', 'On') : tr('Aus', 'Off')}
+                      IMAP:{' '}
+                      {instance.mail.imapEnabled
+                        ? tr('An', 'On')
+                        : tr('Aus', 'Off')}{' '}
+                      · SMTP:{' '}
+                      {instance.mail.smtpEnabled
+                        ? tr('An', 'On')
+                        : tr('Aus', 'Off')}
                     </MetadataListItem>
                     <MetadataListItem
-                      label={tr(
-                        'Bildschirmfreigabe-Keyframes',
-                        'Screen-share keyframes'
-                      )}
+                      label={tr('Folien-Standbilder', 'Slide snapshots')}
                     >
                       {instance.enable_keyframes !== false
-                        ? tr(
-                            'Aktiviert (nur Folien-Standbilder, keine Kamera)',
-                            'Enabled (settled slides only, zero camera)'
-                          )
-                        : tr('Deaktiviert', 'Disabled')}
+                        ? tr('Aktiv (keine Kamera)', 'Enabled (no camera)')
+                        : tr('Aus', 'Disabled')}
                     </MetadataListItem>
                     <MetadataListItem
-                      label={tr('Lokale KI-Zusammenfassung', 'Local AI summary')}
+                      label={tr('KI-Zusammenfassung', 'AI summary')}
                     >
                       {instance.llmSummaryEnabled
-                        ? tr(
-                            `Aktiviert (${instance.llmModel || 'Ollama'})`,
-                            `Enabled (${instance.llmModel || 'Ollama'})`
-                          )
-                        : tr('Deaktiviert', 'Disabled')}
-                    </MetadataListItem>
-                    <MetadataListItem label="MCP Server (OAuth 2.1)">
-                      {tr('Aktiv unter /mcp', 'Active at /mcp')}
+                        ? instance.llmModel || 'Ollama'
+                        : tr('Aus', 'Disabled')}
                     </MetadataListItem>
                     <MetadataListItem
                       label={tr(
-                        'Timeouts (Lobby / Leerer Raum)',
-                        'Timeouts (Lobby / Empty room)'
+                        'Timeouts (Lobby / Leer)',
+                        'Timeouts (Lobby / Empty)'
                       )}
                     >
-                      {Math.round(instance.limits.lobbyTimeoutSeconds / 60)}{' '}
-                      min /{' '}
-                      {Math.round(instance.limits.emptyRoomTimeoutSeconds / 60)}{' '}
-                      min
+                      <span className="tabular-nums">
+                        {Math.round(instance.limits.lobbyTimeoutSeconds / 60)}m
+                        / {Math.round(instance.limits.emptyRoomTimeoutSeconds / 60)}m
+                      </span>
                     </MetadataListItem>
                   </MetadataList>
                 </VStack>
-              </Section>
-            </div>
+              </div>
 
-            <Section variant="section">
-              <VStack gap={2}>
-                <Heading level={3}>
-                  {tr(
-                    `Aufzeichnungen mit Hinweis oder Abbruch (${problemRecordings.length})`,
-                    `Recordings with Notice or Early Exit (${problemRecordings.length})`
-                  )}
-                </Heading>
-
-                {problemRecordings.length === 0 ? (
-                  <EmptyState
-                    isCompact
-                    icon={<CheckCircle2 className="h-6 w-6" />}
-                    title={tr(
-                      'Keine fehlgeschlagenen Aufzeichnungen',
-                      'No failed recordings'
+              {problemRecordings.length > 0 && (
+                <VStack gap={2}>
+                  <Heading level={2}>
+                    {tr(
+                      `Hinweise & Abbrüche (${problemRecordings.length})`,
+                      `Notices & Early Exits (${problemRecordings.length})`
                     )}
-                    description={tr(
-                      'Alle angezeigten Aufzeichnungen wurden regulär abgeschlossen oder befinden sich im geplanten Ablauf.',
-                      'All listed recordings completed normally or are progressing as scheduled.'
-                    )}
-                  />
-                ) : (
-                  <Table<ProblemRow>
-                    idKey="id"
-                    density="compact"
-                    dividers="rows"
-                    hasHover
-                    data={problemRecordings.slice(0, 12) as ProblemRow[]}
-                    columns={problemColumns}
-                  />
-                )}
-              </VStack>
-            </Section>
-          </VStack>
+                  </Heading>
+                  <div className="hidden md:block">
+                    <Table<ProblemRow>
+                      idKey="id"
+                      density="compact"
+                      dividers="rows"
+                      hasHover
+                      data={problemRecordings.slice(0, 12) as ProblemRow[]}
+                      columns={problemColumns}
+                    />
+                  </div>
+                  <div className="md:hidden rounded-lg border border-[var(--color-border)] divide-y divide-[var(--color-border)]">
+                    {problemRecordings.slice(0, 12).map((row) => {
+                      const reason = row.participation_reason;
+                      const reasonText =
+                        reason && failureReasons[reason]
+                          ? failureReasons[reason]
+                          : reason ||
+                            tr('Verarbeitungsfehler', 'Processing error');
+                      return (
+                        <div key={row.id} className="p-3.5">
+                          <VStack gap={1.5}>
+                            <Text
+                              type="body"
+                              weight="semibold"
+                              color="primary"
+                            >
+                              {formatRecordingTitle(row)}
+                            </Text>
+                            <Text type="supporting" color="secondary">
+                              {reasonText}
+                            </Text>
+                            <HStack
+                              justify="between"
+                              vAlign="center"
+                              wrap="wrap"
+                              gap={2}
+                            >
+                              <HStack gap={2} vAlign="center" wrap="wrap">
+                                <StatusBadge
+                                  participation={row.participation}
+                                  processing={row.processing}
+                                  hasError={true}
+                                />
+                                <ProviderBadge provider={row.provider} />
+                              </HStack>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                label={tr('Öffnen', 'Open')}
+                                endContent={
+                                  <ArrowRight className="h-3.5 w-3.5" />
+                                }
+                                onClick={() => onSelectRecording(row.id)}
+                              />
+                            </HStack>
+                          </VStack>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </VStack>
+              )}
+            </VStack>
           </div>
         </LayoutContent>
       }
