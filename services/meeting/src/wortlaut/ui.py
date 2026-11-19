@@ -31,28 +31,37 @@ def _asset_version() -> str:
     return digest.hexdigest()[:12] if found else "1"
 
 
-PRIVACY_HTML = """<!DOCTYPE html>
-<html lang="de" data-theme="dark" data-astryx-theme="stone">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Datenschutz &amp; Transparenz – __ASSISTANT_NAME__</title>
-  <link rel="stylesheet" href="/sdk/ui/app.css?v=__ASSET_VERSION__">
-  <style>
+FAVICON_DATA_URI = (
+    "data:image/svg+xml,"
+    "%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E"
+    "%3Crect width='32' height='32' rx='8' fill='%23111113' "
+    "stroke='%23059669' stroke-width='1.5'/%3E"
+    "%3Cg stroke='%2334d399' stroke-width='2.4' stroke-linecap='round'%3E"
+    "%3Cline x1='9' y1='13' x2='9' y2='19'/%3E"
+    "%3Cline x1='13.6' y1='8.5' x2='13.6' y2='23.5'/%3E"
+    "%3Cline x1='18.4' y1='11.5' x2='18.4' y2='20.5'/%3E"
+    "%3Cline x1='23' y1='9.5' x2='23' y2='22.5'/%3E"
+    "%3C/g%3E%3C/svg%3E"
+)
+
+_PRIVACY_STYLE_BLOCK = """  <style>
     :root {
-      --priv-bg: var(--color-background-body, #0f1014);
-      --priv-surface: var(--color-background-surface, #181920);
-      --priv-surface-hover: var(--color-background-muted, #23252f);
-      --priv-border: var(--color-border, #2b2d38);
-      --priv-text: var(--color-text-primary, #f2f3f8);
-      --priv-muted: var(--color-text-secondary, #a2a6b8);
-      --priv-emerald: #34d399;
-      --priv-emerald-bg: rgba(16, 185, 129, 0.10);
-      --priv-emerald-border: rgba(16, 185, 129, 0.28);
-      --priv-amber: #fbbf24;
-      --priv-amber-bg: rgba(245, 158, 11, 0.08);
-      --priv-amber-border: rgba(245, 158, 11, 0.30);
+      color-scheme: light dark;
+      --priv-bg: light-dark(#fafaf9, #111113);
+      --priv-surface: light-dark(#ffffff, #18181b);
+      --priv-muted-bg: light-dark(#f5f5f4, #222226);
+      --priv-border: light-dark(#e7e5e4, #27272a);
+      --priv-text: light-dark(#1c1917, #fafaf9);
+      --priv-muted: light-dark(#57534e, #a8a29e);
+      --priv-emerald: light-dark(#047857, #34d399);
+      --priv-emerald-bg: light-dark(rgba(5, 150, 105, 0.09), rgba(16, 185, 129, 0.12));
+      --priv-emerald-border: light-dark(rgba(5, 150, 105, 0.28), rgba(16, 185, 129, 0.32));
+      --priv-amber: light-dark(#92400e, #fbbf24);
+      --priv-amber-bg: light-dark(#fffbeb, rgba(245, 158, 11, 0.09));
+      --priv-amber-border: light-dark(#fde68a, rgba(245, 158, 11, 0.34));
     }
+    html[data-theme="light"] { color-scheme: light; }
+    html[data-theme="dark"] { color-scheme: dark; }
     *, *::before, *::after { box-sizing: border-box; }
     html, body {
       margin: 0;
@@ -61,60 +70,64 @@ PRIVACY_HTML = """<!DOCTYPE html>
       background-color: var(--priv-bg);
       color: var(--priv-text);
       font-family: var(--font-family-body, system-ui, -apple-system, sans-serif);
-      line-height: 1.6;
+      line-height: 1.62;
       -webkit-font-smoothing: antialiased;
     }
-    .priv-container {
-      max-width: 780px;
-      margin: 0 auto;
-      padding: 48px 24px 64px;
-      display: flex;
-      flex-direction: column;
-      gap: 24px;
-    }
-    .priv-header {
-      display: flex;
-      align-items: flex-start;
-      justify-content: space-between;
-      gap: 20px;
-      padding-bottom: 24px;
+    .priv-topbar {
       border-bottom: 1px solid var(--priv-border);
+      background: var(--priv-bg);
+    }
+    .priv-topbar-inner {
+      max-width: 820px;
+      margin: 0 auto;
+      padding: 14px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
       flex-wrap: wrap;
     }
-    .priv-badge {
+    .priv-brand {
       display: inline-flex;
       align-items: center;
-      gap: 8px;
-      padding: 4px 12px;
+      gap: 10px;
+      text-decoration: none;
+      color: var(--priv-text);
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+    }
+    .priv-mark {
+      width: 28px;
+      height: 28px;
+      border-radius: 8px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--priv-emerald-bg);
+      border: 1px solid var(--priv-emerald-border);
+      color: var(--priv-emerald);
+      flex-shrink: 0;
+    }
+    .priv-pill {
+      display: inline-flex;
+      align-items: center;
+      padding: 3px 10px;
       border-radius: 999px;
-      font-size: 12px;
+      font-size: 11.5px;
       font-weight: 600;
       color: var(--priv-emerald);
       background: var(--priv-emerald-bg);
       border: 1px solid var(--priv-emerald-border);
-      margin-bottom: 12px;
-    }
-    .priv-title {
-      margin: 0;
-      font-size: 24px;
-      font-weight: 650;
-      letter-spacing: -0.02em;
-      line-height: 1.25;
-      color: var(--priv-text);
-    }
-    .priv-subtitle {
-      margin: 8px 0 0;
-      font-size: 14px;
-      color: var(--priv-muted);
     }
     .priv-btn {
       display: inline-flex;
       align-items: center;
       gap: 6px;
-      padding: 8px 14px;
-      border-radius: 10px;
+      padding: 6px 13px;
+      border-radius: 999px;
       font-size: 13px;
-      font-weight: 500;
+      font-weight: 600;
       color: var(--priv-text);
       background: var(--priv-surface);
       border: 1px solid var(--priv-border);
@@ -123,35 +136,64 @@ PRIVACY_HTML = """<!DOCTYPE html>
       transition: background 0.15s ease, border-color 0.15s ease;
     }
     .priv-btn:hover {
-      background: var(--priv-surface-hover);
+      background: var(--priv-muted-bg);
     }
-    .priv-card {
-      border-radius: 14px;
-      border: 1px solid var(--priv-border);
-      background: var(--priv-surface);
-      padding: 24px;
+    .priv-container {
+      max-width: 820px;
+      margin: 0 auto;
+      padding: 36px 24px 64px;
+      display: flex;
+      flex-direction: column;
+      gap: 28px;
     }
-    .priv-card h2 {
+    .priv-hero {
+      padding-bottom: 24px;
+      border-bottom: 1px solid var(--priv-border);
+    }
+    .priv-title {
+      margin: 0;
+      font-size: 26px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      line-height: 1.22;
+      color: var(--priv-text);
+      text-wrap: balance;
+    }
+    .priv-subtitle {
+      margin: 10px 0 0;
+      font-size: 14.5px;
+      color: var(--priv-muted);
+      max-width: 68ch;
+    }
+    .priv-section {
+      padding-bottom: 26px;
+      border-bottom: 1px solid var(--priv-border);
+    }
+    .priv-section h2 {
       margin: 0 0 10px;
       font-size: 16px;
-      font-weight: 600;
+      font-weight: 650;
+      letter-spacing: -0.01em;
       color: var(--priv-text);
     }
-    .priv-card p {
+    .priv-section p {
       margin: 0;
       font-size: 14px;
       color: var(--priv-muted);
+      max-width: 72ch;
     }
     .priv-grid {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 16px;
+      padding-bottom: 26px;
+      border-bottom: 1px solid var(--priv-border);
     }
     @media (max-width: 640px) {
       .priv-grid { grid-template-columns: 1fr; }
     }
     .priv-card-sm {
-      border-radius: 14px;
+      border-radius: 12px;
       border: 1px solid var(--priv-border);
       background: var(--priv-surface);
       padding: 20px;
@@ -159,12 +201,12 @@ PRIVACY_HTML = """<!DOCTYPE html>
     .priv-card-sm h3 {
       margin: 0 0 8px;
       font-size: 14px;
-      font-weight: 600;
-      color: var(--priv-emerald);
+      font-weight: 650;
+      color: var(--priv-text);
     }
     .priv-card-sm p {
       margin: 0;
-      font-size: 13px;
+      font-size: 13.5px;
       color: var(--priv-muted);
     }
     .priv-list {
@@ -175,58 +217,109 @@ PRIVACY_HTML = """<!DOCTYPE html>
       display: flex;
       flex-direction: column;
       gap: 10px;
+      max-width: 72ch;
     }
-    .priv-list strong, .priv-card p strong, .priv-callout p strong {
+    .priv-list strong, .priv-section p strong, .priv-callout p strong {
       color: var(--priv-text);
       font-weight: 600;
     }
+    .priv-kbd {
+      display: inline-block;
+      padding: 1px 7px;
+      border-radius: 6px;
+      font-family: 'Liberation Mono', 'DejaVu Sans Mono', ui-monospace, monospace;
+      font-size: 12.5px;
+      font-weight: 600;
+      color: var(--priv-text);
+      background: var(--priv-muted-bg);
+      border: 1px solid var(--priv-border);
+    }
     .priv-callout {
-      border-radius: 14px;
+      border-radius: 12px;
       border: 1px solid var(--priv-amber-border);
       background: var(--priv-amber-bg);
-      padding: 24px;
+      padding: 22px 24px;
     }
     .priv-callout h2 {
-      margin: 0 0 8px;
+      margin: 0 0 10px;
       font-size: 16px;
-      font-weight: 600;
+      font-weight: 650;
       color: var(--priv-amber);
     }
     .priv-callout p {
       margin: 0;
       font-size: 14px;
       color: var(--priv-muted);
+      max-width: 72ch;
     }
     .priv-callout a {
       color: var(--priv-amber);
+      font-weight: 600;
       text-decoration: underline;
+      text-underline-offset: 0.2em;
     }
   </style>
+  <script>
+    (function () {
+      try {
+        var m = localStorage.getItem('wortlaut-theme-mode');
+        var sys = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        var dark = m === 'dark' || (m !== 'light' && sys);
+        document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+      } catch (e) {}
+    })();
+  </script>"""
+
+_BRAND_MARK_SVG = (
+    '<span class="priv-mark" aria-hidden="true">'
+    '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+    'stroke-width="2.2" stroke-linecap="round">'
+    '<path d="M2 10v3"/><path d="M6 6v11"/><path d="M10 3v18"/>'
+    '<path d="M14 8v7"/><path d="M18 5v13"/><path d="M22 10v3"/>'
+    "</svg></span>"
+)
+
+PRIVACY_HTML = (
+    """<!DOCTYPE html>
+<html lang="de" data-theme="dark" data-astryx-theme="stone">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Datenschutz &amp; Transparenz – __ASSISTANT_NAME__</title>
+  <link rel="icon" type="image/svg+xml" href="__FAVICON_DATA_URI__">
+  <link rel="stylesheet" href="/sdk/ui/app.css?v=__ASSET_VERSION__">
+"""
+    + _PRIVACY_STYLE_BLOCK
+    + """
 </head>
 <body>
-  <main class="priv-container">
-    <header class="priv-header">
-      <div style="flex: 1; min-width: 260px;">
-        <div class="priv-badge">
-          100 % Self-Hosted · Keine Cloud-Weitergabe
-        </div>
-        <h1 class="priv-title">
-          Datenschutz- &amp; Transparenzhinweis (__ASSISTANT_NAME__)
-        </h1>
-        <p class="priv-subtitle">
-          Informationen zur automatisierten Meeting-Protokollierung für Teilnehmende in
-          Google Meet, Microsoft Teams, Zoom und Cisco Webex.
-        </p>
+  <nav class="priv-topbar" aria-label="Wortlaut">
+    <div class="priv-topbar-inner">
+      <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+        <a href="/ui" class="priv-brand">"""
+    + _BRAND_MARK_SVG
+    + """<span>Wortlaut.cloud</span></a>
+        <span class="priv-pill">100 % Self-Hosted · Keine Cloud-Weitergabe</span>
       </div>
       <div style="display: flex; align-items: center; gap: 8px;">
         <a href="/privacy?lang=en" class="priv-btn">EN</a>
-        <a href="/ui" class="priv-btn">
-          Zur Web-UI →
-        </a>
+        <a href="/ui" class="priv-btn">Zur Web-UI →</a>
       </div>
+    </div>
+  </nav>
+
+  <main class="priv-container">
+    <header class="priv-hero">
+      <h1 class="priv-title">
+        Datenschutz- &amp; Transparenzhinweis (__ASSISTANT_NAME__)
+      </h1>
+      <p class="priv-subtitle">
+        Informationen zur automatisierten Meeting-Protokollierung für Teilnehmende in
+        Google Meet, Microsoft Teams, Zoom und Cisco Webex.
+      </p>
     </header>
 
-    <section class="priv-card">
+    <section class="priv-section">
       <h2>
         1. Warum nimmt __ASSISTANT_NAME__ an diesem Meeting teil?
       </h2>
@@ -255,7 +348,7 @@ PRIVACY_HTML = """<!DOCTYPE html>
       </div>
     </section>
 
-    <section class="priv-card">
+    <section class="priv-section">
       <h2>
         2. Zugriffsschutz &amp; automatische Löschfristen
       </h2>
@@ -282,13 +375,13 @@ PRIVACY_HTML = """<!DOCTYPE html>
       </h2>
       <p>
         <strong>Eigene Aussagen von der Protokollierung ausschließen (Chat-Opt-out):</strong>
-        Schreiben Sie während des laufenden Calls einfach <strong>„no“</strong> oder
-        <strong>„opt out“</strong> in den Meeting-Chat. __OPTOUT_EFFECT_DE__<br><br>
+        Schreiben Sie während des laufenden Calls einfach <kbd class="priv-kbd">„no“</kbd> oder
+        <kbd class="priv-kbd">„opt out“</kbd> in den Meeting-Chat. __OPTOUT_EFFECT_DE__<br><br>
         <strong>Off-the-Record-Pause im Chat:</strong>
-        Mit <strong>„#pause“</strong> im Konferenz-Chat pausieren Sie die Audio- und
+        Mit <kbd class="priv-kbd">„#pause“</kbd> im Konferenz-Chat pausieren Sie die Audio- und
         Bildschirmerfassung sofort (Anzeige „OFF THE RECORD“ auf der Videokachel; verworfene Daten
-        werden nicht gespeichert), bis <strong>„#resume“</strong> oder <strong>„#weiter“</strong>
-        geschrieben wird.<br><br>
+        werden nicht gespeichert), bis <kbd class="priv-kbd">„#resume“</kbd> oder
+        <kbd class="priv-kbd">„#weiter“</kbd> geschrieben wird.<br><br>
         <strong>Gesamte Aufzeichnung beenden:</strong> Der Bot <strong>__ASSISTANT_NAME__</strong>
         kann jederzeit direkt über die Teilnehmerliste von Google Meet, Microsoft Teams, Zoom
         oder Cisco Webex aus dem Raum entfernt oder durch die einladende Person in der
@@ -299,6 +392,7 @@ PRIVACY_HTML = """<!DOCTYPE html>
 </body>
 </html>
 """
+)
 
 UI_HTML = """<!DOCTYPE html>
 <html lang="de" data-theme="dark" data-astryx-theme="stone">
@@ -306,11 +400,12 @@ UI_HTML = """<!DOCTYPE html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Wortlaut.cloud – Meeting-Transkription</title>
+  <link rel="icon" type="image/svg+xml" href="__FAVICON_DATA_URI__">
   <link rel="stylesheet" href="/sdk/ui/app.css?v=__ASSET_VERSION__">
 </head>
 <body
-  class="bg-[var(--color-background-body,#101018)]
-         text-[var(--color-text-primary,#f0f0f9)] antialiased"
+  class="bg-[var(--color-background-body,#111113)]
+         text-[var(--color-text-primary,#fafaf9)] antialiased"
 >
   <div id="root">
     <!-- Bot in ein Meeting schicken · title-search · participation-filter -->
@@ -454,108 +549,49 @@ def render_ui() -> str:
     }
     return (
         UI_HTML.replace("__BOOT_PAYLOAD_JSON__", _safe_script_json(payload))
+        .replace("__FAVICON_DATA_URI__", FAVICON_DATA_URI)
         .replace("__ASSET_VERSION__", _asset_version())
     )
 
 
-PRIVACY_HTML_EN = """<!DOCTYPE html>
+PRIVACY_HTML_EN = (
+    """<!DOCTYPE html>
 <html lang="en" data-theme="dark" data-astryx-theme="stone">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Privacy &amp; Transparency Notice – __ASSISTANT_NAME__</title>
+  <link rel="icon" type="image/svg+xml" href="__FAVICON_DATA_URI__">
   <link rel="stylesheet" href="/sdk/ui/app.css?v=__ASSET_VERSION__">
-  <style>
-    :root {
-      --priv-bg: var(--color-background-body, #0f1014);
-      --priv-surface: var(--color-background-surface, #181920);
-      --priv-surface-hover: var(--color-background-muted, #23252f);
-      --priv-border: var(--color-border, #2b2d38);
-      --priv-text: var(--color-text-primary, #f2f3f8);
-      --priv-muted: var(--color-text-secondary, #a2a6b8);
-      --priv-emerald: #34d399;
-      --priv-emerald-bg: rgba(16, 185, 129, 0.10);
-      --priv-emerald-border: rgba(16, 185, 129, 0.28);
-      --priv-amber: #fbbf24;
-      --priv-amber-bg: rgba(245, 158, 11, 0.08);
-      --priv-amber-border: rgba(245, 158, 11, 0.30);
-    }
-    *, *::before, *::after { box-sizing: border-box; }
-    html, body {
-      margin: 0; padding: 0; min-height: 100vh;
-      background-color: var(--priv-bg); color: var(--priv-text);
-      font-family: var(--font-family-body, system-ui, -apple-system, sans-serif);
-      line-height: 1.6; -webkit-font-smoothing: antialiased;
-    }
-    .priv-container {
-      max-width: 780px; margin: 0 auto; padding: 48px 24px 64px;
-      display: flex; flex-direction: column; gap: 24px;
-    }
-    .priv-header {
-      display: flex; align-items: flex-start; justify-content: space-between;
-      gap: 20px; padding-bottom: 24px; border-bottom: 1px solid var(--priv-border);
-      flex-wrap: wrap;
-    }
-    .priv-badge {
-      display: inline-flex; align-items: center; gap: 8px; padding: 4px 12px;
-      border-radius: 999px; font-size: 12px; font-weight: 600;
-      color: var(--priv-emerald); background: var(--priv-emerald-bg);
-      border: 1px solid var(--priv-emerald-border); margin-bottom: 12px;
-    }
-    .priv-title { margin: 0; font-size: 24px; font-weight: 650; letter-spacing: -0.02em; }
-    .priv-subtitle { margin: 8px 0 0; font-size: 14px; color: var(--priv-muted); }
-    .priv-btn {
-      display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px;
-      border-radius: 10px; font-size: 13px; font-weight: 500; color: var(--priv-text);
-      background: var(--priv-surface); border: 1px solid var(--priv-border); text-decoration: none;
-    }
-    .priv-card {
-      border-radius: 16px; border: 1px solid var(--priv-border);
-      background: var(--priv-surface); padding: 24px;
-    }
-    .priv-card h2 { margin: 0 0 12px; font-size: 16px; font-weight: 600; }
-    .priv-card p, .priv-list { margin: 0; font-size: 14px; color: var(--priv-muted); }
-    .priv-list { padding-left: 18px; display: flex; flex-direction: column; gap: 10px; }
-    .priv-list strong, .priv-card strong, .priv-callout strong { color: var(--priv-text); }
-    .priv-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-      gap: 16px;
-    }
-    .priv-card-sm {
-      border-radius: 16px; border: 1px solid var(--priv-border);
-      background: var(--priv-surface); padding: 20px;
-    }
-    .priv-card-sm h3 { margin: 0 0 8px; font-size: 14px; font-weight: 600; }
-    .priv-card-sm p { margin: 0; font-size: 13px; color: var(--priv-muted); }
-    .priv-callout {
-      border-radius: 16px; border: 1px solid var(--priv-amber-border);
-      background: var(--priv-amber-bg); padding: 24px;
-    }
-    .priv-callout h2 {
-      margin: 0 0 8px; font-size: 16px; font-weight: 600; color: var(--priv-amber);
-    }
-    .priv-callout p { margin: 0; font-size: 14px; color: var(--priv-muted); }
-    .priv-callout a { color: var(--priv-amber); text-decoration: underline; }
-  </style>
+"""
+    + _PRIVACY_STYLE_BLOCK
+    + """
 </head>
 <body>
-  <main class="priv-container">
-    <header class="priv-header">
-      <div style="flex: 1; min-width: 260px;">
-        <div class="priv-badge">100% Self-Hosted · Zero External Cloud Transfer</div>
-        <h1 class="priv-title">Privacy &amp; Transparency Notice (__ASSISTANT_NAME__)</h1>
-        <p class="priv-subtitle">
-          Participant information on automated meeting transcription in Google Meet,
-          Microsoft Teams, Zoom, and Cisco Webex.
-        </p>
+  <nav class="priv-topbar" aria-label="Wortlaut">
+    <div class="priv-topbar-inner">
+      <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+        <a href="/ui" class="priv-brand">"""
+    + _BRAND_MARK_SVG
+    + """<span>Wortlaut.cloud</span></a>
+        <span class="priv-pill">100% Self-Hosted · Zero External Cloud Transfer</span>
       </div>
       <div style="display: flex; align-items: center; gap: 8px;">
         <a href="/privacy?lang=de" class="priv-btn">DE</a>
         <a href="/ui" class="priv-btn">Open Web-UI →</a>
       </div>
+    </div>
+  </nav>
+
+  <main class="priv-container">
+    <header class="priv-hero">
+      <h1 class="priv-title">Privacy &amp; Transparency Notice (__ASSISTANT_NAME__)</h1>
+      <p class="priv-subtitle">
+        Participant information on automated meeting transcription in Google Meet,
+        Microsoft Teams, Zoom, and Cisco Webex.
+      </p>
     </header>
-    <section class="priv-card">
+    <section class="priv-section">
       <h2>1. Why is __ASSISTANT_NAME__ joining this meeting?</h2>
       <p>
         The assistant <strong>__ASSISTANT_NAME__</strong> was invited by a meeting participant
@@ -580,7 +616,7 @@ PRIVACY_HTML_EN = """<!DOCTYPE html>
         </p>
       </div>
     </section>
-    <section class="priv-card">
+    <section class="priv-section">
       <h2>2. Access Control &amp; Automatic Retention</h2>
       <ul class="priv-list">
         <li>
@@ -601,13 +637,13 @@ PRIVACY_HTML_EN = """<!DOCTYPE html>
       <h2>3. Individual In-Call Chat Opt-Out &amp; Stopping Recording</h2>
       <p>
         <strong>Exclude only your own statements (Chat Opt-Out):</strong>
-        Simply type <strong>"no"</strong> or <strong>"opt out"</strong> in the meeting chat at any
-        point during the call.
+        Simply type <kbd class="priv-kbd">"no"</kbd> or <kbd class="priv-kbd">"opt out"</kbd> in
+        the meeting chat at any point during the call.
         __OPTOUT_EFFECT_EN__<br><br>
         <strong>Off-the-record pause:</strong>
-        Type <strong>"#pause"</strong> in the meeting chat to immediately pause audio and screen
-        capture (the bot's video tile switches to "OFF THE RECORD" and drops media in memory) until
-        <strong>"#resume"</strong> is sent.<br><br>
+        Type <kbd class="priv-kbd">"#pause"</kbd> in the meeting chat to immediately pause audio
+        and screen capture (the bot's video tile switches to "OFF THE RECORD" and drops media in
+        memory) until <kbd class="priv-kbd">"#resume"</kbd> is sent.<br><br>
         <strong>Stop the entire recording:</strong> Remove <strong>__ASSISTANT_NAME__</strong> from
         the call roster or cancel/delete the recording in the <a href="/ui">wortlaut Web-UI</a>.
       </p>
@@ -616,6 +652,7 @@ PRIVACY_HTML_EN = """<!DOCTYPE html>
 </body>
 </html>
 """
+)
 
 
 def render_privacy(lang: str | None = None) -> str:
@@ -717,5 +754,6 @@ def render_privacy(lang: str | None = None) -> str:
         .replace("__ASSISTANT_NAME__", escaped_name)
         .replace("__AUDIO_HOURS__", str(audio_hours))
         .replace("__TRANSCRIPT_DAYS__", str(transcript_days))
+        .replace("__FAVICON_DATA_URI__", FAVICON_DATA_URI)
         .replace("__ASSET_VERSION__", _asset_version())
     )

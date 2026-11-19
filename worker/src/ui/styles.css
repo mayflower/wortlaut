@@ -48,8 +48,8 @@
   }
 
   body {
-    background-color: var(--color-background-body, #101018);
-    color: var(--color-text-primary, #f0f0f9);
+    background-color: var(--color-background-body, #111113);
+    color: var(--color-text-primary, #fafaf9);
     font-family: var(--font-family-body, system-ui, -apple-system, sans-serif);
     -webkit-font-smoothing: antialiased;
     caret-color: var(--wl-accent);

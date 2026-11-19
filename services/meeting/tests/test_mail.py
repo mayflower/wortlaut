@@ -17,7 +17,7 @@ from test_recordings import API, create
 
 from wortlaut.asr import commit_result, finalize_processing
 from wortlaut.mail import smtp_pass
-from wortlaut.models import AsrJob, AudioStream, Delivery, Recording
+from wortlaut.models import AsrJob, Attempt, AudioStream, Delivery, Recording
 from wortlaut.processing import segmentation_pass
 from wortlaut.settings import get_settings
 
@@ -103,6 +103,21 @@ def test_successful_real_smtp_has_three_exports_and_does_not_send_without_audio(
     recording = finished_capture(client, database)
     with Session(database) as db:
         rec = db.get(Recording, recording)
+        att = db.scalar(select(Attempt).where(Attempt.recording_id == recording))
+        p_t0 = datetime.now(UTC)
+        att.diagnostics = {
+            **(att.diagnostics or {}),
+            "participant_sources": {
+                "pause_windows": [
+                    {
+                        "started_at": p_t0.isoformat(),
+                        "ended_at": (p_t0 + timedelta(seconds=12)).isoformat(),
+                        "by": "Elena Rostova",
+                    }
+                ]
+            },
+        }
+        rec.participation_reason = "room_empty"
         rec.protocol_meta = {
             **(rec.protocol_meta or {}),
             "summary": {
@@ -135,10 +150,15 @@ def test_successful_real_smtp_has_three_exports_and_does_not_send_without_audio(
     assert "Quellenabdeckung: unknown" not in body
     assert "Audioabschluss:" not in body
     assert "<!DOCTYPE html>" in html_body
+    assert "Wortlaut.cloud" in html_body
     assert "Protokoll im Browser öffnen" in html_body
     assert "<strong>Architekturfreigabe</strong></li>" in html_body
     assert "To-Do-Liste" in html_body
     assert "Keine offenen Aufgaben vereinbart." in html_body
+    assert "Off-the-Record-Pause" in html_body
+    assert "Off-the-Record-Pause (Elena Rostova)" in body
+    assert "Hinweis zur Sitzung" not in html_body
+    assert "Hinweise zur Sitzung" not in body
     with Session(database) as db:
         delivery = db.get(Delivery, recording)
         assert delivery.status == "delivered"

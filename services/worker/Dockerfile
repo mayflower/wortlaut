@@ -7,9 +7,9 @@ RUN npm run build
 RUN npm prune --omit=dev --no-audit --no-fund && rm -rf node_modules/@typescript
 
 FROM mcr.microsoft.com/playwright:v1.65.1-noble
-RUN apt-get update \
-    && apt-get upgrade -y --no-install-recommends \
-    && apt-get install -y --no-install-recommends xdotool \
+RUN apt-get -o Acquire::Retries=5 update \
+    && apt-get -o Acquire::Retries=5 upgrade -y --no-install-recommends \
+    && apt-get -o Acquire::Retries=5 install -y --no-install-recommends xdotool \
     && rm -rf /var/lib/apt/lists/* /usr/lib/node_modules/npm /usr/lib/node_modules/corepack /usr/lib/node_modules/yarn /usr/bin/npm /usr/bin/npx /usr/bin/corepack /usr/bin/yarn /usr/bin/yarnpkg
 WORKDIR /app/worker
 COPY --from=build /app/worker/node_modules ./node_modules

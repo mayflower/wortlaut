@@ -88,14 +88,63 @@ def delivery_json(delivery):
     }
 
 
-SPEAKER_BADGE_COLORS = (
-    ("#ecfdf5", "#047857", "#10b981"),
-    ("#eff6ff", "#1d4ed8", "#3b82f6"),
-    ("#f5f3ff", "#6d28d9", "#8b5cf6"),
-    ("#fffbeb", "#b45309", "#f59e0b"),
-    ("#fdf2f8", "#be185d", "#ec4899"),
-    ("#f0fdfa", "#0f766e", "#14b8a6"),
+NORMAL_COMPLETED_REASONS = frozenset({"normal", "room_empty", "cancelled", "deadline"})
+
+_EMAIL_HEAD_STYLE = (
+    "<meta charset='utf-8'>"
+    "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+    "<meta name='color-scheme' content='light dark'>"
+    "<meta name='supported-color-schemes' content='light dark'>"
+    "<style>"
+    "@media (prefers-color-scheme: dark) {"
+    " .wl-body { background-color: #111113 !important; color: #fafaf9 !important; }"
+    " .wl-sheet { background-color: #181920 !important; border-color: #2b2d38 !important;"
+    "   box-shadow: none !important; }"
+    " .wl-rule { border-color: #2b2d38 !important; }"
+    " .wl-rule-soft { border-color: #23252f !important; }"
+    " .wl-ink { color: #fafaf9 !important; }"
+    " .wl-body-text { color: #fafaf9 !important; }"
+    " .wl-muted { color: #a8a29e !important; }"
+    " .wl-ts { color: #78716c !important; }"
+    " .wl-pill { background-color: #23252f !important; border-color: #2b2d38 !important;"
+    "   color: #a8a29e !important; }"
+    " .wl-avatar { background-color: #23252f !important; border-color: #2b2d38 !important;"
+    "   color: #fafaf9 !important; }"
+    " .wl-track { background-color: #23252f !important; }"
+    " .wl-bar { background-color: #10b981 !important; }"
+    " .wl-emerald-text { color: #34d399 !important; }"
+    " .wl-cta { background-color: #10b981 !important; color: #022c22 !important; }"
+    " .wl-warn { background-color: #451a03 !important;"
+    "   border-color: #b45309 !important; color: #fbbf24 !important; }"
+    " .wl-err { background-color: #451a03 !important;"
+    "   border-color: #b45309 !important; color: #fbbf24 !important; }"
+    "}"
+    "</style>"
 )
+
+_EMAIL_BRAND_MARK_HTML = (
+    "<span style='display:inline-block;vertical-align:middle;width:24px;height:24px;"
+    "border-radius:6px;background:#d1fae5;border:1px solid #6ee7b7;text-align:center;"
+    "line-height:22px;margin-right:9px;'>"
+    "<span style='display:inline-block;width:2px;height:8px;background:#059669;"
+    "border-radius:2px;vertical-align:middle;margin:0 1px;'></span>"
+    "<span style='display:inline-block;width:2px;height:13px;background:#059669;"
+    "border-radius:2px;vertical-align:middle;margin:0 1px;'></span>"
+    "<span style='display:inline-block;width:2px;height:6px;background:#059669;"
+    "border-radius:2px;vertical-align:middle;margin:0 1px;'></span>"
+    "<span style='display:inline-block;width:2px;height:11px;background:#059669;"
+    "border-radius:2px;vertical-align:middle;margin:0 1px;'></span>"
+    "</span>"
+)
+
+
+def _speaker_initials(name: str) -> str:
+    parts = [p for p in str(name or "").strip().split() if p and p[0].isalnum()]
+    if not parts:
+        return "S"
+    if len(parts) == 1:
+        return parts[0][:2].upper()
+    return (parts[0][0] + parts[-1][0]).upper()
 
 
 def _speaker_breakdown(data: dict) -> list[dict]:
@@ -116,18 +165,15 @@ def _speaker_breakdown(data: dict) -> list[dict]:
                 totals[name] = totals.get(name, 0.0) + sec
     overall = sum(totals.values())
     items = []
-    for idx, (name, secs) in enumerate(sorted(totals.items(), key=lambda kv: -kv[1])):
+    for name, secs in sorted(totals.items(), key=lambda kv: -kv[1]):
         pct = round((secs / overall) * 100) if overall > 0 else 0
-        bg, fg, bar = SPEAKER_BADGE_COLORS[idx % len(SPEAKER_BADGE_COLORS)]
         items.append(
             {
                 "name": name,
+                "initials": _speaker_initials(name),
                 "seconds": secs,
                 "duration": format_duration_de(secs),
                 "share_pct": pct,
-                "bg": bg,
-                "fg": fg,
-                "bar": bar,
             }
         )
     return items
@@ -155,35 +201,48 @@ def _build_failed_join_bodies(
         "Es wurde kein Audio aufgezeichnet; daher sind keine Transkript-Anhänge enthalten.\n"
     )
     html = (
-        "<!DOCTYPE html><html lang='de'><head><meta charset='utf-8'></head>"
-        "<body style='margin:0;padding:24px 12px;background:#f4f6f9;"
-        "font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;"
-        "color:#0f172a;'>"
-        "<div style='max-width:640px;margin:0 auto;background:#ffffff;border-radius:16px;"
-        "border:1px solid #e2e8f0;overflow:hidden;box-shadow:0 4px 16px rgba(15,23,42,0.05);'>"
-        "<div style='background:#0f172a;padding:20px 28px;color:#ffffff;'>"
-        "<div style='font-size:12px;letter-spacing:0.08em;text-transform:uppercase;"
-        "color:#94a3b8;font-weight:700;'>wortlaut · Konferenz-Benachrichtigung</div>"
-        "<h1 style='margin:6px 0 0;font-size:20px;line-height:1.35;color:#ffffff;'>"
-        f"{escape(title)}</h1>"
-        "</div>"
+        f"<!DOCTYPE html><html lang='de'><head>{_EMAIL_HEAD_STYLE}</head>"
+        "<body class='wl-body' style='margin:0;padding:28px 12px;background:#fafaf9;"
+        "font-family:system-ui,-apple-system,Liberation Sans,sans-serif;"
+        "color:#1c1917;-webkit-font-smoothing:antialiased;'>"
+        "<div class='wl-sheet' style='max-width:640px;margin:0 auto;background:#ffffff;"
+        "border-radius:12px;border:1px solid #e7e5e4;overflow:hidden;'>"
+        "<div class='wl-rule' style='padding:16px 28px;border-bottom:1px solid #e7e5e4;'>"
+        "<table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0'>"
+        "<tr><td valign='middle'>"
+        f"{_EMAIL_BRAND_MARK_HTML}"
+        "<span class='wl-ink' style='font-size:14px;font-weight:700;color:#1c1917;"
+        "vertical-align:middle;letter-spacing:-0.01em;'>Wortlaut.cloud</span>"
+        "</td><td align='right' valign='middle'>"
+        "<span class='wl-pill' style='display:inline-block;font-size:13px;font-weight:600;"
+        "background:#fafaf9;border:1px solid #e7e5e4;color:#57534e;"
+        f"padding:3px 10px;border-radius:999px;'>{escape(human_provider)}</span>"
+        "</td></tr></table></div>"
         "<div style='padding:24px 28px;'>"
-        "<div style='background:#fef2f2;border:1px solid #fecaca;border-radius:12px;"
-        "padding:14px 16px;margin-bottom:20px;color:#991b1b;font-size:14px;line-height:1.5;'>"
+        "<h1 class='wl-ink' style='margin:0 0 6px;font-size:22px;font-weight:700;"
+        f"line-height:1.25;letter-spacing:-0.02em;color:#1c1917;'>{escape(title)}</h1>"
+        "<div class='wl-muted' style='font-size:13px;color:#57534e;margin-bottom:20px;"
+        f"font-variant-numeric:tabular-nums;'>{escape(human_period)}</div>"
+        "<div class='wl-err' style='background:#fef3c7;border:1px solid #fde68a;"
+        "border-radius:8px;padding:14px 16px;margin-bottom:20px;color:#78350f;"
+        "font-size:14px;line-height:1.55;'>"
         f"<strong>Aufnahme nicht zustande gekommen:</strong> {escape(hint)}"
-        "<div style='margin-top:4px;font-size:12px;color:#b91c1c;'>"
+        "<div style='margin-top:4px;font-size:13px;opacity:0.9;"
+        "font-family:Liberation Mono,DejaVu Sans Mono,ui-monospace,monospace;'>"
         f"Grund: {escape(reason_code)}</div>"
         "</div>"
-        "<table style='width:100%;border-collapse:collapse;font-size:14px;margin-bottom:22px;'>"
-        "<tr><td style='padding:6px 0;color:#64748b;width:130px;'>Plattform</td>"
-        "<td style='padding:6px 0;font-weight:600;color:#0f172a;'>"
+        "<table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0' "
+        "style='font-size:14px;margin-bottom:22px;border-collapse:collapse;'>"
+        "<tr><td class='wl-muted' style='padding:6px 0;color:#78716c;width:130px;'>Plattform</td>"
+        "<td class='wl-ink' style='padding:6px 0;font-weight:600;color:#1c1917;'>"
         f"{escape(human_provider)}</td></tr>"
-        "<tr><td style='padding:6px 0;color:#64748b;'>Termin</td>"
-        f"<td style='padding:6px 0;color:#0f172a;'>{escape(human_period)}</td></tr>"
+        "<tr><td class='wl-muted' style='padding:6px 0;color:#78716c;'>Termin</td>"
+        "<td class='wl-ink' style='padding:6px 0;color:#1c1917;"
+        f"font-variant-numeric:tabular-nums;'>{escape(human_period)}</td></tr>"
         "</table>"
-        f"<a href='{escape(ui_url)}' style='display:inline-block;background:#059669;"
-        "color:#ffffff;text-decoration:none;font-weight:600;font-size:14px;"
-        "padding:11px 20px;border-radius:10px;'>"
+        f"<a href='{escape(ui_url)}' class='wl-cta' style='display:inline-block;"
+        "background:#047857;color:#ffffff;text-decoration:none;font-weight:600;"
+        "font-size:14px;padding:10px 18px;border-radius:999px;'>"
         "In der Web-Ansicht prüfen &amp; erneut starten →</a>"
         "</div></div></body></html>"
     )
@@ -199,6 +258,8 @@ def _build_completed_bodies(
     summary: dict | None = None,
     speakers: list[dict],
     turns: list[dict],
+    pause_windows: list[dict] | None = None,
+    keyframe_count: int = 0,
     notices: list[str],
     ui_url: str,
     reader_url: str | None,
@@ -206,8 +267,7 @@ def _build_completed_bodies(
 ) -> tuple[str, str]:
     total_speech_sec = sum(s["seconds"] for s in speakers)
     speech_summary = (
-        f"{format_duration_de(total_speech_sec)} ({len(speakers)} "
-        f"{'Sprecher' if len(speakers) != 1 else 'Sprecher'})"
+        f"{format_duration_de(total_speech_sec)} ({len(speakers)} Sprecher)"
         if speakers
         else "Audio erfasst (keine Sprachsegmente erkannt)"
     )
@@ -272,7 +332,7 @@ def _build_completed_bodies(
         for sp in speakers:
             plain_lines.append(f"• {sp['name']} — {sp['duration']} ({sp['share_pct']} %)")
 
-    color_by_speaker = {sp["name"]: (sp["bg"], sp["fg"]) for sp in speakers}
+    initials_by_speaker = {sp["name"]: sp["initials"] for sp in speakers}
     inline_turns: list[dict] = []
     inline_truncated = False
     if include_inline_transcript and turns:
@@ -292,16 +352,48 @@ def _build_completed_bodies(
                 inline_truncated = True
                 break
 
+    # Chronologically interleave Off-the-Record pause windows that fall within the excerpt range
+    timeline_entries: list[dict] = [
+        {"kind": "turn", "start": float(t["start"]), "turn": t} for t in inline_turns
+    ]
+    if include_inline_transcript and pause_windows:
+        max_shown_start = max((float(t["start"]) for t in inline_turns), default=float("inf"))
+        for pw in pause_windows:
+            p_start = float(pw.get("offset_seconds") or pw.get("start") or 0.0)
+            if not inline_truncated or p_start <= max_shown_start + 30.0:
+                timeline_entries.append({"kind": "pause", "start": p_start, "pause": pw})
+        timeline_entries.sort(key=lambda e: (e["start"], 0 if e["kind"] == "pause" else 1))
+
     if include_inline_transcript:
         plain_lines.extend(["", "WORTPROTOKOLL", "-" * 68])
-        if not inline_turns:
+        if not timeline_entries:
             plain_lines.append("Keine gesprochenen Textsegmente im Aufzeichnungszeitraum erkannt.")
         else:
-            for turn in inline_turns:
-                ts = wall_clock_time_de(time_origin_utc, turn["start"])
-                plain_lines.append(f"[{ts}] {turn['speaker']}:")
-                plain_lines.append(turn["snippet"])
-                plain_lines.append("")
+            for item in timeline_entries:
+                if item["kind"] == "pause":
+                    pw = item["pause"]
+                    p_s = float(pw.get("offset_seconds") or pw.get("start") or 0.0)
+                    ts0 = wall_clock_time_de(time_origin_utc, p_s)
+                    p_end = (
+                        pw.get("end_offset_seconds")
+                        if pw.get("end_offset_seconds") is not None
+                        else pw.get("end")
+                    )
+                    ts_range = (
+                        f"{ts0}–{wall_clock_time_de(time_origin_utc, float(p_end))}"
+                        if p_end is not None
+                        else f"ab {ts0}"
+                    )
+                    by = " ".join(str(pw.get("by") or pw.get("paused_by") or "").split())
+                    who = f" ({by})" if by else ""
+                    plain_lines.append(f"[{ts_range}] Off-the-Record-Pause{who}")
+                    plain_lines.append("")
+                else:
+                    turn = item["turn"]
+                    ts = wall_clock_time_de(time_origin_utc, turn["start"])
+                    plain_lines.append(f"[{ts}] {turn['speaker']}:")
+                    plain_lines.append(turn["snippet"])
+                    plain_lines.append("")
             if inline_truncated:
                 plain_lines.append(
                     "… Vollständiges Wortprotokoll im angehängten Markdown-Dokument (.md) "
@@ -323,8 +415,9 @@ def _build_completed_bodies(
             f"<div style='margin:3px 0;'>• {escape(note)}</div>" for note in notices
         )
         notice_html = (
-            "<div style='background:#fffbeb;border:1px solid #fde68a;border-radius:12px;"
-            "padding:12px 16px;margin-bottom:20px;color:#92400e;font-size:13px;line-height:1.5;'>"
+            "<div class='wl-warn' style='background:#fef3c7;border:1px solid #fde68a;"
+            "border-radius:8px;padding:12px 16px;margin-bottom:22px;color:#78350f;"
+            "font-size:13px;line-height:1.55;'>"
             "<strong style='display:block;margin-bottom:2px;'>Hinweis zur Sitzung</strong>"
             f"{items_html}</div>"
         )
@@ -334,8 +427,8 @@ def _build_completed_bodies(
         summary_parts = []
         if summary_text:
             summary_parts.append(
-                "<div style='font-size:14px;line-height:1.6;color:#1e293b;margin-bottom:10px;'>"
-                f"{escape(summary_text)}</div>"
+                "<div class='wl-body-text' style='font-size:14px;line-height:1.65;"
+                f"color:#1c1917;margin-bottom:14px;'>{escape(summary_text)}</div>"
             )
         if topics:
             topic_rows = []
@@ -343,18 +436,18 @@ def _build_completed_bodies(
                 t_title = " ".join(str(t.get("title") or "Thema").split())
                 t_details = " ".join(str(t.get("details") or "").split())
                 body_html = (
-                    f"<strong>{escape(t_title)}:</strong> {escape(t_details)}"
+                    f"<strong class='wl-ink'>{escape(t_title)}:</strong> {escape(t_details)}"
                     if t_details
                     else f"<strong>{escape(t_title)}</strong>"
                 )
                 topic_rows.append(
-                    "<li style='margin:4px 0;font-size:13px;line-height:1.5;color:#334155;'>"
-                    f"{body_html}</li>"
+                    "<li class='wl-body-text' style='margin:6px 0;font-size:14px;"
+                    f"line-height:1.58;color:#1c1917;'>{body_html}</li>"
                 )
             summary_parts.append(
-                "<div style='margin-top:8px;'>"
-                "<div style='font-size:11px;font-weight:700;text-transform:uppercase;"
-                "letter-spacing:0.06em;color:#475569;margin-bottom:4px;'>"
+                "<div style='margin-top:10px;'>"
+                "<div class='wl-muted' style='font-size:13px;font-weight:600;"
+                "color:#57534e;margin-bottom:6px;'>"
                 "Besprochene Themen &amp; Ergebnisse</div>"
                 f"<ul style='margin:0;padding-left:18px;'>{''.join(topic_rows)}</ul></div>"
             )
@@ -365,30 +458,35 @@ def _build_completed_bodies(
                 task = " ".join(str(a["task"]).split())
                 due = " ".join(str(a.get("due") or "").split())
                 due_html = (
-                    f" <span style='color:#64748b;'>(Fällig: {escape(due)})</span>" if due else ""
+                    f" <span class='wl-muted' style='color:#78716c;font-size:13px;'>"
+                    f"(Fällig: {escape(due)})</span>"
+                    if due
+                    else ""
                 )
                 action_rows.append(
-                    "<div style='margin:5px 0;font-size:13px;line-height:1.5;color:#0f172a;'>"
-                    f"☐ <strong>{escape(owner)}:</strong> {escape(task)}{due_html}</div>"
+                    "<div class='wl-body-text' style='margin:6px 0;font-size:14px;"
+                    "line-height:1.55;color:#1c1917;'>"
+                    f"☐ <strong class='wl-ink'>{escape(owner)}:</strong> "
+                    f"{escape(task)}{due_html}</div>"
                 )
             action_items_html = "".join(action_rows)
         else:
             action_items_html = (
-                "<div style='font-size:13px;line-height:1.5;color:#64748b;font-style:italic;'>"
+                "<div class='wl-muted' style='font-size:13px;line-height:1.5;color:#78716c;'>"
                 "Keine offenen Aufgaben vereinbart.</div>"
             )
         summary_parts.append(
-            "<div style='margin-top:12px;padding-top:10px;border-top:1px solid #d1fae5;'>"
-            "<div style='font-size:11px;font-weight:700;text-transform:uppercase;"
-            "letter-spacing:0.06em;color:#047857;margin-bottom:6px;'>To-Do-Liste</div>"
+            "<div class='wl-rule-soft' style='margin-top:14px;padding-top:12px;"
+            "border-top:1px solid #e7e5e4;'>"
+            "<div class='wl-emerald-text' style='font-size:13px;font-weight:600;"
+            "color:#047857;margin-bottom:6px;'>To-Do-Liste</div>"
             f"{action_items_html}</div>"
         )
         summary_html = (
-            "<div style='background:#f0fdf4;border:1px solid #bbf7d0;border-radius:12px;"
-            "padding:16px 18px;margin-bottom:22px;'>"
-            "<div style='font-size:11px;font-weight:700;text-transform:uppercase;"
-            "letter-spacing:0.07em;color:#047857;margin-bottom:8px;'>"
-            "Zusammenfassung &amp; Aufgaben</div>"
+            "<div class='wl-rule' style='padding-bottom:22px;margin-bottom:22px;"
+            "border-bottom:1px solid #e7e5e4;'>"
+            "<h2 class='wl-ink' style='margin:0 0 12px;font-size:16px;font-weight:600;"
+            "letter-spacing:-0.01em;color:#1c1917;'>Zusammenfassung &amp; Aufgaben</h2>"
             + "".join(summary_parts)
             + "</div>"
         )
@@ -397,102 +495,151 @@ def _build_completed_bodies(
     if speakers:
         rows = []
         for sp in speakers:
-            pct = max(4, min(100, sp["share_pct"]))
+            pct = max(3, min(100, sp["share_pct"]))
             rows.append(
-                "<div style='margin-bottom:10px;'>"
-                "<div style='display:flex;justify-content:space-between;font-size:13px;"
-                "margin-bottom:4px;'>"
-                f"<span style='font-weight:600;color:#0f172a;'>{escape(sp['name'])}</span>"
-                "<span style='color:#64748b;'>"
-                f"{escape(sp['duration'])} · {sp['share_pct']}&nbsp;%</span>"
-                "</div>"
-                "<div style='height:6px;background:#f1f5f9;border-radius:999px;overflow:hidden;'>"
-                f"<div style='width:{pct}%;height:6px;background:{sp['bar']};"
+                "<div style='margin-bottom:11px;'>"
+                "<table role='presentation' width='100%' cellpadding='0' cellspacing='0' "
+                "border='0' style='margin-bottom:4px;'><tr>"
+                "<td class='wl-ink' style='font-size:13px;font-weight:600;color:#1c1917;'>"
+                f"{escape(sp['name'])}</td>"
+                "<td align='right' class='wl-muted' style='font-size:13px;color:#78716c;"
+                "font-family:Liberation Mono,DejaVu Sans Mono,ui-monospace,monospace;'>"
+                f"{escape(sp['duration'])} · {sp['share_pct']}&nbsp;%</td>"
+                "</tr></table>"
+                "<div class='wl-track' style='height:6px;background:#e7e5e4;"
+                "border-radius:999px;overflow:hidden;'>"
+                f"<div class='wl-bar' style='width:{pct}%;height:6px;background:#059669;"
                 "border-radius:999px;'></div>"
                 "</div></div>"
             )
         speakers_html = (
-            "<div style='background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;"
-            "padding:16px 18px;margin-bottom:22px;'>"
-            "<div style='font-size:11px;font-weight:700;text-transform:uppercase;"
-            "letter-spacing:0.07em;color:#64748b;margin-bottom:12px;'>Sprecheranteile</div>"
+            "<div class='wl-rule' style='padding-bottom:16px;margin-bottom:22px;"
+            "border-bottom:1px solid #e7e5e4;'>"
+            "<h2 class='wl-ink' style='margin:0 0 12px;font-size:16px;font-weight:600;"
+            "letter-spacing:-0.01em;color:#1c1917;'>Sprecheranteile</h2>"
             + "".join(rows)
             + "</div>"
         )
 
     transcript_html = ""
     if include_inline_transcript:
-        if not inline_turns:
+        if not timeline_entries:
             turn_blocks = (
-                "<p style='color:#64748b;font-size:14px;margin:0;'>"
+                "<p class='wl-muted' style='color:#78716c;font-size:14px;margin:0;'>"
                 "Keine gesprochenen Textsegmente im Aufzeichnungszeitraum erkannt.</p>"
             )
         else:
             blocks = []
-            for turn in inline_turns:
-                bg, fg = color_by_speaker.get(turn["speaker"], ("#f1f5f9", "#334155"))
-                ts = wall_clock_time_de(time_origin_utc, turn["start"])
-                blocks.append(
-                    "<div style='padding:12px 0;border-bottom:1px solid #f1f5f9;'>"
-                    "<div style='margin-bottom:5px;'>"
-                    f"<span style='display:inline-block;background:{bg};color:{fg};"
-                    "font-weight:700;font-size:12px;padding:2px 9px;border-radius:999px;'>"
-                    f"{escape(turn['speaker'])}</span>"
-                    f"<span style='font-size:12px;color:#94a3b8;margin-left:8px;"
-                    f"font-family:ui-monospace,SFMono-Regular,Menlo,monospace;'>{ts}</span>"
-                    "</div>"
-                    "<div style='font-size:14px;line-height:1.6;color:#1e293b;'>"
-                    f"{escape(turn['snippet'])}</div></div>"
-                )
+            for item in timeline_entries:
+                if item["kind"] == "pause":
+                    pw = item["pause"]
+                    p_s = float(pw.get("offset_seconds") or pw.get("start") or 0.0)
+                    ts0 = wall_clock_time_de(time_origin_utc, p_s)
+                    p_end = (
+                        pw.get("end_offset_seconds")
+                        if pw.get("end_offset_seconds") is not None
+                        else pw.get("end")
+                    )
+                    ts_range = (
+                        f"{ts0} – {wall_clock_time_de(time_origin_utc, float(p_end))}"
+                        if p_end is not None
+                        else f"ab {ts0}"
+                    )
+                    by = " ".join(str(pw.get("by") or pw.get("paused_by") or "").split())
+                    who_html = f" · {escape(by)}" if by else ""
+                    blocks.append(
+                        "<div class='wl-warn' style='margin:10px 0;padding:8px 12px;"
+                        "background:#fef3c7;border:1px solid #fde68a;border-radius:8px;"
+                        "font-size:13px;color:#78350f;'>"
+                        f"<strong>Off-the-Record-Pause</strong> · {escape(ts_range)}{who_html}"
+                        "</div>"
+                    )
+                else:
+                    turn = item["turn"]
+                    initials = initials_by_speaker.get(
+                        turn["speaker"], _speaker_initials(turn["speaker"])
+                    )
+                    ts = wall_clock_time_de(time_origin_utc, turn["start"])
+                    blocks.append(
+                        "<div class='wl-rule-soft' style='padding:12px 0;"
+                        "border-bottom:1px solid #e7e5e4;'>"
+                        "<div style='margin-bottom:5px;'>"
+                        "<span class='wl-avatar' style='display:inline-block;width:22px;"
+                        "height:22px;line-height:20px;text-align:center;border-radius:999px;"
+                        "background:#fafaf9;border:1px solid #e7e5e4;color:#57534e;"
+                        "font-size:13px;font-weight:700;vertical-align:middle;margin-right:7px;'>"
+                        f"{escape(initials[:1])}</span>"
+                        "<span class='wl-ink' style='font-weight:600;font-size:14px;"
+                        f"color:#1c1917;vertical-align:middle;'>{escape(turn['speaker'])}</span>"
+                        "<span class='wl-ts' style='font-size:13px;color:#78716c;"
+                        "margin-left:8px;vertical-align:middle;"
+                        "font-family:Liberation Mono,DejaVu Sans Mono,ui-monospace,monospace;'>"
+                        f"{ts}</span>"
+                        "</div>"
+                        "<div class='wl-body-text' style='font-size:14px;line-height:1.6;"
+                        f"color:#1c1917;'>{escape(turn['snippet'])}</div></div>"
+                    )
             if inline_truncated:
                 blocks.append(
-                    "<div style='padding-top:12px;font-size:13px;color:#475569;font-style:italic;'>"
+                    "<div class='wl-muted' style='padding-top:12px;font-size:13px;"
+                    "color:#57534e;'>"
                     "Vollständiges Wortprotokoll im angehängten Markdown-Dokument "
                     "(<code>.md</code>) oder in der interaktiven Web-Ansicht.</div>"
                 )
             turn_blocks = "".join(blocks)
         transcript_html = (
-            "<div style='margin-top:8px;'>"
-            "<div style='font-size:11px;font-weight:700;text-transform:uppercase;"
-            "letter-spacing:0.07em;color:#64748b;margin-bottom:8px;'>Wortprotokoll</div>"
+            "<div style='margin-top:4px;'>"
+            "<h2 class='wl-ink' style='margin:0 0 8px;font-size:16px;font-weight:600;"
+            "letter-spacing:-0.01em;color:#1c1917;'>Wortprotokoll</h2>"
             f"{turn_blocks}</div>"
         )
 
+    slides_meta = (
+        f" · {keyframe_count} {'Bildschirm-Folie' if keyframe_count == 1 else 'Bildschirm-Folien'}"
+        if keyframe_count > 0
+        else ""
+    )
+
     html_body = (
-        "<!DOCTYPE html><html lang='de'><head><meta charset='utf-8'></head>"
-        "<body style='margin:0;padding:24px 12px;background:#f4f6f9;"
-        "font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;"
-        "color:#0f172a;'>"
-        "<div style='max-width:680px;margin:0 auto;background:#ffffff;border-radius:16px;"
-        "border:1px solid #e2e8f0;overflow:hidden;box-shadow:0 4px 16px rgba(15,23,42,0.05);'>"
-        "<div style='background:linear-gradient(135deg,#0f172a 0%,#1e293b 100%);"
-        "padding:22px 28px;color:#ffffff;'>"
-        "<div style='display:flex;align-items:center;justify-content:space-between;'>"
-        "<span style='font-size:12px;letter-spacing:0.08em;text-transform:uppercase;"
-        "color:#34d399;font-weight:700;'>wortlaut · Wortprotokoll</span>"
-        "<span style='font-size:12px;background:rgba(255,255,255,0.12);color:#e2e8f0;"
+        f"<!DOCTYPE html><html lang='de'><head>{_EMAIL_HEAD_STYLE}</head>"
+        "<body class='wl-body' style='margin:0;padding:28px 12px;background:#fafaf9;"
+        "font-family:system-ui,-apple-system,Liberation Sans,sans-serif;"
+        "color:#1c1917;-webkit-font-smoothing:antialiased;'>"
+        "<div class='wl-sheet' style='max-width:680px;margin:0 auto;background:#ffffff;"
+        "border-radius:12px;border:1px solid #e7e5e4;overflow:hidden;'>"
+        "<div class='wl-rule' style='padding:16px 28px;border-bottom:1px solid #e7e5e4;'>"
+        "<table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0'>"
+        "<tr><td valign='middle'>"
+        f"{_EMAIL_BRAND_MARK_HTML}"
+        "<span class='wl-ink' style='font-size:14px;font-weight:700;color:#1c1917;"
+        "vertical-align:middle;letter-spacing:-0.01em;'>Wortlaut.cloud</span>"
+        "</td><td align='right' valign='middle'>"
+        "<span class='wl-pill' style='display:inline-block;font-size:13px;font-weight:600;"
+        "background:#fafaf9;border:1px solid #e7e5e4;color:#57534e;"
         f"padding:3px 10px;border-radius:999px;'>{escape(human_provider)}</span>"
-        "</div>"
-        "<h1 style='margin:8px 0 4px;font-size:22px;line-height:1.3;color:#ffffff;'>"
-        f"{escape(title)}</h1>"
-        "<div style='font-size:13px;color:#cbd5e1;'>"
-        f"{escape(human_period)} · {escape(speech_summary)}</div>"
-        "</div>"
+        "</td></tr></table></div>"
+        "<div class='wl-rule' style='padding:24px 28px 22px;border-bottom:1px solid #e7e5e4;'>"
+        "<h1 class='wl-ink' style='margin:0 0 6px;font-size:22px;font-weight:700;"
+        f"line-height:1.25;letter-spacing:-0.02em;color:#1c1917;'>{escape(title)}</h1>"
+        "<div class='wl-muted' style='font-size:13px;color:#57534e;"
+        "font-variant-numeric:tabular-nums;'>"
+        f"{escape(human_period)} · {escape(speech_summary)}{escape(slides_meta)}</div>"
+        "<div style='margin-top:16px;'>"
+        f"<a href='{escape(primary_link)}' class='wl-cta' style='display:inline-block;"
+        "background:#047857;color:#ffffff;text-decoration:none;font-weight:600;"
+        "font-size:14px;padding:10px 18px;border-radius:999px;'>"
+        "Protokoll im Browser öffnen →</a>"
+        "</div></div>"
         "<div style='padding:24px 28px;'>"
-        "<div style='margin-bottom:22px;'>"
-        f"<a href='{escape(primary_link)}' style='display:inline-block;background:#059669;"
-        "color:#ffffff;text-decoration:none;font-weight:600;font-size:14px;"
-        "padding:11px 20px;border-radius:10px;'>Protokoll im Browser öffnen →</a>"
-        "</div>"
         f"{notice_html}"
         f"{summary_html}"
         f"{speakers_html}"
         f"{transcript_html}"
-        "<div style='margin-top:24px;padding-top:16px;border-top:1px solid #e2e8f0;"
-        "font-size:12px;color:#64748b;line-height:1.5;'>"
-        "<strong>Angehängte Dateien:</strong> Markdown-Protokoll (<code>.md</code>), "
-        "Text-Transkript (<code>.txt</code>), Untertitel (<code>.vtt</code>) und "
-        "strukturierte Metadaten (<code>.json</code>)."
+        "<div class='wl-rule wl-muted' style='margin-top:24px;padding-top:16px;"
+        "border-top:1px solid #e7e5e4;font-size:13px;color:#78716c;line-height:1.55;'>"
+        "<strong class='wl-ink' style='color:#57534e;'>Angehängte Dateien:</strong> "
+        "Markdown-Protokoll (<code>.md</code>), Text-Transkript (<code>.txt</code>), "
+        "Untertitel (<code>.vtt</code>) und strukturierte Metadaten (<code>.json</code>)."
         "</div></div></div></body></html>"
     )
     return plain_body, html_body
@@ -556,7 +703,7 @@ def build_message(db, recording, delivery):
     notices: list[str] = []
     if capture_anomaly:
         notices.append(anomaly_hint)
-    if explanation:
+    if explanation and reason not in NORMAL_COMPLETED_REASONS:
         notices.append(explanation)
     if quality["has_audio_gaps"]:
         notices.append("Während der Aufnahme traten kurze Audiolücken auf.")
@@ -567,6 +714,8 @@ def build_message(db, recording, delivery):
     summary_data = data.get("summary")
     speakers = _speaker_breakdown(data)
     turns = group_transcript_turns(data.get("segments") or [])
+    pause_windows = data.get("pause_windows") or []
+    keyframe_count = len(data.get("keyframes") or [])
     plain_body, html_body = _build_completed_bodies(
         title=title,
         human_provider=human_provider,
@@ -575,6 +724,8 @@ def build_message(db, recording, delivery):
         summary=summary_data,
         speakers=speakers,
         turns=turns,
+        pause_windows=pause_windows,
+        keyframe_count=keyframe_count,
         notices=notices,
         ui_url=ui_url,
         reader_url=reader_url,
@@ -612,6 +763,8 @@ def build_message(db, recording, delivery):
             summary=summary_data,
             speakers=speakers,
             turns=turns,
+            pause_windows=pause_windows,
+            keyframe_count=keyframe_count,
             notices=notices,
             ui_url=ui_url,
             reader_url=reader_url,

@@ -30,6 +30,7 @@ from wortlaut.oidc import (
     verify_user_session_token,
 )
 from wortlaut.settings import derive_subkey, get_settings
+from wortlaut.ui import FAVICON_DATA_URI
 
 MCP_SCOPES: tuple[str, ...] = ("mcp:read", "mcp:write")
 DEFAULT_SCOPE_STRING = "mcp:read mcp:write"
@@ -549,26 +550,33 @@ def _render_consent_html(
     )
 
     return f"""<!DOCTYPE html>
-<html lang="{'en' if is_en else 'de'}" data-theme="dark">
+<html lang="{'en' if is_en else 'de'}" data-theme="dark" data-astryx-theme="stone">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{title}</title>
+  <link rel="icon" type="image/svg+xml" href="{FAVICON_DATA_URI}">
   <style>
     :root {{
-      color-scheme: dark;
-      --bg: #0f1014;
-      --surface: #181920;
-      --muted-bg: #21232d;
-      --border: #2b2d38;
-      --text: #f2f3f8;
-      --muted: #a2a6b8;
-      --accent: #10b981;
-      --accent-hover: #059669;
-      --danger-bg: rgba(239, 68, 68, 0.12);
-      --danger-border: rgba(239, 68, 68, 0.36);
-      --danger-text: #fca5a5;
+      color-scheme: light dark;
+      --bg: light-dark(#fafaf9, #111113);
+      --surface: light-dark(#ffffff, #18181b);
+      --muted-bg: light-dark(#f5f5f4, #222226);
+      --border: light-dark(#e7e5e4, #27272a);
+      --text: light-dark(#1c1917, #fafaf9);
+      --muted: light-dark(#57534e, #a8a29e);
+      --accent: light-dark(#047857, #10b981);
+      --accent-fg: light-dark(#ffffff, #052e16);
+      --accent-hover: light-dark(#065f46, #34d399);
+      --emerald-ink: light-dark(#047857, #34d399);
+      --emerald-bg: light-dark(rgba(5, 150, 105, 0.09), rgba(16, 185, 129, 0.12));
+      --emerald-border: light-dark(rgba(5, 150, 105, 0.28), rgba(16, 185, 129, 0.32));
+      --danger-bg: light-dark(#fef2f2, rgba(239, 68, 68, 0.12));
+      --danger-border: light-dark(#fecaca, rgba(239, 68, 68, 0.36));
+      --danger-text: light-dark(#991b1b, #fca5a5);
     }}
+    html[data-theme="light"] {{ color-scheme: light; }}
+    html[data-theme="dark"] {{ color-scheme: dark; }}
     * {{ box-sizing: border-box; }}
     body {{
       margin: 0;
@@ -580,67 +588,119 @@ def _render_consent_html(
       background: var(--bg);
       color: var(--text);
       font-family: system-ui, -apple-system, sans-serif;
-      line-height: 1.5;
+      line-height: 1.55;
+      -webkit-font-smoothing: antialiased;
     }}
     .card {{
       width: 100%;
-      max-width: 500px;
+      max-width: 520px;
       background: var(--surface);
       border: 1px solid var(--border);
-      border-radius: 16px;
-      padding: 28px;
-      box-shadow: 0 20px 50px rgba(0,0,0,0.45);
+      border-radius: 12px;
+      overflow: hidden;
     }}
-    .badge {{
+    .card-top {{
+      padding: 14px 24px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }}
+    .brand {{
+      display: inline-flex;
+      align-items: center;
+      gap: 9px;
+      font-size: 13.5px;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+      color: var(--text);
+    }}
+    .brand-mark {{
+      width: 26px;
+      height: 26px;
+      border-radius: 7px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--emerald-bg);
+      border: 1px solid var(--emerald-border);
+      color: var(--emerald-ink);
+    }}
+    .proto-pill {{
       display: inline-block;
-      font-size: 12px;
+      font-size: 11.5px;
       font-weight: 600;
-      color: #34d399;
-      background: rgba(16, 185, 129, 0.12);
-      border: 1px solid rgba(16, 185, 129, 0.28);
-      padding: 3px 10px;
+      color: var(--muted);
+      background: var(--muted-bg);
+      border: 1px solid var(--border);
+      padding: 2px 9px;
       border-radius: 999px;
-      margin-bottom: 12px;
     }}
-    h1 {{ margin: 0 0 6px; font-size: 20px; font-weight: 700; }}
-    .sub {{ margin: 0 0 20px; font-size: 14px; color: var(--muted); }}
+    .card-body {{
+      padding: 24px;
+    }}
+    h1 {{
+      margin: 0 0 6px;
+      font-size: 20px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      line-height: 1.28;
+    }}
+    .sub {{ margin: 0 0 18px; font-size: 13.5px; color: var(--muted); }}
     .meta-box {{
       background: var(--muted-bg);
       border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 12px 14px;
-      margin-bottom: 18px;
-      font-size: 13px;
+      border-radius: 8px;
+      padding: 11px 14px;
+      margin-bottom: 16px;
+      font-size: 12.5px;
       display: flex;
       flex-direction: column;
       gap: 6px;
     }}
     .meta-row {{ display: flex; justify-content: space-between; gap: 12px; }}
-    .meta-key {{ color: var(--muted); }}
-    .meta-val {{ font-weight: 600; text-align: right; word-break: break-all; }}
+    .meta-key {{ color: var(--muted); flex-shrink: 0; }}
+    .meta-val {{
+      font-weight: 600;
+      text-align: right;
+      overflow-wrap: anywhere;
+      font-family: 'Liberation Mono', 'DejaVu Sans Mono', ui-monospace, monospace;
+      font-size: 13px;
+    }}
     .scope-item {{
       display: flex;
       align-items: flex-start;
       gap: 10px;
-      padding: 12px;
+      padding: 12px 14px;
       border: 1px solid var(--border);
-      border-radius: 10px;
+      border-radius: 8px;
       margin-bottom: 10px;
-      background: rgba(255,255,255,0.015);
+      cursor: pointer;
     }}
-    .scope-item input {{ margin-top: 3px; accent-color: var(--accent); width: 16px; height: 16px; }}
-    .scope-title {{ font-size: 14px; font-weight: 600; display: block; }}
+    .scope-item input {{
+      margin-top: 3px;
+      accent-color: var(--accent);
+      width: 16px;
+      height: 16px;
+      flex-shrink: 0;
+    }}
+    .scope-title {{ font-size: 13.5px; font-weight: 600; display: block; }}
     .scope-desc {{ font-size: 12.5px; color: var(--muted); display: block; margin-top: 2px; }}
     .field-group {{ margin-bottom: 16px; }}
     .field-group label {{ display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; }}
     .field-group input {{
       width: 100%;
-      padding: 10px 12px;
+      padding: 9px 12px;
       border-radius: 8px;
       border: 1px solid var(--border);
       background: var(--bg);
       color: var(--text);
-      font-size: 14px;
+      font-size: 13.5px;
+    }}
+    .field-group input:focus-visible {{
+      outline: 2px solid var(--accent);
+      outline-offset: 1px;
     }}
     .err-box {{
       background: var(--danger-bg);
@@ -654,55 +714,84 @@ def _render_consent_html(
     .actions {{ display: flex; gap: 10px; margin-top: 20px; }}
     button {{
       flex: 1;
-      padding: 10px 16px;
-      border-radius: 9px;
-      font-size: 14px;
+      padding: 9px 16px;
+      border-radius: 999px;
+      font-size: 13.5px;
       font-weight: 600;
       cursor: pointer;
       border: 1px solid var(--border);
+      transition: background 0.15s ease;
     }}
-    .btn-primary {{ background: var(--accent); color: #052e16; border-color: transparent; }}
-    .btn-primary:hover {{ background: var(--accent-hover); color: #fff; }}
+    .btn-primary {{
+      background: var(--accent);
+      color: var(--accent-fg);
+      border-color: transparent;
+    }}
+    .btn-primary:hover {{ background: var(--accent-hover); }}
     .btn-secondary {{ background: transparent; color: var(--text); }}
     .btn-secondary:hover {{ background: var(--muted-bg); }}
     .hint {{ margin: 16px 0 0; font-size: 12px; color: var(--muted); text-align: center; }}
   </style>
+  <script>
+    (function () {{
+      try {{
+        var m = localStorage.getItem('wortlaut-theme-mode');
+        var sys = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        var dark = m === 'dark' || (m !== 'light' && sys);
+        document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+      }} catch (e) {{}}
+    }})();
+  </script>
 </head>
 <body>
   <main class="card">
-    <span class="badge">Model Context Protocol · OAuth 2.1</span>
-    <h1>{heading}</h1>
-    <p class="sub">{subtitle}</p>
-    {err_block}
-    <form method="post" action="/oauth/consent">
-      <input type="hidden" name="auth_id" value="{auth_row.id}">
-      <input type="hidden" name="csrf_token" value="{html.escape(auth_row.csrf_token)}">
-      <div class="meta-box">
-        <div class="meta-row">
-          <span class="meta-key">{callback_label}</span>
-          <span class="meta-val">{cb_escaped}</span>
-        </div>
-        {user_or_token_block if not require_local_token else ""}
-      </div>
-      {user_or_token_block if require_local_token else ""}
-      <label class="scope-item">
-        <input type="checkbox" name="scopes" value="mcp:read" checked disabled>
-        <input type="hidden" name="scopes" value="mcp:read">
-        <span>
-          <span class="scope-title">{read_title}</span>
-          <span class="scope-desc">{read_desc}</span>
+    <div class="card-top">
+      <span class="brand">
+        <span class="brand-mark" aria-hidden="true">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="2.2" stroke-linecap="round">
+            <path d="M2 10v3"/><path d="M6 6v11"/><path d="M10 3v18"/>
+            <path d="M14 8v7"/><path d="M18 5v13"/><path d="M22 10v3"/>
+          </svg>
         </span>
-      </label>{write_scope_block}
-      <div class="actions">
-        <button type="submit" name="decision" value="deny" class="btn-secondary" formnovalidate>
-          {deny_label}
-        </button>
-        <button type="submit" name="decision" value="allow" class="btn-primary">
-          {allow_label}
-        </button>
-      </div>
-    </form>
-    <p class="hint">{revoke_hint}</p>
+        <span>Wortlaut.cloud</span>
+      </span>
+      <span class="proto-pill">MCP · OAuth 2.1</span>
+    </div>
+    <div class="card-body">
+      <h1>{heading}</h1>
+      <p class="sub">{subtitle}</p>
+      {err_block}
+      <form method="post" action="/oauth/consent">
+        <input type="hidden" name="auth_id" value="{auth_row.id}">
+        <input type="hidden" name="csrf_token" value="{html.escape(auth_row.csrf_token)}">
+        <div class="meta-box">
+          <div class="meta-row">
+            <span class="meta-key">{callback_label}</span>
+            <span class="meta-val">{cb_escaped}</span>
+          </div>
+          {user_or_token_block if not require_local_token else ""}
+        </div>
+        {user_or_token_block if require_local_token else ""}
+        <label class="scope-item">
+          <input type="checkbox" name="scopes" value="mcp:read" checked disabled>
+          <input type="hidden" name="scopes" value="mcp:read">
+          <span>
+            <span class="scope-title">{read_title}</span>
+            <span class="scope-desc">{read_desc}</span>
+          </span>
+        </label>{write_scope_block}
+        <div class="actions">
+          <button type="submit" name="decision" value="deny" class="btn-secondary" formnovalidate>
+            {deny_label}
+          </button>
+          <button type="submit" name="decision" value="allow" class="btn-primary">
+            {allow_label}
+          </button>
+        </div>
+      </form>
+      <p class="hint">{revoke_hint}</p>
+    </div>
   </main>
 </body>
 </html>"""
