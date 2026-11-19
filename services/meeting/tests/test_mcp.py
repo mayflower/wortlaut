@@ -884,30 +884,46 @@ def test_mcp_tools_resources_multi_user_isolation_and_ui_revocation(
         == 403
     )
 
-    # Strict boolean validation rejects string "false" instead of coercing to True
-    bad_bool = _rpc(
+    # Strict integer validation rejects boolean True/False passed to integer parameters
+    bad_int = _rpc(
         rw_headers,
         "tools/call",
         {
-            "name": "toggle_calendar_event_recording",
-            "arguments": {"event_id": str(uuid.uuid4()), "enabled": "false"},
+            "name": "schedule_recording",
+            "arguments": {
+                "meeting_url": "https://meet.google.com/new-call-now",
+                "duration_minutes": True,
+            },
         },
     ).json()["result"]
-    assert bad_bool["isError"] is True
-    assert "enabled must be a boolean" in bad_bool["content"][0]["text"]
+    assert bad_int["isError"] is True
+    assert "duration_minutes must be an integer" in bad_int["content"][0]["text"]
 
-    # Read-only grant only exposes the 5 mcp:read tools, while read+write exposes all 11
-    ro_tools = {t["name"] for t in _rpc(ro_headers, "tools/list").json()["result"]["tools"]}
+    # Read-only grant exposes the 4 mcp:read tools; read+write exposes all 7 focused tools
+    ro_tool_list = _rpc(ro_headers, "tools/list").json()["result"]["tools"]
+    ro_tools = {t["name"] for t in ro_tool_list}
     assert ro_tools == {
         "list_recordings",
         "get_recording",
         "get_transcript",
-        "export_protocol",
-        "list_calendar_events",
+        "get_keyframe",
     }
-    rw_tools = {t["name"] for t in _rpc(rw_headers, "tools/list").json()["result"]["tools"]}
-    assert len(rw_tools) == 11
-    assert {"schedule_recording", "cancel_recording", "update_protocol"} <= rw_tools
+    assert all(t["annotations"]["openWorldHint"] is False for t in ro_tool_list)
+
+    rw_tool_list = _rpc(rw_headers, "tools/list").json()["result"]["tools"]
+    rw_by_name = {t["name"]: t for t in rw_tool_list}
+    assert set(rw_by_name) == {
+        "list_recordings",
+        "get_recording",
+        "get_transcript",
+        "get_keyframe",
+        "schedule_recording",
+        "cancel_recording",
+        "update_protocol",
+    }
+    assert rw_by_name["schedule_recording"]["annotations"]["openWorldHint"] is True
+    assert rw_by_name["update_protocol"]["annotations"]["openWorldHint"] is False
+    assert rw_by_name["cancel_recording"]["annotations"]["openWorldHint"] is False
 
     # Read-only grant gets 403 + insufficient_scope WWW-Authenticate when calling write tools
     ro_write_attempt = _rpc(
@@ -921,31 +937,52 @@ def test_mcp_tools_resources_multi_user_isolation_and_ui_revocation(
     assert ro_write_attempt.status_code == 403
     assert 'error="insufficient_scope"' in ro_write_attempt.headers["www-authenticate"]
 
-    # Multi-user isolation: Alice finds her recording by transcript query and never sees Bob's
+    # Multi-user isolation + snippet-first search + since/until/status filters
     list_res = _rpc(
         ro_headers,
         "tools/call",
-        {"name": "list_recordings", "arguments": {"query": "ArgoCD"}},
+        {
+            "name": "list_recordings",
+            "arguments": {
+                "query": "ArgoCD",
+                "status": "completed",
+                "since": (now - timedelta(days=1)).strftime("%Y-%m-%d"),
+                "until": now.strftime("%Y-%m-%d"),
+            },
+        },
     ).json()["result"]
     assert list_res["isError"] is False
-    listed_ids = [item["id"] for item in list_res["structuredContent"]["items"]]
-    assert listed_ids == [str(alice_rec_id)]
+    assert "structuredContent" not in list_res
+    list_text = list_res["content"][0]["text"]
+    assert str(alice_rec_id) in list_text
+    assert "**Dr. Weber**: Wir migrieren Kubevela auf ArgoCD bis Freitag." in list_text
+    assert str(bob_rec_id) not in list_text
 
-    all_alice_ids = [
-        item["id"]
-        for item in _rpc(
-            ro_headers, "tools/call", {"name": "list_recordings", "arguments": {}}
-        ).json()["result"]["structuredContent"]["items"]
-    ]
-    assert str(bob_rec_id) not in all_alice_ids
+    # Future date filter returns no false matches
+    future_list_text = _rpc(
+        ro_headers,
+        "tools/call",
+        {
+            "name": "list_recordings",
+            "arguments": {"since": (now + timedelta(days=5)).strftime("%Y-%m-%d")},
+        },
+    ).json()["result"]["content"][0]["text"]
+    assert "No matching recordings found." in future_list_text
 
-    # Alice cannot read, export, or cancel Bob's recording
+    all_alice_text = _rpc(
+        ro_headers, "tools/call", {"name": "list_recordings", "arguments": {}}
+    ).json()["result"]["content"][0]["text"]
+    assert str(alice_rec_id) in all_alice_text
+    assert str(bob_rec_id) not in all_alice_text
+
+    # Alice cannot read or cancel Bob's recording (error includes self-correcting hint)
     bob_get_err = _rpc(
         rw_headers,
         "tools/call",
         {"name": "get_recording", "arguments": {"recording_id": str(bob_rec_id)}},
     ).json()["result"]
     assert bob_get_err["isError"] is True
+    assert "list_recordings" in bob_get_err["content"][0]["text"]
     bob_cancel_err = _rpc(
         rw_headers,
         "tools/call",
@@ -959,7 +996,7 @@ def test_mcp_tools_resources_multi_user_isolation_and_ui_revocation(
     ).json()
     assert bob_res_err["error"]["code"] == -32002
 
-    # Alice reads her transcript + verifies isolated WAV audio snippet using her MCP access token!
+    # Alice reads her compact transcript (no structuredContent or audio_snippet_path bloat)
     tx_res = _rpc(
         ro_headers,
         "tools/call",
@@ -969,16 +1006,24 @@ def test_mcp_tools_resources_multi_user_isolation_and_ui_revocation(
         },
     ).json()["result"]
     assert tx_res["isError"] is False
-    segs = tx_res["structuredContent"]["segments"]
-    assert len(segs) == 2
-    snippet_path = segs[0]["audio_snippet_path"]
+    assert "structuredContent" not in tx_res
+    tx_text = tx_res["content"][0]["text"]
+    assert "Showing 2 of 2 segment(s)" in tx_text
+    assert "**Dr. Weber**: Wir migrieren Kubevela auf ArgoCD bis Freitag." in tx_text
+    assert "audio-snippet" not in tx_text
+
+    # MCP access tokens still authorize isolated audio-snippet HTTP reads for own recordings
+    snippet_path = (
+        f"/v1/recordings/{alice_rec_id}/audio-snippet"
+        f"?start=0.0&end=1.0&stream_id={stream_ext_id}"
+    )
     wav_resp = client.get(snippet_path, headers=ro_headers)
     assert wav_resp.status_code == 200
     assert wav_resp.content[:4] == b"RIFF"
-    # Bob's MCP token cannot fetch Alice's audio snippet
     assert client.get(snippet_path, headers=bob_headers).status_code == 404
 
-    # Alice updates speaker override + glossary term replacement via update_protocol
+    # Flat partial-merge update_protocol: updating decisions ONLY preserves existing summary,
+    # topics ("Datenbank"), and action_items ("Runbook schreiben") without wiping them!
     upd_res = _rpc(
         rw_headers,
         "tools/call",
@@ -989,60 +1034,75 @@ def test_mcp_tools_resources_multi_user_isolation_and_ui_revocation(
                 "notes": "Freigegeben durch Architektur-Gremium.",
                 "speaker_overrides": {"Dr. Weber": "Prof. Dr. Martin Weber"},
                 "term_replacements": {"Kubevela": "KubeVela"},
+                "decisions": [
+                    {
+                        "text": "Kubevela wird durch ArgoCD abgelöst.",
+                        "timestamp": "00:00",
+                    }
+                ],
             },
         },
     ).json()["result"]
     assert upd_res["isError"] is False
+    assert "structuredContent" not in upd_res
 
-    md_res = _rpc(
-        ro_headers,
-        "tools/call",
-        {
-            "name": "export_protocol",
-            "arguments": {"recording_id": str(alice_rec_id), "format": "md"},
-        },
-    ).json()["result"]
-    assert "Prof. Dr. Martin Weber" in md_res["content"][0]["text"]
-    assert "KubeVela" in md_res["content"][0]["text"]
-    assert "Freigegeben durch Architektur-Gremium." in md_res["content"][0]["text"]
-
-    rec_detail_mcp = _rpc(
+    rec_detail_res = _rpc(
         ro_headers,
         "tools/call",
         {"name": "get_recording", "arguments": {"recording_id": str(alice_rec_id)}},
-    ).json()["result"]["structuredContent"]
-    assert rec_detail_mcp["transcript"]["pause_window_count"] == 1
-    assert rec_detail_mcp["pause_windows"][0]["by"] == "Prof. Dr. Martin Weber"
+    ).json()["result"]
+    assert "structuredContent" not in rec_detail_res
+    rec_detail_text = rec_detail_res["content"][0]["text"]
+    assert "Pause windows: 1" in rec_detail_text
+    assert "Off-the-Record (Prof. Dr. Martin Weber)" in rec_detail_text
+    assert "Entscheidung für PostgreSQL 17 Partitionierung." in rec_detail_text
+    assert "**Datenbank**: Migration im Dezember." in rec_detail_text
+    assert "## Decisions" in rec_detail_text
+    assert "✓ KubeVela wird durch ArgoCD abgelöst." in rec_detail_text
+    assert "**Prof. Dr. Martin Weber**: Runbook schreiben" in rec_detail_text
+    assert "Freigegeben durch Architektur-Gremium." in rec_detail_text
 
-    full_tx_mcp = _rpc(
+    # Searching by replaced term ("KubeVela") also finds Alice's recording
+    replaced_search_text = _rpc(
+        ro_headers,
+        "tools/call",
+        {"name": "list_recordings", "arguments": {"query": "KubeVela"}},
+    ).json()["result"]["content"][0]["text"]
+    assert str(alice_rec_id) in replaced_search_text
+
+    full_tx_text = _rpc(
         ro_headers,
         "tools/call",
         {"name": "get_transcript", "arguments": {"recording_id": str(alice_rec_id)}},
-    ).json()["result"]["structuredContent"]
-    assert len(full_tx_mcp["pause_windows"]) == 1
+    ).json()["result"]["content"][0]["text"]
+    assert "Off-the-record pause windows:" in full_tx_text
+    assert "**Prof. Dr. Martin Weber**: Wir migrieren KubeVela auf ArgoCD bis Freitag." in (
+        full_tx_text
+    )
 
-    # Query & speaker filtering on get_transcript hides pause_windows
-    matching_query_mcp = _rpc(
+    # Query & speaker filtering on get_transcript hides pause_windows & gives speaker hint on miss
+    matching_query_text = _rpc(
         ro_headers,
         "tools/call",
         {
             "name": "get_transcript",
             "arguments": {"recording_id": str(alice_rec_id), "query": "KubeVela"},
         },
-    ).json()["result"]
-    assert matching_query_mcp["structuredContent"]["pause_windows"] == []
+    ).json()["result"]["content"][0]["text"]
+    assert "Off-the-record pause windows:" not in matching_query_text
 
-    non_matching_speaker_mcp = _rpc(
+    non_matching_speaker_text = _rpc(
         ro_headers,
         "tools/call",
         {
             "name": "get_transcript",
             "arguments": {"recording_id": str(alice_rec_id), "speaker": "Nobody"},
         },
-    ).json()["result"]["structuredContent"]
-    assert non_matching_speaker_mcp["pause_windows"] == []
+    ).json()["result"]["content"][0]["text"]
+    assert "Off-the-record pause windows:" not in non_matching_speaker_text
+    assert "Available speakers: Prof. Dr. Martin Weber." in non_matching_speaker_text
 
-    # Resources & Prompts
+    # Resources (protocol.md + keyframes PNG template; redundant transcript.json & prompts removed)
     res_list = _rpc(ro_headers, "resources/list").json()["result"]["resources"]
     assert [r["uri"] for r in res_list] == [f"wortlaut://recordings/{alice_rec_id}/protocol.md"]
     res_read = _rpc(
@@ -1051,18 +1111,9 @@ def test_mcp_tools_resources_multi_user_isolation_and_ui_revocation(
         {"uri": f"wortlaut://recordings/{alice_rec_id}/protocol.md"},
     ).json()["result"]
     assert "Prof. Dr. Martin Weber" in res_read["contents"][0]["text"]
-
-    prompts_list = _rpc(ro_headers, "prompts/list").json()["result"]["prompts"]
-    assert {p["name"] for p in prompts_list} == {"meeting_followup", "decision_audit"}
-    prompt_get = _rpc(
-        ro_headers,
-        "prompts/get",
-        {
-            "name": "decision_audit",
-            "arguments": {"recording_id": str(alice_rec_id), "topic": "ArgoCD"},
-        },
-    ).json()["result"]
-    assert str(alice_rec_id) in prompt_get["messages"][0]["content"]["text"]
+    assert (
+        _rpc(ro_headers, "prompts/list").json()["error"]["code"] == -32601
+    )
 
     # Schedule & cancel a new recording via MCP write tools
     sched = _rpc(
@@ -1078,8 +1129,10 @@ def test_mcp_tools_resources_multi_user_isolation_and_ui_revocation(
         },
     ).json()["result"]
     assert sched["isError"] is False
-    new_rec_id = sched["structuredContent"]["id"]
-    assert sched["structuredContent"]["provider"] == "zoom"
+    assert "structuredContent" not in sched
+    m_sched = re.search(r"Scheduled zoom recording `([0-9a-f-]+)`", sched["content"][0]["text"])
+    assert m_sched is not None
+    new_rec_id = m_sched.group(1)
 
     canc = _rpc(
         rw_headers,
@@ -1087,7 +1140,7 @@ def test_mcp_tools_resources_multi_user_isolation_and_ui_revocation(
         {"name": "cancel_recording", "arguments": {"recording_id": new_rec_id}},
     ).json()["result"]
     assert canc["isError"] is False
-    assert canc["structuredContent"]["cancelled_at"] is not None
+    assert f"Cancelled recording `{new_rec_id}`" in canc["content"][0]["text"]
 
     # Web-UI MCP grant management (/v1/mcp/grants): Alice sees her 2 grants, not Bob's
     alice_ui_token, _ = issue_user_session_token(

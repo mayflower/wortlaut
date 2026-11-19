@@ -752,16 +752,18 @@ def test_rejoin_timeline_exports_access_controls_optout_retention_and_mcp(
     }
     assert "wortlaut://recordings/{recording_id}/keyframes/{keyframe_id}.png" in tpl_uris
 
-    mcp_rec = _mcp_rpc(
+    mcp_rec_res = _mcp_rpc(
         mcp_hdrs,
         "tools/call",
         {"name": "get_recording", "arguments": {"recording_id": str(rec_id)}},
-    )["result"]["structuredContent"]
-    assert mcp_rec["transcript"]["keyframe_count"] == 2
+    )["result"]
+    assert "structuredContent" not in mcp_rec_res
+    mcp_rec_text = mcp_rec_res["content"][0]["text"]
+    assert "Keyframes: 2" in mcp_rec_text
     kf1_uri = f"wortlaut://recordings/{rec_id}/keyframes/{kf1_id}.png"
-    assert mcp_rec["keyframes"][0]["resource_uri"] == kf1_uri
+    assert kf1_uri in mcp_rec_text
 
-    mcp_tx_filtered = _mcp_rpc(
+    mcp_tx_res = _mcp_rpc(
         mcp_hdrs,
         "tools/call",
         {
@@ -773,12 +775,32 @@ def test_rejoin_timeline_exports_access_controls_optout_retention_and_mcp(
                 "end_seconds": 130.0,
             },
         },
-    )["result"]["structuredContent"]
-    assert [k["id"] for k in mcp_tx_filtered["keyframes"]] == [str(kf2_id)]
+    )["result"]
+    assert "structuredContent" not in mcp_tx_res
+    mcp_tx_text = mcp_tx_res["content"][0]["text"]
+    assert f"wortlaut://recordings/{rec_id}/keyframes/{kf2_id}.png" in mcp_tx_text
+    assert kf1_uri not in mcp_tx_text
 
     blob_read = _mcp_rpc(mcp_hdrs, "resources/read", {"uri": kf1_uri})["result"]["contents"][0]
     assert blob_read["mimeType"] == "image/png"
     assert base64.b64decode(blob_read["blob"]) == png_slide1
+
+    # Multimodal get_keyframe tool returns native ImageContent + caption text for any MCP client
+    kf_tool_res = _mcp_rpc(
+        mcp_hdrs,
+        "tools/call",
+        {
+            "name": "get_keyframe",
+            "arguments": {"recording_id": str(rec_id), "keyframe_id": str(kf1_id)},
+        },
+    )["result"]
+    assert kf_tool_res["isError"] is False
+    assert "structuredContent" not in kf_tool_res
+    assert kf_tool_res["content"][0]["type"] == "text"
+    assert str(kf1_id) in kf_tool_res["content"][0]["text"]
+    assert kf_tool_res["content"][1]["type"] == "image"
+    assert kf_tool_res["content"][1]["mimeType"] == "image/png"
+    assert base64.b64decode(kf_tool_res["content"][1]["data"]) == png_slide1
 
     # DELETE /v1/recordings/{id}/keyframes/{kf_id} authorization & S3 cleanup
     del_url_2 = f"/v1/recordings/{rec_id}/keyframes/{kf2_id}"
@@ -795,6 +817,16 @@ def test_rejoin_timeline_exports_access_controls_optout_retention_and_mcp(
         "resources/read",
         {"uri": f"wortlaut://recordings/{rec_id}/keyframes/{kf2_id}.png"},
     )["error"]["code"] == -32002
+    deleted_kf_tool = _mcp_rpc(
+        mcp_hdrs,
+        "tools/call",
+        {
+            "name": "get_keyframe",
+            "arguments": {"recording_id": str(rec_id), "keyframe_id": str(kf2_id)},
+        },
+    )["result"]
+    assert deleted_kf_tool["isError"] is True
+    assert "get_recording" in deleted_kf_tool["content"][0]["text"]
 
     # 24-hour audio retention deletes audio/{rec_id}/ while preserving keyframes/{rec_id}/!
     s3_key_1 = f"keyframes/{rec_id}/{att1_id}/0000.png"

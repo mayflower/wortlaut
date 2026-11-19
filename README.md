@@ -151,7 +151,7 @@ claude mcp add --transport http wortlaut https://wortlaut.example.org/mcp
 ```
 
 * **Zero static API keys:** MCP clients (`Claude Code`, `Cursor`, `VS Code`, `Antigravity`) automatically discover OAuth endpoints, sign users in via your existing OIDC provider (or local instance token), and request `mcp:read` and optional `mcp:write` scopes.
-* **Strict per-user isolation & revocation:** Every tool call (`list_recordings`, `get_recording`, `get_transcript`, `export_protocol`, `list_calendar_events`, `schedule_recording`, `cancel_recording`, `update_protocol`, `generate_summary`, `toggle_calendar_event_recording`, `publish_calendar_protocol_link`) and `wortlaut://` resource (including screen-share slide snapshots via the `wortlaut://recordings/{recording_id}/keyframes/{keyframe_id}.png` resource template) is scoped to the authenticated user. Active client grants can be reviewed and revoked at `/ui#view=mcp` (`GET/DELETE /v1/mcp/grants`).
+* **Strict per-user isolation & revocation:** Every tool call (`list_recordings`, `get_recording`, `get_transcript`, `get_keyframe`, `schedule_recording`, `cancel_recording`, `update_protocol`) and `wortlaut://` resource (`protocol.md` plus screen-share slide snapshots via `wortlaut://recordings/{recording_id}/keyframes/{keyframe_id}.png`) is scoped to the authenticated user. Active client grants can be reviewed and revoked at `/ui#view=mcp` (`GET/DELETE /v1/mcp/grants`).
 
 ### Local AI Executive Summaries & Action Items (Ollama)
 

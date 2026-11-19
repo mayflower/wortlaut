@@ -1,6 +1,7 @@
 """Authenticated MCP Streamable HTTP server built on the official `mcp` Python SDK."""
 
 import asyncio
+import base64
 import contextvars
 import hashlib
 import hmac
@@ -8,7 +9,7 @@ import json
 import secrets
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -23,29 +24,25 @@ from mcp.server.streamable_http import (
 )
 from mcp.shared.exceptions import McpError
 from pydantic import AnyUrl, TypeAdapter, ValidationError
-from sqlalchemy import desc, select
+from sqlalchemy import and_, desc, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from wortlaut.calendar_oauth import (
-    publish_protocol_link_to_calendar_events,
-    toggle_synced_event,
-)
 from wortlaut.domain import (
     apply_protocol_metadata_fields,
     apply_recordings_search_filters,
     cancel_recording_and_unlink_calendar,
-    query_calendar_overview,
 )
 from wortlaut.exports import (
+    BERLIN_TZ,
     export_data,
-    generate_protocol_summary,
     render_export,
+    resolve_citation_timestamp,
     short_timestamp,
+    wall_clock_time_de,
 )
 from wortlaut.ingest import capacity_reached
 from wortlaut.languages import (
-    QWEN_ASR_LANGUAGES,
     effective_recording_language,
     normalize_asr_language,
 )
@@ -174,6 +171,7 @@ def _tool_spec(
     read_only: bool,
     destructive: bool = False,
     idempotent: bool = True,
+    open_world: bool = False,
 ) -> tuple[str, mcp_types.Tool]:
     return (
         required_scope,
@@ -186,19 +184,25 @@ def _tool_spec(
                 readOnlyHint=read_only,
                 destructiveHint=destructive,
                 idempotentHint=idempotent,
+                openWorldHint=open_world,
             ),
         ),
     )
 
 
+_CITATION_ITEM_PROPS: dict[str, Any] = {
+    "timestamp": {"type": "string"},
+    "offset_seconds": {"type": "number"},
+}
+
 _SCOPED_TOOLS: list[tuple[str, mcp_types.Tool]] = [
     _tool_spec(
         "list_recordings",
         required_scope="mcp:read",
-        title="List & Search Recordings",
+        title="Search Recordings",
         description=(
-            "List or search meeting recordings accessible to the authenticated user. "
-            "Searches titles, bound speaker names, and full transcript text."
+            "Search or list accessible meetings by keyword/speaker query, date range "
+            "(since/until), status, or provider; returns inline quote snippets when query is set."
         ),
         read_only=True,
         input_schema={
@@ -206,34 +210,25 @@ _SCOPED_TOOLS: list[tuple[str, mcp_types.Tool]] = [
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": (
-                        "Optional full-text search across transcript text, speaker names, "
-                        "and titles."
-                    ),
+                    "description": "Search across titles, speakers, transcripts, summaries, notes.",
+                },
+                "since": {
+                    "type": "string",
+                    "description": "Lower date/time bound (YYYY-MM-DD or ISO-8601).",
+                },
+                "until": {
+                    "type": "string",
+                    "description": "Upper date/time bound (YYYY-MM-DD or ISO-8601).",
+                },
+                "status": {
+                    "type": "string",
+                    "enum": ["upcoming", "active", "completed", "failed"],
                 },
                 "provider": {
                     "type": "string",
                     "enum": ["google_meet", "teams", "webex", "zoom"],
-                    "description": "Optional conference provider filter.",
                 },
-                "participation": {
-                    "type": "string",
-                    "description": (
-                        "Optional participation state (e.g. scheduled, capturing, ended)."
-                    ),
-                },
-                "processing": {
-                    "type": "string",
-                    "enum": ["pending", "processing", "completed", "failed"],
-                    "description": "Optional ASR processing state filter.",
-                },
-                "limit": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "maximum": 50,
-                    "default": 20,
-                    "description": "Maximum number of recordings to return (newest first).",
-                },
+                "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20},
             },
             "additionalProperties": False,
         },
@@ -241,17 +236,16 @@ _SCOPED_TOOLS: list[tuple[str, mcp_types.Tool]] = [
     _tool_spec(
         "get_recording",
         required_scope="mcp:read",
-        title="Get Recording Details & Summary",
+        title="Get Protocol Overview",
         description=(
-            "Retrieve metadata, live capture/pause status, executive summary, action items, notes, "
-            "speaker list, screen-share keyframes, off-the-record pause windows, and raw-audio "
-            "retention availability for a recording."
+            "Read a meeting's status, speakers, summary, decisions, topics, action items "
+            "(with timestamps), notes, pause windows, and screen-share keyframe IDs."
         ),
         read_only=True,
         input_schema={
             "type": "object",
             "properties": {
-                "recording_id": {"type": "string", "description": "UUID of the recording."}
+                "recording_id": {"type": "string", "description": "Recording UUID."},
             },
             "required": ["recording_id"],
             "additionalProperties": False,
@@ -260,149 +254,78 @@ _SCOPED_TOOLS: list[tuple[str, mcp_types.Tool]] = [
     _tool_spec(
         "get_transcript",
         required_scope="mcp:read",
-        title="Read Speaker-Attributed Transcript",
+        title="Read Verbatim Transcript",
         description=(
-            "Read speaker-attributed verbatim transcript segments, settled screen-share keyframes "
-            "(wortlaut://recordings/{recording_id}/keyframes/{keyframe_id}.png), and "
-            "off-the-record pause windows for a recording, with optional speaker, keyword, and "
-            "timestamp filters plus isolated audio snippets."
+            "Read paginated speaker-attributed transcript segments, pause windows, and "
+            "keyframes with optional speaker, keyword, or time-window filters."
         ),
         read_only=True,
         input_schema={
             "type": "object",
             "properties": {
-                "recording_id": {"type": "string", "description": "UUID of the recording."},
-                "speaker": {
-                    "type": "string",
-                    "description": (
-                        "Optional case-insensitive substring filter on speaker name or speaker_id."
-                    ),
-                },
-                "query": {
-                    "type": "string",
-                    "description": "Optional case-insensitive substring filter on segment text.",
-                },
-                "start_seconds": {
-                    "type": "number",
-                    "minimum": 0,
-                    "description": "Optional lower bound in seconds from recording start.",
-                },
-                "end_seconds": {
-                    "type": "number",
-                    "minimum": 0,
-                    "description": "Optional upper bound in seconds from recording start.",
-                },
-                "offset": {
-                    "type": "integer",
-                    "minimum": 0,
-                    "default": 0,
-                    "description": "Segment pagination offset.",
-                },
-                "limit": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "maximum": 250,
-                    "default": 100,
-                    "description": "Maximum number of segments to return.",
-                },
+                "recording_id": {"type": "string", "description": "Recording UUID."},
+                "speaker": {"type": "string", "description": "Case-insensitive speaker filter."},
+                "query": {"type": "string", "description": "Case-insensitive text filter."},
+                "start_seconds": {"type": "number", "minimum": 0},
+                "end_seconds": {"type": "number", "minimum": 0},
+                "offset": {"type": "integer", "minimum": 0, "default": 0},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 250, "default": 80},
             },
             "required": ["recording_id"],
             "additionalProperties": False,
         },
     ),
     _tool_spec(
-        "export_protocol",
+        "get_keyframe",
         required_scope="mcp:read",
-        title="Export Formatted Protocol",
+        title="View Screen-Share Slide",
         description=(
-            "Render the formatted meeting protocol in Markdown (md), plain text (txt), "
-            "WebVTT (vtt), or JSON."
+            "Fetch a screen-share keyframe PNG as native ImageContent plus extracted slide "
+            "context so multimodal models can inspect shared slides, code, or diagrams."
         ),
         read_only=True,
         input_schema={
             "type": "object",
             "properties": {
-                "recording_id": {"type": "string", "description": "UUID of the recording."},
-                "format": {
+                "recording_id": {"type": "string", "description": "Recording UUID."},
+                "keyframe_id": {
                     "type": "string",
-                    "enum": ["md", "txt", "vtt", "json"],
-                    "default": "md",
+                    "description": "Keyframe UUID from get_recording or get_transcript.",
                 },
             },
-            "required": ["recording_id"],
-            "additionalProperties": False,
-        },
-    ),
-    _tool_spec(
-        "list_calendar_events",
-        required_scope="mcp:read",
-        title="List Calendar Events",
-        description=(
-            "List the authenticated user's connected Google/Microsoft calendars and upcoming "
-            "(or recent) synced calendar meetings and .ics invitations."
-        ),
-        read_only=True,
-        input_schema={
-            "type": "object",
-            "properties": {
-                "include_past": {
-                    "type": "boolean",
-                    "default": False,
-                    "description": "Include events from the past 7 days.",
-                },
-                "limit": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "maximum": 100,
-                    "default": 30,
-                },
-            },
+            "required": ["recording_id", "keyframe_id"],
             "additionalProperties": False,
         },
     ),
     _tool_spec(
         "schedule_recording",
         required_scope="mcp:write",
-        title="Schedule or Start Recording",
+        title="Start or Schedule Recording",
         description=(
-            "Schedule a future recording or start an immediate ad-hoc recording for a "
-            "Google Meet, Microsoft Teams, Cisco Webex, or Zoom URL."
+            "Send the bot into a live call immediately (omit starts_at) or schedule a future "
+            "recording for Google Meet, Teams, Webex, or Zoom."
         ),
         read_only=False,
         idempotent=False,
+        open_world=True,
         input_schema={
             "type": "object",
             "properties": {
-                "meeting_url": {
-                    "type": "string",
-                    "description": (
-                        "HTTPS URL for Google Meet, Microsoft Teams, Cisco Webex, or Zoom."
-                    ),
-                },
-                "title": {
-                    "type": "string",
-                    "description": "Optional human-readable meeting title.",
-                },
+                "meeting_url": {"type": "string", "description": "Conference HTTPS URL."},
+                "title": {"type": "string"},
                 "starts_at": {
                     "type": "string",
-                    "description": (
-                        "Optional ISO-8601 start timestamp with timezone. Omit to join immediately."
-                    ),
+                    "description": "ISO-8601 timestamp with timezone; omit to join now.",
                 },
                 "duration_minutes": {
                     "type": "integer",
                     "minimum": 5,
                     "maximum": 240,
                     "default": 60,
-                    "description": "Expected duration in minutes (5-240).",
-                },
-                "guest_name": {
-                    "type": "string",
-                    "description": "Optional bot display name override.",
                 },
                 "language": {
                     "type": "string",
-                    "description": "Optional Qwen3-ASR language ('auto' or name/ISO).",
+                    "description": "ASR language ('auto' or ISO code/name, e.g. 'de', 'en').",
                 },
             },
             "required": ["meeting_url"],
@@ -419,10 +342,7 @@ _SCOPED_TOOLS: list[tuple[str, mcp_types.Tool]] = [
         input_schema={
             "type": "object",
             "properties": {
-                "recording_id": {
-                    "type": "string",
-                    "description": "UUID of the recording to stop or cancel.",
-                }
+                "recording_id": {"type": "string", "description": "Recording UUID."},
             },
             "required": ["recording_id"],
             "additionalProperties": False,
@@ -431,101 +351,61 @@ _SCOPED_TOOLS: list[tuple[str, mcp_types.Tool]] = [
     _tool_spec(
         "update_protocol",
         required_scope="mcp:write",
-        title="Update Protocol Metadata & Replacements",
+        title="Update Protocol & Summary",
         description=(
-            "Update a recording's title, transcription language (all 30 Qwen3-ASR languages or "
-            "'auto'), human meeting notes, speaker display-name overrides, or glossary term "
-            "replacements."
+            "Partially update a recording's title, language, notes, summary_text, decisions, "
+            "topics, action_items (optional HH:MM:SS or offset_seconds citations), "
+            "speaker_overrides, or term_replacements. Omitted fields are preserved."
         ),
         read_only=False,
         input_schema={
             "type": "object",
             "properties": {
-                "recording_id": {"type": "string", "description": "UUID of the recording."},
-                "title": {"type": "string", "description": "Optional updated meeting title."},
-                "language": {
-                    "type": "string",
-                    "description": (
-                        "Optional Qwen3-ASR transcription language ('auto' for all 30 languages, "
-                        f"or any of: {', '.join(QWEN_ASR_LANGUAGES)})."
-                    ),
+                "recording_id": {"type": "string", "description": "Recording UUID."},
+                "title": {"type": "string"},
+                "language": {"type": "string", "description": "'auto' or ISO code/language name."},
+                "notes": {"type": "string"},
+                "summary_text": {"type": "string", "description": "Executive overview paragraph."},
+                "decisions": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {"text": {"type": "string"}, **_CITATION_ITEM_PROPS},
+                        "required": ["text"],
+                    },
                 },
-                "notes": {"type": "string", "description": "Optional Markdown meeting notes."},
+                "topics": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "title": {"type": "string"},
+                            "details": {"type": "string"},
+                            **_CITATION_ITEM_PROPS,
+                        },
+                    },
+                },
+                "action_items": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "owner": {"type": "string"},
+                            "task": {"type": "string"},
+                            "due": {"type": "string"},
+                            **_CITATION_ITEM_PROPS,
+                        },
+                        "required": ["task"],
+                    },
+                },
                 "speaker_overrides": {
                     "type": "object",
                     "additionalProperties": {"type": "string"},
-                    "description": "Map of original speaker label/ID to corrected display name.",
                 },
                 "term_replacements": {
                     "type": "object",
                     "additionalProperties": {"type": "string"},
-                    "description": "Map of misrecognized term to domain-accurate replacement.",
                 },
-            },
-            "required": ["recording_id"],
-            "additionalProperties": False,
-        },
-    ),
-    _tool_spec(
-        "generate_summary",
-        required_scope="mcp:write",
-        title="Generate Local AI Summary",
-        description=(
-            "Generate or refresh the structured executive summary, topics, and action items "
-            "for a completed recording using the local self-hosted Ollama model."
-        ),
-        read_only=False,
-        idempotent=False,
-        input_schema={
-            "type": "object",
-            "properties": {
-                "recording_id": {"type": "string", "description": "UUID of the recording."}
-            },
-            "required": ["recording_id"],
-            "additionalProperties": False,
-        },
-    ),
-    _tool_spec(
-        "toggle_calendar_event_recording",
-        required_scope="mcp:write",
-        title="Toggle Calendar Event Auto-Record",
-        description=(
-            "Enable or disable automatic recording for a synced Google Calendar or "
-            "Microsoft 365 event."
-        ),
-        read_only=False,
-        input_schema={
-            "type": "object",
-            "properties": {
-                "event_id": {
-                    "type": "string",
-                    "description": "UUID of the synced calendar event from list_calendar_events.",
-                },
-                "enabled": {
-                    "type": "boolean",
-                    "description": "True to schedule/enable recording, false to disable/cancel.",
-                },
-            },
-            "required": ["event_id", "enabled"],
-            "additionalProperties": False,
-        },
-    ),
-    _tool_spec(
-        "publish_calendar_protocol_link",
-        required_scope="mcp:write",
-        title="Write Protocol Link to Calendar Invite",
-        description=(
-            "Write the scoped read-only protocol link back into the matching Google Calendar "
-            "or Microsoft 365 invite."
-        ),
-        read_only=False,
-        input_schema={
-            "type": "object",
-            "properties": {
-                "recording_id": {
-                    "type": "string",
-                    "description": "UUID of the completed recording.",
-                }
             },
             "required": ["recording_id"],
             "additionalProperties": False,
@@ -537,56 +417,27 @@ _TOOL_BY_NAME: dict[str, tuple[str, mcp_types.Tool]] = {
     tool.name: (scope, tool) for scope, tool in _SCOPED_TOOLS
 }
 
-_PROMPTS: list[mcp_types.Prompt] = [
-    mcp_types.Prompt(
-        name="meeting_followup",
-        description=(
-            "Draft a concise follow-up summary with speaker-attributed decisions and action items."
-        ),
-        arguments=[
-            mcp_types.PromptArgument(
-                name="recording_id",
-                description="UUID of the recording to summarize.",
-                required=True,
-            )
-        ],
-    ),
-    mcp_types.Prompt(
-        name="decision_audit",
-        description=(
-            "Verify exact verbatim quotes and timestamps for technical or product decisions "
-            "in a meeting."
-        ),
-        arguments=[
-            mcp_types.PromptArgument(
-                name="recording_id",
-                description="UUID of the recording to audit.",
-                required=True,
-            ),
-            mcp_types.PromptArgument(
-                name="topic",
-                description="Specific topic or question to verify.",
-                required=False,
-            ),
-        ],
-    ),
-]
-
 
 def _parse_uuid(raw: Any, field_name: str = "recording_id") -> uuid.UUID:
     if not isinstance(raw, str) or not raw.strip():
-        raise ValueError(f"{field_name} must be a non-empty UUID string")
+        raise ValueError(
+            f"{field_name} must be a non-empty UUID string. "
+            "Call list_recordings to find valid recording UUIDs."
+        )
     try:
         return uuid.UUID(raw.strip())
     except ValueError:
-        raise ValueError(f"Invalid UUID for {field_name}: {raw}") from None
+        raise ValueError(
+            f"Invalid UUID for {field_name}: {raw!r}. "
+            "Call list_recordings to find valid recording UUIDs."
+        ) from None
 
 
 def _parse_int(raw: Any, default: int, field_name: str) -> int:
     if raw is None:
         return default
     if isinstance(raw, bool) or not isinstance(raw, int):
-        raise ValueError(f"{field_name} must be an integer")
+        raise ValueError(f"{field_name} must be an integer (got {type(raw).__name__}).")
     return raw
 
 
@@ -594,18 +445,38 @@ def _parse_float(raw: Any, field_name: str) -> float | None:
     if raw is None:
         return None
     if isinstance(raw, bool) or not isinstance(raw, (int, float)):
-        raise ValueError(f"{field_name} must be a number")
+        raise ValueError(f"{field_name} must be a number (got {type(raw).__name__}).")
     return float(raw)
 
 
-def _parse_bool(raw: Any, field_name: str, *, default: bool | None = None) -> bool:
+def _parse_date_bound(raw: Any, field_name: str, *, is_upper: bool) -> datetime | None:
     if raw is None:
-        if default is not None:
-            return default
-        raise ValueError(f"{field_name} is required and must be a boolean")
-    if not isinstance(raw, bool):
-        raise ValueError(f"{field_name} must be a boolean (true or false)")
-    return raw
+        return None
+    val = str(raw).strip()
+    if not val:
+        return None
+    if len(val) == 10 and val[4] == "-" and val[7] == "-":
+        try:
+            d = date.fromisoformat(val)
+        except ValueError:
+            raise ValueError(
+                f"{field_name} must be YYYY-MM-DD or ISO-8601 datetime (got {val!r})."
+            ) from None
+        local_dt = datetime.combine(
+            d,
+            time(23, 59, 59, 999999) if is_upper else time(0, 0, 0),
+            tzinfo=BERLIN_TZ,
+        )
+        return local_dt.astimezone(UTC)
+    try:
+        dt = datetime.fromisoformat(val)
+    except ValueError:
+        raise ValueError(
+            f"{field_name} must be YYYY-MM-DD or ISO-8601 datetime (got {val!r})."
+        ) from None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=BERLIN_TZ)
+    return dt.astimezone(UTC)
 
 
 def _get_accessible_recording(
@@ -624,18 +495,50 @@ def _get_accessible_recording(
         or rec.metadata_deleted_at is not None
         or not can_access_recording(db, principal, rec)
     ):
-        raise LookupError(f"Recording {recording_id} not found or not accessible")
+        raise LookupError(
+            f"Recording {recording_id} not found or not accessible. "
+            "Call list_recordings first to inspect accessible recording UUIDs."
+        )
     return rec
 
 
+def _load_verified_keyframe(
+    db: Session,
+    rec: Recording,
+    kf_id: uuid.UUID,
+) -> tuple[RecordingKeyframe, bytes]:
+    kf = db.get(RecordingKeyframe, kf_id)
+    if (
+        kf is None
+        or kf.recording_id != rec.id
+        or kf.deleted_at is not None
+        or not kf.object_key
+        or is_keyframe_opted_out(db, rec, kf)
+    ):
+        raise LookupError(
+            f"Keyframe {kf_id} not found or opted out. "
+            f"Call get_recording(recording_id='{rec.id}') to list available keyframe IDs."
+        )
+    try:
+        png_bytes = get_storage().read(kf.object_key)
+    except (ClientError, ObjectConflict):
+        raise LookupError(
+            f"Keyframe {kf_id} object unavailable in storage."
+        ) from None
+    if hashlib.sha256(png_bytes).hexdigest() != kf.sha256:
+        raise LookupError("Invalid keyframe object integrity.")
+    return kf, png_bytes
+
+
 def _tool_result(
-    text_body: str, structured: dict[str, Any] | None = None
+    text_body: str,
+    *,
+    extra_content: list[mcp_types.ContentBlock] | None = None,
 ) -> mcp_types.CallToolResult:
-    return mcp_types.CallToolResult(
-        content=[mcp_types.TextContent(type="text", text=text_body)],
-        structuredContent=structured,
-        isError=False,
-    )
+    blocks: list[mcp_types.ContentBlock] = [mcp_types.TextContent(type="text", text=text_body)]
+    if extra_content:
+        blocks.extend(extra_content)
+    return mcp_types.CallToolResult(content=blocks, isError=False)
 
 
 def _tool_error(message: str) -> mcp_types.CallToolResult:
@@ -645,11 +548,238 @@ def _tool_error(message: str) -> mcp_types.CallToolResult:
     )
 
 
-def _mcp_keyframe_item(rec_id: uuid.UUID, kf: dict[str, Any]) -> dict[str, Any]:
-    return {
-        **kf,
-        "resource_uri": f"wortlaut://recordings/{rec_id}/keyframes/{kf['id']}.png",
+def _format_citation_tag(item: dict[str, Any]) -> str:
+    ts = str(item.get("timestamp") or "").strip()
+    off = item.get("offset_seconds")
+    if ts and isinstance(off, (int, float)):
+        return f" [{ts} / +{int(round(float(off)))}s]"
+    if ts:
+        return f" [{ts}]"
+    if isinstance(off, (int, float)):
+        return f" [+{int(round(float(off)))}s]"
+    return ""
+
+
+def _human_status_label(rec: Recording) -> str:
+    if rec.participation == "scheduled":
+        return "upcoming"
+    if rec.processing == "completed":
+        return "completed"
+    if rec.processing == "failed" or (
+        rec.participation == "ended"
+        and rec.participation_reason not in (None, "normal", "room_empty", "cancelled")
+    ):
+        return f"failed ({rec.processing_error or rec.participation_reason})"
+    if rec.participation == "ended" and rec.participation_reason == "cancelled":
+        return "cancelled"
+    return f"active ({rec.participation}/{rec.processing})"
+
+
+def _extract_query_snippets(
+    db: Session,
+    rec: Recording,
+    needle_lower: str,
+    *,
+    max_snippets: int = 2,
+) -> list[str]:
+    if rec.transcript_deleted_at is not None or not needle_lower:
+        return []
+    exp = export_data(db, rec)
+    origin_utc = exp.get("time_origin_utc")
+    snippets: list[str] = []
+    for seg in exp.get("segments") or []:
+        txt = str(seg.get("text") or "")
+        spk = str(seg.get("speaker_label") or seg.get("speaker_name") or "Speaker")
+        if needle_lower in txt.lower() or needle_lower in spk.lower():
+            s_start = float(seg.get("start") or 0.0)
+            clock = (
+                wall_clock_time_de(origin_utc, s_start) if origin_utc else short_timestamp(s_start)
+            )
+            trimmed = txt if len(txt) <= 150 else f"{txt[:147].rstrip()}…"
+            snippets.append(f"  > [{clock} / +{int(round(s_start))}s] **{spk}**: {trimmed}")
+            if len(snippets) >= max_snippets:
+                return snippets
+    summary = exp.get("summary")
+    if isinstance(summary, dict):
+        for d in summary.get("decisions") or []:
+            d_txt = str(d.get("text") or "")
+            if needle_lower in d_txt.lower():
+                snippets.append(f"  > ✓ Decision: {d_txt[:150]}{_format_citation_tag(d)}")
+                if len(snippets) >= max_snippets:
+                    return snippets
+    return snippets
+
+
+def _clean_decisions_list(
+    raw_list: Any,
+    *,
+    origin_utc: str | None,
+    segments: list[dict[str, Any]],
+    keyframes: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if not isinstance(raw_list, list):
+        raise ValueError("decisions must be an array of {text, timestamp?, offset_seconds?}.")
+    out: list[dict[str, Any]] = []
+    for d in raw_list:
+        if not isinstance(d, dict):
+            raise ValueError("each decision must be an object with a 'text' string.")
+        d_txt = " ".join(str(d.get("text") or "").split())
+        if not d_txt:
+            continue
+        d_item: dict[str, Any] = {"text": d_txt}
+        raw_ts = d.get("timestamp")
+        d_ts, d_off = resolve_citation_timestamp(
+            raw_ts,
+            d.get("offset_seconds") if not str(raw_ts or "").strip() else None,
+            origin_utc=origin_utc,
+            segments=segments,
+            keyframes=keyframes,
+        )
+        if d_ts and d_off is not None:
+            d_item["timestamp"] = d_ts
+            d_item["offset_seconds"] = d_off
+        out.append(d_item)
+    return out
+
+
+def _clean_topics_list(
+    raw_list: Any,
+    *,
+    origin_utc: str | None,
+    segments: list[dict[str, Any]],
+    keyframes: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if not isinstance(raw_list, list):
+        raise ValueError("topics must be an array of {title, details, timestamp?}.")
+    out: list[dict[str, Any]] = []
+    for t in raw_list:
+        if not isinstance(t, dict):
+            raise ValueError("each topic must be an object.")
+        t_title = " ".join(str(t.get("title") or "").split())
+        t_details = " ".join(str(t.get("details") or "").split())
+        if not (t_title or t_details):
+            continue
+        t_item: dict[str, Any] = {"title": t_title, "details": t_details}
+        raw_ts = t.get("timestamp")
+        t_ts, t_off = resolve_citation_timestamp(
+            raw_ts,
+            t.get("offset_seconds") if not str(raw_ts or "").strip() else None,
+            origin_utc=origin_utc,
+            segments=segments,
+            keyframes=keyframes,
+        )
+        if t_ts and t_off is not None:
+            t_item["timestamp"] = t_ts
+            t_item["offset_seconds"] = t_off
+        out.append(t_item)
+    return out
+
+
+def _clean_actions_list(
+    raw_list: Any,
+    *,
+    origin_utc: str | None,
+    segments: list[dict[str, Any]],
+    keyframes: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if not isinstance(raw_list, list):
+        raise ValueError("action_items must be an array of {owner?, task, due?, timestamp?}.")
+    out: list[dict[str, Any]] = []
+    for a in raw_list:
+        if not isinstance(a, dict):
+            raise ValueError("each action item must be an object with a 'task' string.")
+        task = " ".join(str(a.get("task") or "").split())
+        if not task:
+            continue
+        owner = " ".join(str(a.get("owner") or "").split()) or "Team"
+        a_item: dict[str, Any] = {"owner": owner, "task": task}
+        due = " ".join(str(a.get("due") or "").split())
+        if due:
+            a_item["due"] = due
+        raw_ts = a.get("timestamp")
+        a_ts, a_off = resolve_citation_timestamp(
+            raw_ts,
+            a.get("offset_seconds") if not str(raw_ts or "").strip() else None,
+            origin_utc=origin_utc,
+            segments=segments,
+            keyframes=keyframes,
+        )
+        if a_ts and a_off is not None:
+            a_item["timestamp"] = a_ts
+            a_item["offset_seconds"] = a_off
+        out.append(a_item)
+    return out
+
+
+def _merge_mcp_summary_fields(
+    existing_raw: Any,
+    arguments: dict[str, Any],
+    *,
+    origin_utc: str | None,
+    segments: list[dict[str, Any]],
+    keyframes: list[dict[str, Any]],
+) -> tuple[bool, dict[str, Any] | None]:
+    nested = arguments.get("summary")
+    if nested is not None and not isinstance(nested, dict):
+        raise ValueError(
+            "summary must be an object (or pass flat summary_text, decisions, topics, "
+            "action_items fields)."
+        )
+    nested_dict: dict[str, Any] = nested if isinstance(nested, dict) else {}
+
+    has_summary_text = "summary_text" in arguments or "summary" in nested_dict
+    has_decisions = "decisions" in arguments or "decisions" in nested_dict
+    has_topics = "topics" in arguments or "topics" in nested_dict
+    has_actions = "action_items" in arguments or "action_items" in nested_dict
+
+    if not (has_summary_text or has_decisions or has_topics or has_actions):
+        return False, None
+
+    cur = dict(existing_raw) if isinstance(existing_raw, dict) else {}
+    summary_text = str(cur.get("summary") or "").strip()
+    decisions = list(cur.get("decisions") or [])
+    topics = list(cur.get("topics") or [])
+    action_items = list(cur.get("action_items") or [])
+
+    if has_summary_text:
+        raw_st = (
+            arguments["summary_text"]
+            if "summary_text" in arguments
+            else nested_dict.get("summary")
+        )
+        summary_text = str(raw_st or "").strip()
+    if has_decisions:
+        raw_dec = (
+            arguments["decisions"] if "decisions" in arguments else nested_dict.get("decisions")
+        )
+        decisions = _clean_decisions_list(
+            raw_dec, origin_utc=origin_utc, segments=segments, keyframes=keyframes
+        )
+    if has_topics:
+        raw_top = arguments["topics"] if "topics" in arguments else nested_dict.get("topics")
+        topics = _clean_topics_list(
+            raw_top, origin_utc=origin_utc, segments=segments, keyframes=keyframes
+        )
+    if has_actions:
+        raw_act = (
+            arguments["action_items"]
+            if "action_items" in arguments
+            else nested_dict.get("action_items")
+        )
+        action_items = _clean_actions_list(
+            raw_act, origin_utc=origin_utc, segments=segments, keyframes=keyframes
+        )
+
+    if not (summary_text or decisions or topics or action_items):
+        return True, None
+    merged: dict[str, Any] = {
+        "summary": summary_text,
+        "decisions": decisions,
+        "topics": topics,
+        "action_items": action_items,
+        "generated_at": datetime.now(UTC).isoformat(),
     }
+    return True, merged
 
 
 def _execute_tool_sync(
@@ -665,106 +795,180 @@ def _execute_tool_sync(
         limit = max(1, min(50, _parse_int(arguments.get("limit"), 20, "limit")))
         q_str = str(arguments.get("query") or "").strip()
         provider = str(arguments["provider"]) if arguments.get("provider") else None
-        participation = str(arguments.get("participation") or "").strip() or None
-        processing = str(arguments.get("processing") or "").strip() or None
+        status_filter = str(arguments.get("status") or "").strip().lower() or None
+        since_dt = _parse_date_bound(arguments.get("since"), "since", is_upper=False)
+        until_dt = _parse_date_bound(arguments.get("until"), "until", is_upper=True)
 
+        base_stmt = select(Recording).where(Recording.metadata_deleted_at.is_(None))
+        if since_dt is not None:
+            base_stmt = base_stmt.where(Recording.ends_at >= since_dt)
+        if until_dt is not None:
+            base_stmt = base_stmt.where(Recording.starts_at <= until_dt)
+        if status_filter == "upcoming":
+            base_stmt = base_stmt.where(Recording.participation == "scheduled")
+        elif status_filter == "active":
+            base_stmt = base_stmt.where(
+                or_(
+                    ~Recording.participation.in_(("scheduled", "ended")),
+                    Recording.processing == "processing",
+                )
+            )
+        elif status_filter == "completed":
+            base_stmt = base_stmt.where(Recording.processing == "completed")
+        elif status_filter == "failed":
+            base_stmt = base_stmt.where(
+                or_(
+                    Recording.processing == "failed",
+                    and_(
+                        Recording.participation == "ended",
+                        Recording.processing != "completed",
+                        Recording.participation_reason != "cancelled",
+                    ),
+                )
+            )
+        elif status_filter is not None:
+            raise ValueError(
+                f"Invalid status {status_filter!r}; expected upcoming, active, completed, failed."
+            )
+
+        # Match query against title/segments/streams OR curated protocol_meta (summary/notes/terms)
         stmt, empty_for_principal = apply_recordings_search_filters(
-            select(Recording).where(Recording.metadata_deleted_at.is_(None)),
+            base_stmt,
             principal=principal,
             provider=provider,
-            participation=participation,
-            processing=processing,
-            q=q_str or None,
+            q=None,
         )
         if empty_for_principal:
-            return _tool_result("No recordings found.", {"items": [], "count": 0})
+            return _tool_result("No recordings found.")
+        if q_str:
+            seg_stmt, _ = apply_recordings_search_filters(
+                select(Recording.id).where(Recording.metadata_deleted_at.is_(None)),
+                principal=principal,
+                q=q_str,
+            )
+            needle = f"%{q_str}%"
+            stmt = stmt.where(
+                or_(
+                    Recording.id.in_(seg_stmt),
+                    Recording.protocol_meta["summary"].astext.ilike(needle),
+                    Recording.protocol_meta["notes"].astext.ilike(needle),
+                    Recording.protocol_meta["term_replacements"].astext.ilike(needle),
+                    Recording.protocol_meta["speaker_overrides"].astext.ilike(needle),
+                )
+            )
+
         rows = db.scalars(
             stmt.order_by(desc(Recording.starts_at), desc(Recording.id)).limit(limit)
         ).all()
-        items = []
-        lines = []
-        for rec in rows:
-            meta = rec.protocol_meta if isinstance(rec.protocol_meta, dict) else {}
-            item = {
-                "id": str(rec.id),
-                "title": rec.title or f"{rec.provider} meeting",
-                "provider": rec.provider,
-                "starts_at": rec.starts_at.isoformat(),
-                "ends_at": rec.ends_at.isoformat(),
-                "participation": rec.participation,
-                "processing": rec.processing,
-                "summary_available": bool(meta.get("summary")),
-                "audio_snippets_available": rec.audio_deleted_at is None,
-                "ui_url": f"{origin}/ui#view=meetings&id={rec.id}",
-            }
-            items.append(item)
+        if not rows:
+            return _tool_result("No matching recordings found.")
+
+        needle_lower = q_str.lower()
+        lines = [f"Found {len(rows)} recording(s):"]
+        for idx, rec in enumerate(rows):
+            title = rec.title or f"{rec.provider} meeting"
             lines.append(
-                f"- **{item['title']}** (`{item['id']}`) · {rec.provider} · "
-                f"{rec.starts_at.strftime('%Y-%m-%d %H:%M UTC')} · "
-                f"participation=`{rec.participation}`, processing=`{rec.processing}`"
+                f"- **{title}** (`{rec.id}`) · {rec.provider} · "
+                f"{rec.starts_at.strftime('%Y-%m-%d %H:%M UTC')} · {_human_status_label(rec)}"
             )
-        summary_text = (
-            f"Found {len(items)} recording(s):\n" + "\n".join(lines)
-            if items
-            else "No matching recordings found."
-        )
-        return _tool_result(summary_text, {"items": items, "count": len(items)})
+            if needle_lower and idx < 10:
+                lines.extend(_extract_query_snippets(db, rec, needle_lower))
+        return _tool_result("\n".join(lines))
 
     if name == "get_recording":
         rec_id = _parse_uuid(arguments.get("recording_id"))
         rec = _get_accessible_recording(db, principal, rec_id)
-        meta = dict(rec.protocol_meta or {})
-        transcript_info: dict[str, Any] = {
-            "segment_count": 0,
-            "keyframe_count": 0,
-            "pause_window_count": 0,
-            "speakers": [],
-        }
-        keyframes_out: list[dict[str, Any]] = []
-        pause_windows_out: list[dict[str, Any]] = []
-        detected_langs: list[str] = []
-        if rec.transcript_deleted_at is None:
-            exp = export_data(db, rec)
-            segs = exp.get("segments") or []
-            detected_langs = list(exp.get("detected_languages") or [])
-            keyframes_out = [_mcp_keyframe_item(rec.id, kf) for kf in (exp.get("keyframes") or [])]
-            pause_windows_out = list(exp.get("pause_windows") or [])
-            speakers = sorted(
-                {str(s.get("speaker_label") or s.get("speaker_name") or "Unknown") for s in segs}
-            )
-            transcript_info = {
-                "segment_count": len(segs),
-                "keyframe_count": len(keyframes_out),
-                "pause_window_count": len(pause_windows_out),
-                "speakers": speakers,
-                "detected_languages": detected_langs,
-                "opted_out_speakers": exp.get("opted_out_speakers") or [],
-            }
-        payload = {
-            "id": str(rec.id),
-            "title": rec.title,
-            "provider": rec.provider,
-            "language": effective_recording_language(rec, get_settings()),
-            "detected_languages": detected_langs,
-            "owner_email": rec.owner_email,
-            "starts_at": rec.starts_at.isoformat(),
-            "ends_at": rec.ends_at.isoformat(),
-            "participation": rec.participation,
-            "participation_reason": rec.participation_reason,
-            "processing": rec.processing,
-            "processing_error": rec.processing_error,
-            "audio_snippets_available": rec.audio_deleted_at is None,
-            "transcript_expired": rec.transcript_deleted_at is not None,
-            "summary": meta.get("summary"),
-            "notes": meta.get("notes") or "",
-            "speaker_overrides": meta.get("speaker_overrides") or {},
-            "term_replacements": meta.get("term_replacements") or {},
-            "transcript": transcript_info,
-            "keyframes": keyframes_out,
-            "pause_windows": pause_windows_out,
-            "ui_url": f"{origin}/ui#view=meetings&id={rec.id}",
-        }
-        return _tool_result(json.dumps(payload, ensure_ascii=False, indent=2), payload)
+        title = rec.title or f"{rec.provider} meeting"
+        lang = effective_recording_language(rec, get_settings())
+        lines = [
+            f"# {title}",
+            f"- ID: `{rec.id}`",
+            f"- Provider: `{rec.provider}` · Language: `{lang}`",
+            f"- Scheduled: {rec.starts_at.strftime('%Y-%m-%d %H:%M')}–"
+            f"{rec.ends_at.strftime('%H:%M UTC')}",
+            f"- Status: {_human_status_label(rec)}",
+            f"- UI: {origin}/ui#view=meetings&id={rec.id}",
+        ]
+        if rec.transcript_deleted_at is not None:
+            lines.append("\n_Transcript retention window has expired._")
+            return _tool_result("\n".join(lines))
+
+        exp = export_data(db, rec)
+        segs: list[dict[str, Any]] = list(exp.get("segments") or [])
+        keyframes: list[dict[str, Any]] = list(exp.get("keyframes") or [])
+        pause_windows: list[dict[str, Any]] = list(exp.get("pause_windows") or [])
+        speakers = sorted(
+            {str(s.get("speaker_label") or s.get("speaker_name") or "Unknown") for s in segs}
+        )
+        lines.append(
+            f"- Segments: {len(segs)} · Keyframes: {len(keyframes)} · "
+            f"Pause windows: {len(pause_windows)}"
+        )
+        if speakers:
+            lines.append(f"- Speakers ({len(speakers)}): {', '.join(speakers)}")
+
+        summary = exp.get("summary")
+        if isinstance(summary, dict):
+            if summary.get("summary"):
+                lines.extend(["", "## Summary", str(summary["summary"])])
+            decisions = summary.get("decisions") or []
+            if decisions:
+                lines.extend(["", "## Decisions"])
+                for d in decisions:
+                    lines.append(f"- ✓ {d['text']}{_format_citation_tag(d)}")
+            topics = summary.get("topics") or []
+            if topics:
+                lines.extend(["", "## Topics"])
+                for t in topics:
+                    t_title = t.get("title") or ""
+                    t_det = t.get("details") or ""
+                    body = (
+                        f"**{t_title}**: {t_det}"
+                        if t_title and t_det
+                        else (f"**{t_title}**" if t_title else t_det)
+                    )
+                    lines.append(f"- {body}{_format_citation_tag(t)}")
+            actions = summary.get("action_items") or []
+            if actions:
+                lines.extend(["", "## Action Items"])
+                for a in actions:
+                    due = f" _(due: {a['due']})_" if a.get("due") else ""
+                    lines.append(
+                        f"- [ ] **{a.get('owner') or 'Team'}**: {a['task']}"
+                        f"{due}{_format_citation_tag(a)}"
+                    )
+
+        notes = str(exp.get("notes") or "").strip()
+        if notes:
+            lines.extend(["", "## Notes", notes])
+
+        if pause_windows:
+            lines.extend(["", "## Off-the-Record Pause Windows"])
+            for pw in pause_windows:
+                s_ts = short_timestamp(float(pw.get("offset_seconds") or 0.0))
+                end_off = pw.get("end_offset_seconds")
+                e_ts = short_timestamp(float(end_off)) if end_off is not None else "ongoing"
+                by = f" ({pw.get('by')})" if pw.get("by") else ""
+                lines.append(f"- [{s_ts}–{e_ts}] Off-the-Record{by}")
+
+        if keyframes:
+            lines.extend(["", "## Screen-Share Keyframes"])
+            for kf in keyframes:
+                off = int(round(float(kf.get("offset_seconds") or 0.0)))
+                ts = kf.get("wall_clock") or short_timestamp(off)
+                uri = f"wortlaut://recordings/{rec.id}/keyframes/{kf['id']}.png"
+                vc = kf.get("visual_context")
+                vc_summary = (
+                    f" — {vc['summary']}"
+                    if isinstance(vc, dict) and vc.get("summary")
+                    else ""
+                )
+                lines.append(
+                    f"- [{ts} / +{off}s] **{kf.get('presenter') or 'Screen'}** "
+                    f"(keyframe_id=`{kf['id']}`, `{uri}`){vc_summary}"
+                )
+
+        return _tool_result("\n".join(lines))
 
     if name == "get_transcript":
         rec_id = _parse_uuid(arguments.get("recording_id"))
@@ -772,6 +976,7 @@ def _execute_tool_sync(
         if rec.transcript_deleted_at is not None:
             return _tool_error("Transcript retention window has expired for this recording.")
         exp = export_data(db, rec)
+        origin_utc = exp.get("time_origin_utc")
         all_segments: list[dict[str, Any]] = list(exp.get("segments") or [])
         all_keyframes: list[dict[str, Any]] = list(exp.get("keyframes") or [])
         all_pauses: list[dict[str, Any]] = list(exp.get("pause_windows") or [])
@@ -781,7 +986,7 @@ def _execute_tool_sync(
         start_sec = _parse_float(arguments.get("start_seconds"), "start_seconds")
         end_sec = _parse_float(arguments.get("end_seconds"), "end_seconds")
         offset = max(0, _parse_int(arguments.get("offset"), 0, "offset"))
-        limit = max(1, min(250, _parse_int(arguments.get("limit"), 100, "limit")))
+        limit = max(1, min(250, _parse_int(arguments.get("limit"), 80, "limit")))
 
         filtered = []
         for seg in all_segments:
@@ -811,13 +1016,21 @@ def _execute_tool_sync(
             pres = str(kf.get("presenter") or "").lower()
             pid = str(kf.get("participant_id") or "").lower()
             kf_offset = float(kf.get("offset_seconds") or 0.0)
+            vc_text = ""
+            if isinstance(kf.get("visual_context"), dict):
+                vc_text = (
+                    f"{kf['visual_context'].get('summary') or ''} "
+                    f"{' '.join(kf['visual_context'].get('terms') or [])}"
+                ).lower()
             if speaker_filter and speaker_filter not in pres and speaker_filter not in pid:
+                continue
+            if query_filter and query_filter not in pres and query_filter not in vc_text:
                 continue
             if start_sec is not None and kf_offset < float(start_sec):
                 continue
             if end_sec is not None and kf_offset > float(end_sec):
                 continue
-            out_keyframes.append(_mcp_keyframe_item(rec.id, kf))
+            out_keyframes.append(kf)
 
         out_pauses = []
         for pw in all_pauses:
@@ -832,38 +1045,40 @@ def _execute_tool_sync(
 
         total_matching = len(filtered)
         page = filtered[offset : offset + limit]
-        audio_available = rec.audio_deleted_at is None
-        out_segments = []
+        next_hint = (
+            f" · next offset={offset + len(page)}"
+            if (offset + len(page)) < total_matching
+            else ""
+        )
         md_lines = [
             f"# {rec.title or rec.provider} ({rec.starts_at.strftime('%Y-%m-%d %H:%M UTC')})",
-            f"Showing {len(page)} of {total_matching} matching segment(s) (offset={offset}):\n",
+            f"Showing {len(page)} of {total_matching} segment(s) (offset={offset}{next_hint}):\n",
         ]
+        if total_matching == 0 and speaker_filter and all_segments:
+            known_speakers = sorted(
+                {
+                    str(s.get("speaker_label") or s.get("speaker_name") or "Unknown")
+                    for s in all_segments
+                }
+            )
+            md_lines.append(
+                f"No segments matched speaker={arguments.get('speaker')!r}. "
+                f"Available speakers: {', '.join(known_speakers)}."
+            )
         for seg in page:
-            s_start = round(float(seg.get("start") or 0.0), 2)
-            s_end = round(float(seg.get("end") or 0.0), 2)
+            s_start = float(seg.get("start") or 0.0)
             speaker_label = str(
                 seg.get("speaker_label")
                 or seg.get("speaker_name")
                 or ("Unbound Speaker" if seg.get("attribution_unknown") else "Speaker")
             )
-            stream_id = str(seg.get("stream_id") or "")
-            item: dict[str, Any] = {
-                "segment_id": seg.get("segment_id") or seg.get("id"),
-                "speaker": speaker_label,
-                "speaker_id": seg.get("speaker_id"),
-                "attribution_unknown": bool(seg.get("attribution_unknown")),
-                "start": s_start,
-                "end": s_end,
-                "timestamp": f"{short_timestamp(s_start)}-{short_timestamp(s_end)}",
-                "text": seg.get("text") or "",
-            }
-            if audio_available and stream_id:
-                item["audio_snippet_path"] = (
-                    f"/v1/recordings/{rec.id}/audio-snippet"
-                    f"?start={s_start}&end={max(s_end, s_start + 0.5)}&stream_id={stream_id}"
-                )
-            out_segments.append(item)
-            md_lines.append(f"[{item['timestamp']}] **{speaker_label}**: {item['text']}")
+            clock_label = (
+                wall_clock_time_de(origin_utc, s_start) if origin_utc else short_timestamp(s_start)
+            )
+            md_lines.append(
+                f"[{clock_label} / +{int(round(s_start))}s] **{speaker_label}**: "
+                f"{seg.get('text') or ''}"
+            )
 
         if out_pauses:
             md_lines.append("\nOff-the-record pause windows:")
@@ -872,69 +1087,59 @@ def _execute_tool_sync(
                 end_off = pw.get("end_offset_seconds")
                 e_ts = short_timestamp(float(end_off)) if end_off is not None else "ongoing"
                 by = f" ({pw.get('by')})" if pw.get("by") else ""
-                md_lines.append(f"- [{s_ts}-{e_ts}] **OFF THE RECORD{by}**")
+                md_lines.append(f"- [{s_ts}–{e_ts}] **OFF THE RECORD{by}**")
 
         if out_keyframes:
             md_lines.append("\nScreen-share keyframes:")
             for kf in out_keyframes:
-                ts = short_timestamp(float(kf.get("offset_seconds") or 0.0))
+                off = int(round(float(kf.get("offset_seconds") or 0.0)))
+                ts = kf.get("wall_clock") or short_timestamp(off)
+                uri = f"wortlaut://recordings/{rec.id}/keyframes/{kf['id']}.png"
+                vc = kf.get("visual_context")
+                vc_summary = (
+                    f" — {vc['summary']}"
+                    if isinstance(vc, dict) and vc.get("summary")
+                    else ""
+                )
                 md_lines.append(
-                    f"- [{ts}] **{kf.get('presenter')}**: `{kf['resource_uri']}` "
-                    f"({kf.get('width')}x{kf.get('height')})"
+                    f"- [{ts} / +{off}s] **{kf.get('presenter') or 'Screen'}** "
+                    f"(keyframe_id=`{kf['id']}`, `{uri}`){vc_summary}"
                 )
 
-        structured = {
-            "recording_id": str(rec.id),
-            "title": rec.title,
-            "language": exp.get("language") or effective_recording_language(rec, get_settings()),
-            "detected_languages": list(exp.get("detected_languages") or []),
-            "total_matching": total_matching,
-            "offset": offset,
-            "returned": len(out_segments),
-            "audio_snippets_available": audio_available,
-            "ui_url": f"{origin}/ui#view=meetings&id={rec.id}",
-            "segments": out_segments,
-            "keyframes": out_keyframes,
-            "pause_windows": out_pauses,
-        }
-        return _tool_result("\n".join(md_lines), structured)
+        return _tool_result("\n".join(md_lines))
 
-    if name == "export_protocol":
-        rec_id = _parse_uuid(arguments.get("recording_id"))
-        fmt = str(arguments.get("format") or "md").strip().lower()
-        if fmt not in ("md", "txt", "vtt", "json"):
-            return _tool_error("format must be one of: md, txt, vtt, json")
+    if name == "get_keyframe":
+        rec_id = _parse_uuid(arguments.get("recording_id"), "recording_id")
+        kf_id = _parse_uuid(arguments.get("keyframe_id"), "keyframe_id")
         rec = _get_accessible_recording(db, principal, rec_id)
         if rec.transcript_deleted_at is not None:
             return _tool_error("Transcript retention window has expired for this recording.")
-        if rec.processing not in ("completed", "failed"):
-            return _tool_error(f"Recording processing is still '{rec.processing}'.")
-        rendered, media_type = render_export(export_data(db, rec), fmt)
-        text_out = rendered.decode("utf-8") if isinstance(rendered, bytes) else str(rendered)
+        kf, png_bytes = _load_verified_keyframe(db, rec, kf_id)
+        exp = export_data(db, rec)
+        kf_meta = next(
+            (item for item in (exp.get("keyframes") or []) if item.get("id") == str(kf.id)),
+            None,
+        )
+        off = int(round(float((kf_meta or {}).get("offset_seconds") or 0.0)))
+        ts = (kf_meta or {}).get("wall_clock") or short_timestamp(off)
+        presenter = (kf_meta or {}).get("presenter") or kf.participant_name or "Screen"
+        caption_lines = [
+            f"Keyframe `{kf.id}` · [{ts} / +{off}s] · Presenter: **{presenter}** "
+            f"({kf.width}×{kf.height})"
+        ]
+        vc = (kf_meta or {}).get("visual_context")
+        if isinstance(vc, dict):
+            if vc.get("summary"):
+                caption_lines.append(f"Slide context: {vc['summary']}")
+            if vc.get("terms"):
+                caption_lines.append(f"Visible terms: {', '.join(str(t) for t in vc['terms'])}")
+        b64_png = base64.b64encode(png_bytes).decode("ascii")
         return _tool_result(
-            text_out,
-            {"recording_id": str(rec.id), "format": fmt, "media_type": media_type},
+            "\n".join(caption_lines),
+            extra_content=[
+                mcp_types.ImageContent(type="image", data=b64_png, mimeType="image/png")
+            ],
         )
-
-    if name == "list_calendar_events":
-        include_past = _parse_bool(arguments.get("include_past"), "include_past", default=False)
-        limit = max(1, min(100, _parse_int(arguments.get("limit"), 30, "limit")))
-        overview = query_calendar_overview(
-            db,
-            principal,
-            datetime.now(UTC),
-            include_past=include_past,
-            synced_upcoming_limit=limit,
-            synced_past_limit=0,
-            ics_limit=limit,
-            match_unlinked_urls=False,
-        )
-        payload = {
-            "connections": overview["connections"],
-            "synced_events": overview["synced_events"],
-            "ics_events": overview["events"][:limit],
-        }
-        return _tool_result(json.dumps(payload, ensure_ascii=False, indent=2), payload)
 
     if name == "schedule_recording":
         raw_url = str(arguments.get("meeting_url") or "").strip()
@@ -951,9 +1156,15 @@ def _execute_tool_sync(
             try:
                 starts_at = datetime.fromisoformat(str(raw_starts))
             except ValueError:
-                return _tool_error("starts_at must be a valid ISO-8601 datetime with timezone.")
+                return _tool_error(
+                    "starts_at must be a valid ISO-8601 datetime with timezone "
+                    "(e.g. '2026-11-20T14:00:00+01:00' or 'Z'); omit starts_at to join now."
+                )
             if starts_at.tzinfo is None:
-                return _tool_error("starts_at requires an explicit timezone (e.g. Z or +01:00).")
+                return _tool_error(
+                    "starts_at requires an explicit timezone offset (e.g. 'Z' or '+01:00'); "
+                    "omit starts_at to join immediately."
+                )
             starts_at = starts_at.astimezone(UTC)
         else:
             starts_at = now
@@ -963,7 +1174,6 @@ def _execute_tool_sync(
         )
         ends_at = starts_at + timedelta(minutes=duration_min)
         title = " ".join(str(arguments.get("title") or "").split())[:200] or None
-        guest_name = " ".join(str(arguments.get("guest_name") or "").split())[:120] or None
         raw_lang = arguments.get("language")
         norm_lang: str | None = None
         if raw_lang is not None and str(raw_lang).strip():
@@ -985,8 +1195,6 @@ def _execute_tool_sync(
             digest_payload["provider"] = provider
         if title is not None:
             digest_payload["title"] = title
-        if guest_name is not None:
-            digest_payload["guest_name"] = guest_name
         if norm_lang is not None:
             digest_payload["language"] = norm_lang
         digest = hashlib.sha256(json.dumps(digest_payload, sort_keys=True).encode()).hexdigest()
@@ -1003,7 +1211,6 @@ def _execute_tool_sync(
             meeting_url=normalized_url,
             provider=provider,
             title=title,
-            guest_name=guest_name,
             owner_sub=principal.sub,
             owner_email=principal.email.lower() if principal.email else None,
             starts_at=starts_at,
@@ -1017,20 +1224,10 @@ def _execute_tool_sync(
             db.rollback()
             return _tool_error("Conflicting recording schedule request.")
 
-        out = {
-            "id": str(rec.id),
-            "provider": rec.provider,
-            "title": rec.title,
-            "language": effective_recording_language(rec, get_settings()),
-            "starts_at": rec.starts_at.isoformat(),
-            "ends_at": rec.ends_at.isoformat(),
-            "participation": rec.participation,
-            "ui_url": f"{origin}/ui#view=meetings&id={rec.id}",
-        }
         return _tool_result(
             f"Scheduled {rec.provider} recording `{rec.id}` "
-            f"({rec.starts_at.isoformat()} -> {rec.ends_at.isoformat()}).",
-            out,
+            f"({rec.starts_at.isoformat()} -> {rec.ends_at.isoformat()}) · "
+            f"{origin}/ui#view=meetings&id={rec.id}"
         )
 
     if name == "cancel_recording":
@@ -1040,12 +1237,9 @@ def _execute_tool_sync(
         if rec is None:
             return _tool_error(f"Recording {rec_id} not found.")
         db.commit()
-        out = {
-            "id": str(rec.id),
-            "participation": rec.participation,
-            "cancelled_at": rec.cancelled_at.isoformat() if rec.cancelled_at else None,
-        }
-        return _tool_result(f"Cancelled recording `{rec.id}`.", out)
+        return _tool_result(
+            f"Cancelled recording `{rec.id}` (participation=`{rec.participation}`)."
+        )
 
     if name == "update_protocol":
         rec_id = _parse_uuid(arguments.get("recording_id"))
@@ -1074,65 +1268,27 @@ def _execute_tool_sync(
                     else None
                 ),
             )
+            exp = export_data(db, rec)
+            touched_summary, merged_summary = _merge_mcp_summary_fields(
+                meta.get("summary"),
+                arguments,
+                origin_utc=exp.get("time_origin_utc"),
+                segments=exp.get("segments") or [],
+                keyframes=exp.get("keyframes") or [],
+            )
+            if touched_summary:
+                if merged_summary is not None:
+                    meta["summary"] = merged_summary
+                else:
+                    meta.pop("summary", None)
         except ValueError as exc:
             return _tool_error(str(exc))
         rec.protocol_meta = meta
         db.commit()
-        out = {
-            "id": str(rec.id),
-            "title": rec.title,
-            "language": effective_recording_language(rec, get_settings()),
-            "notes": meta.get("notes") or "",
-            "speaker_overrides": meta.get("speaker_overrides") or {},
-            "term_replacements": meta.get("term_replacements") or {},
-        }
-        return _tool_result(f"Updated protocol metadata for `{rec.id}`.", out)
-
-    if name == "generate_summary":
-        if not get_settings().enable_llm_summary:
-            return _tool_error(
-                "Local LLM summary is disabled on this instance "
-                "(WORTLAUT_ENABLE_LLM_SUMMARY=false)."
-            )
-        rec_id = _parse_uuid(arguments.get("recording_id"))
-        rec = _get_accessible_recording(db, principal, rec_id)
-        if rec.transcript_deleted_at is not None:
-            return _tool_error("Transcript retention window has expired for this recording.")
-        try:
-            summary = generate_protocol_summary(db, rec.id)
-        except RuntimeError as exc:
-            return _tool_error(f"Local LLM summary failed: {exc}")
-        try:
-            fresh_rec = db.get(Recording, rec.id)
-            if fresh_rec is not None:
-                publish_protocol_link_to_calendar_events(db, fresh_rec)
-                db.commit()
-        except Exception:
-            db.rollback()
         return _tool_result(
-            json.dumps(summary, ensure_ascii=False, indent=2),
-            {"recording_id": str(rec.id), "summary": summary},
+            f"Updated protocol `{rec.id}` "
+            f"(title={rec.title!r}, language={effective_recording_language(rec, get_settings())})."
         )
-
-    if name == "toggle_calendar_event_recording":
-        ev_id = _parse_uuid(arguments.get("event_id"), "event_id")
-        enabled = _parse_bool(arguments.get("enabled"), "enabled")
-        try:
-            res = toggle_synced_event(db, principal, ev_id, enabled)
-        except HTTPException as exc:
-            return _tool_error(str(exc.detail))
-        return _tool_result(json.dumps(res, ensure_ascii=False, indent=2), res)
-
-    if name == "publish_calendar_protocol_link":
-        rec_id = _parse_uuid(arguments.get("recording_id"))
-        rec = _get_accessible_recording(db, principal, rec_id)
-        if rec.processing != "completed":
-            return _tool_error(f"Recording processing is '{rec.processing}' (must be 'completed').")
-        res = publish_protocol_link_to_calendar_events(db, rec, force_empty_audio=True)
-        db.commit()
-        if res.get("status") in ("no_matching_calendar_event", "error"):
-            return _tool_error(f"Calendar update failed: {res.get('error') or res.get('status')}")
-        return _tool_result(json.dumps(res, ensure_ascii=False, indent=2), res)
 
     raise McpError(
         mcp_types.ErrorData(code=mcp_types.INVALID_PARAMS, message=f"Unknown tool: {name}")
@@ -1196,7 +1352,7 @@ async def _sdk_list_resources() -> list[mcp_types.Resource]:
         mcp_types.Resource(
             uri=AnyUrl(f"wortlaut://recordings/{r.id}/protocol.md"),
             name=r.title or f"{r.provider} ({r.starts_at.strftime('%Y-%m-%d %H:%M UTC')})",
-            description=f"Markdown protocol for {r.provider} meeting on {r.starts_at.isoformat()}",
+            description=f"Markdown protocol ({r.provider}, {r.starts_at.strftime('%Y-%m-%d')})",
             mimeType="text/markdown",
         )
         for r in recs
@@ -1213,15 +1369,9 @@ async def _sdk_list_resource_templates() -> list[mcp_types.ResourceTemplate]:
             mimeType="text/markdown",
         ),
         mcp_types.ResourceTemplate(
-            uriTemplate="wortlaut://recordings/{recording_id}/transcript.json",
-            name="Meeting Transcript (JSON)",
-            description="Structured speaker-attributed transcript segments.",
-            mimeType="application/json",
-        ),
-        mcp_types.ResourceTemplate(
             uriTemplate="wortlaut://recordings/{recording_id}/keyframes/{keyframe_id}.png",
             name="Screen-Share Slide Keyframe (PNG)",
-            description="Settled static PNG snapshot captured from an active screen share.",
+            description="Static PNG snapshot captured from an active screen share.",
             mimeType="image/png",
         ),
     ]
@@ -1259,7 +1409,7 @@ async def _sdk_read_resource(uri_obj: AnyUrl) -> list[ReadResourceContents]:
         and subpath.endswith(".png")
         and "/" not in subpath.removeprefix("keyframes/")
     )
-    if subpath not in ("protocol.md", "transcript.json") and not is_keyframe_uri:
+    if subpath != "protocol.md" and not is_keyframe_uri:
         raise McpError(
             mcp_types.ErrorData(
                 code=mcp_types.INVALID_PARAMS, message=f"Invalid wortlaut resource path: {uri}"
@@ -1277,86 +1427,14 @@ async def _sdk_read_resource(uri_obj: AnyUrl) -> list[ReadResourceContents]:
     if is_keyframe_uri:
         raw_kf_id = subpath.removeprefix("keyframes/").removesuffix(".png")
         try:
-            kf_id = _parse_uuid(raw_kf_id)
-        except ValueError as exc:
+            kf_id = _parse_uuid(raw_kf_id, "keyframe_id")
+            _, png_bytes = _load_verified_keyframe(scope.db, rec, kf_id)
+        except (ValueError, LookupError) as exc:
             raise McpError(mcp_types.ErrorData(code=-32002, message=str(exc))) from None
-        kf = scope.db.get(RecordingKeyframe, kf_id)
-        if (
-            kf is None
-            or kf.recording_id != rec.id
-            or kf.deleted_at is not None
-            or not kf.object_key
-            or is_keyframe_opted_out(scope.db, rec, kf)
-        ):
-            raise McpError(mcp_types.ErrorData(code=-32002, message="Keyframe not found"))
-        try:
-            png_bytes = get_storage().read(kf.object_key)
-        except (ClientError, ObjectConflict):
-            raise McpError(mcp_types.ErrorData(code=-32002, message="Keyframe not found")) from None
-        if hashlib.sha256(png_bytes).hexdigest() != kf.sha256:
-            raise McpError(
-                mcp_types.ErrorData(code=-32002, message="Invalid keyframe object integrity")
-            )
         return [ReadResourceContents(content=png_bytes, mime_type="image/png")]
-    fmt = "md" if subpath == "protocol.md" else "json"
-    rendered, mime = render_export(export_data(scope.db, rec), fmt)
+    rendered, mime = render_export(export_data(scope.db, rec), "md")
     text_body = rendered.decode("utf-8") if isinstance(rendered, bytes) else str(rendered)
     return [ReadResourceContents(content=text_body, mime_type=mime.split(";", 1)[0])]
-
-
-@mcp_app.list_prompts()
-async def _sdk_list_prompts() -> list[mcp_types.Prompt]:
-    return _PROMPTS
-
-
-@mcp_app.get_prompt()
-async def _sdk_get_prompt(
-    name: str, arguments: dict[str, str] | None
-) -> mcp_types.GetPromptResult:
-    p_args = arguments or {}
-    rec_id = str(p_args.get("recording_id") or "").strip()
-    if name == "meeting_followup":
-        return mcp_types.GetPromptResult(
-            description="Follow-up summary with decisions and action items",
-            messages=[
-                mcp_types.PromptMessage(
-                    role="user",
-                    content=mcp_types.TextContent(
-                        type="text",
-                        text=(
-                            f"Call `get_recording` and `get_transcript` for `{rec_id}`. "
-                            "Produce a concise follow-up note with: (1) key decisions "
-                            "attributed to exact bound speakers, (2) concrete action items "
-                            "with owners, and (3) open questions or off-the-record "
-                            "`pause_windows`."
-                        ),
-                    ),
-                )
-            ],
-        )
-    if name == "decision_audit":
-        topic = str(p_args.get("topic") or "").strip()
-        topic_clause = f" focusing on '{topic}'" if topic else ""
-        return mcp_types.GetPromptResult(
-            description="Verbatim decision audit with timestamps",
-            messages=[
-                mcp_types.PromptMessage(
-                    role="user",
-                    content=mcp_types.TextContent(
-                        type="text",
-                        text=(
-                            f"Inspect `{rec_id}` using `get_transcript`{topic_clause}. "
-                            "Quote exact verbatim statements with `[MM:SS]` timestamps and "
-                            "bound speaker names, noting any `attribution_unknown` or "
-                            "`pause_windows`."
-                        ),
-                    ),
-                )
-            ],
-        )
-    raise McpError(
-        mcp_types.ErrorData(code=mcp_types.INVALID_PARAMS, message=f"Unknown prompt: {name}")
-    )
 
 
 async def _dispatch_via_mcp_sdk(
@@ -1379,19 +1457,16 @@ async def _dispatch_via_mcp_sdk(
             capabilities=mcp_types.ServerCapabilities(
                 tools=mcp_types.ToolsCapability(listChanged=False),
                 resources=mcp_types.ResourcesCapability(subscribe=False, listChanged=False),
-                prompts=mcp_types.PromptsCapability(listChanged=False),
             ),
             serverInfo=mcp_types.Implementation(
                 name=get_settings().assistant_name,
                 version="0.1.0",
             ),
             instructions=(
-                "wortlaut provides pre-mix WebRTC speaker-isolated meeting transcripts "
-                "(Google Meet, Microsoft Teams, Cisco Webex, Zoom) scoped to the authenticated "
-                "user. Prefer get_transcript with pagination or filters for verbatim speaker "
-                "statements, off-the-record pause_windows (#pause / #resume), and settled "
-                "screen-share keyframes (readable as image/png via "
-                "wortlaut://recordings/{id}/keyframes/{kf_id}.png)."
+                "Speaker-isolated meeting protocols (Meet, Teams, Webex, Zoom). "
+                "Use list_recordings (supports query + since/until) to find meetings, "
+                "get_recording for summary/decisions/tasks, get_transcript for verbatim quotes, "
+                "and get_keyframe to view shared slides as PNG images."
             ),
         )
         return (
@@ -1415,8 +1490,6 @@ async def _dispatch_via_mcp_sdk(
             "resources/list",
             "resources/templates/list",
             "resources/read",
-            "prompts/list",
-            "prompts/get",
         }
         code = (
             mcp_types.INVALID_PARAMS
