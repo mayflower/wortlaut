@@ -1111,3 +1111,239 @@ def test_desktop_pip_face_anonymization_before_s3_persistence(client, database, 
     )
     assert retry.status_code == 200
     assert retry.json()["duplicate"] is True
+
+
+def test_keyframe_visual_context_enriches_asr_prompt_summary_and_purges_on_optout(
+    client, database, storage, monkeypatch
+):
+    from wortlaut import exports as exports_module
+    from wortlaut.asr import build_asr_context_prompt, keyframe_context_pass
+    from wortlaut.models import AsrJob, Attempt, AudioStream, Recording, TranscriptSegment
+    from wortlaut.settings import get_settings
+
+    monkeypatch.setenv("WORTLAUT_ENABLE_LLM_SUMMARY", "true")
+    monkeypatch.setenv("WORTLAUT_OLLAMA_URL", "http://ollama.local:11434")
+    get_settings.cache_clear()
+    try:
+        op_hdrs = {"Authorization": "Bearer fixture-api-token"}
+        rec_id, att_id, cred = _create_claimed_attempt(client, op_hdrs)
+        t0 = datetime(2026, 11, 19, 9, 0, 0, tzinfo=UTC)
+        worker_hdrs = {
+            "Authorization": f"Bearer {cred}",
+            "X-Worker-ID": "worker-kf-1",
+            "Content-Type": "image/png",
+        }
+
+        # Upload two rapid frames 4s apart (scroll burst) + one settled frame 40s later
+        frames = [
+            (0, 10, _make_png(640, 360, (20, 30, 40))),
+            (1, 14, _make_png(640, 360, (30, 50, 70))),
+            (2, 55, _make_png(640, 360, (60, 80, 100))),
+        ]
+        uploaded_ids: list[str] = []
+        for seq, offset_s, blob in frames:
+            r = client.post(
+                f"/v1/attempts/{att_id}/keyframes",
+                headers={
+                    **worker_hdrs,
+                    "X-Wortlaut-Keyframe": _encode_meta_header(
+                        {
+                            "sequence": seq,
+                            "provider_source_id": "rtc:slides:board",
+                            "participant_id": "spaces/r/devices/presenter",
+                            "participant_name": "Johann Peter Hartmann",
+                            "captured_at": (t0 + timedelta(seconds=offset_s)).isoformat(),
+                            "width": 640,
+                            "height": 360,
+                            "sha256": hashlib.sha256(blob).hexdigest(),
+                        }
+                    ),
+                },
+                content=blob,
+            )
+            assert r.status_code == 201
+            uploaded_ids.append(r.json()["id"])
+
+        with Session(database) as db:
+            rec = db.get(Recording, rec_id)
+            att = db.get(Attempt, att_id)
+            rec.title = "Review Interne Projekte - Voicebot + mAIstack"
+            st = AudioStream(
+                attempt_id=att.id,
+                stream_id=uuid.uuid4(),
+                epoch=uuid.uuid4(),
+                contract={
+                    "provider_source_id": "rtc:audio:1",
+                    "source_kind": "speaker",
+                    "speaker_id": "spaces/r/devices/presenter",
+                    "participant_id": "spaces/r/devices/presenter",
+                    "participant_name": "Johann Peter Hartmann",
+                    "attribution_unknown": False,
+                    "session_utc_origin": t0.isoformat(),
+                    "monotonic_origin_ms": 0,
+                    "session_monotonic_origin_ms": 0,
+                },
+                final_sample=16000 * 90,
+                last_sequence=0,
+                scan_complete=True,
+            )
+            db.add(st)
+            db.flush()
+            job = AsrJob(
+                id="a" * 64,
+                stream_id=st.id,
+                start_sample=16000 * 20,
+                end_sample=16000 * 28,
+                core_start=16000 * 20,
+                core_end=16000 * 28,
+                binding={
+                    "provider_source_id": "rtc:audio:1",
+                    "source_kind": "speaker",
+                    "speaker_id": "spaces/r/devices/presenter",
+                    "participant_id": "spaces/r/devices/presenter",
+                    "participant_name": "Johann Peter Hartmann",
+                    "attribution_unknown": False,
+                },
+                status="completed",
+            )
+            db.add(job)
+            db.flush()
+            db.add(
+                TranscriptSegment(
+                    id=job.id,
+                    result={
+                        "id": job.id,
+                        "stream_id": str(st.stream_id),
+                        "epoch": str(st.epoch),
+                        **job.binding,
+                        "session_utc_origin": t0.isoformat(),
+                        "start": 20.0,
+                        "end": 28.0,
+                        "text": (
+                            "Der hier kann rüber in Progress, und für mAIstack "
+                            "planen wir den Lasttest."
+                        ),
+                        "words": [{"word": "Der", "confidence": 0.9}],
+                        "confidence": 0.9,
+                        "language": "German",
+                    },
+                )
+            )
+            att.ended_at = t0 + timedelta(seconds=90)
+            att.end_reason = "room_empty"
+            rec.active_attempt_id = None
+            rec.participation = "ended"
+            rec.processing = "pending"
+            db.commit()
+            stream_db_id = st.id
+            job_id = job.id
+
+        ollama_calls: list[dict] = []
+
+        class FakeOllamaResp:
+            status_code = 200
+
+            def __init__(self, payload: dict):
+                self._payload = payload
+
+            def json(self):
+                return {"message": {"content": json.dumps(self._payload)}}
+
+        vision_responses = [
+            {
+                "view": "Jira-Board mAIstack Sprint",
+                "items": [
+                    {"id": "MAIS-270", "title": "Unmaintainedtes Ragas durch DeepEval ersetzen"},
+                ],
+                "terms": ["mAIstack", "Ragas", "DeepEval"],
+            },
+            {
+                "view": "Jira-Board Spalte Ready to Implement",
+                "items": [
+                    {
+                        "id": "MAIS-156",
+                        "title": "mAIstack für 100 gleichzeitig aktive Nutzer skalieren",
+                    },
+                    {"id": "MAIS-211", "title": "Databricks Unity Catalog Functions-MCP"},
+                ],
+                "terms": ["Databricks", "Unity Catalog", "Bucketeer", "OFREP"],
+            },
+        ]
+
+        def fake_ollama_post(url, **kwargs):
+            body = kwargs.get("json") or {}
+            ollama_calls.append(body)
+            msgs = body.get("messages") or []
+            if msgs and msgs[-1].get("images"):
+                idx = min(len(vision_responses) - 1, len(ollama_calls) - 1)
+                return FakeOllamaResp(vision_responses[idx])
+            return FakeOllamaResp(
+                {
+                    "summary": "Review des mAIstack-Boards mit Status zu MAIS-270 und MAIS-156.",
+                    "topics": [
+                        {
+                            "title": "Evaluation & Skalierung (MAIS-270, MAIS-156)",
+                            "details": (
+                                "MAIS-270 wechselt in Progress; Lasttest für 100 Nutzer "
+                                "auf mAIstack geplant."
+                            ),
+                        }
+                    ],
+                    "action_items": [
+                        {
+                            "owner": "Johann Peter Hartmann",
+                            "task": "Lasttest-Konzept für mAIstack (MAIS-156) erstellen.",
+                            "due": "",
+                        }
+                    ],
+                }
+            )
+
+        monkeypatch.setattr(exports_module.httpx, "post", fake_ollama_post)
+
+        # Pass 1 skips rapid scroll frame #0 (4s before #1); Pass 2 & 3 extract #1 & #2
+        assert keyframe_context_pass(database) is True
+        assert keyframe_context_pass(database) is True
+        assert keyframe_context_pass(database) is True
+        assert keyframe_context_pass(database) is False
+        assert len(ollama_calls) == 2
+
+        with Session(database) as db:
+            rec = db.get(Recording, rec_id)
+            ctx_map = rec.protocol_meta["keyframe_context"]
+            assert ctx_map[uploaded_ids[0]] == {"skipped": True}
+            assert "MAIS-270: Unmaintainedtes Ragas durch DeepEval ersetzen" in (
+                ctx_map[uploaded_ids[1]]["items"]
+            )
+            st_row = db.get(AudioStream, stream_db_id)
+            job_row = db.get(AsrJob, job_id)
+            asr_prompt = build_asr_context_prompt(db, job_row, st_row, get_settings())
+            assert asr_prompt is not None
+            assert "Ragas" in asr_prompt and "DeepEval" in asr_prompt
+            assert "Databricks" in asr_prompt
+
+        # Summary reuses cached keyframe_context (0 extra vision calls -> 1 summary call total)
+        sum_res = client.post(f"/v1/recordings/{rec_id}/summary", headers=op_hdrs)
+        assert sum_res.status_code == 200
+        assert len(ollama_calls) == 3
+        summary_user_prompt = ollama_calls[-1]["messages"][1]["content"]
+        assert "Sichtbarer Bildschirmkontext" in summary_user_prompt
+        assert "MAIS-270: Unmaintainedtes Ragas durch DeepEval ersetzen" in summary_user_prompt
+        assert (
+            "MAIS-156: mAIstack für 100 gleichzeitig aktive Nutzer skalieren"
+            in summary_user_prompt
+        )
+        assert "OFREP" in summary_user_prompt
+
+        # Opting out the presenter purges keyframe_context from protocol_meta
+        opt_res = client.patch(
+            f"/v1/recordings/{rec_id}",
+            headers=op_hdrs,
+            json={"opted_out_speakers": ["Johann Peter Hartmann"]},
+        )
+        assert opt_res.status_code == 200
+        with Session(database) as db:
+            rec_after = db.get(Recording, rec_id)
+            assert "keyframe_context" not in (rec_after.protocol_meta or {})
+    finally:
+        get_settings.cache_clear()

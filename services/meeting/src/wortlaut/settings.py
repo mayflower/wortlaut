@@ -133,7 +133,7 @@ class Settings(BaseSettings):
     enable_llm_summary: bool = False
     ollama_url: str = "http://ollama.ollama.svc.cluster.local:11434"
     ollama_model: str = "qwen3.8:latest"
-    ollama_timeout_seconds: int = 120
+    ollama_timeout_seconds: int = 180
 
     @field_validator("asr_languages", mode="before")
     @classmethod

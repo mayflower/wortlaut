@@ -9,7 +9,9 @@ export const GLOBAL_MAD_THRESHOLD = 12.0;
 export const BLOCK_DELTA_THRESHOLD = 22.0;
 export const MIN_CHANGED_BLOCKS = 6;
 export const KEYFRAME_SETTLE_TICKS = 3;
+export const KEYFRAME_SUBSEQUENT_SETTLE_TICKS = 4;
 export const KEYFRAME_COOLDOWN_MS = 5000;
+export const RECENT_KEYFRAME_HISTORY = 5;
 export const MAX_KEYFRAMES_PER_RECORDING = 60;
 export const MAX_EXPORT_W = 1280;
 export const MAX_EXPORT_H = 720;
@@ -147,9 +149,11 @@ export class ScreenShareKeyframeSampler {
   private exportCtx: CanvasRenderingContext2D | null = null;
   private lastCommittedGrid: Uint8Array | null = null;
   private lastCommittedSourceKey: string | null = null;
+  private recentCommittedGrids: Uint8Array[] = [];
   private candidateGrid: Uint8Array | null = null;
   private candidateSourceKey: string | null = null;
   private candidateOnsetUtc: string | null = null;
+  private candidateOnsetMs: number | null = null;
   private stableTicks = 0;
   private lastCommittedAtMs: number | null = null;
   private nextSequence = 0;
@@ -200,6 +204,7 @@ export class ScreenShareKeyframeSampler {
     this.candidateGrid = null;
     this.candidateSourceKey = null;
     this.candidateOnsetUtc = null;
+    this.candidateOnsetMs = null;
     this.stableTicks = 0;
   }
 
@@ -248,14 +253,16 @@ export class ScreenShareKeyframeSampler {
 
     const sourceKey = `${source.participant_id}\0${source.provider_source_id}`;
     if (
-      this.lastCommittedGrid &&
       this.lastCommittedSourceKey === sourceKey &&
-      !gridsDiffer(grid, this.lastCommittedGrid)
+      ((this.lastCommittedGrid && !gridsDiffer(grid, this.lastCommittedGrid)) ||
+        this.recentCommittedGrids.some((prev) => !gridsDiffer(grid, prev)))
     ) {
+      this.lastCommittedGrid = grid;
       this.resetCandidate();
       return false;
     }
 
+    const tickNowMs = this.nowMs();
     if (
       this.candidateGrid &&
       this.candidateSourceKey === sourceKey &&
@@ -266,14 +273,18 @@ export class ScreenShareKeyframeSampler {
       this.candidateGrid = grid;
       this.candidateSourceKey = sourceKey;
       this.candidateOnsetUtc = this.nowUtc();
+      this.candidateOnsetMs = tickNowMs;
       this.stableTicks = 1;
     }
 
-    if (this.stableTicks < KEYFRAME_SETTLE_TICKS) {
+    const requiredSettleTicks =
+      this.lastCommittedSourceKey === sourceKey
+        ? KEYFRAME_SUBSEQUENT_SETTLE_TICKS
+        : KEYFRAME_SETTLE_TICKS;
+    if (this.stableTicks < requiredSettleTicks) {
       return false;
     }
 
-    const tickNowMs = this.nowMs();
     if (this.lastCommittedAtMs !== null && tickNowMs - this.lastCommittedAtMs < KEYFRAME_COOLDOWN_MS) {
       return false;
     }
@@ -299,6 +310,9 @@ export class ScreenShareKeyframeSampler {
       });
       if (!blob || blob.size < 8) return false;
       if (blob.size > MAX_KEYFRAME_BYTES) {
+        if (this.lastCommittedSourceKey !== sourceKey) {
+          this.recentCommittedGrids = [];
+        }
         this.lastCommittedGrid = grid;
         this.lastCommittedSourceKey = sourceKey;
         this.resetCandidate();
@@ -308,9 +322,21 @@ export class ScreenShareKeyframeSampler {
       const pngBytes = new Uint8Array(await blob.arrayBuffer());
       const sha256 = await sha256Hex(pngBytes);
       const encoded = encodeBytesBase64(pngBytes);
-      const capturedAt = this.candidateOnsetUtc ?? this.nowUtc();
+      const heldByCooldown =
+        this.lastCommittedAtMs !== null &&
+        this.candidateOnsetMs !== null &&
+        this.candidateOnsetMs - this.lastCommittedAtMs < KEYFRAME_COOLDOWN_MS;
+      const capturedAt = heldByCooldown ? this.nowUtc() : (this.candidateOnsetUtc ?? this.nowUtc());
       const sequence = this.nextSequence++;
       this.emittedCount += 1;
+      if (this.lastCommittedSourceKey !== sourceKey) {
+        this.recentCommittedGrids = [grid];
+      } else {
+        this.recentCommittedGrids.push(grid);
+        if (this.recentCommittedGrids.length > RECENT_KEYFRAME_HISTORY) {
+          this.recentCommittedGrids.shift();
+        }
+      }
       this.lastCommittedGrid = grid;
       this.lastCommittedSourceKey = sourceKey;
       this.lastCommittedAtMs = tickNowMs;

@@ -964,13 +964,21 @@ function install(config: MeetCaptureConfig) {
       const cleaned = rawDisplay.replace(/\s*\((?:Host|Co-host|Gastgeber|Co-Gastgeber|Me|Ich)\)\s*$/i, '').trim();
       if (cleaned && cleaned.length >= 2 && cleaned.length <= 120 && cleaned !== 'fixture') return cleaned;
     }
-    const sub = el.querySelector(
+    const TILE_OWNER_SELECTOR =
+      '[data-participant-id], [data-requested-participant-id], [data-member-id], ' +
+      '[data-endpoint-id], [data-user-id], .participants-li[data-participants-row]';
+    const belongsToTile = (node: Element): boolean => {
+      const owner = node.closest(TILE_OWNER_SELECTOR);
+      return !owner || owner === el;
+    };
+    const subCandidates = el.querySelectorAll(
       '[data-participant-name], [data-self-name], [data-display-name], ' +
       '[data-tid="roster-person-name"], [data-tid="video-tile-name"], ' +
       '.participants-item__display-name, ' +
       '[class*="participant-name"], [class*="participantName"], [class*="displayName"], [class*="nameplate"]'
     );
-    if (sub) {
+    for (const sub of Array.from(subCandidates).slice(0, 16)) {
+      if (!belongsToTile(sub)) continue;
       const attrVal = (sub.getAttribute('data-participant-name') ||
         sub.getAttribute('data-self-name') ||
         sub.getAttribute('data-display-name') ||
@@ -978,7 +986,7 @@ function install(config: MeetCaptureConfig) {
       if (attrVal && attrVal.length <= 200 && attrVal !== 'fixture') return cleanCandidate(attrVal) ?? attrVal;
     }
     for (const np of Array.from(el.querySelectorAll('.notranslate, [jsslot]')).slice(0, 16)) {
-      if (np.children.length > 0 || np.closest('button') || np.closest('[role="tooltip"]')) continue;
+      if (!belongsToTile(np) || np.children.length > 0 || np.closest('button') || np.closest('[role="tooltip"]')) continue;
       const cls = typeof np.className === 'string' ? np.className : '';
       if (/material-icons|google-symbols|google-material-icons/i.test(cls)) continue;
       const txt = (np.textContent || '').trim();
@@ -994,6 +1002,7 @@ function install(config: MeetCaptureConfig) {
     }
     for (const child of Array.from(el.querySelectorAll('span, div, p')).slice(0, 64)) {
       if (
+        !belongsToTile(child) ||
         child.children.length > 0 ||
         child.closest('button') ||
         child.closest('[role="tooltip"]') ||
@@ -1179,13 +1188,18 @@ function install(config: MeetCaptureConfig) {
       '.participants-li[data-participants-row]'
     );
     for (const el of Array.from(nodes).slice(0, 256)) {
-      const rawId = (
+      const explicitId = (
         el.getAttribute('data-participant-id') ??
-        el.getAttribute('data-requested-participant-id') ??
         el.getAttribute('data-member-id') ??
         el.getAttribute('data-endpoint-id') ??
         el.getAttribute('data-user-id') ?? ''
       ).trim();
+      const requestedId = (el.getAttribute('data-requested-participant-id') ?? '').trim();
+      if (explicitId && requestedId && explicitId !== requestedId) {
+        continue;
+      }
+      const rawId = explicitId || requestedId;
+      const isRequestedViewportOnly = !explicitId && Boolean(requestedId);
       const zoomRowLabel = el.hasAttribute('data-participants-row')
         ? (el.getAttribute('aria-label') || el.textContent || '')
         : '';
@@ -1228,12 +1242,18 @@ function install(config: MeetCaptureConfig) {
           (t) => Boolean((t as MediaStreamTrack & {__wortlautVirtualVideo?: boolean}).__wortlautVirtualVideo),
         );
       });
+      const selfNameSub = el.querySelector('[data-self-name]');
+      const selfNameBelongsHere = Boolean(
+        selfNameSub &&
+        (!selfNameSub.closest('[data-participant-id], [data-requested-participant-id], [data-member-id], [data-endpoint-id], [data-user-id]') ||
+          selfNameSub.closest('[data-participant-id], [data-requested-participant-id], [data-member-id], [data-endpoint-id], [data-user-id]') === el),
+      );
       const isSelfTile = el.hasAttribute('data-self-name') ||
-        Boolean(el.querySelector('[data-self-name]')) ||
+        selfNameBelongsHere ||
         /\((?:Me|Ich)\)/i.test(zoomRowLabel) ||
         hasVirtualSelfVideo;
-      const name = extractDomParticipantName(el);
-      if (isSelfTile || isIgnoredParticipantName(name)) {
+      const rawDomName = extractDomParticipantName(el);
+      if (isSelfTile || (!isRequestedViewportOnly && isIgnoredParticipantName(rawDomName))) {
         if (rawId) {
           ignoredParticipantIds.add(rawId);
           domNames.delete(rawId);
@@ -1245,6 +1265,41 @@ function install(config: MeetCaptureConfig) {
         continue;
       }
       if (rawId && ignoredParticipantIds.has(rawId)) continue;
+      const protoNameForId = rawId ? (protoNames.get(rawId) ?? null) : null;
+      const claimedByOtherParticipant = Boolean(
+        rawDomName &&
+        rawId &&
+        ([...protoNames.entries()].some(
+          ([otherId, otherName]) =>
+            otherId !== rawId && otherName.trim().toLowerCase() === rawDomName.trim().toLowerCase(),
+        ) ||
+          (isRequestedViewportOnly &&
+            [...domNames.entries()].some(
+              ([otherId, otherName]) =>
+                otherId !== rawId && otherName.trim().toLowerCase() === rawDomName.trim().toLowerCase(),
+            ))),
+      );
+      let name: string | null = rawDomName;
+      if (isRequestedViewportOnly) {
+        if (isIgnoredParticipantName(rawDomName)) {
+          name = null;
+        } else if (
+          protoNameForId ||
+          domNames.has(rawId) ||
+          participants.get(rawId)?.participant_name ||
+          claimedByOtherParticipant
+        ) {
+          name = protoNameForId ?? domNames.get(rawId) ?? participants.get(rawId)?.participant_name ?? null;
+        }
+      } else if (
+        config.provider === 'google_meet' &&
+        protoNameForId &&
+        rawDomName &&
+        protoNameForId !== rawDomName &&
+        claimedByOtherParticipant
+      ) {
+        name = protoNameForId;
+      }
       if (rawId && rawId.length <= 200 && name) {
         seenLiveDom.add(rawId);
         if (domNames.size < 256 || domNames.has(rawId)) domNames.set(rawId, name);
@@ -1253,7 +1308,7 @@ function install(config: MeetCaptureConfig) {
           existing.participant_name = name;
           updated = true;
         }
-      } else if (rawId && domNames.has(rawId)) {
+      } else if (rawId && (isRequestedViewportOnly || domNames.has(rawId) || protoNames.has(rawId))) {
         seenLiveDom.add(rawId);
       } else if (!rawId && name) {
         seenLiveDom.add(`name:${name}`);

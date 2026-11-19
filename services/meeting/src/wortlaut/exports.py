@@ -1,8 +1,10 @@
+import base64
 import hmac
 import io
 import json
 import re
 import secrets
+import time
 import uuid
 import wave
 from datetime import UTC, datetime, timedelta
@@ -35,6 +37,7 @@ from wortlaut.processing import (
     stream_quality,
 )
 from wortlaut.settings import derive_subkey, get_settings
+from wortlaut.storage import get_storage
 
 BERLIN_TZ = ZoneInfo("Europe/Berlin")
 WEEKDAYS_DE = ("Mo.", "Di.", "Mi.", "Do.", "Fr.", "Sa.", "So.")
@@ -621,10 +624,27 @@ def export_data(
             .where(AsrJob.stream_id.in_([s.id for s in streams]))
         ).all()
     segments = [dict(s.result) for s in seg_rows]
+    authoritative_pids: set[str] = set()
+    for att in attempts:
+        diag = att.diagnostics if isinstance(att.diagnostics, dict) else {}
+        for p in (diag.get("participant_sources") or {}).get("sources") or []:
+            if isinstance(p, dict) and p.get("participant_id") and p.get("participant_name"):
+                if " ".join(str(p["participant_name"]).split()):
+                    authoritative_pids.add(str(p["participant_id"]))
+    seg_name_weights: dict[str, dict[str, float]] = {}
     for seg in segments:
         pid = seg.get("participant_id") or seg.get("speaker_id")
-        if pid and seg.get("participant_name"):
-            participant_names[pid] = seg["participant_name"]
+        raw_pname = " ".join(str(seg.get("participant_name") or "").split())
+        if pid and raw_pname:
+            dur_w = max(0.05, float(seg.get("end") or 0.0) - float(seg.get("start") or 0.0))
+            by_name = seg_name_weights.setdefault(str(pid), {})
+            by_name[raw_pname] = by_name.get(raw_pname, 0.0) + dur_w
+    for pid_s, by_name in seg_name_weights.items():
+        if pid_s not in authoritative_pids and by_name:
+            participant_names[pid_s] = max(
+                reversed(list(by_name.items())),
+                key=lambda kv: kv[1],
+            )[0]
     keyframe_rows = (
         list(
             db.scalars(
@@ -834,8 +854,7 @@ def export_data(
             segment["participant_id"] = resolved_pid
             segment["speaker_id"] = resolved_spk if resolved_kind == "speaker" else None
             segment["source_kind"] = resolved_kind
-            if resolved_name and not segment.get("participant_name"):
-                segment["participant_name"] = resolved_name
+            segment["participant_name"] = resolved_name
         elif segment.get("attribution_unknown") and stream_key in stream_onset_windows:
             matched_onset = next(
                 (
@@ -851,8 +870,7 @@ def export_data(
                 segment["participant_id"] = w_pid
                 segment["speaker_id"] = w_spk if w_kind == "speaker" else None
                 segment["source_kind"] = w_kind
-                if w_name and not segment.get("participant_name"):
-                    segment["participant_name"] = w_name
+                segment["participant_name"] = w_name or participant_names.get(str(w_pid))
             elif (
                 not is_protected
                 and bool(stream_bind_timeline.get(stream_key))
@@ -880,9 +898,14 @@ def export_data(
         ):
             continue
         pid = segment.get("participant_id") or segment.get("speaker_id")
-        if not segment.get("attribution_unknown") and not segment.get("participant_name") and pid:
-            if pid in participant_names:
-                segment["participant_name"] = participant_names[pid]
+        if (
+            not segment.get("attribution_unknown")
+            and segment.get("source_kind") != "share_audio"
+            and pid
+            and str(pid) in participant_names
+            and participant_names[str(pid)]
+        ):
+            segment["participant_name"] = participant_names[str(pid)]
         segment["speaker_label"] = speaker_label(segment, participant_names)
         segment["segment_id"] = segment["id"]
         segment["speaker_name"] = segment.get("participant_name")
@@ -1283,21 +1306,27 @@ def _build_sources_summary(
             src_quals[0].get("source_kind") if src_quals else "speaker"
         )
         if src_segs:
-            grouped: dict[str | None, list[dict]] = {}
+            grouped: dict[tuple[str | None, str], list[dict]] = {}
             for seg in src_segs:
-                key = seg.get("participant_id") or seg.get("speaker_id")
-                grouped.setdefault(key, []).append(seg)
-            for seg_pid, group_segs in grouped.items():
-                eff_sig_id = seg_pid or sig_id
+                seg_pid_raw = seg.get("participant_id") or seg.get("speaker_id")
+                seg_pid_str = str(seg_pid_raw) if seg_pid_raw else None
+                seg_lbl_str = str(seg.get("speaker_label") or "")
+                grouped.setdefault((seg_pid_str, seg_lbl_str), []).append(seg)
+            for (seg_pid, seg_lbl), group_segs in grouped.items():
+                eff_sig_id = seg_pid or (str(sig_id) if sig_id else None)
+                name_weights: dict[str, float] = {}
+                for g in group_segs:
+                    g_name = " ".join(str(g.get("participant_name") or "").split())
+                    if g_name:
+                        dur_g = max(0.05, float(g.get("end") or 0.0) - float(g.get("start") or 0.0))
+                        name_weights[g_name] = name_weights.get(g_name, 0.0) + dur_g
+                dominant_group_name = (
+                    max(reversed(list(name_weights.items())), key=lambda kv: kv[1])[0]
+                    if name_weights
+                    else None
+                )
                 eff_name = (
-                    next(
-                        (
-                            g.get("participant_name")
-                            for g in group_segs
-                            if g.get("participant_name")
-                        ),
-                        None,
-                    )
+                    dominant_group_name
                     or (participant_names.get(eff_sig_id) if eff_sig_id else None)
                     or part_name
                 )
@@ -1310,9 +1339,7 @@ def _build_sources_summary(
                         "provider_source_ids": [sid],
                         "participant_name": eff_name,
                         "signaled_participant_id": eff_sig_id,
-                        "speaker_label": (
-                            group_segs[0].get("speaker_label") or eff_name or eff_sig_id or sid
-                        ),
+                        "speaker_label": seg_lbl or eff_name or eff_sig_id or sid,
                         "csi": rcv.get("csi"),
                         "source_kind": kind,
                         "segment_count": len(group_segs),
@@ -1342,11 +1369,21 @@ def _build_sources_summary(
                 }
             )
     merged: list[dict] = []
-    by_participant: dict[str, dict] = {}
+    by_participant: dict[tuple[str, str], dict] = {}
     for item in summary:
         pid = item.get("signaled_participant_id")
-        if pid and pid in by_participant:
-            existing = by_participant[pid]
+        lbl = str(item.get("speaker_label") or "")
+        merge_key: tuple[str, str] | None = None
+        if pid:
+            merge_key = ("pid", f"{pid}\0{lbl}" if item.get("segment_count", 0) > 0 else str(pid))
+        elif (
+            item.get("segment_count", 0) > 0
+            and lbl
+            and not lbl.lower().startswith(("quelle ", "sprecher "))
+        ):
+            merge_key = ("label", lbl)
+        if merge_key and merge_key in by_participant:
+            existing = by_participant[merge_key]
             existing["segment_count"] += item["segment_count"]
             existing["speech_seconds"] = round(
                 existing["speech_seconds"] + item["speech_seconds"], 2
@@ -1362,8 +1399,10 @@ def _build_sources_summary(
             if cand_sample:
                 existing["sample_text"] = cand_sample
         else:
-            if pid:
-                by_participant[pid] = item
+            if merge_key:
+                by_participant[merge_key] = item
+                if pid and item.get("segment_count", 0) > 0:
+                    by_participant.setdefault(("pid", str(pid)), item)
             merged.append(item)
     if opted_out_norm:
         for item in merged:
@@ -1763,6 +1802,172 @@ def extract_org_glossary_hints(attendee_emails: object) -> list[str]:
     return hints
 
 
+def _normalize_keyframe_context_entry(raw: object) -> dict | None:
+    if not isinstance(raw, dict):
+        return None
+    view = _single_line(raw.get("view") or raw.get("summary") or "")[:220]
+    items: list[str] = []
+    seen_items: set[str] = set()
+    for it in raw.get("items") or []:
+        if isinstance(it, dict):
+            item_id = _single_line(it.get("id") or it.get("key") or "")
+            item_title = _single_line(
+                it.get("title") or it.get("name") or it.get("summary") or ""
+            )
+            label = (
+                f"{item_id}: {item_title}"
+                if item_id and item_title
+                else (item_id or item_title)
+            )
+        else:
+            label = _single_line(it)
+        label = label[:160]
+        if label and label.lower() not in seen_items and len(items) < 16:
+            seen_items.add(label.lower())
+            items.append(label)
+    terms: list[str] = []
+    seen_terms: set[str] = set()
+    for raw_t in raw.get("terms") or []:
+        clean_t = _single_line(raw_t)[:60]
+        if (
+            len(clean_t) >= 2
+            and any(ch.isalnum() for ch in clean_t)
+            and clean_t.lower() not in seen_terms
+            and len(terms) < 24
+        ):
+            seen_terms.add(clean_t.lower())
+            terms.append(clean_t)
+    if not view and not items and not terms:
+        return None
+    return {"view": view, "items": items, "terms": terms}
+
+
+def extract_keyframe_visual_context(
+    png_bytes: bytes,
+    *,
+    summary_lang: str = "German",
+    settings=None,
+    timeout: float = 35.0,
+) -> dict | None:
+    """Extract visible ticket IDs, headings, and domain terms from a redacted keyframe PNG."""
+    if not png_bytes:
+        return None
+    settings = settings or get_settings()
+    b64 = base64.b64encode(png_bytes).decode("ascii")
+    if summary_lang == "German":
+        sys_prompt = (
+            "Extrahiere aus dem geteilten Konferenz-Bildschirmfoto präzise den sichtbaren "
+            "Arbeitskontext als JSON-Objekt mit genau diesen Feldern:\n"
+            '{"view": "Kurze Beschreibung der Ansicht (max. 1 Satz)", '
+            '"items": ["Sichtbare Ticket-IDs mit Titel (z. B. MAIS-270: ...), PR-Nummern, '
+            'Folienüberschriften oder Dateinamen"], '
+            '"terms": ["Sichtbare Produktnamen, Bibliotheken und Fachbegriffe in '
+            'exakter Originalschreibweise"]}\n'
+            "Erfinde nichts hinzu; gib nur klar lesbare Einträge zurück."
+        )
+        usr_prompt = "Analysiere diesen geteilten Bildschirm-Ausschnitt."
+    else:
+        sys_prompt = (
+            "Extract the visible workspace context from this shared conference screen frame "
+            "strictly as a JSON object with these fields:\n"
+            f'{{"view": "Concise 1-sentence description in {summary_lang}", '
+            '"items": ["Visible ticket IDs with title, PR numbers, slide headings, or files"], '
+            '"terms": ["Visible product names, libraries, and technical terms in exact '
+            'spelling"]}\n'
+            "Do not guess unreadable text."
+        )
+        usr_prompt = "Analyze this shared screen frame."
+    url = settings.ollama_url.rstrip("/") + "/api/chat"
+    try:
+        resp = httpx.post(
+            url,
+            json={
+                "model": settings.ollama_model,
+                "think": False,
+                "stream": False,
+                "format": "json",
+                "options": {"num_ctx": 8192, "temperature": 0.1},
+                "messages": [
+                    {"role": "system", "content": sys_prompt},
+                    {"role": "user", "content": usr_prompt, "images": [b64]},
+                ],
+            },
+            timeout=float(timeout),
+        )
+        if resp.status_code != 200:
+            return None
+        raw_content = (resp.json().get("message") or {}).get("content") or "{}"
+        parsed = json.loads(raw_content)
+    except (httpx.HTTPError, ValueError, TypeError, AttributeError):
+        return None
+    return _normalize_keyframe_context_entry(parsed)
+
+
+def _select_representative_keyframes(
+    keyframes: list[dict],
+    *,
+    max_count: int = 10,
+    burst_gap_seconds: float = 15.0,
+) -> list[dict]:
+    if not keyframes:
+        return []
+    clusters: list[list[dict]] = []
+    for kf in keyframes:
+        if not clusters:
+            clusters.append([kf])
+            continue
+        prev = clusters[-1][-1]
+        gap = float(kf.get("offset_seconds") or 0.0) - float(prev.get("offset_seconds") or 0.0)
+        same_presenter = kf.get("participant_id") == prev.get("participant_id")
+        if same_presenter and 0.0 <= gap < burst_gap_seconds:
+            clusters[-1].append(kf)
+        else:
+            clusters.append([kf])
+    selected: list[dict] = []
+    for idx, cluster in enumerate(clusters):
+        if (
+            idx == 0
+            and len(cluster) > 1
+            and (
+                float(cluster[-1].get("offset_seconds") or 0.0)
+                - float(cluster[0].get("offset_seconds") or 0.0)
+            )
+            >= 20.0
+        ):
+            selected.append(cluster[0])
+        selected.append(cluster[-1])
+    if len(selected) <= max_count:
+        return selected
+    if max_count <= 1:
+        return [selected[-1]]
+    step = (len(selected) - 1) / (max_count - 1)
+    indices = sorted({round(i * step) for i in range(max_count)})
+    return [selected[i] for i in indices]
+
+
+def _format_keyframe_context_line(
+    kf: dict,
+    ctx: dict,
+    origin_utc: str | None,
+    term_replacements: dict[str, str] | None = None,
+) -> str | None:
+    view = _single_line(ctx.get("view") or "")
+    items = [_single_line(x) for x in (ctx.get("items") or []) if _single_line(x)]
+    if not view and not items:
+        return None
+    t_label = wall_clock_time_de(origin_utc, float(kf.get("offset_seconds") or 0.0))
+    presenter = _single_line(kf.get("presenter") or "Präsentation")
+    parts: list[str] = []
+    if view:
+        parts.append(view)
+    if items:
+        parts.append("Sichtbar: " + "; ".join(items[:10]))
+    body = " | ".join(parts)
+    if term_replacements:
+        body = _apply_text_replacements(body, term_replacements)
+    return f"- [{t_label}] {presenter}: {body}"
+
+
 def generate_protocol_summary(db: Session, recording_id: uuid.UUID) -> dict:
     settings = get_settings()
     recording = db.get(Recording, recording_id)
@@ -1774,8 +1979,20 @@ def generate_protocol_summary(db: Session, recording_id: uuid.UUID) -> dict:
     prior_participation = recording.participation
     from wortlaut.glossary import resolve_recording_glossary
 
-    resolved_glossary_terms, _ = resolve_recording_glossary(db, recording, settings)
+    resolved_glossary_terms, glossary_alias_repls = resolve_recording_glossary(
+        db, recording, settings
+    )
     data = export_data(db, recording)
+    kf_object_keys: dict[str, str] = {
+        str(r.id): r.object_key
+        for r in db.scalars(
+            select(RecordingKeyframe).where(
+                RecordingKeyframe.recording_id == recording.id,
+                RecordingKeyframe.deleted_at.is_(None),
+            )
+        ).all()
+        if r.object_key
+    }
     title = _single_line(recording.title) or f"Besprechung ({provider_label(recording.provider)})"
     # End the read transaction before calling Ollama so no DB snapshot or row lock is held.
     db.rollback()
@@ -1785,11 +2002,15 @@ def generate_protocol_summary(db: Session, recording_id: uuid.UUID) -> dict:
     transcript_lines: list[str] = []
     known_speakers: list[str] = []
     seen_speakers: set[str] = set()
+    total_speech_seconds = 0.0
     for seg in segments:
         txt = _single_line(seg.get("text"))
         if not txt:
             continue
-        t0 = wall_clock_time_de(origin_utc, float(seg.get("start") or 0.0))
+        seg_start = float(seg.get("start") or 0.0)
+        seg_end = float(seg.get("end") or seg_start)
+        total_speech_seconds += max(0.0, seg_end - seg_start)
+        t0 = wall_clock_time_de(origin_utc, seg_start)
         spk = _single_line(seg.get("speaker_label")) or "Sprecher"
         if (
             spk
@@ -1828,11 +2049,11 @@ def generate_protocol_summary(db: Session, recording_id: uuid.UUID) -> dict:
         raise ValueError("Kein Transkript für die KI-Zusammenfassung vorhanden.")
 
     transcript_text = "\n".join(transcript_lines)
-    if len(transcript_text) > 64000:
+    if len(transcript_text) > 84000:
         transcript_text = (
-            transcript_text[:40000]
+            transcript_text[:52000]
             + "\n...[Mittelteil gekürzt]...\n"
-            + transcript_text[-24000:]
+            + transcript_text[-32000:]
         )
 
     lang_spec = effective_recording_language(prior_meta, settings)
@@ -1850,17 +2071,91 @@ def generate_protocol_summary(db: Session, recording_id: uuid.UUID) -> dict:
         else:
             summary_lang = "German" if settings.default_locale == "de" else "English"
 
+    active_keyframes = data.get("keyframes") or []
+    raw_cached_ctx = prior_meta.get("keyframe_context")
+    cached_kf_ctx: dict[str, dict] = {}
+    if isinstance(raw_cached_ctx, dict):
+        for kf_id_k, kf_val in raw_cached_ctx.items():
+            norm_entry = _normalize_keyframe_context_entry(kf_val)
+            if norm_entry is not None:
+                cached_kf_ctx[str(kf_id_k)] = norm_entry
+
+    newly_extracted_kf_ctx: dict[str, dict] = {}
+    if active_keyframes and settings.s3_access_key and settings.s3_secret_key:
+        rep_keyframes = _select_representative_keyframes(active_keyframes, max_count=10)
+        vision_budget = min(55.0, float(settings.ollama_timeout_seconds) * 0.45)
+        vision_deadline = time.monotonic() + vision_budget
+        extracted_now = 0
+        for rep_kf in rep_keyframes:
+            rep_id = str(rep_kf.get("id") or "")
+            if not rep_id or rep_id in cached_kf_ctx or extracted_now >= 6:
+                continue
+            if time.monotonic() >= vision_deadline:
+                break
+            obj_key = kf_object_keys.get(rep_id)
+            if not obj_key:
+                continue
+            try:
+                png_bytes = get_storage().read(obj_key)
+            except Exception:
+                continue
+            rem_timeout = max(8.0, min(30.0, vision_deadline - time.monotonic()))
+            extracted = extract_keyframe_visual_context(
+                png_bytes,
+                summary_lang=summary_lang,
+                settings=settings,
+                timeout=rem_timeout,
+            )
+            extracted_now += 1
+            if extracted is not None:
+                cached_kf_ctx[rep_id] = extracted
+                newly_extracted_kf_ctx[rep_id] = extracted
+
+    term_repls = prior_meta.get("term_replacements")
+    effective_repls = {
+        **glossary_alias_repls,
+        **(term_repls if isinstance(term_repls, dict) else {}),
+    }
+    screen_context_lines: list[str] = []
+    visual_terms: list[str] = []
+    for kf in _select_representative_keyframes(active_keyframes, max_count=12):
+        kf_ctx = cached_kf_ctx.get(str(kf.get("id") or ""))
+        if not kf_ctx:
+            continue
+        line = _format_keyframe_context_line(kf, kf_ctx, origin_utc, effective_repls)
+        if line:
+            screen_context_lines.append(line)
+        for vt in kf_ctx.get("terms") or []:
+            visual_terms.append(vt)
+
+    is_detailed_meeting = (
+        total_speech_seconds >= 900.0
+        or len(transcript_lines) >= 80
+        or len(screen_context_lines) >= 3
+    )
+
     if summary_lang == "German":
+        summary_len_hint = (
+            "Prägnante Management-Zusammenfassung der Ergebnisse (3-6 Sätze)."
+            if is_detailed_meeting
+            else "Prägnante Management-Zusammenfassung des Gesprächs (2-4 Sätze)."
+        )
+        topics_len_hint = (
+            "Besprochene Inhalte, Status, Entscheidungen und ggf. zugehörige Ticket-/PR-Nummern "
+            "in 2 bis 5 präzisen Sätzen; bilde bei längeren Reviews alle eigenständigen "
+            "Themenblöcke ab."
+            if is_detailed_meeting
+            else "Besprochene Inhalte und Entscheidungen in 1 bis 3 Sätzen."
+        )
         system_prompt = (
             "Du bist ein präziser deutschsprachiger Protokollführer für Geschäftstreffen. "
             "Erstelle aus dem folgenden Wortprotokoll eine sachliche, strukturierte "
             "Zusammenfassung und To-Do-Liste auf Deutsch. "
             "Antworte ausschließlich als valides JSON-Objekt mit genau diesem Schema:\n"
             "{\n"
-            '  "summary": "Prägnante Management-Zusammenfassung des Gesprächs (2-4 Sätze).",\n'
+            f'  "summary": "{summary_len_hint}",\n'
             '  "topics": [\n'
-            '    {"title": "Kurzer Thementitel", '
-            '"details": "Besprochene Inhalte und Entscheidungen in 1 bis 3 Sätzen."}\n'
+            f'    {{"title": "Kurzer Thementitel", "details": "{topics_len_hint}"}}\n'
             "  ],\n"
             '  "action_items": [\n'
             '    {"owner": "Name der Person (oder \'Team\')", '
@@ -1869,27 +2164,52 @@ def generate_protocol_summary(db: Session, recording_id: uuid.UUID) -> dict:
             "  ]\n"
             "}\n"
             "Wichtige Regeln:\n"
-            "- Erfinde keine Fakten, Fristen oder Namen, die nicht im Transkript vorkommen.\n"
-            "- Wenn keine konkreten Aufgaben oder nächsten Schritte vereinbart wurden, "
-            'gib ein leeres Array `"action_items": []` zurück.\n'
+            "- Erfinde keine Fakten, Fristen oder Namen, die nicht im Gespräch oder im "
+            "nachgewiesenen Bildschirmkontext vorkommen.\n"
+            "- Erfasse in `action_items` alle konkret zugesagten Folgeaufgaben, PR-Reviews, "
+            "Konfigurationsprüfungen, Testzugänge und anzulegenden Tickets mit der zuständigen "
+            "Person; wenn nichts vereinbart wurde, gib `\"action_items\": []` zurück.\n"
+            "- Ordne Vorschläge, Bewertungen und Zusagen namentlich den Personen zu, die sie "
+            "tatsächlich eingebracht haben.\n"
+            "- Wenn Teilnehmende zeigend auf den geteilten Bildschirm verweisen (z. B. 'der hier', "
+            "'das Ticket', 'kann rüber') und ein zeitlich passender Eintrag unter "
+            "'Sichtbarer Bildschirmkontext' vorliegt, nutze die dort sichtbare Ticket-ID bzw. "
+            "Bezeichnung zur Präzisierung. Verschmelze niemals zwei benachbarte Karten/Tickets "
+            "auf einem Board zu einer erfundenen Misch-Aufgabe.\n"
             "- Übernimm die exakte Schreibweise der Teilnehmendennamen und Fachbegriffe; "
             "korrigiere offensichtliche phonetische Spracherkennungsfehler bei bekannten "
-            "Eigennamen, Konferenzplattformen und Glossarbegriffen anhand des Gesprächskontexts "
-            "(z. B. Jitsi statt 'Jetzti'/'Chitzy', Wortlaut statt 'Wordlaut'/'Boardlaut').\n"
-            "- Trenne Nebenbemerkungen zu Alternativmodellen oder Drittsystemen sauber von der "
-            "tatsächlich besprochenen bzw. gezeigten Architektur."
+            "Eigennamen, Werkzeugen, Konferenzplattformen und Glossar-/Bildschirmbegriffen "
+            "anhand des Kontexts (z. B. Jitsi statt 'Jetzti'/'Chitzy', Wortlaut statt "
+            "'Wordlaut'/'Boardlaut', MkDocs statt 'MakeDocs', Diataxis statt 'Diary-Taxus', "
+            "RAG/Default-RAG statt 'Rack'/'Default-Rack', Databricks statt 'DataWorks', "
+            "Genie Spaces statt 'Synia Spaces' im Databricks-Kontext, Ragas/DeepEval statt "
+            "'Agas'/'Deepiva', Langfuse/LangGraph statt 'Langviews'/'Langraft', "
+            "HubSpot statt 'Hopspot', Jira statt 'Chirer').\n"
+            "- Trenne Nebenbemerkungen zu Alternativmodellen, Smalltalk oder Drittsystemen sauber "
+            "von der tatsächlich besprochenen bzw. gezeigten Lösung."
         )
     else:
+        summary_len_en = (
+            f"Concise executive summary in {summary_lang} (3-6 sentences)."
+            if is_detailed_meeting
+            else f"Concise executive summary in {summary_lang} (2-4 sentences)."
+        )
+        topics_len_en = (
+            f"Discussed points, decisions, and matching ticket/PR IDs in {summary_lang} "
+            "(2-5 sentences); cover all distinct agenda blocks."
+            if is_detailed_meeting
+            else f"Discussed points and decisions in {summary_lang} (1-3 sentences)."
+        )
         system_prompt = (
             "You are a precise meeting minutes secretary. "
             "Produce a factual, structured executive summary and action-item list "
             f"written in {summary_lang} from the verbatim transcript below. "
             "Respond strictly as a valid JSON object matching this exact schema:\n"
             "{\n"
-            f'  "summary": "Concise executive summary in {summary_lang} (2-4 sentences).",\n'
+            f'  "summary": "{summary_len_en}",\n'
             '  "topics": [\n'
             f'    {{"title": "Short topic title in {summary_lang}", '
-            f'"details": "Discussed points and decisions in {summary_lang} (1-3 sentences)."}}\n'
+            f'"details": "{topics_len_en}"}}\n'
             "  ],\n"
             '  "action_items": [\n'
             '    {"owner": "Person name (or \'Team\')", '
@@ -1898,19 +2218,25 @@ def generate_protocol_summary(db: Session, recording_id: uuid.UUID) -> dict:
             "  ]\n"
             "}\n"
             "Rules:\n"
-            "- Never invent facts, deadlines, or names not present in the transcript.\n"
-            "- If no concrete action items were agreed, return `\"action_items\": []`.\n"
+            "- Never invent facts, deadlines, or names not present in the transcript or "
+            "verified screen-share context.\n"
+            "- Capture all concrete follow-ups, PR reviews, test setups, and ticket actions "
+            "with their owner; if none were agreed, return `\"action_items\": []`.\n"
+            "- Attribute proposals and commitments to the actual speaker by name.\n"
+            "- When speakers refer deictically to shared screen items ('this ticket', 'this one') "
+            "and a timestamp-matching screen-share context entry exists, cite the visible ticket "
+            "ID/title accurately; never conflate two adjacent cards on a board into one task.\n"
             "- Preserve exact spelling of participant names and domain terminology; normalize "
-            "unambiguous phonetic ASR misspellings of known platforms, proper nouns, and glossary "
-            "terms from context (e.g. Jitsi instead of 'Jetzti'/'Chitzy', Wortlaut instead of "
-            "'Wordlaut'/'Boardlaut').\n"
-            "- Keep side remarks about alternative models or third-party tools clearly distinct "
-            "from the properties of the demonstrated solution."
+            "unambiguous phonetic ASR misspellings of known platforms, developer tools, proper "
+            "nouns, and glossary/screen terms from context (e.g. Jitsi instead of 'Jetzti', "
+            "Wortlaut instead of 'Wordlaut', MkDocs instead of 'MakeDocs', RAG instead of 'Rack', "
+            "Databricks instead of 'DataWorks', Ragas/DeepEval, Langfuse/LangGraph, HubSpot, "
+            "Jira).\n"
+            "- Keep side remarks or small talk distinct from the demonstrated solution."
         )
     meta_lines = [f"Titel der Besprechung: {title}"]
     if known_speakers:
         meta_lines.append(f"Bekannte Teilnehmende: {', '.join(known_speakers)}")
-    term_repls = prior_meta.get("term_replacements")
     repl_values = list(term_repls.values()) if isinstance(term_repls, dict) else []
     assistant_hint = _single_line(settings.assistant_name)
     builtin_hints = (
@@ -1921,14 +2247,28 @@ def generate_protocol_summary(db: Session, recording_id: uuid.UUID) -> dict:
     org_hints = extract_org_glossary_hints(prior_meta.get("attendee_emails"))
     merged_glossary: list[str] = []
     seen_glossary: set[str] = set()
-    for raw_term in [*repl_values, *resolved_glossary_terms, *builtin_hints, *org_hints]:
+    for raw_term in [
+        *repl_values,
+        *resolved_glossary_terms,
+        *visual_terms,
+        *builtin_hints,
+        *org_hints,
+    ]:
         term = _single_line(raw_term)[:60]
-        if term and term.lower() not in seen_glossary and len(merged_glossary) < 40:
+        if term and term.lower() not in seen_glossary and len(merged_glossary) < 80:
             seen_glossary.add(term.lower())
             merged_glossary.append(term)
     if merged_glossary:
         meta_lines.append(f"Fachbegriffe / Glossar: {', '.join(merged_glossary)}")
-    user_prompt = "\n".join(meta_lines) + f"\n\nWortprotokoll:\n{transcript_text}"
+    prompt_sections = ["\n".join(meta_lines)]
+    if screen_context_lines:
+        prompt_sections.append(
+            "Sichtbarer Bildschirmkontext (zeitlich passend zur Bildschirmfreigabe):\n"
+            + "\n".join(screen_context_lines)
+        )
+    prompt_sections.append(f"Wortprotokoll:\n{transcript_text}")
+    user_prompt = "\n\n".join(prompt_sections)
+    ctx_window = 40960 if len(user_prompt) > 48000 else 32768
 
     url = settings.ollama_url.rstrip("/") + "/api/chat"
     try:
@@ -1939,7 +2279,7 @@ def generate_protocol_summary(db: Session, recording_id: uuid.UUID) -> dict:
                 "think": False,
                 "stream": False,
                 "format": "json",
-                "options": {"num_ctx": 32768, "temperature": 0.2},
+                "options": {"num_ctx": ctx_window, "temperature": 0.2},
                 "messages": [
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
@@ -2006,6 +2346,26 @@ def generate_protocol_summary(db: Session, recording_id: uuid.UUID) -> dict:
         db.rollback()
         raise ValueError("Teilnehmer-Opt-out während der Zusammenfassung erkannt.")
     meta = dict(locked_rec.protocol_meta or {})
+    if newly_extracted_kf_ctx:
+        live_kf_ids = {
+            str(kid)
+            for kid in db.scalars(
+                select(RecordingKeyframe.id).where(
+                    RecordingKeyframe.recording_id == recording_id,
+                    RecordingKeyframe.deleted_at.is_(None),
+                )
+            ).all()
+        }
+        merged_kf_ctx = dict(
+            meta.get("keyframe_context")
+            if isinstance(meta.get("keyframe_context"), dict)
+            else {}
+        )
+        for kid, kval in newly_extracted_kf_ctx.items():
+            if kid in live_kf_ids:
+                merged_kf_ctx[kid] = kval
+        if merged_kf_ctx:
+            meta["keyframe_context"] = merged_kf_ctx
     meta["summary"] = summary_obj
     locked_rec.protocol_meta = meta
     db.commit()

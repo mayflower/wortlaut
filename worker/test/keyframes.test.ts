@@ -487,11 +487,38 @@ test('browser sampler: settle window, 1.5s transient rejection, 5s cooldown, and
       await new Promise((r) => setTimeout(r, 2200));
       const afterTransient = window.wortlautMeet.inspect();
 
-      // Switch to Slide 2 and hold steady until both 3-tick settle AND 5s cooldown complete
+      // Switch to Slide 2 and hold steady until both 4-tick subsequent settle AND 5s cooldown complete
       currentSlideDraw = drawSlide2;
       currentSlideDraw();
       await new Promise((r) => setTimeout(r, 5800));
       const afterSlide2 = window.wortlautMeet.inspect();
+
+      // Closing a modal back to already-captured Slide 1 must NOT emit a duplicate board screenshot!
+      currentSlideDraw = drawSlide1;
+      currentSlideDraw();
+      await new Promise((r) => setTimeout(r, 5200));
+      const afterReturnSlide1 = window.wortlautMeet.inspect();
+
+      // Google Meet viewport transition regression: a data-requested-participant-id slot pointing to
+      // Maria while its inner nameplate still shows Alice must never overwrite Maria's participant_name.
+      const mariaTile = document.createElement('div');
+      mariaTile.setAttribute('data-participant-id', 'spaces/meet/devices/maria');
+      mariaTile.setAttribute('data-participant-name', 'Maria Haubner');
+      mariaTile.setAttribute('data-ssrc', '537001');
+      document.body.append(mariaTile);
+      window.wortlautMeet.inspect();
+
+      const viewportSlot = document.createElement('div');
+      viewportSlot.setAttribute('data-requested-participant-id', 'spaces/meet/devices/maria');
+      const staleLabel = document.createElement('span');
+      staleLabel.className = 'notranslate';
+      staleLabel.textContent = 'Alice';
+      viewportSlot.append(staleLabel);
+      document.body.append(viewportSlot);
+      const afterViewportFlap = window.wortlautMeet.inspect();
+      const mariaEntry = afterViewportFlap.participant_sources.sources.find(
+        (s: {participant_id: string}) => s.participant_id === 'spaces/meet/devices/maria',
+      );
 
       clearInterval(keepCamPushing);
       clearInterval(keepPushing);
@@ -503,10 +530,12 @@ test('browser sampler: settle window, 1.5s transient rejection, 5s cooldown, and
       return {
         afterCameraInspect: afterCameraInspect.keyframes,
         beforeInterruptions: beforeClock.total_interruptions,
-        afterInterruptions: afterSlide2.audio_clock.total_interruptions,
+        afterInterruptions: afterReturnSlide1.audio_clock.total_interruptions,
         afterSlide1: afterSlide1.keyframes,
         afterTransient: afterTransient.keyframes,
         afterSlide2: afterSlide2.keyframes,
+        afterReturnSlide1: afterReturnSlide1.keyframes,
+        mariaNameAfterFlap: mariaEntry?.participant_name ?? null,
       };
     });
 
@@ -517,6 +546,8 @@ test('browser sampler: settle window, 1.5s transient rejection, 5s cooldown, and
     assert.equal(clockResult.afterSlide1.emitted, 1);
     assert.equal(clockResult.afterTransient.emitted, 1);
     assert.equal(clockResult.afterSlide2.emitted, 2);
+    assert.equal(clockResult.afterReturnSlide1.emitted, 2);
+    assert.equal(clockResult.mariaNameAfterFlap, 'Maria Haubner');
     assert.equal(clockResult.afterInterruptions, clockResult.beforeInterruptions);
 
     assert.equal(capturedKeyframes.length, 2);

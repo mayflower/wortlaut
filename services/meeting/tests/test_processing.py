@@ -1259,3 +1259,243 @@ def test_floor_holding_backchannels_and_multiplexed_sources_summary():
         f"google_meet:{rec_id}:receiver:1",
     ]
     assert _format_markdown_source_ids(sources[0], rec_id) == "receiver:3, receiver:1"
+
+
+def test_shared_sfu_dom_flap_canonicalization_and_multi_speaker_sources_summary(
+    client, database, storage
+):
+    from wortlaut.exports import export_data
+    from wortlaut.models import AsrJob, Attempt, AudioStream, Recording, TranscriptSegment
+
+    attempt_id, _, identity = source(client)
+    att_uuid = uuid.UUID(attempt_id)
+    t0_iso = "2026-11-19T09:00:00+00:00"
+
+    with Session(database) as db:
+        att = db.get(Attempt, att_uuid)
+        rec = db.get(Recording, att.recording_id)
+        rec.participation = "ended"
+        rec.processing = "completed"
+        att.ended_at = datetime.now(UTC)
+        att.end_reason = "room_empty"
+        att.diagnostics = {
+            "participant_sources": {
+                "available": True,
+                "total": 5,
+                "sources": [
+                    {
+                        "participant_id": "spaces/r/devices/526",
+                        "participant_name": "Johann Peter Hartmann",
+                        "audio_csis": [101],
+                        "share_audio_csis": [],
+                    },
+                    {
+                        "participant_id": "spaces/r/devices/529",
+                        "participant_name": "Martin Wild",
+                        "audio_csis": [102],
+                        "share_audio_csis": [],
+                    },
+                    {
+                        "participant_id": "spaces/r/devices/532",
+                        "participant_name": "Ingrid Stevens",
+                        "audio_csis": [103],
+                        "share_audio_csis": [],
+                    },
+                    {
+                        "participant_id": "spaces/r/devices/525",
+                        "participant_name": "Kerstin Flederer",
+                        "audio_csis": [104],
+                        "share_audio_csis": [],
+                    },
+                    {
+                        "participant_id": "spaces/r/devices/537",
+                        "participant_name": "Maria Haubner",
+                        "audio_csis": [105],
+                        "share_audio_csis": [],
+                    },
+                ],
+            },
+            "receiver_sources": [
+                {
+                    "provider_source_id": f"google_meet:{rec.id}:receiver:1",
+                    "source_kind": "speaker",
+                    "signaled_participant_id": "spaces/r/devices/529",
+                    "participant_name": "Martin Wild",
+                },
+                {
+                    "provider_source_id": f"google_meet:{rec.id}:receiver:2",
+                    "source_kind": "speaker",
+                    "signaled_participant_id": "spaces/r/devices/537",
+                    "participant_name": "Maria Haubner",
+                },
+                {
+                    "provider_source_id": f"google_meet:{rec.id}:receiver:3",
+                    "source_kind": "speaker",
+                    "signaled_participant_id": "spaces/r/devices/532",
+                    "participant_name": "Ingrid Stevens",
+                },
+            ],
+        }
+        streams: list[AudioStream] = []
+        for idx in (1, 2, 3):
+            st = AudioStream(
+                attempt_id=att.id,
+                stream_id=uuid.uuid4(),
+                epoch=uuid.uuid4(),
+                contract={
+                    "provider_source_id": f"google_meet:{rec.id}:receiver:{idx}",
+                    "source_kind": "speaker",
+                    "speaker_id": None,
+                    "attribution_unknown": True,
+                    "session_utc_origin": t0_iso,
+                    "monotonic_origin_ms": 0,
+                    "session_monotonic_origin_ms": 0,
+                },
+                final_sample=16000 * 120,
+                last_sequence=0,
+                scan_complete=True,
+            )
+            db.add(st)
+            streams.append(st)
+        db.flush()
+
+        # Simulate transient DOM viewport name flaps on shared SFU receivers:
+        # - Maria (devices/537) has "Johann Peter Hartmann" on her first 0.3s clause "Frage dazu."
+        # - Kerstin (devices/525) has "Johann Peter Hartmann" on an early short clause
+        # - Martin (devices/529) has a mid-sentence 0.25s flap "Was war" inside his turn
+        raw_segs = [
+            (
+                streams[0],
+                "spaces/r/devices/526",
+                "Johann Peter Hartmann",
+                10.0,
+                22.0,
+                "Wir starten mit dem Board-Review.",
+            ),
+            (
+                streams[2],
+                "spaces/r/devices/525",
+                "Johann Peter Hartmann",
+                30.0,
+                30.3,
+                "Diesmal",
+            ),
+            (
+                streams[2],
+                "spaces/r/devices/525",
+                "Kerstin Flederer",
+                30.4,
+                36.0,
+                "habe ich sechs Usability-Tickets vorbereitet.",
+            ),
+            (
+                streams[0],
+                "spaces/r/devices/529",
+                "Martin Wild",
+                50.0,
+                52.0,
+                "Irgendwann",
+            ),
+            (
+                streams[0],
+                "spaces/r/devices/529",
+                "Johann Peter Hartmann",
+                52.1,
+                52.35,
+                "was war",
+            ),
+            (
+                streams[0],
+                "spaces/r/devices/529",
+                "Martin Wild",
+                52.4,
+                57.0,
+                "da war das neue Logo schon im PR enthalten.",
+            ),
+            (
+                streams[2],
+                "spaces/r/devices/532",
+                "Ingrid Stevens",
+                70.0,
+                78.0,
+                "Für den E-Mail-Kanal brauche ich noch ein Testpostfach.",
+            ),
+            (
+                streams[1],
+                "spaces/r/devices/537",
+                "Johann Peter Hartmann",
+                90.0,
+                90.3,
+                "Frage dazu.",
+            ),
+            (
+                streams[1],
+                "spaces/r/devices/537",
+                "Maria Haubner",
+                90.4,
+                99.0,
+                "Können wir die Changelogs automatisiert in Slack teilen?",
+            ),
+        ]
+        for idx, (st, pid, flapped_name, s_sec, e_sec, text) in enumerate(raw_segs):
+            jid = f"{idx + 1:064x}"
+            src_id = st.contract["provider_source_id"]
+            binding = {
+                "provider_source_id": src_id,
+                "source_kind": "speaker",
+                "speaker_id": pid,
+                "participant_id": pid,
+                "participant_name": flapped_name,
+                "attribution_unknown": False,
+            }
+            db.add(
+                AsrJob(
+                    id=jid,
+                    stream_id=st.id,
+                    start_sample=int(s_sec * 16000),
+                    end_sample=int(e_sec * 16000),
+                    core_start=int(s_sec * 16000),
+                    core_end=int(e_sec * 16000),
+                    binding=binding,
+                    status="completed",
+                )
+            )
+            db.flush()
+            db.add(
+                TranscriptSegment(
+                    id=jid,
+                    result={
+                        "id": jid,
+                        "stream_id": str(st.stream_id),
+                        "epoch": str(st.epoch),
+                        **binding,
+                        "session_utc_origin": t0_iso,
+                        "start": s_sec,
+                        "end": e_sec,
+                        "text": text,
+                        "words": [{"word": w, "confidence": 0.9} for w in text.split()],
+                        "confidence": 0.9,
+                        "language": "German",
+                    },
+                )
+            )
+        db.commit()
+
+        exported = export_data(db, rec)
+
+    # 1. All 5 speakers appear in sources_summary with zero duplicates and zero missing speakers
+    summary_names = [s["participant_name"] for s in exported["sources_summary"]]
+    assert sorted(summary_names) == [
+        "Ingrid Stevens",
+        "Johann Peter Hartmann",
+        "Kerstin Flederer",
+        "Maria Haubner",
+        "Martin Wild",
+    ]
+    assert len(exported["sources_summary"]) == 5
+
+    # 2. Flapped fragments are canonicalized by participant_id and coalesced cleanly
+    seg_by_speaker = {s["speaker_label"]: s["text"] for s in exported["segments"]}
+    assert "Irgendwann was war da war das neue Logo" in seg_by_speaker["Martin Wild"]
+    assert "Frage dazu. Können wir die Changelogs" in seg_by_speaker["Maria Haubner"]
+    assert "Diesmal habe ich sechs Usability-Tickets" in seg_by_speaker["Kerstin Flederer"]

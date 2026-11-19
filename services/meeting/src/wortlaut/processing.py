@@ -627,25 +627,36 @@ def collect_stream_participant_names(
 ) -> tuple[dict[str, str], list[AudioControl]]:
     """Collect canonical participant_id -> participant_name mapping and bind controls."""
     participant_names: dict[str, str] = {}
+    authoritative_pids: set[str] = set()
     if attempts:
         for att in attempts:
             diag = att.diagnostics if isinstance(att.diagnostics, dict) else {}
             for p in (diag.get("participant_sources") or {}).get("sources") or []:
                 if isinstance(p, dict) and p.get("participant_id") and p.get("participant_name"):
-                    participant_names[str(p["participant_id"])] = str(p["participant_name"])
+                    pid_s = str(p["participant_id"])
+                    pname_s = " ".join(str(p["participant_name"]).split())
+                    if pname_s:
+                        participant_names[pid_s] = pname_s
+                        authoritative_pids.add(pid_s)
             for rcv in diag.get("receiver_sources") or []:
                 if (
                     isinstance(rcv, dict)
                     and rcv.get("signaled_participant_id")
                     and rcv.get("participant_name")
                 ):
-                    participant_names[str(rcv["signaled_participant_id"])] = str(
-                        rcv["participant_name"]
-                    )
+                    pid_r = str(rcv["signaled_participant_id"])
+                    pname_r = " ".join(str(rcv["participant_name"]).split())
+                    if pname_r and pid_r not in authoritative_pids:
+                        participant_names[pid_r] = pname_r
+    observed_counts: dict[str, dict[str, int]] = {}
     for s in streams:
         pid = s.contract.get("participant_id") or s.contract.get("speaker_id")
         if pid and s.contract.get("participant_name"):
-            participant_names[str(pid)] = str(s.contract["participant_name"])
+            pid_str = str(pid)
+            pname_str = " ".join(str(s.contract["participant_name"]).split())
+            if pname_str:
+                counts = observed_counts.setdefault(pid_str, {})
+                counts[pname_str] = counts.get(pname_str, 0) + 1
     stream_db_ids = [s.id for s in streams if s.id is not None]
     if stream_db_ids:
         q = select(AudioControl).where(
@@ -660,7 +671,22 @@ def collect_stream_participant_names(
     for ctrl in bind_controls:
         pid = ctrl.contract.get("participant_id") or ctrl.contract.get("speaker_id")
         if pid and ctrl.contract.get("participant_name"):
-            participant_names[str(pid)] = str(ctrl.contract["participant_name"])
+            pid_str = str(pid)
+            pname_str = " ".join(str(ctrl.contract["participant_name"]).split())
+            if pname_str:
+                counts = observed_counts.setdefault(pid_str, {})
+                counts[pname_str] = counts.get(pname_str, 0) + 1
+    for pid_str, name_counts in observed_counts.items():
+        if pid_str in authoritative_pids or not name_counts:
+            continue
+        # Prefer the dominant display name observed for this participant session so a
+        # single-tick DOM viewport transition flap cannot overwrite the real speaker name;
+        # ties break in favor of the latest observation (e.g. a participant updating their name).
+        best_name = max(
+            reversed(list(name_counts.items())),
+            key=lambda kv: kv[1],
+        )[0]
+        participant_names[pid_str] = best_name
     return participant_names, bind_controls
 
 
@@ -865,11 +891,20 @@ def purge_opted_out_keyframes(
             participant_names.setdefault(str(kf.participant_id), str(kf.participant_name))
 
     _, opted_out_norm = collect_opted_out_speakers(recording, attempts, participant_names)
-    if not opted_out_norm or not active_keyframes:
+    if not opted_out_norm:
+        return 0
+    if not active_keyframes:
+        if isinstance(recording.protocol_meta, dict) and recording.protocol_meta.get(
+            "keyframe_context"
+        ):
+            next_meta = dict(recording.protocol_meta)
+            next_meta.pop("keyframe_context", None)
+            recording.protocol_meta = next_meta
         return 0
 
     now = datetime.now(UTC)
     deleted = 0
+    kept_kf_ids: set[str] = set()
     s3_configured = bool(get_settings().s3_access_key and get_settings().s3_secret_key)
     for kf in active_keyframes:
         pname = kf.participant_name or participant_names.get(str(kf.participant_id))
@@ -895,6 +930,20 @@ def purge_opted_out_keyframes(
             elif not s3_configured:
                 kf.object_key = ""
             deleted += 1
+        else:
+            kept_kf_ids.add(str(kf.id))
+    if isinstance(recording.protocol_meta, dict) and isinstance(
+        recording.protocol_meta.get("keyframe_context"), dict
+    ):
+        prev_ctx = recording.protocol_meta["keyframe_context"]
+        pruned_ctx = {k: v for k, v in prev_ctx.items() if str(k) in kept_kf_ids}
+        if len(pruned_ctx) != len(prev_ctx):
+            next_meta = dict(recording.protocol_meta)
+            if pruned_ctx:
+                next_meta["keyframe_context"] = pruned_ctx
+            else:
+                next_meta.pop("keyframe_context", None)
+            recording.protocol_meta = next_meta
     return deleted
 
 

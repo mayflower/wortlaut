@@ -40,7 +40,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
-from wortlaut.asr import finalize_processing, inference_pass
+from wortlaut.asr import finalize_processing, inference_pass, keyframe_context_pass
 from wortlaut.calendar import imap_pass, import_mail
 from wortlaut.calendar_oauth import (
     CalendarOAuthProvider,
@@ -184,6 +184,7 @@ async def lifespan(app: FastAPI):
             for operation, interval in (
                 (segmentation_pass, 2),
                 (inference_pass, 2),
+                (keyframe_context_pass, 5),
                 (finalize_processing, 2),
                 (retention_pass, 60),
             )

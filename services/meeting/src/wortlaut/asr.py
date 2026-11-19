@@ -19,6 +19,7 @@ from wortlaut.models import (
     AudioChunk,
     AudioStream,
     Recording,
+    RecordingKeyframe,
     TranscriptSegment,
 )
 from wortlaut.processing import (
@@ -26,11 +27,13 @@ from wortlaut.processing import (
     RATE,
     AudioReadError,
     collect_opted_out_speakers,
+    is_keyframe_opted_out,
     is_speaker_opted_out,
     read_pcm,
     stream_binding_opted_out,
 )
 from wortlaut.settings import get_settings
+from wortlaut.storage import get_storage
 
 
 class InvalidResult(ValueError):
@@ -303,14 +306,57 @@ def build_asr_context_prompt(
     replacement_targets = (
         list(term_replacements.values()) if isinstance(term_replacements, dict) else []
     )
+    visual_terms: list[str] = []
+    raw_kf_ctx = meta.get("keyframe_context")
+    if recording is not None and isinstance(raw_kf_ctx, dict) and raw_kf_ctx:
+        live_kfs = list(
+            db.scalars(
+                select(RecordingKeyframe).where(
+                    RecordingKeyframe.recording_id == recording.id,
+                    RecordingKeyframe.deleted_at.is_(None),
+                )
+            ).all()
+        )
+        job_utc: datetime | None = None
+        if isinstance(stream.contract, dict) and stream.contract.get("session_utc_origin"):
+            try:
+                origin_dt = datetime.fromisoformat(str(stream.contract["session_utc_origin"]))
+                if origin_dt.tzinfo is None:
+                    origin_dt = origin_dt.replace(tzinfo=UTC)
+                mono_delta = (
+                    float(stream.contract.get("monotonic_origin_ms") or 0)
+                    - float(stream.contract.get("session_monotonic_origin_ms") or 0)
+                ) / 1000.0
+                job_utc = origin_dt + timedelta(seconds=mono_delta + job.start_sample / RATE)
+            except (ValueError, TypeError):
+                job_utc = None
+        if job_utc is not None:
+            live_kfs.sort(
+                key=lambda k: abs((k.captured_at.astimezone(UTC) - job_utc).total_seconds())
+            )
+        for kf_row in live_kfs:
+            pname_kf = kf_row.participant_name or raw_names.get(str(kf_row.participant_id))
+            if is_speaker_opted_out(
+                opted_out_norm,
+                participant_id=kf_row.participant_id,
+                participant_name=pname_kf,
+                provider_source_id=kf_row.provider_source_id,
+            ):
+                continue
+            entry_kf = raw_kf_ctx.get(str(kf_row.id))
+            if isinstance(entry_kf, dict):
+                for vt in entry_kf.get("terms") or []:
+                    if isinstance(vt, str) and vt.strip():
+                        visual_terms.append(vt)
     for raw_term in [
         *replacement_targets,
         *resolved_glossary_terms,
         *builtin_hints,
         *org_hints,
+        *visual_terms,
     ]:
         term = " ".join(str(raw_term or "").split())[:60]
-        if term and term.lower() not in seen_terms and len(glossary_terms) < 40:
+        if term and term.lower() not in seen_terms and len(glossary_terms) < 48:
             seen_terms.add(term.lower())
             glossary_terms.append(term)
 
@@ -355,7 +401,7 @@ def build_asr_context_prompt(
         glossary_line = ""
         for term in glossary_terms:
             next_val = f"{glossary_line}, {term}" if glossary_line else term
-            if len(next_val) > 220:
+            if len(next_val) > 250:
                 break
             glossary_line = next_val
         if glossary_line:
@@ -653,3 +699,212 @@ def finalize_processing(engine):
                 )
 
     return bool(completed_ids or failed_count)
+
+
+MAX_EXTRACTED_KEYFRAMES_PER_RECORDING = 16
+
+
+def keyframe_context_pass(engine) -> bool:
+    """Incrementally extract screen-share visual context during or right after a meeting."""
+    settings = get_settings()
+    if (
+        not settings.enable_llm_summary
+        or not settings.enable_keyframes
+        or not settings.s3_access_key
+        or not settings.s3_secret_key
+    ):
+        return False
+
+    now = datetime.now(UTC)
+    claim_kf_id: str | None = None
+    claim_rec_id = None
+    claim_obj_key = ""
+    claim_lang = "German" if settings.default_locale == "de" else "English"
+
+    with Session(engine) as db:
+        candidates = list(
+            db.execute(
+                select(RecordingKeyframe, Recording)
+                .join(Recording, Recording.id == RecordingKeyframe.recording_id)
+                .where(
+                    RecordingKeyframe.deleted_at.is_(None),
+                    RecordingKeyframe.object_key != "",
+                    Recording.transcript_deleted_at.is_(None),
+                    Recording.metadata_deleted_at.is_(None),
+                    Recording.processing.in_(["pending", "processing"]),
+                )
+                .order_by(RecordingKeyframe.captured_at.asc(), RecordingKeyframe.sequence.asc())
+                .limit(48)
+            ).all()
+        )
+        for kf_row, rec_row in candidates:
+            kf_id_str = str(kf_row.id)
+            meta_peek = dict(rec_row.protocol_meta or {})
+            ctx_map_peek = (
+                meta_peek.get("keyframe_context")
+                if isinstance(meta_peek.get("keyframe_context"), dict)
+                else {}
+            )
+            if kf_id_str in ctx_map_peek:
+                continue
+            extracted_count = sum(
+                1
+                for val in ctx_map_peek.values()
+                if isinstance(val, dict) and not val.get("skipped") and not val.get("empty")
+            )
+            if extracted_count >= MAX_EXTRACTED_KEYFRAMES_PER_RECORDING:
+                continue
+            claims_peek = (
+                meta_peek.get("keyframe_context_claims")
+                if isinstance(meta_peek.get("keyframe_context_claims"), dict)
+                else {}
+            )
+            existing_claim = claims_peek.get(kf_id_str)
+            if isinstance(existing_claim, str) and existing_claim:
+                try:
+                    if datetime.fromisoformat(existing_claim).astimezone(UTC) > now:
+                        continue
+                except ValueError:
+                    pass
+            if (
+                rec_row.participation != "ended"
+                and kf_row.captured_at.astimezone(UTC) > now - timedelta(seconds=8)
+            ):
+                continue
+
+            locked_rec = db.scalar(
+                select(Recording)
+                .where(
+                    Recording.id == rec_row.id,
+                    Recording.transcript_deleted_at.is_(None),
+                    Recording.metadata_deleted_at.is_(None),
+                )
+                .with_for_update(skip_locked=True)
+            )
+            if locked_rec is None:
+                continue
+            fresh_kf = db.get(RecordingKeyframe, kf_row.id)
+            if fresh_kf is None or fresh_kf.deleted_at is not None or not fresh_kf.object_key:
+                continue
+            if is_keyframe_opted_out(db, locked_rec, fresh_kf):
+                continue
+
+            meta = dict(locked_rec.protocol_meta or {})
+            ctx_map = dict(
+                meta.get("keyframe_context")
+                if isinstance(meta.get("keyframe_context"), dict)
+                else {}
+            )
+            if kf_id_str in ctx_map:
+                continue
+
+            superseded = db.scalar(
+                select(RecordingKeyframe.id)
+                .where(
+                    RecordingKeyframe.recording_id == locked_rec.id,
+                    RecordingKeyframe.deleted_at.is_(None),
+                    RecordingKeyframe.participant_id == fresh_kf.participant_id,
+                    RecordingKeyframe.captured_at > fresh_kf.captured_at,
+                    RecordingKeyframe.captured_at
+                    < fresh_kf.captured_at + timedelta(seconds=12),
+                )
+                .limit(1)
+            )
+            if superseded is not None:
+                ctx_map[kf_id_str] = {"skipped": True}
+                meta["keyframe_context"] = ctx_map
+                locked_rec.protocol_meta = meta
+                db.commit()
+                return True
+
+            claims = {
+                k: v
+                for k, v in (
+                    meta.get("keyframe_context_claims")
+                    if isinstance(meta.get("keyframe_context_claims"), dict)
+                    else {}
+                ).items()
+                if isinstance(v, str)
+            }
+            claims[kf_id_str] = (now + timedelta(seconds=50)).isoformat()
+            meta["keyframe_context_claims"] = claims
+            locked_rec.protocol_meta = meta
+            lang_spec = effective_recording_language(locked_rec, settings)
+            if lang_spec and lang_spec != "auto" and "," not in lang_spec:
+                claim_lang = lang_spec
+            claim_kf_id = kf_id_str
+            claim_rec_id = locked_rec.id
+            claim_obj_key = fresh_kf.object_key
+            db.commit()
+            break
+
+    if not claim_kf_id or claim_rec_id is None:
+        return False
+
+    from wortlaut.exports import extract_keyframe_visual_context
+
+    extracted: dict | None = None
+    read_failed = False
+    try:
+        png_bytes = get_storage().read(claim_obj_key)
+        extracted = extract_keyframe_visual_context(
+            png_bytes,
+            summary_lang=claim_lang,
+            settings=settings,
+            timeout=min(40.0, float(settings.ollama_timeout_seconds)),
+        )
+    except Exception:
+        read_failed = True
+
+    with Session(engine) as db:
+        locked_rec = db.scalar(
+            select(Recording)
+            .where(
+                Recording.id == claim_rec_id,
+                Recording.transcript_deleted_at.is_(None),
+                Recording.metadata_deleted_at.is_(None),
+            )
+            .with_for_update()
+        )
+        if locked_rec is None:
+            return True
+        meta = dict(locked_rec.protocol_meta or {})
+        claims = dict(
+            meta.get("keyframe_context_claims")
+            if isinstance(meta.get("keyframe_context_claims"), dict)
+            else {}
+        )
+        claims.pop(claim_kf_id, None)
+        if claims:
+            meta["keyframe_context_claims"] = claims
+        else:
+            meta.pop("keyframe_context_claims", None)
+
+        fresh_kf = next(
+            (
+                k
+                for k in db.scalars(
+                    select(RecordingKeyframe).where(
+                        RecordingKeyframe.recording_id == claim_rec_id,
+                        RecordingKeyframe.deleted_at.is_(None),
+                    )
+                ).all()
+                if str(k.id) == claim_kf_id
+            ),
+            None,
+        )
+        if (
+            fresh_kf is not None
+            and not read_failed
+            and not is_keyframe_opted_out(db, locked_rec, fresh_kf)
+        ):
+            ctx_map = dict(
+                meta.get("keyframe_context")
+                if isinstance(meta.get("keyframe_context"), dict)
+                else {}
+            )
+            ctx_map[claim_kf_id] = extracted if extracted is not None else {"empty": True}
+            meta["keyframe_context"] = ctx_map
+        locked_rec.protocol_meta = meta
+        db.commit()
+    return True
