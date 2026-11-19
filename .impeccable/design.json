@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-11-18T12:29:00Z",
+  "generatedAt": "2026-11-19T13:08:00Z",
   "title": "Design System: Wortlaut.cloud",
   "extensions": {
     "colorMeta": {
@@ -96,7 +96,7 @@
     "northStar": "The Quiet Acoustic Ledger",
     "overview": "Wortlaut.cloud pairs the calm editorial restraint of an archival minutes ledger with live acoustic telemetry. Across both the Astryx Stone web workspace (worker/src/ui/) and the 1280×720 WebRTC conference video tile (worker/runtime/video-tile.ts), neutral Stone grounds carry the structure through 1px hairlines and clear typographic scale rather than nested card boxes or decorative gradients.\n\nColor acts strictly as state proof: emerald (--wl-accent) signals active speech capture and verified brand presence, while warm amber (--wl-warn-text) appears exclusively when a bot waits for host admission or a participant pauses capture Off-the-Record (#pause). Cold navy-slate cards, rainbow speaker side-stripes, and model-name jargon are explicitly rejected.",
     "keyCharacteristics": [
-      "Warm-neutral Stone surfaces (light / dark / system) built on @astryxdesign/core and @astryxdesign/theme-stone.",
+      "Warm-neutral Stone surfaces (light / dark / system) built on Astryx Design (@astryxdesign/core and @astryxdesign/theme-stone in worker/package.json).",
       "Flat editorial sectioning divided by 1px hairlines (var(--color-border)), reserving elevated containers for primary input bars (.wl-dispatch-bar).",
       "Emerald acoustic signal (#059669 light / #10b981 & #34d399 dark) for live voice waveforms, focus rings, and active speaker states.",
       "Distance-legible conference video tile (Ruhiger Sprach-Horizont) engineered for 2×2–3×3 gallery grids."

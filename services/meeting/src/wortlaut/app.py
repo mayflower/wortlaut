@@ -69,6 +69,7 @@ from wortlaut.exports import (
     extract_audio_snippet_wav,
     generate_protocol_summary,
     render_export,
+    resolve_citation_timestamp,
     verify_recording_reader_token,
 )
 from wortlaut.glossary import (
@@ -1767,19 +1768,30 @@ def get_transcript(
     return export_data(db, recording)
 
 
+class ProtocolDecisionInput(BaseModel):
+    text: str = Field(default="", max_length=1500)
+    timestamp: str | None = Field(default=None, max_length=32)
+    offset_seconds: float | None = Field(default=None, ge=0.0, le=86400.0 * 3)
+
+
 class ProtocolTopicInput(BaseModel):
     title: str = Field(default="", max_length=300)
     details: str = Field(default="", max_length=2000)
+    timestamp: str | None = Field(default=None, max_length=32)
+    offset_seconds: float | None = Field(default=None, ge=0.0, le=86400.0 * 3)
 
 
 class ProtocolActionItemInput(BaseModel):
     owner: str = Field(default="Team", max_length=200)
     task: str = Field(default="", max_length=1000)
     due: str | None = Field(default=None, max_length=200)
+    timestamp: str | None = Field(default=None, max_length=32)
+    offset_seconds: float | None = Field(default=None, ge=0.0, le=86400.0 * 3)
 
 
 class ProtocolSummaryInput(BaseModel):
     summary: str = Field(default="", max_length=10000)
+    decisions: list[ProtocolDecisionInput] = Field(default_factory=list, max_length=64)
     topics: list[ProtocolTopicInput] = Field(default_factory=list, max_length=64)
     action_items: list[ProtocolActionItemInput] = Field(default_factory=list, max_length=128)
 
@@ -1824,31 +1836,77 @@ def update_recording_protocol(
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from None
     if body.summary is not None:
+        current_export = export_data(db, recording)
+        origin_utc = current_export.get("time_origin_utc")
+        cur_segments = current_export.get("segments") or []
+        cur_keyframes = current_export.get("keyframes") or []
         cleaned_summary_text = body.summary.summary.strip()
-        cleaned_topics = [
-            {
-                "title": " ".join(t.title.split()),
-                "details": " ".join(t.details.split()),
-            }
-            for t in body.summary.topics
-            if " ".join(t.title.split()) or " ".join(t.details.split())
-        ]
-        cleaned_actions: list[dict[str, str]] = []
+
+        cleaned_decisions: list[dict] = []
+        for d in body.summary.decisions:
+            d_txt = " ".join(d.text.split())
+            if not d_txt:
+                continue
+            d_item: dict = {"text": d_txt}
+            d_ts, d_off = resolve_citation_timestamp(
+                d.timestamp,
+                d.offset_seconds if not (d.timestamp or "").strip() else None,
+                origin_utc=origin_utc,
+                segments=cur_segments,
+                keyframes=cur_keyframes,
+            )
+            if d_ts and d_off is not None:
+                d_item["timestamp"] = d_ts
+                d_item["offset_seconds"] = d_off
+            cleaned_decisions.append(d_item)
+
+        cleaned_topics: list[dict] = []
+        for t in body.summary.topics:
+            t_title = " ".join(t.title.split())
+            t_details = " ".join(t.details.split())
+            if not (t_title or t_details):
+                continue
+            t_item: dict = {"title": t_title, "details": t_details}
+            t_ts, t_off = resolve_citation_timestamp(
+                t.timestamp,
+                t.offset_seconds if not (t.timestamp or "").strip() else None,
+                origin_utc=origin_utc,
+                segments=cur_segments,
+                keyframes=cur_keyframes,
+            )
+            if t_ts and t_off is not None:
+                t_item["timestamp"] = t_ts
+                t_item["offset_seconds"] = t_off
+            cleaned_topics.append(t_item)
+
+        cleaned_actions: list[dict] = []
         for a in body.summary.action_items:
             task = " ".join(a.task.split())
             if not task:
                 continue
-            item: dict[str, str] = {
+            item: dict = {
                 "owner": " ".join(a.owner.split()) or "Team",
                 "task": task,
             }
             due = " ".join((a.due or "").split())
             if due:
                 item["due"] = due
+            a_ts, a_off = resolve_citation_timestamp(
+                a.timestamp,
+                a.offset_seconds if not (a.timestamp or "").strip() else None,
+                origin_utc=origin_utc,
+                segments=cur_segments,
+                keyframes=cur_keyframes,
+            )
+            if a_ts and a_off is not None:
+                item["timestamp"] = a_ts
+                item["offset_seconds"] = a_off
             cleaned_actions.append(item)
-        if cleaned_summary_text or cleaned_topics or cleaned_actions:
+
+        if cleaned_summary_text or cleaned_decisions or cleaned_topics or cleaned_actions:
             meta["summary"] = {
                 "summary": cleaned_summary_text,
+                "decisions": cleaned_decisions,
                 "topics": cleaned_topics,
                 "action_items": cleaned_actions,
                 "generated_at": datetime.now(UTC).isoformat(),

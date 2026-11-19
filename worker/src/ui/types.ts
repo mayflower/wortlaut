@@ -178,10 +178,32 @@ export interface TranscriptSegment {
   language?: string;
 }
 
+export interface ProtocolDecisionItem {
+  text: string;
+  timestamp?: string;
+  offset_seconds?: number;
+}
+
+export interface ProtocolTopicItem {
+  title: string;
+  details: string;
+  timestamp?: string;
+  offset_seconds?: number;
+}
+
+export interface ProtocolActionItem {
+  owner: string;
+  task: string;
+  due?: string;
+  timestamp?: string;
+  offset_seconds?: number;
+}
+
 export interface ProtocolSummary {
   summary: string;
-  topics: Array<{ title: string; details: string }>;
-  action_items: Array<{ owner: string; task: string; due?: string }>;
+  decisions?: ProtocolDecisionItem[];
+  topics: ProtocolTopicItem[];
+  action_items: ProtocolActionItem[];
   model?: string;
   generated_at?: string;
 }

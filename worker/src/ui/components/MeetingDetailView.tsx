@@ -75,6 +75,7 @@ export interface MeetingDetailViewProps {
   transcript: TranscriptExport | null;
   calendarConnections?: CalendarConnectionInfo[];
   focusKeyframeId?: string | null;
+  focusTimestampSeconds?: number | null;
   isLoading: boolean;
   loadError?: unknown;
   onRefresh: () => void;
@@ -90,6 +91,7 @@ export function MeetingDetailView({
   transcript,
   calendarConnections = [],
   focusKeyframeId,
+  focusTimestampSeconds,
   isLoading,
   loadError,
   onRefresh,
@@ -226,31 +228,57 @@ export function MeetingDetailView({
         `# ${singleLine(formatRecordingTitle(recording))}`,
         '',
       ];
+      const protocolViewUrl = `${window.location.origin}/ui#view=meetings&id=${encodeURIComponent(recording.id)}`;
+      const formatMdCitation = (item: {
+        timestamp?: string;
+        offset_seconds?: number;
+      }): string => {
+        const tsVal = singleLine(item.timestamp);
+        if (!tsVal) return '';
+        if (
+          typeof item.offset_seconds === 'number' &&
+          Number.isFinite(item.offset_seconds)
+        ) {
+          return ` · [\`${tsVal}\`](${protocolViewUrl}&t=${Math.max(0, Math.round(item.offset_seconds))})`;
+        }
+        return ` · \`${tsVal}\``;
+      };
       const sum = transcript.summary;
       const sumText = sum?.summary?.trim() || '';
+      const sumDecisions = (sum?.decisions || []).filter((d) =>
+        singleLine(d.text)
+      );
       const sumTopics = (sum?.topics || []).filter(
         (t) => singleLine(t.title) || singleLine(t.details)
       );
       const sumActions = (sum?.action_items || []).filter((a) =>
         singleLine(a.task)
       );
-      if (sumText || sumTopics.length > 0) {
+      if (sumText || sumDecisions.length > 0 || sumTopics.length > 0) {
         mdLines.push(`## ${tr('Zusammenfassung', 'Summary')}`, '');
         if (sumText) {
           mdLines.push(sumText, '');
         }
+        if (sumDecisions.length > 0) {
+          mdLines.push(`### ${tr('Entscheidungen', 'Decisions')}`, '');
+          for (const d of sumDecisions) {
+            mdLines.push(`- ${singleLine(d.text)}${formatMdCitation(d)}`);
+          }
+          mdLines.push('');
+        }
         if (sumTopics.length > 0) {
           mdLines.push(
-            `### ${tr('Besprochene Themen & Ergebnisse', 'Key Topics & Decisions')}`,
+            `### ${tr('Besprochene Themen & Ergebnisse', 'Key Topics & Outcomes')}`,
             ''
           );
           for (const t of sumTopics) {
             const titlePart = singleLine(t.title) || tr('Thema', 'Topic');
             const detailPart = singleLine(t.details);
+            const citeSuffix = formatMdCitation(t);
             mdLines.push(
               detailPart
-                ? `- **${titlePart}:** ${detailPart}`
-                : `- **${titlePart}**`
+                ? `- **${titlePart}:** ${detailPart}${citeSuffix}`
+                : `- **${titlePart}**${citeSuffix}`
             );
           }
           mdLines.push('');
@@ -263,7 +291,7 @@ export function MeetingDetailView({
           const dueVal = singleLine(item.due);
           const dueSuffix = dueVal ? ` _(${tr('Fällig', 'Due')}: ${dueVal})_` : '';
           mdLines.push(
-            `- [ ] **${owner}:** ${singleLine(item.task)}${dueSuffix}`
+            `- [ ] **${owner}:** ${singleLine(item.task)}${dueSuffix}${formatMdCitation(item)}`
           );
         }
         mdLines.push('');
@@ -284,7 +312,6 @@ export function MeetingDetailView({
           )
         );
       } else {
-        const protocolViewUrl = `${window.location.origin}/ui#view=meetings&id=${encodeURIComponent(recording.id)}`;
         const timeline = [
           ...pauses.map((pw) => {
             const startLbl = formatWallClockTime(
@@ -1063,6 +1090,7 @@ export function MeetingDetailView({
                     segments={transcript.segments || []}
                     keyframes={transcript.keyframes ?? []}
                     focusKeyframeId={focusKeyframeId}
+                    focusTimestampSeconds={focusTimestampSeconds}
                     pauseWindows={transcript.pause_windows ?? []}
                     sources={transcript.sources_summary || []}
                     selectedSourceFilter={selectedSourceFilter}

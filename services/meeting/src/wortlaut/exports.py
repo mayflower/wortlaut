@@ -2,6 +2,7 @@ import base64
 import hmac
 import io
 import json
+import math
 import re
 import secrets
 import time
@@ -1445,6 +1446,108 @@ def _single_line(value: object) -> str:
     return " ".join(str(value or "").split())
 
 
+_CITATION_TS_RE = re.compile(r"^\s*\[?\s*(\d{1,2}):(\d{2})(?::(\d{2}))?\s*\]?\s*$")
+
+
+def resolve_citation_timestamp(
+    raw_timestamp: object,
+    raw_offset: object = None,
+    *,
+    origin_utc: str | None = None,
+    segments: list[dict] | tuple = (),
+    keyframes: list[dict] | tuple = (),
+) -> tuple[str | None, float | None]:
+    """Validate and snap a wall-clock or relative citation timestamp to a recording offset."""
+    max_span = max(
+        [
+            *(float(s.get("end") or 0.0) for s in segments if isinstance(s, dict)),
+            *(float(k.get("offset_seconds") or 0.0) for k in keyframes if isinstance(k, dict)),
+            0.0,
+        ]
+    )
+    has_timeline = bool(segments or keyframes)
+    upper_bound = max_span + 90.0 if has_timeline else 86400.0 * 3
+
+    cand_offset: float | None = None
+    if (
+        isinstance(raw_offset, (int, float))
+        and not isinstance(raw_offset, bool)
+        and math.isfinite(raw_offset)
+        and 0.0 <= float(raw_offset) <= upper_bound
+    ):
+        cand_offset = float(raw_offset)
+
+    ts_str = _single_line(raw_timestamp)
+    if cand_offset is None and ts_str:
+        m = _CITATION_TS_RE.match(ts_str)
+        if m:
+            p1 = int(m.group(1))
+            p2 = int(m.group(2))
+            p3 = int(m.group(3)) if m.group(3) is not None else None
+            if p2 < 60 and (p3 is None or p3 < 60):
+                origin_dt = _parse_iso_utc(origin_utc) if origin_utc else None
+                if origin_dt is not None and p1 < 24:
+                    origin_berlin = origin_dt.astimezone(BERLIN_TZ)
+                    sec_val = p3 if p3 is not None else 0
+                    for day_shift in (0, 1, -1):
+                        base_day = origin_berlin + timedelta(days=day_shift)
+                        wall_dt = base_day.replace(
+                            hour=p1, minute=p2, second=sec_val, microsecond=0
+                        )
+                        wall_off = (wall_dt - origin_berlin).total_seconds()
+                        if -20.0 <= wall_off <= upper_bound:
+                            cand_offset = max(0.0, wall_off)
+                            break
+                if cand_offset is None:
+                    rel_off = (
+                        float(p1 * 3600 + p2 * 60 + p3)
+                        if p3 is not None
+                        else float(p1 * 60 + p2)
+                    )
+                    if 0.0 <= rel_off <= upper_bound:
+                        cand_offset = rel_off
+
+    if cand_offset is None:
+        return None, None
+
+    snapped = cand_offset
+    overlapping = [
+        float(s.get("start") or 0.0)
+        for s in segments
+        if isinstance(s, dict)
+        and float(s.get("start") or 0.0) - 2.5
+        <= cand_offset
+        <= float(s.get("end") or 0.0) + 2.0
+    ]
+    if overlapping:
+        snapped = min(overlapping, key=lambda st: abs(st - cand_offset))
+    else:
+        anchors = [
+            *(float(s.get("start") or 0.0) for s in segments if isinstance(s, dict)),
+            *(float(k.get("offset_seconds") or 0.0) for k in keyframes if isinstance(k, dict)),
+        ]
+        near = [a for a in anchors if abs(a - cand_offset) <= 15.0]
+        if near:
+            snapped = min(near, key=lambda a: abs(a - cand_offset))
+
+    snapped = round(max(0.0, snapped), 2)
+    label = (
+        wall_clock_time_de(origin_utc, snapped)
+        if origin_utc
+        else short_timestamp(snapped)
+    )
+    return label, snapped
+
+
+def _attach_resolved_citation(target: dict, source: dict) -> None:
+    ts = _single_line(source.get("timestamp"))
+    off = source.get("offset_seconds")
+    if ts:
+        target["timestamp"] = ts
+    if isinstance(off, (int, float)) and not isinstance(off, bool) and math.isfinite(off):
+        target["offset_seconds"] = round(max(0.0, float(off)), 2)
+
+
 def _resolve_summary(
     raw_summary: object,
     speaker_overrides: dict[str, str],
@@ -1455,7 +1558,23 @@ def _resolve_summary(
     summary_text = _apply_text_replacements(
         str(raw_summary.get("summary") or "").strip(), term_replacements
     )
-    topics: list[dict[str, str]] = []
+    decisions: list[dict] = []
+    for d in raw_summary.get("decisions") or []:
+        if isinstance(d, str):
+            d_txt = _single_line(_apply_text_replacements(d, term_replacements))
+            if d_txt:
+                decisions.append({"text": d_txt})
+            continue
+        if not isinstance(d, dict):
+            continue
+        raw_d = str(d.get("text") or d.get("decision") or "")
+        d_txt = _single_line(_apply_text_replacements(raw_d, term_replacements))
+        if not d_txt:
+            continue
+        d_item: dict = {"text": d_txt}
+        _attach_resolved_citation(d_item, d)
+        decisions.append(d_item)
+    topics: list[dict] = []
     for t in raw_summary.get("topics") or []:
         if not isinstance(t, dict):
             continue
@@ -1466,8 +1585,10 @@ def _resolve_summary(
             _apply_text_replacements(str(t.get("details") or ""), term_replacements)
         )
         if t_title or t_details:
-            topics.append({"title": t_title, "details": t_details})
-    action_items: list[dict[str, str]] = []
+            t_item: dict = {"title": t_title, "details": t_details}
+            _attach_resolved_citation(t_item, t)
+            topics.append(t_item)
+    action_items: list[dict] = []
     for a in raw_summary.get("action_items") or []:
         if not isinstance(a, dict):
             continue
@@ -1482,14 +1603,16 @@ def _resolve_summary(
             else _single_line(_apply_text_replacements(raw_owner, term_replacements))
         )
         due = _single_line(_apply_text_replacements(str(a.get("due") or ""), term_replacements))
-        item: dict[str, str] = {"owner": owner, "task": task}
+        item: dict = {"owner": owner, "task": task}
         if due:
             item["due"] = due
+        _attach_resolved_citation(item, a)
         action_items.append(item)
-    if not summary_text and not topics and not action_items:
+    if not summary_text and not decisions and not topics and not action_items:
         return None
     resolved: dict = {
         "summary": summary_text,
+        "decisions": decisions,
         "topics": topics,
         "action_items": action_items,
     }
@@ -1533,6 +1656,11 @@ def render_export(data, format):
     notes_text = str(data.get("notes") or "").strip()
     summary_data = data.get("summary") if isinstance(data.get("summary"), dict) else None
     summary_text = str(summary_data.get("summary") or "").strip() if summary_data else ""
+    decisions = [
+        d
+        for d in ((summary_data.get("decisions") if summary_data else None) or [])
+        if isinstance(d, dict) and _single_line(d.get("text"))
+    ]
     topics = [
         t
         for t in ((summary_data.get("topics") if summary_data else None) or [])
@@ -1546,7 +1674,23 @@ def render_export(data, format):
     pause_windows_list = [
         w for w in (data.get("pause_windows") or []) if isinstance(w, dict)
     ]
-    has_summary_content = bool(summary_text or topics or actions)
+    has_summary_content = bool(summary_text or decisions or topics or actions)
+    ui_url = f"{get_settings().public_base_url()}/ui"
+    protocol_link = f"{ui_url}#view=meetings&id={data['recording_id']}"
+
+    def _md_citation_suffix(item_obj: dict) -> str:
+        ts_val = _single_line(item_obj.get("timestamp"))
+        off_val = item_obj.get("offset_seconds")
+        if not ts_val:
+            return ""
+        if isinstance(off_val, (int, float)) and not isinstance(off_val, bool):
+            return f" · [`{ts_val}`]({protocol_link}&t={max(0, round(float(off_val)))})"
+        return f" · `{ts_val}`"
+
+    def _txt_citation_suffix(item_obj: dict) -> str:
+        ts_val = _single_line(item_obj.get("timestamp"))
+        return f" [{ts_val}]" if ts_val else ""
+
     if format == "md":
         lines = [
             f"# {title}",
@@ -1559,17 +1703,26 @@ def render_export(data, format):
         if pause_windows_list:
             lines.append(f"- **Off-the-Record-Pausen:** {len(pause_windows_list)}")
         lines.append("")
-        if summary_text or topics:
+        if summary_text or decisions or topics:
             lines.extend(["## Zusammenfassung", ""])
             if summary_text:
                 lines.extend([summary_text, ""])
+            if decisions:
+                lines.extend(["### Entscheidungen", ""])
+                for d in decisions:
+                    d_text = _single_line(d["text"])
+                    lines.append(f"- {d_text}{_md_citation_suffix(d)}")
+                lines.append("")
             if topics:
                 lines.extend(["### Besprochene Themen & Ergebnisse", ""])
                 for t in topics:
                     t_title = _single_line(t.get("title")) or "Thema"
                     t_details = _single_line(t.get("details"))
+                    t_cite = _md_citation_suffix(t)
                     lines.append(
-                        f"- **{t_title}:** {t_details}" if t_details else f"- **{t_title}**"
+                        f"- **{t_title}:** {t_details}{t_cite}"
+                        if t_details
+                        else f"- **{t_title}**{t_cite}"
                     )
                 lines.append("")
         if has_summary_content:
@@ -1580,7 +1733,9 @@ def render_export(data, format):
                     task = _single_line(a["task"])
                     due = _single_line(a.get("due"))
                     suffix = f" _(Fällig: {due})_" if due else ""
-                    lines.append(f"- [ ] **{owner}:** {task}{suffix}")
+                    lines.append(
+                        f"- [ ] **{owner}:** {task}{suffix}{_md_citation_suffix(a)}"
+                    )
             else:
                 lines.append("_Keine offenen Aufgaben vereinbart._")
             lines.append("")
@@ -1616,8 +1771,6 @@ def render_export(data, format):
         ):
             lines.append("_Keine Transkriptsegmente vorhanden._")
         else:
-            ui_url = f"{get_settings().public_base_url()}/ui"
-            protocol_link = f"{ui_url}#view=meetings&id={data['recording_id']}"
             total_slides = len(keyframes_list)
             timeline_items: list[tuple[float, int, int, str, dict]] = []
             for idx, kf in enumerate(keyframes_list):
@@ -1675,17 +1828,26 @@ def render_export(data, format):
             "-" * 72,
             "",
         ]
-        if summary_text or topics:
+        if summary_text or decisions or topics:
             lines.extend(["ZUSAMMENFASSUNG", "-" * 72])
             if summary_text:
                 lines.extend([summary_text, ""])
+            if decisions:
+                lines.append("Entscheidungen:")
+                for d in decisions:
+                    d_text = _single_line(d["text"])
+                    lines.append(f"✓ {d_text}{_txt_citation_suffix(d)}")
+                lines.append("")
             if topics:
                 lines.append("Besprochene Themen & Ergebnisse:")
                 for t in topics:
                     t_title = _single_line(t.get("title")) or "Thema"
                     t_details = _single_line(t.get("details"))
+                    t_cite = _txt_citation_suffix(t)
                     lines.append(
-                        f"• {t_title}: {t_details}" if t_details else f"• {t_title}"
+                        f"• {t_title}: {t_details}{t_cite}"
+                        if t_details
+                        else f"• {t_title}{t_cite}"
                     )
                 lines.append("")
         if has_summary_content:
@@ -1696,7 +1858,9 @@ def render_export(data, format):
                     task = _single_line(a["task"])
                     due = _single_line(a.get("due"))
                     suffix = f" (Fällig: {due})" if due else ""
-                    lines.append(f"[ ] {owner}: {task}{suffix}")
+                    lines.append(
+                        f"[ ] {owner}: {task}{suffix}{_txt_citation_suffix(a)}"
+                    )
             else:
                 lines.append("Keine offenen Aufgaben vereinbart.")
             lines.append("")
@@ -2150,25 +2314,37 @@ def generate_protocol_summary(db: Session, recording_id: uuid.UUID) -> dict:
         system_prompt = (
             "Du bist ein präziser deutschsprachiger Protokollführer für Geschäftstreffen. "
             "Erstelle aus dem folgenden Wortprotokoll eine sachliche, strukturierte "
-            "Zusammenfassung und To-Do-Liste auf Deutsch. "
+            "Zusammenfassung, Entscheidungs- und To-Do-Liste auf Deutsch. "
             "Antworte ausschließlich als valides JSON-Objekt mit genau diesem Schema:\n"
             "{\n"
             f'  "summary": "{summary_len_hint}",\n'
+            '  "decisions": [\n'
+            '    {"text": "Konkreter getroffener Beschluss oder verbindliche Festlegung.", '
+            '"timestamp": "Exakter Zeitstempel HH:MM:SS der belegenden Stelle aus dem Protokoll"}\n'
+            "  ],\n"
             '  "topics": [\n'
-            f'    {{"title": "Kurzer Thementitel", "details": "{topics_len_hint}"}}\n'
+            f'    {{"title": "Kurzer Thementitel", "details": "{topics_len_hint}", '
+            '"timestamp": "Start-Zeitstempel HH:MM:SS dieses Themenblocks aus dem Protokoll"}\n'
             "  ],\n"
             '  "action_items": [\n'
             '    {"owner": "Name der Person (oder \'Team\')", '
             '"task": "Konkrete vereinbarte Aufgabe oder nächster Schritt.", '
-            '"due": "Im Gespräch genannter Termin/Zeitraum oder leerer String \\"\\""}\n'
+            '"due": "Im Gespräch genannter Termin/Zeitraum oder leerer String \\"\\"", '
+            '"timestamp": "Exakter Zeitstempel HH:MM:SS der Vereinbarung aus dem Protokoll"}\n'
             "  ]\n"
             "}\n"
             "Wichtige Regeln:\n"
-            "- Erfinde keine Fakten, Fristen oder Namen, die nicht im Gespräch oder im "
-            "nachgewiesenen Bildschirmkontext vorkommen.\n"
+            "- Erfinde keine Fakten, Fristen, Zeitstempel oder Namen, die nicht im Gespräch "
+            "oder im nachgewiesenen Bildschirmkontext vorkommen.\n"
+            "- Führe unter `decisions` ausschließlich tatsächlich getroffene Entscheidungen, "
+            "Beschlüsse oder verbindliche Richtungsfestlegungen auf (keine Statusmeldungen); "
+            'wurde nichts entschieden, gib `"decisions": []` zurück.\n'
+            "- Gib bei jedem Eintrag in `decisions`, `topics` und `action_items` im Feld "
+            '`"timestamp"` den exakten `[HH:MM:SS]`-Zeitstempel der belegenden Zeile aus dem '
+            "Wortprotokoll an.\n"
             "- Erfasse in `action_items` alle konkret zugesagten Folgeaufgaben, PR-Reviews, "
             "Konfigurationsprüfungen, Testzugänge und anzulegenden Tickets mit der zuständigen "
-            "Person; wenn nichts vereinbart wurde, gib `\"action_items\": []` zurück.\n"
+            'Person; wenn nichts vereinbart wurde, gib `"action_items": []` zurück.\n'
             "- Ordne Vorschläge, Bewertungen und Zusagen namentlich den Personen zu, die sie "
             "tatsächlich eingebracht haben.\n"
             "- Wenn Teilnehmende zeigend auf den geteilten Bildschirm verweisen (z. B. 'der hier', "
@@ -2195,33 +2371,43 @@ def generate_protocol_summary(db: Session, recording_id: uuid.UUID) -> dict:
             else f"Concise executive summary in {summary_lang} (2-4 sentences)."
         )
         topics_len_en = (
-            f"Discussed points, decisions, and matching ticket/PR IDs in {summary_lang} "
+            f"Discussed points, outcomes, and matching ticket/PR IDs in {summary_lang} "
             "(2-5 sentences); cover all distinct agenda blocks."
             if is_detailed_meeting
-            else f"Discussed points and decisions in {summary_lang} (1-3 sentences)."
+            else f"Discussed points and outcomes in {summary_lang} (1-3 sentences)."
         )
         system_prompt = (
             "You are a precise meeting minutes secretary. "
-            "Produce a factual, structured executive summary and action-item list "
+            "Produce a factual, structured executive summary, decisions log, and action-item list "
             f"written in {summary_lang} from the verbatim transcript below. "
             "Respond strictly as a valid JSON object matching this exact schema:\n"
             "{\n"
             f'  "summary": "{summary_len_en}",\n'
+            '  "decisions": [\n'
+            f'    {{"text": "Concrete agreed decision in {summary_lang}.", '
+            '"timestamp": "Exact HH:MM:SS timestamp from the transcript"}\n'
+            "  ],\n"
             '  "topics": [\n'
             f'    {{"title": "Short topic title in {summary_lang}", '
-            f'"details": "{topics_len_en}"}}\n'
+            f'"details": "{topics_len_en}", '
+            '"timestamp": "Starting HH:MM:SS timestamp of this topic from the transcript"}\n'
             "  ],\n"
             '  "action_items": [\n'
             '    {"owner": "Person name (or \'Team\')", '
             f'"task": "Concrete agreed action item in {summary_lang}.", '
-            '"due": "Mentioned deadline/timeframe or empty string \\"\\""}\n'
+            '"due": "Mentioned deadline/timeframe or empty string \\"\\"", '
+            '"timestamp": "Exact HH:MM:SS timestamp from the transcript"}\n'
             "  ]\n"
             "}\n"
             "Rules:\n"
-            "- Never invent facts, deadlines, or names not present in the transcript or "
-            "verified screen-share context.\n"
+            "- Never invent facts, deadlines, timestamps, or names not present in the transcript "
+            "or verified screen-share context.\n"
+            "- List only explicit decisions or binding agreements under `decisions`; if none were "
+            'made, return `"decisions": []`.\n'
+            "- Provide the exact `[HH:MM:SS]` source timestamp from the transcript on every entry "
+            "in `decisions`, `topics`, and `action_items`.\n"
             "- Capture all concrete follow-ups, PR reviews, test setups, and ticket actions "
-            "with their owner; if none were agreed, return `\"action_items\": []`.\n"
+            'with their owner; if none were agreed, return `"action_items": []`.\n'
             "- Attribute proposals and commitments to the actual speaker by name.\n"
             "- When speakers refer deictically to shared screen items ('this ticket', 'this one') "
             "and a timestamp-matching screen-share context entry exists, cite the visible ticket "
@@ -2301,32 +2487,81 @@ def generate_protocol_summary(db: Session, recording_id: uuid.UUID) -> dict:
         raise RuntimeError("ollama_invalid_json") from None
     if not isinstance(parsed, dict):
         raise RuntimeError("ollama_invalid_json")
-    action_items: list[dict[str, str]] = []
+    decisions_list: list[dict] = []
+    for raw_dec in parsed.get("decisions") or []:
+        if isinstance(raw_dec, str):
+            dec_txt = _single_line(raw_dec)
+            if dec_txt:
+                decisions_list.append({"text": dec_txt})
+            continue
+        if not isinstance(raw_dec, dict):
+            continue
+        dec_txt = _single_line(raw_dec.get("text") or raw_dec.get("decision"))
+        if not dec_txt:
+            continue
+        dec_item: dict = {"text": dec_txt}
+        dec_ts, dec_off = resolve_citation_timestamp(
+            raw_dec.get("timestamp"),
+            raw_dec.get("offset_seconds"),
+            origin_utc=origin_utc,
+            segments=segments,
+            keyframes=active_keyframes,
+        )
+        if dec_ts and dec_off is not None:
+            dec_item["timestamp"] = dec_ts
+            dec_item["offset_seconds"] = dec_off
+        decisions_list.append(dec_item)
+
+    action_items: list[dict] = []
     for a in parsed.get("action_items") or []:
         if not isinstance(a, dict) or not _single_line(a.get("task")):
             continue
-        item: dict[str, str] = {
+        item: dict = {
             "owner": _single_line(a.get("owner")) or "Team",
             "task": _single_line(a.get("task")),
         }
         due = _single_line(a.get("due"))
         if due:
             item["due"] = due
+        act_ts, act_off = resolve_citation_timestamp(
+            a.get("timestamp"),
+            a.get("offset_seconds"),
+            origin_utc=origin_utc,
+            segments=segments,
+            keyframes=active_keyframes,
+        )
+        if act_ts and act_off is not None:
+            item["timestamp"] = act_ts
+            item["offset_seconds"] = act_off
         action_items.append(item)
-    topics_list = [
-        {
-            "title": _single_line(t.get("title")),
-            "details": _single_line(t.get("details")),
-        }
-        for t in (parsed.get("topics") or [])
-        if isinstance(t, dict)
-        and (_single_line(t.get("title")) or _single_line(t.get("details")))
-    ]
+
+    topics_list: list[dict] = []
+    for t in parsed.get("topics") or []:
+        if not isinstance(t, dict):
+            continue
+        t_title = _single_line(t.get("title"))
+        t_details = _single_line(t.get("details"))
+        if not (t_title or t_details):
+            continue
+        t_item: dict = {"title": t_title, "details": t_details}
+        top_ts, top_off = resolve_citation_timestamp(
+            t.get("timestamp"),
+            t.get("offset_seconds"),
+            origin_utc=origin_utc,
+            segments=segments,
+            keyframes=active_keyframes,
+        )
+        if top_ts and top_off is not None:
+            t_item["timestamp"] = top_ts
+            t_item["offset_seconds"] = top_off
+        topics_list.append(t_item)
+
     cleaned_summary = str(parsed.get("summary") or "").strip()
-    if not cleaned_summary and not topics_list and not action_items:
+    if not cleaned_summary and not decisions_list and not topics_list and not action_items:
         raise RuntimeError("ollama_empty_summary")
     summary_obj = {
         "summary": cleaned_summary,
+        "decisions": decisions_list,
         "topics": topics_list,
         "action_items": action_items,
         "model": settings.ollama_model,

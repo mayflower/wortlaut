@@ -76,6 +76,9 @@ export function App() {
   const [focusKeyframeId, setFocusKeyframeId] = useState<string | null>(
     initialNav.keyframeId
   );
+  const [focusTimestampSeconds, setFocusTimestampSeconds] = useState<
+    number | null
+  >(initialNav.timestampSeconds);
   const [newRecordingOpen, setNewRecordingOpen] = useState<boolean>(false);
   const [newRecordingTab, setNewRecordingTab] = useState<'link' | 'ics'>(
     'link'
@@ -175,6 +178,7 @@ export function App() {
       setActiveNav(next.view);
       setSelectedId(next.recordingId);
       setFocusKeyframeId(next.keyframeId);
+      setFocusTimestampSeconds(next.timestampSeconds);
     };
     window.addEventListener('popstate', onUrlChange);
     window.addEventListener('hashchange', onUrlChange);
@@ -545,6 +549,8 @@ export function App() {
 
   const handleOpenRecording = (id: string) => {
     setSelectedId(id);
+    setFocusKeyframeId(null);
+    setFocusTimestampSeconds(null);
     setActiveNav('meetings');
   };
 
@@ -882,27 +888,32 @@ export function App() {
             transcript={transcriptQuery.data || null}
             calendarConnections={calendarConnections}
             focusKeyframeId={focusKeyframeId}
+            focusTimestampSeconds={focusTimestampSeconds}
             isLoading={detailQuery.isLoading || transcriptQuery.isLoading}
             loadError={detailLoadError}
             onRefresh={handleManualRefresh}
             onBackToOverview={() => {
               setSelectedId(null);
               setFocusKeyframeId(null);
+              setFocusTimestampSeconds(null);
               setActiveNav('meetings');
             }}
             onOpenCalendar={() => {
               setSelectedId(null);
               setFocusKeyframeId(null);
+              setFocusTimestampSeconds(null);
               setActiveNav('calendar');
             }}
             onOpenGlossary={() => {
               setSelectedId(null);
               setFocusKeyframeId(null);
+              setFocusTimestampSeconds(null);
               setActiveNav('glossary');
             }}
             onDeleted={() => {
               setSelectedId(null);
               setFocusKeyframeId(null);
+              setFocusTimestampSeconds(null);
               handleManualRefresh();
             }}
           />

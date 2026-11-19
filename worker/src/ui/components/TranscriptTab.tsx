@@ -96,6 +96,7 @@ export interface TranscriptTabProps {
   segments: TranscriptSegment[];
   keyframes?: RecordingKeyframe[];
   focusKeyframeId?: string | null;
+  focusTimestampSeconds?: number | null;
   pauseWindows?: PauseWindow[];
   sources: SourceSummary[];
   selectedSourceFilter: string;
@@ -143,6 +144,7 @@ interface KeyframeTimelineCardProps {
   deleteLabel: string;
   isOperator: boolean;
   isActiveFilter: boolean;
+  isCited?: boolean;
   onToggleFilter: () => void;
   onRequestLoad: (kf: RecordingKeyframe) => void;
   onOpenPreview: (kf: RecordingKeyframe) => void;
@@ -162,6 +164,7 @@ function KeyframeTimelineCard({
   deleteLabel,
   isOperator,
   isActiveFilter,
+  isCited = false,
   onToggleFilter,
   onRequestLoad,
   onOpenPreview,
@@ -193,7 +196,7 @@ function KeyframeTimelineCard({
     <div
       ref={containerRef}
       id={`keyframe-${keyframe.id}`}
-      className="group wl-turn-row"
+      className={`group wl-turn-row ${isCited ? 'wl-turn-cited' : ''}`}
     >
       <HStack gap={3} vAlign="start">
         <Avatar size="sm" shape="circle" name={keyframe.presenter} />
@@ -287,6 +290,7 @@ export function TranscriptTab({
   segments,
   keyframes = [],
   focusKeyframeId = null,
+  focusTimestampSeconds = null,
   pauseWindows = [],
   sources,
   selectedSourceFilter,
@@ -298,17 +302,33 @@ export function TranscriptTab({
   const kStr = KEYFRAME_STRINGS[lang];
   const [searchQuery, setSearchQuery] = useState('');
   const [copiedTurnId, setCopiedTurnId] = useState<string | null>(null);
+  const [citedElementId, setCitedElementId] = useState<string | null>(null);
+  const citeTimerRef = useRef<number | null>(null);
 
-  // AI Summary & manual To-Do editor state
+  // AI Summary, Decisions & manual To-Do editor state
   const [generatingSummary, setGeneratingSummary] = useState(false);
   const [summaryError, setSummaryError] = useState<string | null>(null);
   const [editingSummary, setEditingSummary] = useState(false);
   const [summaryDraft, setSummaryDraft] = useState('');
+  const [decisionsDraft, setDecisionsDraft] = useState<
+    Array<{ text: string; timestamp: string; offset_seconds?: number }>
+  >([]);
   const [topicsDraft, setTopicsDraft] = useState<
-    Array<{ title: string; details: string }>
+    Array<{
+      title: string;
+      details: string;
+      timestamp: string;
+      offset_seconds?: number;
+    }>
   >([]);
   const [actionItemsDraft, setActionItemsDraft] = useState<
-    Array<{ owner: string; task: string; due: string }>
+    Array<{
+      owner: string;
+      task: string;
+      due: string;
+      timestamp: string;
+      offset_seconds?: number;
+    }>
   >([]);
   const [savingSummary, setSavingSummary] = useState(false);
 
@@ -360,6 +380,7 @@ export function TranscriptTab({
     setEditingTurnId(null);
     setPreviewKeyframe(null);
     setConfirmDeleteKeyframe(null);
+    setCitedElementId(null);
     for (const url of createdKeyframeUrlsRef.current.values()) {
       URL.revokeObjectURL(url);
     }
@@ -384,6 +405,10 @@ export function TranscriptTab({
         URL.revokeObjectURL(url);
       }
       createdKeyframeUrlsRef.current.clear();
+      if (citeTimerRef.current !== null) {
+        window.clearTimeout(citeTimerRef.current);
+        citeTimerRef.current = null;
+      }
     };
   }, []);
 
@@ -437,6 +462,164 @@ export function TranscriptTab({
     });
     return () => window.cancelAnimationFrame(frame);
   }, [focusKeyframeId, keyframes, requestKeyframeImage]);
+
+  const jumpToProtocolOffset = useCallback(
+    (offsetSec?: number, rawTimestamp?: string) => {
+      let targetSec: number | null =
+        typeof offsetSec === 'number' && Number.isFinite(offsetSec)
+          ? Math.max(0, offsetSec)
+          : null;
+
+      const cleanTs = (rawTimestamp || '').replace(/^\[|\]$/g, '').trim();
+      if (targetSec === null && cleanTs) {
+        for (const seg of segments) {
+          const wall = formatWallClockTime(seg.start, timeOriginUtc);
+          if (wall === cleanTs || wall.startsWith(cleanTs)) {
+            targetSec = seg.start;
+            break;
+          }
+        }
+        if (targetSec === null) {
+          for (const kf of keyframes) {
+            const wall = formatWallClockTime(kf.offset_seconds, timeOriginUtc);
+            if (wall === cleanTs || wall.startsWith(cleanTs)) {
+              targetSec = kf.offset_seconds;
+              break;
+            }
+          }
+        }
+        if (targetSec === null) {
+          const parts = cleanTs.split(':').map((p) => Number(p));
+          if (
+            parts.every((n) => Number.isFinite(n) && n >= 0) &&
+            parts.length >= 2 &&
+            parts.length <= 3
+          ) {
+            targetSec =
+              parts.length === 3
+                ? parts[0] * 3600 + parts[1] * 60 + parts[2]
+                : parts[0] * 60 + parts[1];
+          }
+        }
+      }
+
+      if (targetSec === null) return;
+
+      for (const kf of keyframes) {
+        if (Math.abs(kf.offset_seconds - targetSec) <= 20) {
+          requestKeyframeImage(kf);
+        }
+      }
+
+      // Resolve first segment ID of the turn covering or closest to targetSec
+      const allTurnAnchors: Array<{
+        domId: string;
+        start: number;
+        end: number;
+      }> = [];
+      for (const seg of segments) {
+        const segId =
+          seg.segment_id || seg.id || `${seg.stream_id}-${seg.start}`;
+        const prev = allTurnAnchors[allTurnAnchors.length - 1];
+        if (prev && prev.domId === `seg-${segId}`) {
+          prev.end = Math.max(prev.end, seg.end);
+        } else {
+          allTurnAnchors.push({
+            domId: `seg-${segId}`,
+            start: seg.start,
+            end: seg.end,
+          });
+        }
+      }
+
+      let bestDomId: string | null = null;
+      const overlappingTurns = allTurnAnchors.filter(
+        (t) => targetSec! >= t.start - 2.5 && targetSec! <= t.end + 2.5
+      );
+      if (overlappingTurns.length > 0) {
+        overlappingTurns.sort(
+          (a, b) =>
+            Math.abs(a.start - targetSec!) - Math.abs(b.start - targetSec!)
+        );
+        bestDomId = overlappingTurns[0].domId;
+      } else {
+        const candidates: Array<{ domId: string; dist: number }> = [
+          ...allTurnAnchors.map((t) => ({
+            domId: t.domId,
+            dist: Math.min(
+              Math.abs(t.start - targetSec!),
+              Math.abs(t.end - targetSec!)
+            ),
+          })),
+          ...keyframes.map((kf) => ({
+            domId: `keyframe-${kf.id}`,
+            dist: Math.abs(kf.offset_seconds - targetSec!),
+          })),
+        ];
+        if (candidates.length > 0) {
+          candidates.sort((a, b) => a.dist - b.dist);
+          bestDomId = candidates[0].domId;
+        }
+      }
+
+      if (!bestDomId) return;
+
+      if (searchQuery || selectedSourceFilter) {
+        setSearchQuery('');
+        onSelectedSourceFilterChange('');
+      }
+
+      const scrollAndHighlight = (attempt = 0) => {
+        const el = document.getElementById(bestDomId!);
+        if (!el) {
+          if (attempt < 3) {
+            window.requestAnimationFrame(() => scrollAndHighlight(attempt + 1));
+          }
+          return;
+        }
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        setCitedElementId(bestDomId);
+        if (citeTimerRef.current !== null) {
+          window.clearTimeout(citeTimerRef.current);
+        }
+        citeTimerRef.current = window.setTimeout(() => {
+          setCitedElementId((cur) => (cur === bestDomId ? null : cur));
+          citeTimerRef.current = null;
+        }, 2600);
+      };
+
+      window.requestAnimationFrame(() => scrollAndHighlight(0));
+    },
+    [
+      segments,
+      keyframes,
+      timeOriginUtc,
+      searchQuery,
+      selectedSourceFilter,
+      onSelectedSourceFilterChange,
+      requestKeyframeImage,
+    ]
+  );
+
+  const lastFocusedTsRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (
+      focusTimestampSeconds == null ||
+      (segments.length === 0 && keyframes.length === 0)
+    ) {
+      return;
+    }
+    const key = `${recordingId}:${focusTimestampSeconds}`;
+    if (lastFocusedTsRef.current === key) return;
+    lastFocusedTsRef.current = key;
+    jumpToProtocolOffset(focusTimestampSeconds);
+  }, [
+    recordingId,
+    focusTimestampSeconds,
+    segments.length,
+    keyframes.length,
+    jumpToProtocolOffset,
+  ]);
 
   const handleConfirmDeleteKeyframe = async () => {
     if (!confirmDeleteKeyframe || !token) return;
@@ -680,21 +863,32 @@ export function TranscriptTab({
   const handleStartEditSummary = () => {
     setSummaryError(null);
     setSummaryDraft(summary?.summary || '');
+    setDecisionsDraft(
+      (summary?.decisions || []).map((d) => ({
+        text: d.text || '',
+        timestamp: d.timestamp || '',
+        offset_seconds: d.offset_seconds,
+      }))
+    );
     setTopicsDraft(
       (summary?.topics || []).map((t) => ({
         title: t.title || '',
         details: t.details || '',
+        timestamp: t.timestamp || '',
+        offset_seconds: t.offset_seconds,
       }))
     );
     const existingItems = (summary?.action_items || []).map((item) => ({
       owner: item.owner || 'Team',
       task: item.task || '',
       due: item.due || '',
+      timestamp: item.timestamp || '',
+      offset_seconds: item.offset_seconds,
     }));
     setActionItemsDraft(
       existingItems.length > 0
         ? existingItems
-        : [{ owner: 'Team', task: '', due: '' }]
+        : [{ owner: 'Team', task: '', due: '', timestamp: '' }]
     );
     setEditingSummary(true);
   };
@@ -704,24 +898,51 @@ export function TranscriptTab({
     setSummaryError(null);
     setSavingSummary(true);
     try {
+      const cleanedDecisions = decisionsDraft
+        .map((d) => {
+          const ts = d.timestamp.replace(/\s+/g, ' ').trim();
+          return {
+            text: d.text.replace(/\s+/g, ' ').trim(),
+            ...(ts ? { timestamp: ts } : {}),
+            ...(ts && d.offset_seconds != null
+              ? { offset_seconds: d.offset_seconds }
+              : {}),
+          };
+        })
+        .filter((d) => d.text.length > 0);
       const cleanedTopics = topicsDraft
-        .map((t) => ({
-          title: t.title.replace(/\s+/g, ' ').trim(),
-          details: t.details.replace(/\s+/g, ' ').trim(),
-        }))
+        .map((t) => {
+          const ts = t.timestamp.replace(/\s+/g, ' ').trim();
+          return {
+            title: t.title.replace(/\s+/g, ' ').trim(),
+            details: t.details.replace(/\s+/g, ' ').trim(),
+            ...(ts ? { timestamp: ts } : {}),
+            ...(ts && t.offset_seconds != null
+              ? { offset_seconds: t.offset_seconds }
+              : {}),
+          };
+        })
         .filter((t) => t.title.length > 0 || t.details.length > 0);
       const cleanedActions = actionItemsDraft
         .filter((a) => a.task.trim().length > 0)
-        .map((a) => ({
-          owner: a.owner.replace(/\s+/g, ' ').trim() || 'Team',
-          task: a.task.replace(/\s+/g, ' ').trim(),
-          ...(a.due.replace(/\s+/g, ' ').trim()
-            ? { due: a.due.replace(/\s+/g, ' ').trim() }
-            : {}),
-        }));
+        .map((a) => {
+          const ts = a.timestamp.replace(/\s+/g, ' ').trim();
+          return {
+            owner: a.owner.replace(/\s+/g, ' ').trim() || 'Team',
+            task: a.task.replace(/\s+/g, ' ').trim(),
+            ...(a.due.replace(/\s+/g, ' ').trim()
+              ? { due: a.due.replace(/\s+/g, ' ').trim() }
+              : {}),
+            ...(ts ? { timestamp: ts } : {}),
+            ...(ts && a.offset_seconds != null
+              ? { offset_seconds: a.offset_seconds }
+              : {}),
+          };
+        });
       await updateRecordingProtocol(token, recordingId, {
         summary: {
           summary: summaryDraft.trim(),
+          decisions: cleanedDecisions,
           topics: cleanedTopics,
           action_items: cleanedActions,
         },
@@ -926,7 +1147,89 @@ export function TranscriptTab({
                 <VStack gap={2}>
                   <HStack justify="between" vAlign="center">
                     <Text type="supporting" weight="semibold" color="secondary">
-                      {tr('Themen & Beschlüsse', 'Topics & Decisions')}
+                      {tr('Entscheidungen', 'Decisions')}
+                    </Text>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      icon={<Plus className="h-3.5 w-3.5" />}
+                      label={tr('Entscheidung hinzufügen', 'Add decision')}
+                      onClick={() =>
+                        setDecisionsDraft((prev) => [
+                          ...prev,
+                          { text: '', timestamp: '' },
+                        ])
+                      }
+                    />
+                  </HStack>
+
+                  {decisionsDraft.map((dec, idx) => (
+                    <div
+                      key={idx}
+                      className="grid grid-cols-1 gap-2 sm:grid-cols-12 items-center"
+                    >
+                      <div className="sm:col-span-9">
+                        <TextInput
+                          label={tr('Entscheidung', 'Decision')}
+                          isLabelHidden
+                          size="sm"
+                          value={dec.text}
+                          onChange={(val) =>
+                            setDecisionsDraft((prev) =>
+                              prev.map((row, i) =>
+                                i === idx ? { ...row, text: val } : row
+                              )
+                            )
+                          }
+                          placeholder={tr(
+                            'Getroffener Beschluss…',
+                            'Agreed decision…'
+                          )}
+                        />
+                      </div>
+                      <div className="sm:col-span-2">
+                        <TextInput
+                          label={tr('Zeitstempel', 'Timestamp')}
+                          isLabelHidden
+                          size="sm"
+                          value={dec.timestamp}
+                          onChange={(val) =>
+                            setDecisionsDraft((prev) =>
+                              prev.map((row, i) =>
+                                i === idx
+                                  ? {
+                                      ...row,
+                                      timestamp: val,
+                                      offset_seconds: undefined,
+                                    }
+                                  : row
+                              )
+                            )
+                          }
+                          placeholder="HH:MM:SS"
+                        />
+                      </div>
+                      <div className="sm:col-span-1 flex justify-end">
+                        <IconButton
+                          variant="ghost"
+                          size="sm"
+                          label={tr('Entfernen', 'Remove')}
+                          icon={<Trash2 className="h-3.5 w-3.5" />}
+                          onClick={() =>
+                            setDecisionsDraft((prev) =>
+                              prev.filter((_, i) => i !== idx)
+                            )
+                          }
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </VStack>
+
+                <VStack gap={2}>
+                  <HStack justify="between" vAlign="center">
+                    <Text type="supporting" weight="semibold" color="secondary">
+                      {tr('Besprochene Themen', 'Topics')}
                     </Text>
                     <Button
                       variant="ghost"
@@ -936,7 +1239,7 @@ export function TranscriptTab({
                       onClick={() =>
                         setTopicsDraft((prev) => [
                           ...prev,
-                          { title: '', details: '' },
+                          { title: '', details: '', timestamp: '' },
                         ])
                       }
                     />
@@ -947,7 +1250,7 @@ export function TranscriptTab({
                       key={idx}
                       className="grid grid-cols-1 gap-2 sm:grid-cols-12 items-center"
                     >
-                      <div className="sm:col-span-4">
+                      <div className="sm:col-span-3">
                         <TextInput
                           label={tr('Thema', 'Topic')}
                           isLabelHidden
@@ -963,9 +1266,9 @@ export function TranscriptTab({
                           placeholder={tr('Thema', 'Topic')}
                         />
                       </div>
-                      <div className="sm:col-span-7">
+                      <div className="sm:col-span-6">
                         <TextInput
-                          label={tr('Ergebnis', 'Decision')}
+                          label={tr('Ergebnis', 'Details')}
                           isLabelHidden
                           size="sm"
                           value={topic.details}
@@ -977,9 +1280,31 @@ export function TranscriptTab({
                             )
                           }
                           placeholder={tr(
-                            'Ergebnis / Beschluss',
-                            'Decision / details'
+                            'Inhalte / Ergebnis',
+                            'Discussion / outcome'
                           )}
+                        />
+                      </div>
+                      <div className="sm:col-span-2">
+                        <TextInput
+                          label={tr('Zeitstempel', 'Timestamp')}
+                          isLabelHidden
+                          size="sm"
+                          value={topic.timestamp}
+                          onChange={(val) =>
+                            setTopicsDraft((prev) =>
+                              prev.map((row, i) =>
+                                i === idx
+                                  ? {
+                                      ...row,
+                                      timestamp: val,
+                                      offset_seconds: undefined,
+                                    }
+                                  : row
+                              )
+                            )
+                          }
+                          placeholder="HH:MM:SS"
                         />
                       </div>
                       <div className="sm:col-span-1 flex justify-end">
@@ -1012,7 +1337,7 @@ export function TranscriptTab({
                       onClick={() =>
                         setActionItemsDraft((prev) => [
                           ...prev,
-                          { owner: 'Team', task: '', due: '' },
+                          { owner: 'Team', task: '', due: '', timestamp: '' },
                         ])
                       }
                     />
@@ -1039,7 +1364,7 @@ export function TranscriptTab({
                           placeholder={tr('Person / Team', 'Owner / Team')}
                         />
                       </div>
-                      <div className="sm:col-span-6">
+                      <div className="sm:col-span-4">
                         <TextInput
                           label={tr('Aufgabe', 'Task')}
                           isLabelHidden
@@ -1069,6 +1394,28 @@ export function TranscriptTab({
                             )
                           }
                           placeholder={tr('Frist', 'Due')}
+                        />
+                      </div>
+                      <div className="sm:col-span-2">
+                        <TextInput
+                          label={tr('Zeitstempel', 'Timestamp')}
+                          isLabelHidden
+                          size="sm"
+                          value={item.timestamp}
+                          onChange={(val) =>
+                            setActionItemsDraft((prev) =>
+                              prev.map((row, i) =>
+                                i === idx
+                                  ? {
+                                      ...row,
+                                      timestamp: val,
+                                      offset_seconds: undefined,
+                                    }
+                                  : row
+                              )
+                            )
+                          }
+                          placeholder="HH:MM:SS"
                         />
                       </div>
                       <div className="sm:col-span-1 flex justify-end">
@@ -1116,49 +1463,171 @@ export function TranscriptTab({
                   </div>
                 )}
 
+                {summary.decisions && summary.decisions.length > 0 && (
+                  <VStack gap={1.5}>
+                    <Heading level={3}>
+                      {tr('Entscheidungen', 'Decisions')}
+                    </Heading>
+                    <VStack gap={1}>
+                      {summary.decisions.map((dec, idx) => {
+                        const citeLbl =
+                          dec.timestamp ||
+                          (dec.offset_seconds != null
+                            ? formatWallClockTime(
+                                dec.offset_seconds,
+                                timeOriginUtc
+                              )
+                            : '');
+                        return (
+                          <HStack
+                            key={idx}
+                            gap={2}
+                            vAlign="start"
+                            className="max-w-[72ch]"
+                          >
+                            <Check className="h-4 w-4 shrink-0 mt-0.5 wl-text-accent" />
+                            <Text type="supporting" color="primary">
+                              {dec.text}
+                              {citeLbl ? (
+                                <button
+                                  type="button"
+                                  className="wl-citation-chip"
+                                  onClick={() =>
+                                    jumpToProtocolOffset(
+                                      dec.offset_seconds,
+                                      dec.timestamp
+                                    )
+                                  }
+                                  title={tr(
+                                    'Zur belegenden Stelle im Protokoll springen',
+                                    'Jump to cited source in transcript'
+                                  )}
+                                >
+                                  {citeLbl}
+                                </button>
+                              ) : null}
+                            </Text>
+                          </HStack>
+                        );
+                      })}
+                    </VStack>
+                  </VStack>
+                )}
+
                 {summary.topics && summary.topics.length > 0 && (
-                  <ul
-                    dir="auto"
-                    className="m-0 list-disc pl-5 space-y-1.5 max-w-[72ch] text-[14px] leading-relaxed text-[var(--color-text-secondary)]"
-                  >
-                    {summary.topics.map((t, idx) => (
-                      <li key={idx}>
-                        {t.title && (
-                          <strong className="font-semibold text-[var(--color-text-primary)]">
-                            {t.title}
-                          </strong>
-                        )}
-                        {t.title && t.details ? ' — ' : ''}
-                        {t.details}
-                      </li>
-                    ))}
-                  </ul>
+                  <VStack gap={1.5}>
+                    {summary.decisions && summary.decisions.length > 0 && (
+                      <Heading level={3}>
+                        {tr('Besprochene Themen', 'Topics')}
+                      </Heading>
+                    )}
+                    <ul
+                      dir="auto"
+                      className="m-0 list-disc pl-5 space-y-1.5 max-w-[72ch] text-[14px] leading-relaxed text-[var(--color-text-secondary)]"
+                    >
+                      {summary.topics.map((t, idx) => {
+                        const citeLbl =
+                          t.timestamp ||
+                          (t.offset_seconds != null
+                            ? formatWallClockTime(
+                                t.offset_seconds,
+                                timeOriginUtc
+                              )
+                            : '');
+                        return (
+                          <li key={idx}>
+                            {t.title && (
+                              <strong className="font-semibold text-[var(--color-text-primary)]">
+                                {t.title}
+                              </strong>
+                            )}
+                            {t.title && t.details ? ' — ' : ''}
+                            {t.details}
+                            {citeLbl ? (
+                              <button
+                                type="button"
+                                className="wl-citation-chip"
+                                onClick={() =>
+                                  jumpToProtocolOffset(
+                                    t.offset_seconds,
+                                    t.timestamp
+                                  )
+                                }
+                                title={tr(
+                                  'Zur belegenden Stelle im Protokoll springen',
+                                  'Jump to cited source in transcript'
+                                )}
+                              >
+                                {citeLbl}
+                              </button>
+                            ) : null}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </VStack>
                 )}
 
                 {summary.action_items && summary.action_items.length > 0 && (
-                  <VStack gap={1}>
-                    {summary.action_items.map((item, idx) => (
-                      <HStack
-                        key={idx}
-                        gap={2}
-                        vAlign="start"
-                        className="max-w-[72ch]"
-                      >
-                        <CheckSquare className="h-4 w-4 shrink-0 mt-0.5 wl-text-accent" />
-                        <Text type="supporting" color="primary">
-                          <strong className="font-semibold">
-                            {item.owner}:
-                          </strong>{' '}
-                          {item.task}
-                          {item.due ? (
-                            <span className="text-[var(--color-text-secondary)]">
-                              {' '}
-                              ({item.due})
-                            </span>
-                          ) : null}
-                        </Text>
-                      </HStack>
-                    ))}
+                  <VStack gap={1.5}>
+                    {((summary.decisions && summary.decisions.length > 0) ||
+                      (summary.topics && summary.topics.length > 0)) && (
+                      <Heading level={3}>
+                        {tr('Aufgaben', 'Action Items')}
+                      </Heading>
+                    )}
+                    <VStack gap={1}>
+                      {summary.action_items.map((item, idx) => {
+                        const citeLbl =
+                          item.timestamp ||
+                          (item.offset_seconds != null
+                            ? formatWallClockTime(
+                                item.offset_seconds,
+                                timeOriginUtc
+                              )
+                            : '');
+                        return (
+                          <HStack
+                            key={idx}
+                            gap={2}
+                            vAlign="start"
+                            className="max-w-[72ch]"
+                          >
+                            <CheckSquare className="h-4 w-4 shrink-0 mt-0.5 wl-text-accent" />
+                            <Text type="supporting" color="primary">
+                              <strong className="font-semibold">
+                                {item.owner}:
+                              </strong>{' '}
+                              {item.task}
+                              {item.due ? (
+                                <span className="text-[var(--color-text-secondary)]">
+                                  {' '}
+                                  ({item.due})
+                                </span>
+                              ) : null}
+                              {citeLbl ? (
+                                <button
+                                  type="button"
+                                  className="wl-citation-chip"
+                                  onClick={() =>
+                                    jumpToProtocolOffset(
+                                      item.offset_seconds,
+                                      item.timestamp
+                                    )
+                                  }
+                                  title={tr(
+                                    'Zur belegenden Stelle im Protokoll springen',
+                                    'Jump to cited source in transcript'
+                                  )}
+                                >
+                                  {citeLbl}
+                                </button>
+                              ) : null}
+                            </Text>
+                          </HStack>
+                        );
+                      })}
+                    </VStack>
                   </VStack>
                 )}
               </VStack>
@@ -1505,6 +1974,7 @@ export function TranscriptTab({
                     deleteLabel={kStr.deleteSlide}
                     isOperator={isOperator}
                     isActiveFilter={selectedSourceFilter === kfFilterKey}
+                    isCited={citedElementId === `keyframe-${kf.id}`}
                     onToggleFilter={() =>
                       onSelectedSourceFilterChange(
                         selectedSourceFilter === kfFilterKey ? '' : kfFilterKey
@@ -1530,7 +2000,9 @@ export function TranscriptTab({
                 <div
                   key={turn.id}
                   id={`seg-${turn.id}`}
-                  className="group wl-turn-row"
+                  className={`group wl-turn-row ${
+                    citedElementId === `seg-${turn.id}` ? 'wl-turn-cited' : ''
+                  }`}
                 >
                   <HStack gap={3} vAlign="start">
                     <Avatar

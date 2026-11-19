@@ -723,7 +723,10 @@ def test_web_ui_live_status_and_browser_participant_names_in_exports(
                 "message": {
                     "content": (
                         '{"summary": "Kurzes Kickoff-Treffen zur Begrüßung.", '
-                        '"topics": [{"title": "Begrüßung", "details": "Willkommen im Team."}], '
+                        '"decisions": [{"text": "Kickoff-Format bestätigt.", '
+                        '"timestamp": "00:00"}], '
+                        '"topics": [{"title": "Begrüßung", "details": "Willkommen im Team.", '
+                        '"timestamp": "23:59:59"}], '
                         '"action_items": [{"owner": "Dr. Alice Beispiel", '
                         '"task": "Agenda versenden", "due": "Freitag"}]}'
                     )
@@ -745,42 +748,74 @@ def test_web_ui_live_status_and_browser_participant_names_in_exports(
     sum_res = client.post(f"/v1/recordings/{recording}/summary", headers=API)
     assert sum_res.status_code == 200
     assert sum_res.json()["summary"]["summary"] == "Kurzes Kickoff-Treffen zur Begrüßung."
+    assert sum_res.json()["summary"]["decisions"] == [
+        {"text": "Kickoff-Format bestätigt.", "timestamp": "11:00:00", "offset_seconds": 0.0}
+    ]
+    # Hallucinated out-of-range timestamp (23:59:59 on a 1s recording) is stripped:
+    assert "timestamp" not in sum_res.json()["summary"]["topics"][0]
     assert sum_res.json()["summary"]["action_items"][0]["owner"] == "Dr. Alice Beispiel"
     assert sum_res.json()["summary"]["action_items"][0]["due"] == "Freitag"
     md_after = client.get(f"/v1/recordings/{recording}/exports/md", headers=API).text
     assert "## Zusammenfassung" in md_after
     assert "Kurzes Kickoff-Treffen zur Begrüßung." in md_after
+    assert "### Entscheidungen" in md_after
+    assert "Kickoff-Format bestätigt." in md_after
     assert "## To-Do-Liste" in md_after
     assert "- [ ] **Dr. Alice Beispiel:** Agenda versenden _(Fällig: Freitag)_" in md_after
     assert "## Notizen\n\nWichtige Vorbemerkung (parallel aktualisiert)" in md_after
     txt_after = client.get(f"/v1/recordings/{recording}/exports/txt", headers=API).text
     assert "ZUSAMMENFASSUNG" in txt_after
+    assert "Entscheidungen:" in txt_after
+    assert "✓ Kickoff-Format bestätigt. [11:00:00]" in txt_after
     assert "TO-DO-LISTE" in txt_after
     assert "[ ] Dr. Alice Beispiel: Agenda versenden (Fällig: Freitag)" in txt_after
 
-    # Manual editing of summary & To-Do list via PATCH (e.g. before forwarding .md to partners)
+    # Manual editing of summary, decisions & To-Do list via PATCH
     manual_patch = client.patch(
         f"/v1/recordings/{recording}",
         headers=API,
         json={
             "summary": {
                 "summary": "Abgestimmtes Ergebnisprotokoll für Kundenversand.",
-                "topics": [{"title": "Roadmap", "details": "Q4-Meilensteine bestätigt."}],
+                "decisions": [
+                    {
+                        "text": "Guten Tag Freigabe beschlossen.",
+                        "timestamp": "11:00:00",
+                    }
+                ],
+                "topics": [
+                    {
+                        "title": "Roadmap",
+                        "details": "Q4-Meilensteine bestätigt.",
+                        "timestamp": "11:00:00",
+                    }
+                ],
                 "action_items": [
                     {
                         "owner": "Alice Example",
                         "task": "Guten Tag Protokoll schicken",
                         "due": "Montag",
+                        "timestamp": "11:00:00",
                     }
                 ],
             }
         },
     )
     assert manual_patch.status_code == 200
+    assert manual_patch.json()["summary"]["decisions"] == [
+        {
+            "text": "Willkommen Freigabe beschlossen.",
+            "timestamp": "11:00:00",
+            "offset_seconds": 0.0,
+        }
+    ]
     md_edited = client.get(f"/v1/recordings/{recording}/exports/md", headers=API).text
     # Speaker override (Alice Example -> Dr. Alice Beispiel) and term replacement
-    # (Guten Tag -> Willkommen) apply cleanly to summary & To-Do items as well:
+    # (Guten Tag -> Willkommen) apply cleanly to summary, decisions & To-Do items as well:
     assert "Abgestimmtes Ergebnisprotokoll für Kundenversand." in md_edited
+    assert "### Entscheidungen" in md_edited
+    assert "Willkommen Freigabe beschlossen." in md_edited
+    assert "&t=0)" in md_edited
     assert "- [ ] **Dr. Alice Beispiel:** Willkommen Protokoll schicken _(Fällig: Montag)_" in (
         md_edited
     )

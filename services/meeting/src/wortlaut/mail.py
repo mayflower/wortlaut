@@ -274,6 +274,11 @@ def _build_completed_bodies(
     primary_link = reader_url or ui_url
 
     summary_text = str(summary.get("summary") or "").strip() if isinstance(summary, dict) else ""
+    decisions = [
+        d
+        for d in ((summary.get("decisions") if isinstance(summary, dict) else None) or [])
+        if isinstance(d, dict) and str(d.get("text") or "").strip()
+    ]
     topics = [
         t
         for t in ((summary.get("topics") if isinstance(summary, dict) else None) or [])
@@ -284,6 +289,21 @@ def _build_completed_bodies(
         for a in ((summary.get("action_items") if isinstance(summary, dict) else None) or [])
         if isinstance(a, dict) and str(a.get("task") or "").strip()
     ]
+
+    def _plain_ts(item_obj: dict) -> str:
+        ts_v = " ".join(str(item_obj.get("timestamp") or "").split())
+        return f" [{ts_v}]" if ts_v else ""
+
+    def _html_ts(item_obj: dict) -> str:
+        ts_v = " ".join(str(item_obj.get("timestamp") or "").split())
+        if not ts_v:
+            return ""
+        return (
+            " <span class='wl-pill' style='display:inline-block;font-size:12px;"
+            "font-family:Liberation Mono,DejaVu Sans Mono,ui-monospace,monospace;"
+            "font-variant-numeric:tabular-nums;background:#fafaf9;border:1px solid #e7e5e4;"
+            f"color:#78716c;padding:1px 7px;border-radius:999px;'>{escape(ts_v)}</span>"
+        )
 
     plain_lines = [
         f"WORTPROTOKOLL · {title}",
@@ -302,18 +322,28 @@ def _build_completed_bodies(
         for note in notices:
             plain_lines.append(f"• {note}")
 
-    has_summary_content = bool(summary_text or topics or actions)
-    if summary_text or topics:
+    has_summary_content = bool(summary_text or decisions or topics or actions)
+    if summary_text or decisions or topics:
         plain_lines.extend(["", "ZUSAMMENFASSUNG", "-" * 68])
         if summary_text:
             plain_lines.append(summary_text)
-        if topics:
+        if decisions:
             if summary_text:
+                plain_lines.append("")
+            plain_lines.append("Entscheidungen:")
+            for d in decisions:
+                d_txt = " ".join(str(d["text"]).split())
+                plain_lines.append(f"• {d_txt}{_plain_ts(d)}")
+        if topics:
+            if summary_text or decisions:
                 plain_lines.append("")
             for t in topics:
                 t_title = " ".join(str(t.get("title") or "Thema").split())
                 t_details = " ".join(str(t.get("details") or "").split())
-                plain_lines.append(f"• {t_title}: {t_details}" if t_details else f"• {t_title}")
+                t_ts = _plain_ts(t)
+                plain_lines.append(
+                    f"• {t_title}: {t_details}{t_ts}" if t_details else f"• {t_title}{t_ts}"
+                )
 
     if has_summary_content:
         plain_lines.extend(["", "TO-DO-LISTE", "-" * 68])
@@ -323,7 +353,7 @@ def _build_completed_bodies(
                 task = " ".join(str(a["task"]).split())
                 due = " ".join(str(a.get("due") or "").split())
                 suffix = f" (Fällig: {due})" if due else ""
-                plain_lines.append(f"[ ] {owner}: {task}{suffix}")
+                plain_lines.append(f"[ ] {owner}: {task}{suffix}{_plain_ts(a)}")
         else:
             plain_lines.append("Keine offenen Aufgaben vereinbart.")
 
@@ -430,6 +460,20 @@ def _build_completed_bodies(
                 "<div class='wl-body-text' style='font-size:14px;line-height:1.65;"
                 f"color:#1c1917;margin-bottom:14px;'>{escape(summary_text)}</div>"
             )
+        if decisions:
+            dec_rows = []
+            for d in decisions:
+                d_txt = " ".join(str(d["text"]).split())
+                dec_rows.append(
+                    "<li class='wl-body-text' style='margin:6px 0;font-size:14px;"
+                    f"line-height:1.58;color:#1c1917;'>{escape(d_txt)}{_html_ts(d)}</li>"
+                )
+            summary_parts.append(
+                "<div style='margin-top:10px;margin-bottom:12px;'>"
+                "<div class='wl-emerald-text' style='font-size:13px;font-weight:600;"
+                "color:#047857;margin-bottom:6px;'>Entscheidungen</div>"
+                f"<ul style='margin:0;padding-left:18px;'>{''.join(dec_rows)}</ul></div>"
+            )
         if topics:
             topic_rows = []
             for t in topics:
@@ -442,7 +486,7 @@ def _build_completed_bodies(
                 )
                 topic_rows.append(
                     "<li class='wl-body-text' style='margin:6px 0;font-size:14px;"
-                    f"line-height:1.58;color:#1c1917;'>{body_html}</li>"
+                    f"line-height:1.58;color:#1c1917;'>{body_html}{_html_ts(t)}</li>"
                 )
             summary_parts.append(
                 "<div style='margin-top:10px;'>"
@@ -467,7 +511,7 @@ def _build_completed_bodies(
                     "<div class='wl-body-text' style='margin:6px 0;font-size:14px;"
                     "line-height:1.55;color:#1c1917;'>"
                     f"☐ <strong class='wl-ink'>{escape(owner)}:</strong> "
-                    f"{escape(task)}{due_html}</div>"
+                    f"{escape(task)}{due_html}{_html_ts(a)}</div>"
                 )
             action_items_html = "".join(action_rows)
         else:

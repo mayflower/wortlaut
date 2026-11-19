@@ -122,6 +122,7 @@ def test_successful_real_smtp_has_three_exports_and_does_not_send_without_audio(
             **(rec.protocol_meta or {}),
             "summary": {
                 "summary": "Kurzer Überblick.",
+                "decisions": [{"text": "Release freigegeben.", "timestamp": "10:15:00"}],
                 "topics": [{"title": "Architekturfreigabe", "details": ""}],
                 "action_items": [],
             },
@@ -143,6 +144,8 @@ def test_successful_real_smtp_has_three_exports_and_does_not_send_without_audio(
     html_body = message.get_body(preferencelist=("html",)).get_content()
     assert "WORTPROTOKOLL" in body
     assert "Web-Ansicht:" in body
+    assert "Entscheidungen:" in body
+    assert "• Release freigegeben. [10:15:00]" in body
     assert "• Architekturfreigabe" in body.splitlines()
     assert "• Architekturfreigabe:" not in body
     assert "TO-DO-LISTE" in body
@@ -152,6 +155,9 @@ def test_successful_real_smtp_has_three_exports_and_does_not_send_without_audio(
     assert "<!DOCTYPE html>" in html_body
     assert "Wortlaut.cloud" in html_body
     assert "Protokoll im Browser öffnen" in html_body
+    assert "Entscheidungen" in html_body
+    assert "Release freigegeben." in html_body
+    assert "10:15:00" in html_body
     assert "<strong>Architekturfreigabe</strong></li>" in html_body
     assert "To-Do-Liste" in html_body
     assert "Keine offenen Aufgaben vereinbart." in html_body

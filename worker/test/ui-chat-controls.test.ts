@@ -628,7 +628,21 @@ test('Web-UI automatically refetches settled transcript summary and 1-click Goog
           summary: done
             ? {
                 summary: 'Automatisch erstellte Zusammenfassung des Zweekly.',
-                topics: [{title: 'Glossar', details: 'Neuer Glossar-Editor vorgestellt.'}],
+                decisions: [
+                  {
+                    text: 'Glossar wird instanzweit aktiviert.',
+                    timestamp: '14:00:05',
+                    offset_seconds: 5,
+                  },
+                ],
+                topics: [
+                  {
+                    title: 'Glossar',
+                    details: 'Neuer Glossar-Editor vorgestellt.',
+                    timestamp: '14:00:05',
+                    offset_seconds: 5,
+                  },
+                ],
                 action_items: [],
                 model: 'qwen3.8:latest',
                 generated_at: '2026-11-18T13:45:19Z',
@@ -688,6 +702,21 @@ test('Web-UI automatically refetches settled transcript summary and 1-click Goog
     await page.getByText('Automatisch erstellte Zusammenfassung des Zweekly.').waitFor({
       state: 'visible',
       timeout: 8000,
+    });
+    await page.getByText('Entscheidungen', {exact: true}).waitFor({
+      state: 'visible',
+      timeout: 5000,
+    });
+    await page.getByText('Glossar wird instanzweit aktiviert.').waitFor({
+      state: 'visible',
+      timeout: 5000,
+    });
+    const citationChip = page.locator('.wl-citation-chip', {hasText: '14:00:05'}).first();
+    await citationChip.waitFor({state: 'visible', timeout: 5000});
+    await citationChip.click();
+    await page.locator('#seg-seg-1.wl-turn-cited').waitFor({
+      state: 'visible',
+      timeout: 5000,
     });
     await page.getByRole('button', {name: 'Google Kalender neu verbinden'}).waitFor({
       state: 'visible',

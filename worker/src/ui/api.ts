@@ -468,18 +468,34 @@ export function readNavStateFromHash(): {
   view: UiNavView;
   recordingId: string | null;
   keyframeId: string | null;
+  timestampSeconds: number | null;
 } {
   if (typeof window === 'undefined') {
-    return { view: 'meetings', recordingId: null, keyframeId: null };
+    return {
+      view: 'meetings',
+      recordingId: null,
+      keyframeId: null,
+      timestampSeconds: null,
+    };
   }
   const raw = window.location.hash.replace(/^#/, '');
   if (!raw || raw.includes('token=')) {
-    return { view: 'meetings', recordingId: null, keyframeId: null };
+    return {
+      view: 'meetings',
+      recordingId: null,
+      keyframeId: null,
+      timestampSeconds: null,
+    };
   }
   const params = new URLSearchParams(raw);
   const rawView = params.get('view');
   const id = params.get('id') || params.get('recording');
   const kf = params.get('keyframe');
+  const rawT = params.get('t');
+  const numT =
+    rawT !== null && rawT.trim() !== '' ? Number(rawT.trim()) : Number.NaN;
+  const timestampSeconds =
+    Number.isFinite(numT) && numT >= 0 ? numT : null;
   const view: UiNavView =
     rawView === 'calendar' ||
     rawView === 'glossary' ||
@@ -491,6 +507,7 @@ export function readNavStateFromHash(): {
     view,
     recordingId: id && id.trim() ? id.trim() : null,
     keyframeId: kf && kf.trim() ? kf.trim() : null,
+    timestampSeconds,
   };
 }
 
@@ -1011,8 +1028,15 @@ export async function updateRecordingProtocol(
     notes?: string | null;
     summary?: {
       summary: string;
-      topics: Array<{ title: string; details: string }>;
-      action_items: Array<{ owner: string; task: string; due?: string }>;
+      decisions?: Array<{ text: string; timestamp?: string; offset_seconds?: number }>;
+      topics: Array<{ title: string; details: string; timestamp?: string; offset_seconds?: number }>;
+      action_items: Array<{
+        owner: string;
+        task: string;
+        due?: string;
+        timestamp?: string;
+        offset_seconds?: number;
+      }>;
     } | null;
     speaker_overrides?: Record<string, string>;
     term_replacements?: Record<string, string>;
