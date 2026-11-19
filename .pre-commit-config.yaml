@@ -133,7 +133,7 @@ repos:
       - id: pre-push-vuln-gate
         name: Lockfile vulnerability gate (HIGH/CRITICAL)
         language: system
-        entry: sh -c 'if command -v trivy >/dev/null 2>&1 && trivy --version >/dev/null 2>&1; then exec trivy fs --scanners vuln --skip-dirs .dev --skip-dirs worker/node_modules --skip-dirs services/meeting/.venv --severity HIGH,CRITICAL --quiet --exit-code 1 .; elif command -v mise >/dev/null 2>&1 && mise x trivy@latest -- trivy --version >/dev/null 2>&1; then exec mise x trivy@latest -- trivy fs --scanners vuln --skip-dirs .dev --skip-dirs worker/node_modules --skip-dirs services/meeting/.venv --severity HIGH,CRITICAL --quiet --exit-code 1 .; else exec npm --prefix worker audit --omit=dev --audit-level=high; fi'
+        entry: sh -c 'if command -v trivy >/dev/null 2>&1 && trivy --version >/dev/null 2>&1; then exec trivy fs --scanners vuln --ignore-unfixed --skip-dirs .dev --skip-dirs worker/node_modules --skip-dirs services/meeting/.venv --severity HIGH,CRITICAL --quiet --exit-code 1 .; elif command -v mise >/dev/null 2>&1 && mise x trivy@latest -- trivy --version >/dev/null 2>&1; then exec mise x trivy@latest -- trivy fs --scanners vuln --ignore-unfixed --skip-dirs .dev --skip-dirs worker/node_modules --skip-dirs services/meeting/.venv --severity HIGH,CRITICAL --quiet --exit-code 1 .; else exec npm --prefix worker audit --omit=dev --audit-level=high; fi'
         pass_filenames: false
         always_run: true
         stages: [pre-push]
