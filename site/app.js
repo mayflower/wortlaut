@@ -8,7 +8,7 @@
         "wortlaut.cloud joins Google Meet, Microsoft Teams, Cisco Webex, and Zoom, captures isolated per-speaker audio and screen-share slides, produces structured protocols with timestamp citations, and connects meetings via Hybrid RAG MCP — 100% self-hosted under GNU AGPL-3.0.",
       nav_how: "How it works",
       nav_features: "Features",
-      nav_privacy: "Privacy & Controls",
+      nav_privacy: "Privacy",
       nav_selfhost: "Self-Hosting",
       cta_github: "GitHub",
       cta_install: "Get Started",
@@ -245,9 +245,9 @@
       page_title: "wortlaut.cloud — Sprechergenaue Meeting-Protokolle & MCP-Wissensspeicher. 100 % Self-Hosted.",
       meta_desc:
         "wortlaut.cloud nimmt an Google Meet, Microsoft Teams, Cisco Webex und Zoom teil, erfasst getrennte Sprecherspuren und Screen-Share-Folien, erstellt strukturierte Protokolle mit Zeitstempel-Belegen und bindet Meetings per Hybrid-RAG-MCP an — 100 % Self-Hosted unter GNU AGPL-3.0.",
-      nav_how: "So funktioniert’s",
+      nav_how: "Ablauf",
       nav_features: "Funktionen",
-      nav_privacy: "Datenschutz & Steuerung",
+      nav_privacy: "Datenschutz",
       nav_selfhost: "Self-Hosting",
       cta_github: "GitHub",
       cta_install: "Jetzt starten",
@@ -618,18 +618,29 @@
       const saved = localStorage.getItem("wortlaut_site_theme");
       if (saved === "dark" || saved === "light") return saved;
     } catch (_) {}
-    return "light";
+    return "dark";
+  }
+
+  function updateThemeButtonLabel(theme) {
+    const label = document.getElementById("theme-toggle-label");
+    if (!label) return;
+    if (currentLang === "de") {
+      label.textContent = theme === "dark" ? "Dunkel" : "Hell";
+    } else {
+      label.textContent = theme === "dark" ? "Dark" : "Light";
+    }
   }
 
   function applyTheme(theme) {
-    const resolved = theme === "dark" ? "dark" : "light";
+    const resolved = theme === "light" ? "light" : "dark";
     document.documentElement.setAttribute("data-theme", resolved);
     const sunIcon = document.getElementById("theme-icon-sun");
     const moonIcon = document.getElementById("theme-icon-moon");
     if (sunIcon && moonIcon) {
-      sunIcon.style.display = resolved === "dark" ? "none" : "block";
+      sunIcon.style.display = resolved === "light" ? "block" : "none";
       moonIcon.style.display = resolved === "dark" ? "block" : "none";
     }
+    updateThemeButtonLabel(resolved);
     try {
       localStorage.setItem("wortlaut_site_theme", resolved);
     } catch (_) {}
@@ -748,6 +759,7 @@
 
     renderRagResults();
     syncHorizonStatus();
+    updateThemeButtonLabel(document.documentElement.getAttribute("data-theme") || "dark");
 
     try {
       localStorage.setItem("wortlaut_site_lang", currentLang);

@@ -1,20 +1,23 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>wortlaut.cloud — Speaker-Accurate Meeting Protocols &amp; MCP Memory. 100% Self-Hosted.</title>
-  <meta name="description" content="wortlaut.cloud joins Google Meet, Microsoft Teams, Cisco Webex, and Zoom, captures isolated per-speaker audio and screen-share slides, produces structured protocols with timestamp citations, and connects meetings via Hybrid RAG MCP — 100% self-hosted under GNU AGPL-3.0." />
+  <title>Wortlaut.cloud — Speaker-Accurate Meeting Protocols &amp; MCP Memory. 100% Self-Hosted.</title>
+  <meta name="description" content="Wortlaut.cloud joins Google Meet, Microsoft Teams, Cisco Webex, and Zoom, captures isolated per-speaker audio and screen-share slides, produces structured protocols with timestamp citations, and connects meetings via Hybrid RAG MCP — 100% self-hosted under GNU AGPL-3.0." />
   <meta property="og:type" content="website" />
-  <meta property="og:site_name" content="wortlaut.cloud" />
-  <meta property="og:title" content="wortlaut.cloud — Speaker-Accurate Meeting Protocols &amp; MCP Memory." />
+  <meta property="og:site_name" content="Wortlaut.cloud" />
+  <meta property="og:title" content="Wortlaut.cloud — Speaker-Accurate Meeting Protocols &amp; MCP Memory." />
   <meta property="og:description" content="Isolated pre-mix WebRTC speaker capture, screen-share slide keyframes, live Horizon video tile with #pause Off-the-Record, local Hybrid RAG MCP search, and Ollama or OpenAI-compatible protocols under AGPL-3.0." />
   <meta property="og:image" content="https://raw.githubusercontent.com/mayflower/wortlaut/main/docs/assets/social-preview.png" />
   <meta name="twitter:card" content="summary_large_image" />
-  <meta name="twitter:title" content="wortlaut.cloud — Speaker-Accurate Meeting Protocols &amp; MCP Memory." />
+  <meta name="twitter:title" content="Wortlaut.cloud — Speaker-Accurate Meeting Protocols &amp; MCP Memory." />
   <meta name="twitter:description" content="Self-hosted meeting transcription, screen-share slides, Hybrid RAG MCP, and live #pause / opt-out controls for Meet, Teams, Webex &amp; Zoom." />
   <meta name="twitter:image" content="https://raw.githubusercontent.com/mayflower/wortlaut/main/docs/assets/social-preview.png" />
   <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Montserrat:wght@400;500;600;700&display=swap" />
   <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>
@@ -87,32 +90,34 @@
     </defs>
   </svg>
 
-  <!-- Sticky Header -->
+  <!-- Sticky Header (matches ReaderTopBar in HeaderBar.tsx) -->
   <header class="site-header">
     <div class="container header-inner">
-      <a href="#top" class="brand-link" aria-label="wortlaut.cloud">
+      <a href="#top" class="brand-link" aria-label="Wortlaut.cloud">
         <span class="brand-mark" aria-hidden="true">
           <svg width="17" height="17"><use href="#ic-wave"/></svg>
         </span>
-        <span>wortlaut<span class="brand-domain">.cloud</span></span>
+        <span>Wortlaut.cloud</span>
+        <span class="brand-status-dot" aria-hidden="true"></span>
       </a>
 
       <nav class="main-nav" aria-label="Primary navigation">
         <a href="#how-it-works" data-i18n="nav_how">How it works</a>
         <a href="#features" data-i18n="nav_features">Features</a>
-        <a href="#privacy" data-i18n="nav_privacy">Privacy &amp; Controls</a>
+        <a href="#privacy" data-i18n="nav_privacy">Privacy</a>
         <a href="#self-hosting" data-i18n="nav_selfhost">Self-Hosting</a>
       </nav>
 
       <div class="header-actions">
         <div class="lang-switch" role="group" aria-label="Language">
-          <button type="button" class="lang-btn active" data-lang="en">EN</button>
           <button type="button" class="lang-btn" data-lang="de">DE</button>
+          <button type="button" class="lang-btn active" data-lang="en">EN</button>
         </div>
 
-        <button type="button" class="icon-toggle-btn" id="theme-toggle" aria-label="Switch color theme" title="Switch Light / Dark Stone">
-          <svg width="16" height="16" id="theme-icon-sun"><use href="#ic-sun"/></svg>
-          <svg width="16" height="16" id="theme-icon-moon" style="display:none;"><use href="#ic-moon"/></svg>
+        <button type="button" class="theme-toggle-btn" id="theme-toggle" aria-label="Switch color theme" title="Switch Dark / Light">
+          <svg width="15" height="15" id="theme-icon-moon"><use href="#ic-moon"/></svg>
+          <svg width="15" height="15" id="theme-icon-sun" style="display:none;"><use href="#ic-sun"/></svg>
+          <span class="theme-toggle-label" id="theme-toggle-label">Dark</span>
         </button>
 
         <a href="https://github.com/mayflower/wortlaut" target="_blank" rel="noopener noreferrer" class="btn btn-secondary">
@@ -131,6 +136,25 @@
     <section class="hero-section">
       <div class="container">
         <div class="hero-top">
+          <div class="hero-providers" aria-label="Supported meeting platforms">
+            <span class="provider-token provider-token-meet">
+              <svg width="16" height="13" aria-hidden="true"><use href="#logo-icon-meet"/></svg>
+              Google Meet
+            </span>
+            <span class="provider-token provider-token-teams">
+              <svg width="14" height="14" aria-hidden="true"><use href="#logo-icon-teams"/></svg>
+              Microsoft Teams
+            </span>
+            <span class="provider-token provider-token-webex">
+              <svg width="16" height="13" aria-hidden="true"><use href="#logo-icon-webex"/></svg>
+              Webex
+            </span>
+            <span class="provider-token provider-token-zoom">
+              <svg width="14" height="14" aria-hidden="true"><use href="#logo-icon-zoom"/></svg>
+              Zoom
+            </span>
+          </div>
+
           <h1 class="hero-title" data-i18n-html="hero_title_html">
             Speaker-accurate meeting protocols.<br>
             <span class="hero-subline">100% on your own infrastructure.</span>
@@ -155,30 +179,6 @@
             <span>Local Hybrid RAG &amp; MCP</span>
             <span class="hero-meta-sep" aria-hidden="true">·</span>
             <span>v0.2.0</span>
-          </div>
-
-          <div class="platform-row" aria-label="Supported meeting platforms">
-            <span class="platform-row-label" data-i18n="platforms_label">
-              Runs side-by-side in one instance across all four platforms:
-            </span>
-            <div class="platform-logos">
-              <span class="platform-chip">
-                <svg width="20" height="16" aria-hidden="true"><use href="#logo-icon-meet"/></svg>
-                Google Meet
-              </span>
-              <span class="platform-chip">
-                <svg width="18" height="18" aria-hidden="true"><use href="#logo-icon-teams"/></svg>
-                Microsoft Teams
-              </span>
-              <span class="platform-chip">
-                <svg width="20" height="16" aria-hidden="true"><use href="#logo-icon-webex"/></svg>
-                Cisco Webex
-              </span>
-              <span class="platform-chip">
-                <svg width="18" height="18" aria-hidden="true"><use href="#logo-icon-zoom"/></svg>
-                Zoom
-              </span>
-            </div>
           </div>
         </div>
 
@@ -245,8 +245,8 @@
                 <div>
                   <h2 class="app-meeting-title" dir="auto" data-i18n="ui_meeting_title">Q2 Architecture &amp; Release Review</h2>
                   <div class="app-meeting-meta">
-                    <span class="inline-provider">
-                      <svg width="16" height="13" aria-hidden="true"><use href="#logo-icon-meet"/></svg>
+                    <span class="provider-token provider-token-meet">
+                      <svg width="14" height="12" aria-hidden="true"><use href="#logo-icon-meet"/></svg>
                       Google Meet
                     </span>
                     <span aria-hidden="true">·</span>
@@ -873,8 +873,8 @@
       </div>
     </section>
 
-    <!-- 5. SELF-HOSTING & QUICKSTART (Dark Acoustic Ledger) -->
-    <section id="self-hosting" class="section section-dark">
+    <!-- 5. SELF-HOSTING & QUICKSTART -->
+    <section id="self-hosting" class="section">
       <div class="container">
         <div class="section-header">
           <h2 class="section-title" data-i18n="sh_title">Deploy on your own server or Kubernetes cluster in minutes</h2>
@@ -955,9 +955,9 @@ claude mcp add --transport http wortlaut \
             </div>
 
             <div class="stack-actions">
-              <a href="https://github.com/mayflower/wortlaut" target="_blank" rel="noopener noreferrer" class="btn btn-dark-primary" data-i18n="sh_btn_repo">View on GitHub</a>
-              <a href="https://github.com/mayflower/wortlaut/blob/main/docs/deployment.md" target="_blank" rel="noopener noreferrer" class="btn btn-dark-secondary" data-i18n="sh_btn_docs">Deployment Docs</a>
-              <a href="https://github.com/mayflower/wortlaut/blob/main/CHANGELOG.md" target="_blank" rel="noopener noreferrer" class="btn btn-dark-secondary">Changelog 0.2.0</a>
+              <a href="https://github.com/mayflower/wortlaut" target="_blank" rel="noopener noreferrer" class="btn btn-primary" data-i18n="sh_btn_repo">View on GitHub</a>
+              <a href="https://github.com/mayflower/wortlaut/blob/main/docs/deployment.md" target="_blank" rel="noopener noreferrer" class="btn btn-secondary" data-i18n="sh_btn_docs">Deployment Docs</a>
+              <a href="https://github.com/mayflower/wortlaut/blob/main/CHANGELOG.md" target="_blank" rel="noopener noreferrer" class="btn btn-secondary">Changelog 0.2.0</a>
             </div>
           </div>
         </div>
@@ -969,11 +969,11 @@ claude mcp add --transport http wortlaut \
   <footer class="site-footer">
     <div class="container">
       <div class="footer-top">
-        <a href="#top" class="brand-link footer-brand">
+        <a href="#top" class="brand-link">
           <span class="brand-mark" aria-hidden="true">
             <svg width="16" height="16"><use href="#ic-wave"/></svg>
           </span>
-          <span>wortlaut<span class="brand-domain">.cloud</span></span>
+          <span>Wortlaut.cloud</span>
         </a>
 
         <div class="footer-links">

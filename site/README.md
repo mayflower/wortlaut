@@ -4,8 +4,9 @@ This directory contains the static, bilingual (**English / German**) product and
 
 ## Design System
 
-Aligned with **`DESIGN.md` ("The Quiet Acoustic Ledger")** and the production Astryx Stone Web-UI (`worker/src/ui/`):
-- Warm Stone light (`#fafaf9` / `#ffffff`) and dark (`#111113` / `#181920`) surfaces with a live header theme switch (`?theme=light|dark`).
+Aligned 1:1 with **`@astryxdesign/theme-stone`**, **`worker/src/ui/styles.css`**, and **`DESIGN.md` ("The Quiet Acoustic Ledger")**:
+- Exact Astryx Stone Dark (`#101018` / `#1b1b21` / `#f0f0f9`, default matching the Web-UI) and Light (`#f0f0f7` / `#ffffff` / `#25252a`) tokens with a live `Dunkel / Hell` (`Dark / Light`) header switch (`?theme=dark|light`, respecting `prefers-color-scheme`).
+- Exact Astryx Stone typography (`Montserrat` headings, `Figtree` body, `JetBrains Mono` code & timestamps) and tinted Astryx Provider Tokens (`Google Meet`, `Microsoft Teams`, `Webex`, `Zoom`).
 - Flat hairline-divided sections (`1px solid`), zero nested card-in-card wrappers, zero uppercase eyebrow kickers, and zero rainbow speaker stripes.
 - **State-Only Chroma**: Acoustic Emerald (`#059669` / `#10b981`) for active capture, focus, and verified states; Off-the-Record Amber (`#d97706` / `#fbbf24`) exclusively for `#pause` Off-the-Record state.
 
