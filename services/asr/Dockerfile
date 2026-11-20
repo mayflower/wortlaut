@@ -1,7 +1,7 @@
 # Official NVIDIA PyTorch runtime: the same CUDA 13.0 / torch 2.9 stack the
 # former NeMo-based image shipped, so the shared MPS GPU sees an unchanged client.
 # Model revision is pinned in app.py.
-FROM nvcr.io/nvidia/pytorch:25.09-py3@sha256:f3b4a33fd60d5e0358287bb44d57e91eda45e8f1681fef1bfd6c969371417130
+FROM nvcr.io/nvidia/pytorch:26.11-py3@sha256:0d31ce7e80cda1b1f07357004530a2f41d6754a6ddae28af508134c63c59fe0b
 RUN pip install --no-cache-dir transformers==5.23.0 fastapi==0.165.0 'uvicorn[standard]==0.54.0' \
     && python -c 'from transformers import AutoModelForMultimodalLM, AutoProcessor'
 WORKDIR /app
