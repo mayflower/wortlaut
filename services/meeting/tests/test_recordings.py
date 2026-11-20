@@ -705,7 +705,7 @@ def test_web_ui_live_status_and_browser_participant_names_in_exports(
     assert patched_tx["segments"][0]["text"] == "Willkommen zusammen."
 
     # Structured AI summary via local Ollama endpoint (opt-in via WORTLAUT_ENABLE_LLM_SUMMARY=true)
-    from wortlaut import exports as exports_module
+    from wortlaut import llm as llm_module
     from wortlaut.settings import get_settings
 
     assert client.post(f"/v1/recordings/{recording}/summary", headers=API).status_code == 503
@@ -744,7 +744,7 @@ def test_web_ui_live_status_and_browser_participant_names_in_exports(
         assert concurrent_patch.status_code == 200
         return FakeOllamaResponse()
 
-    monkeypatch.setattr(exports_module.httpx, "post", fake_ollama_post)
+    monkeypatch.setattr(llm_module.httpx, "post", fake_ollama_post)
     sum_res = client.post(f"/v1/recordings/{recording}/summary", headers=API)
     assert sum_res.status_code == 200
     assert sum_res.json()["summary"]["summary"] == "Kurzes Kickoff-Treffen zur Begrüßung."

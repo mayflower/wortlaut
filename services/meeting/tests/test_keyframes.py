@@ -1148,7 +1148,7 @@ def test_desktop_pip_face_anonymization_before_s3_persistence(client, database, 
 def test_keyframe_visual_context_enriches_asr_prompt_summary_and_purges_on_optout(
     client, database, storage, monkeypatch
 ):
-    from wortlaut import exports as exports_module
+    from wortlaut import llm as llm_module
     from wortlaut.asr import build_asr_context_prompt, keyframe_context_pass
     from wortlaut.models import AsrJob, Attempt, AudioStream, Recording, TranscriptSegment
     from wortlaut.settings import get_settings
@@ -1331,7 +1331,7 @@ def test_keyframe_visual_context_enriches_asr_prompt_summary_and_purges_on_optou
                 }
             )
 
-        monkeypatch.setattr(exports_module.httpx, "post", fake_ollama_post)
+        monkeypatch.setattr(llm_module.httpx, "post", fake_ollama_post)
 
         # Pass 1 skips rapid scroll frame #0 (4s before #1); Pass 2 & 3 extract #1 & #2
         assert keyframe_context_pass(database) is True

@@ -899,21 +899,30 @@ def test_mcp_tools_resources_multi_user_isolation_and_ui_revocation(
     assert bad_int["isError"] is True
     assert "duration_minutes must be an integer" in bad_int["content"][0]["text"]
 
-    # Read-only grant exposes the 4 mcp:read tools; read+write exposes all 7 focused tools
+    # Index Alice's completed recording (Bob's is scheduled/pending; enable_processing=false)
+    from wortlaut.rag import rag_index_batch
+
+    assert rag_index_batch(database) == 1
+
+    # Read-only grant exposes the 5 mcp:read tools; read+write exposes all 8 focused tools
     ro_tool_list = _rpc(ro_headers, "tools/list").json()["result"]["tools"]
     ro_tools = {t["name"] for t in ro_tool_list}
     assert ro_tools == {
         "list_recordings",
+        "search_protocols",
         "get_recording",
         "get_transcript",
         "get_keyframe",
     }
     assert all(t["annotations"]["openWorldHint"] is False for t in ro_tool_list)
+    list_tool_spec = next(t for t in ro_tool_list if t["name"] == "list_recordings")
+    assert "query" not in list_tool_spec["inputSchema"]["properties"]
 
     rw_tool_list = _rpc(rw_headers, "tools/list").json()["result"]["tools"]
     rw_by_name = {t["name"]: t for t in rw_tool_list}
     assert set(rw_by_name) == {
         "list_recordings",
+        "search_protocols",
         "get_recording",
         "get_transcript",
         "get_keyframe",
@@ -922,6 +931,7 @@ def test_mcp_tools_resources_multi_user_isolation_and_ui_revocation(
         "update_protocol",
     }
     assert rw_by_name["schedule_recording"]["annotations"]["openWorldHint"] is True
+    assert rw_by_name["search_protocols"]["annotations"]["openWorldHint"] is False
     assert rw_by_name["update_protocol"]["annotations"]["openWorldHint"] is False
     assert rw_by_name["cancel_recording"]["annotations"]["openWorldHint"] is False
 
@@ -937,14 +947,22 @@ def test_mcp_tools_resources_multi_user_isolation_and_ui_revocation(
     assert ro_write_attempt.status_code == 403
     assert 'error="insufficient_scope"' in ro_write_attempt.headers["www-authenticate"]
 
-    # Multi-user isolation + snippet-first search + since/until/status filters
+    # Legacy `query` on list_recordings returns an actionable error pointing to search_protocols
+    legacy_query_err = _rpc(
+        ro_headers,
+        "tools/call",
+        {"name": "list_recordings", "arguments": {"query": "ArgoCD"}},
+    ).json()["result"]
+    assert legacy_query_err["isError"] is True
+    assert "search_protocols" in legacy_query_err["content"][0]["text"]
+
+    # Chronological list_recordings enforces multi-user isolation + since/until/status filters
     list_res = _rpc(
         ro_headers,
         "tools/call",
         {
             "name": "list_recordings",
             "arguments": {
-                "query": "ArgoCD",
                 "status": "completed",
                 "since": (now - timedelta(days=1)).strftime("%Y-%m-%d"),
                 "until": now.strftime("%Y-%m-%d"),
@@ -955,8 +973,28 @@ def test_mcp_tools_resources_multi_user_isolation_and_ui_revocation(
     assert "structuredContent" not in list_res
     list_text = list_res["content"][0]["text"]
     assert str(alice_rec_id) in list_text
-    assert "**Dr. Weber**: Wir migrieren Kubevela auf ArgoCD bis Freitag." in list_text
     assert str(bob_rec_id) not in list_text
+
+    # Hybrid search_protocols enforces multi-user isolation and returns attributed passages
+    search_res = _rpc(
+        ro_headers,
+        "tools/call",
+        {
+            "name": "search_protocols",
+            "arguments": {
+                "query": "ArgoCD",
+                "since": (now - timedelta(days=1)).strftime("%Y-%m-%d"),
+                "until": now.strftime("%Y-%m-%d"),
+            },
+        },
+    ).json()["result"]
+    assert search_res["isError"] is False
+    assert "structuredContent" not in search_res
+    search_text = search_res["content"][0]["text"]
+    assert str(alice_rec_id) in search_text
+    assert "Dr. Weber: Wir migrieren Kubevela auf ArgoCD bis Freitag." in search_text
+    assert "**Dr. Weber**: Dr. Weber:" not in search_text
+    assert str(bob_rec_id) not in search_text
 
     # Future date filter returns no false matches
     future_list_text = _rpc(
@@ -1062,13 +1100,15 @@ def test_mcp_tools_resources_multi_user_isolation_and_ui_revocation(
     assert "**Prof. Dr. Martin Weber**: Runbook schreiben" in rec_detail_text
     assert "Freigegeben durch Architektur-Gremium." in rec_detail_text
 
-    # Searching by replaced term ("KubeVela") also finds Alice's recording
+    # Refresh dirty RAG chunks after update_protocol and verify replaced term ("KubeVela") hits
+    assert rag_index_batch(database) == 1
     replaced_search_text = _rpc(
         ro_headers,
         "tools/call",
-        {"name": "list_recordings", "arguments": {"query": "KubeVela"}},
+        {"name": "search_protocols", "arguments": {"query": "KubeVela"}},
     ).json()["result"]["content"][0]["text"]
     assert str(alice_rec_id) in replaced_search_text
+    assert "KubeVela" in replaced_search_text
 
     full_tx_text = _rpc(
         ro_headers,

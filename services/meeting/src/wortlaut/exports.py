@@ -1,4 +1,3 @@
-import base64
 import hmac
 import io
 import json
@@ -12,7 +11,6 @@ from datetime import UTC, datetime, timedelta
 from html import escape
 from zoneinfo import ZoneInfo
 
-import httpx
 from sqlalchemy import DateTime, func, or_, select
 from sqlalchemy.orm import Session
 
@@ -995,6 +993,9 @@ def export_data(
             "segments": segments,
             "opted_out_speakers": opted_out_list,
         }
+    raw_kf_ctx_map = meta.get("keyframe_context")
+    kf_ctx_map = raw_kf_ctx_map if isinstance(raw_kf_ctx_map, dict) else {}
+    origin_utc_iso = origin_utc_dt.isoformat()
     keyframes: list[dict] = []
     for kf in keyframe_rows:
         raw_name = kf.participant_name or participant_names.get(kf.participant_id)
@@ -1018,19 +1019,43 @@ def export_data(
             max(0.0, (kf.captured_at.astimezone(UTC) - origin_utc_dt).total_seconds()),
             3,
         )
-        keyframes.append(
-            {
-                "id": str(kf.id),
-                "captured_at": kf.captured_at.astimezone(UTC).isoformat(),
-                "offset_seconds": offset_seconds,
-                "presenter": presenter,
-                "participant_id": kf.participant_id,
-                "provider_source_id": kf.provider_source_id,
-                "width": kf.width,
-                "height": kf.height,
-                "image_path": f"/v1/recordings/{recording.id}/keyframes/{kf.id}.png",
+        kf_entry: dict = {
+            "id": str(kf.id),
+            "captured_at": kf.captured_at.astimezone(UTC).isoformat(),
+            "offset_seconds": offset_seconds,
+            "wall_clock": wall_clock_time_de(origin_utc_iso, offset_seconds),
+            "presenter": presenter,
+            "participant_id": kf.participant_id,
+            "provider_source_id": kf.provider_source_id,
+            "width": kf.width,
+            "height": kf.height,
+            "image_path": f"/v1/recordings/{recording.id}/keyframes/{kf.id}.png",
+        }
+        norm_vc = _normalize_keyframe_context_entry(kf_ctx_map.get(str(kf.id)))
+        if norm_vc is not None:
+            vc_view = norm_vc["view"]
+            vc_items = list(norm_vc["items"])
+            vc_terms = list(norm_vc["terms"])
+            if effective_term_replacements:
+                vc_view = _apply_text_replacements(vc_view, effective_term_replacements)
+                vc_items = [
+                    _apply_text_replacements(it, effective_term_replacements) for it in vc_items
+                ]
+                vc_terms = [
+                    _apply_text_replacements(t, effective_term_replacements) for t in vc_terms
+                ]
+            summary_parts: list[str] = []
+            if vc_view:
+                summary_parts.append(vc_view)
+            if vc_items:
+                summary_parts.append("Sichtbar: " + "; ".join(vc_items[:10]))
+            kf_entry["visual_context"] = {
+                "view": vc_view,
+                "items": vc_items,
+                "terms": vc_terms,
+                "summary": " | ".join(summary_parts),
             }
-        )
+        keyframes.append(kf_entry)
     qualities = [
         {
             "stream_id": str(s.stream_id),
@@ -2017,7 +2042,8 @@ def extract_keyframe_visual_context(
     if not png_bytes:
         return None
     settings = settings or get_settings()
-    b64 = base64.b64encode(png_bytes).decode("ascii")
+    if not settings.llm_summary_configured():
+        return None
     if summary_lang == "German":
         sys_prompt = (
             "Extrahiere aus dem geteilten Konferenz-Bildschirmfoto präzise den sichtbaren "
@@ -2041,28 +2067,20 @@ def extract_keyframe_visual_context(
             "Do not guess unreadable text."
         )
         usr_prompt = "Analyze this shared screen frame."
-    url = settings.ollama_url.rstrip("/") + "/api/chat"
+    from wortlaut.llm import chat_completion_json
+
     try:
-        resp = httpx.post(
-            url,
-            json={
-                "model": settings.ollama_model,
-                "think": False,
-                "stream": False,
-                "format": "json",
-                "options": {"num_ctx": 8192, "temperature": 0.1},
-                "messages": [
-                    {"role": "system", "content": sys_prompt},
-                    {"role": "user", "content": usr_prompt, "images": [b64]},
-                ],
-            },
-            timeout=float(timeout),
+        parsed = chat_completion_json(
+            system_prompt=sys_prompt,
+            user_prompt=usr_prompt,
+            settings=settings,
+            timeout_seconds=float(timeout),
+            max_tokens=600,
+            temperature=0.1,
+            image_png_bytes=png_bytes,
+            ollama_num_ctx=8192,
         )
-        if resp.status_code != 200:
-            return None
-        raw_content = (resp.json().get("message") or {}).get("content") or "{}"
-        parsed = json.loads(raw_content)
-    except (httpx.HTTPError, ValueError, TypeError, AttributeError):
+    except RuntimeError:
         return None
     return _normalize_keyframe_context_entry(parsed)
 
@@ -2134,6 +2152,9 @@ def _format_keyframe_context_line(
 
 def generate_protocol_summary(db: Session, recording_id: uuid.UUID) -> dict:
     settings = get_settings()
+    if not settings.llm_summary_configured():
+        db.rollback()
+        raise RuntimeError("llm_summary_disabled")
     recording = db.get(Recording, recording_id)
     if recording is None or recording.transcript_deleted_at is not None:
         db.rollback()
@@ -2247,7 +2268,7 @@ def generate_protocol_summary(db: Session, recording_id: uuid.UUID) -> dict:
     newly_extracted_kf_ctx: dict[str, dict] = {}
     if active_keyframes and settings.s3_access_key and settings.s3_secret_key:
         rep_keyframes = _select_representative_keyframes(active_keyframes, max_count=10)
-        vision_budget = min(55.0, float(settings.ollama_timeout_seconds) * 0.45)
+        vision_budget = min(55.0, float(settings.llm_summary_timeout_seconds()) * 0.45)
         vision_deadline = time.monotonic() + vision_budget
         extracted_now = 0
         for rep_kf in rep_keyframes:
@@ -2456,37 +2477,17 @@ def generate_protocol_summary(db: Session, recording_id: uuid.UUID) -> dict:
     user_prompt = "\n\n".join(prompt_sections)
     ctx_window = 40960 if len(user_prompt) > 48000 else 32768
 
-    url = settings.ollama_url.rstrip("/") + "/api/chat"
-    try:
-        resp = httpx.post(
-            url,
-            json={
-                "model": settings.ollama_model,
-                "think": False,
-                "stream": False,
-                "format": "json",
-                "options": {"num_ctx": ctx_window, "temperature": 0.2},
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-            },
-            timeout=float(settings.ollama_timeout_seconds),
-        )
-    except httpx.TimeoutException:
-        raise RuntimeError("ollama_timeout") from None
-    except httpx.HTTPError:
-        raise RuntimeError("ollama_unreachable") from None
-    if resp.status_code != 200:
-        raise RuntimeError(f"ollama_http_{resp.status_code}")
+    from wortlaut.llm import chat_completion_json
 
-    try:
-        raw_content = (resp.json().get("message") or {}).get("content") or "{}"
-        parsed = json.loads(raw_content)
-    except (ValueError, TypeError, AttributeError):
-        raise RuntimeError("ollama_invalid_json") from None
-    if not isinstance(parsed, dict):
-        raise RuntimeError("ollama_invalid_json")
+    parsed = chat_completion_json(
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
+        settings=settings,
+        timeout_seconds=float(settings.llm_summary_timeout_seconds()),
+        max_tokens=4096,
+        temperature=0.2,
+        ollama_num_ctx=ctx_window,
+    )
     decisions_list: list[dict] = []
     for raw_dec in parsed.get("decisions") or []:
         if isinstance(raw_dec, str):
@@ -2558,13 +2559,15 @@ def generate_protocol_summary(db: Session, recording_id: uuid.UUID) -> dict:
 
     cleaned_summary = str(parsed.get("summary") or "").strip()
     if not cleaned_summary and not decisions_list and not topics_list and not action_items:
-        raise RuntimeError("ollama_empty_summary")
+        raise RuntimeError(
+            "llm_empty_summary" if settings.openai_chat_configured() else "ollama_empty_summary"
+        )
     summary_obj = {
         "summary": cleaned_summary,
         "decisions": decisions_list,
         "topics": topics_list,
         "action_items": action_items,
-        "model": settings.ollama_model,
+        "model": settings.active_llm_model(),
         "generated_at": datetime.now(UTC).isoformat(),
     }
 
@@ -2601,7 +2604,10 @@ def generate_protocol_summary(db: Session, recording_id: uuid.UUID) -> dict:
                 merged_kf_ctx[kid] = kval
         if merged_kf_ctx:
             meta["keyframe_context"] = merged_kf_ctx
+    from wortlaut.rag import invalidate_recording_rag_index
+
     meta["summary"] = summary_obj
+    invalidate_recording_rag_index(meta)
     locked_rec.protocol_meta = meta
     db.commit()
     return summary_obj

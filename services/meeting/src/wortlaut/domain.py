@@ -1,8 +1,9 @@
 """Shared domain service functions used by both the REST API (app.py) and MCP server."""
 
 import uuid
-from datetime import datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
@@ -314,3 +315,37 @@ def query_calendar_overview(
         "connections": connections,
         "synced_events": synced_events,
     }
+
+
+_BERLIN_TZ = ZoneInfo("Europe/Berlin")
+
+
+def parse_date_bound(raw: Any, field_name: str, *, is_upper: bool) -> datetime | None:
+    """Parse YYYY-MM-DD (Europe/Berlin day boundary) or ISO-8601 datetime into UTC."""
+    if raw is None:
+        return None
+    val = str(raw).strip()
+    if not val:
+        return None
+    if len(val) == 10 and val[4] == "-" and val[7] == "-":
+        try:
+            d = date.fromisoformat(val)
+        except ValueError:
+            raise ValueError(
+                f"{field_name} must be YYYY-MM-DD or ISO-8601 datetime (got {val!r})."
+            ) from None
+        local_dt = datetime.combine(
+            d,
+            time(23, 59, 59, 999999) if is_upper else time(0, 0, 0),
+            tzinfo=_BERLIN_TZ,
+        )
+        return local_dt.astimezone(UTC)
+    try:
+        dt = datetime.fromisoformat(val)
+    except ValueError:
+        raise ValueError(
+            f"{field_name} must be YYYY-MM-DD or ISO-8601 datetime (got {val!r})."
+        ) from None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=_BERLIN_TZ)
+    return dt.astimezone(UTC)

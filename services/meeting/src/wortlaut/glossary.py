@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from wortlaut.models import CalendarEntry, CalendarSyncedEvent, GlossaryEntry, Recording
 from wortlaut.oidc import Principal
-from wortlaut.settings import get_settings
+from wortlaut.settings import Settings, get_settings
 
 GlossaryScope = Literal["global", "personal"]
 GlossaryScopeInput = Literal["auto", "global", "personal"]
@@ -457,15 +457,15 @@ def _recording_owner_email(db: Session, recording: Recording | None) -> str:
     return ""
 
 
-def resolve_recording_glossary(
+def _resolve_glossary_for_owner(
     db: Session,
-    recording: Recording | None,
-    settings=None,
+    owner_email: str,
+    settings: Settings | None = None,
 ) -> tuple[list[str], dict[str, str]]:
-    """Return `(ordered_terms, alias_replacements)` for ASR context & protocol export."""
+    """Resolve active global + personal glossary terms and alias replacements for one owner."""
     settings = settings or get_settings()
-    rec_owner = _recording_owner_email(db, recording)
-    owners = [""] if not rec_owner else ["", rec_owner]
+    clean_owner = (owner_email or "").strip().lower()
+    owners = [""] if not clean_owner else ["", clean_owner]
     rows = list(
         db.scalars(
             select(GlossaryEntry)
@@ -527,3 +527,72 @@ def resolve_recording_glossary(
             alias_replacements[al] = row.term
 
     return ordered_terms, alias_replacements
+
+
+def resolve_recording_glossary(
+    db: Session,
+    recording: Recording | None,
+    settings=None,
+) -> tuple[list[str], dict[str, str]]:
+    """Return `(ordered_terms, alias_replacements)` for ASR context & protocol export."""
+    return _resolve_glossary_for_owner(db, _recording_owner_email(db, recording), settings)
+
+
+def resolve_principal_search_glossary(
+    db: Session,
+    principal: Principal,
+    settings: Settings | None = None,
+) -> tuple[list[str], dict[str, str]]:
+    """Return `(ordered_terms, alias_to_canonical)` visible to `principal` for search."""
+    return _resolve_glossary_for_owner(db, principal.email or "", settings)
+
+
+def _phrase_in_query(query_lower: str, phrase_lower: str) -> bool:
+    if not phrase_lower:
+        return False
+    pattern = rf"(?<![0-9a-zäöüß]){re.escape(phrase_lower)}(?![0-9a-zäöüß])"
+    return bool(re.search(pattern, query_lower))
+
+
+def expand_query_with_local_glossary(
+    query: str,
+    ordered_terms: list[str],
+    alias_to_canonical: dict[str, str],
+    *,
+    max_terms: int = 8,
+) -> list[str]:
+    """Expand matching glossary aliases/canonical terms in memory without network I/O."""
+    q_clean = " ".join((query or "").split())
+    if not q_clean or max_terms <= 0:
+        return []
+    q_lower = q_clean.lower()
+
+    canonical_to_aliases: dict[str, list[str]] = {}
+    for alias, canonical in alias_to_canonical.items():
+        canonical_to_aliases.setdefault(canonical.lower(), []).append(alias)
+
+    expanded: list[str] = []
+    seen: set[str] = {q_lower}
+
+    def _emit(term: str) -> None:
+        clean = normalize_glossary_term(term)
+        low = clean.lower()
+        if len(clean) >= 2 and low not in seen and len(expanded) < max_terms:
+            seen.add(low)
+            expanded.append(clean)
+
+    for alias, canonical in alias_to_canonical.items():
+        if _phrase_in_query(q_lower, alias.lower()):
+            _emit(canonical)
+            if len(expanded) >= max_terms:
+                return expanded
+
+    for canonical in ordered_terms:
+        c_low = canonical.lower()
+        if _phrase_in_query(q_lower, c_low):
+            for alias in canonical_to_aliases.get(c_low, ()):
+                _emit(alias)
+                if len(expanded) >= max_terms:
+                    return expanded
+
+    return expanded

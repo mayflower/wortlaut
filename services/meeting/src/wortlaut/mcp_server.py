@@ -9,7 +9,7 @@ import json
 import secrets
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -32,9 +32,9 @@ from wortlaut.domain import (
     apply_protocol_metadata_fields,
     apply_recordings_search_filters,
     cancel_recording_and_unlink_calendar,
+    parse_date_bound,
 )
 from wortlaut.exports import (
-    BERLIN_TZ,
     export_data,
     render_export,
     resolve_citation_timestamp,
@@ -56,6 +56,12 @@ from wortlaut.mcp_oauth import (
 from wortlaut.models import Recording, RecordingKeyframe
 from wortlaut.oidc import Principal, can_access_recording, user_recording_access_predicate
 from wortlaut.processing import is_keyframe_opted_out
+from wortlaut.rag import (
+    VALID_PROVIDERS,
+    VALID_SEARCH_KINDS,
+    invalidate_recording_rag_index,
+    search_protocol_chunks,
+)
 from wortlaut.settings import derive_subkey, get_settings
 from wortlaut.storage import ObjectConflict, get_storage
 from wortlaut.validation import normalize_meeting_url
@@ -199,19 +205,16 @@ _SCOPED_TOOLS: list[tuple[str, mcp_types.Tool]] = [
     _tool_spec(
         "list_recordings",
         required_scope="mcp:read",
-        title="Search Recordings",
+        title="List Recordings",
         description=(
-            "Search or list accessible meetings by keyword/speaker query, date range "
-            "(since/until), status, or provider; returns inline quote snippets when query is set."
+            "List accessible meetings chronologically by date range (since/until), status, or "
+            "provider. For keyword, speaker, or conceptual search across protocols, use "
+            "search_protocols."
         ),
         read_only=True,
         input_schema={
             "type": "object",
             "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "Search across titles, speakers, transcripts, summaries, notes.",
-                },
                 "since": {
                     "type": "string",
                     "description": "Lower date/time bound (YYYY-MM-DD or ISO-8601).",
@@ -226,10 +229,61 @@ _SCOPED_TOOLS: list[tuple[str, mcp_types.Tool]] = [
                 },
                 "provider": {
                     "type": "string",
-                    "enum": ["google_meet", "teams", "webex", "zoom"],
+                    "enum": list(VALID_PROVIDERS),
                 },
                 "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20},
             },
+            "additionalProperties": False,
+        },
+    ),
+    _tool_spec(
+        "search_protocols",
+        required_scope="mcp:read",
+        title="Search Meeting Protocols",
+        description=(
+            "Hybrid semantic + full-text search across accessible completed meeting protocols "
+            "(decisions, action items, summaries, topics, notes, slides, and speaker-attributed "
+            "transcripts). Returns ranked passages with recording UUIDs and [HH:MM:SS / +Ns] "
+            "citations."
+        ),
+        read_only=True,
+        idempotent=True,
+        open_world=False,
+        input_schema={
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Natural-language question, topic, or exact identifier.",
+                },
+                "recording_id": {
+                    "type": "string",
+                    "description": "Optional recording UUID to restrict search to one meeting.",
+                },
+                "speaker": {
+                    "type": "string",
+                    "description": "Case-insensitive speaker or owner filter.",
+                },
+                "kind": {
+                    "type": "string",
+                    "enum": list(VALID_SEARCH_KINDS),
+                    "default": "all",
+                },
+                "since": {
+                    "type": "string",
+                    "description": "Lower date/time bound (YYYY-MM-DD or ISO-8601).",
+                },
+                "until": {
+                    "type": "string",
+                    "description": "Upper date/time bound (YYYY-MM-DD or ISO-8601).",
+                },
+                "provider": {
+                    "type": "string",
+                    "enum": list(VALID_PROVIDERS),
+                },
+                "limit": {"type": "integer", "minimum": 1, "maximum": 30, "default": 10},
+            },
+            "required": ["query"],
             "additionalProperties": False,
         },
     ),
@@ -449,36 +503,6 @@ def _parse_float(raw: Any, field_name: str) -> float | None:
     return float(raw)
 
 
-def _parse_date_bound(raw: Any, field_name: str, *, is_upper: bool) -> datetime | None:
-    if raw is None:
-        return None
-    val = str(raw).strip()
-    if not val:
-        return None
-    if len(val) == 10 and val[4] == "-" and val[7] == "-":
-        try:
-            d = date.fromisoformat(val)
-        except ValueError:
-            raise ValueError(
-                f"{field_name} must be YYYY-MM-DD or ISO-8601 datetime (got {val!r})."
-            ) from None
-        local_dt = datetime.combine(
-            d,
-            time(23, 59, 59, 999999) if is_upper else time(0, 0, 0),
-            tzinfo=BERLIN_TZ,
-        )
-        return local_dt.astimezone(UTC)
-    try:
-        dt = datetime.fromisoformat(val)
-    except ValueError:
-        raise ValueError(
-            f"{field_name} must be YYYY-MM-DD or ISO-8601 datetime (got {val!r})."
-        ) from None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=BERLIN_TZ)
-    return dt.astimezone(UTC)
-
-
 def _get_accessible_recording(
     db: Session,
     principal: Principal,
@@ -573,41 +597,6 @@ def _human_status_label(rec: Recording) -> str:
     if rec.participation == "ended" and rec.participation_reason == "cancelled":
         return "cancelled"
     return f"active ({rec.participation}/{rec.processing})"
-
-
-def _extract_query_snippets(
-    db: Session,
-    rec: Recording,
-    needle_lower: str,
-    *,
-    max_snippets: int = 2,
-) -> list[str]:
-    if rec.transcript_deleted_at is not None or not needle_lower:
-        return []
-    exp = export_data(db, rec)
-    origin_utc = exp.get("time_origin_utc")
-    snippets: list[str] = []
-    for seg in exp.get("segments") or []:
-        txt = str(seg.get("text") or "")
-        spk = str(seg.get("speaker_label") or seg.get("speaker_name") or "Speaker")
-        if needle_lower in txt.lower() or needle_lower in spk.lower():
-            s_start = float(seg.get("start") or 0.0)
-            clock = (
-                wall_clock_time_de(origin_utc, s_start) if origin_utc else short_timestamp(s_start)
-            )
-            trimmed = txt if len(txt) <= 150 else f"{txt[:147].rstrip()}…"
-            snippets.append(f"  > [{clock} / +{int(round(s_start))}s] **{spk}**: {trimmed}")
-            if len(snippets) >= max_snippets:
-                return snippets
-    summary = exp.get("summary")
-    if isinstance(summary, dict):
-        for d in summary.get("decisions") or []:
-            d_txt = str(d.get("text") or "")
-            if needle_lower in d_txt.lower():
-                snippets.append(f"  > ✓ Decision: {d_txt[:150]}{_format_citation_tag(d)}")
-                if len(snippets) >= max_snippets:
-                    return snippets
-    return snippets
 
 
 def _clean_decisions_list(
@@ -792,12 +781,16 @@ def _execute_tool_sync(
     principal = scope.auth.principal
 
     if name == "list_recordings":
+        if arguments.get("query") is not None and str(arguments.get("query")).strip():
+            return _tool_error(
+                "list_recordings no longer accepts 'query'; use search_protocols(query=...) "
+                "instead."
+            )
         limit = max(1, min(50, _parse_int(arguments.get("limit"), 20, "limit")))
-        q_str = str(arguments.get("query") or "").strip()
         provider = str(arguments["provider"]) if arguments.get("provider") else None
         status_filter = str(arguments.get("status") or "").strip().lower() or None
-        since_dt = _parse_date_bound(arguments.get("since"), "since", is_upper=False)
-        until_dt = _parse_date_bound(arguments.get("until"), "until", is_upper=True)
+        since_dt = parse_date_bound(arguments.get("since"), "since", is_upper=False)
+        until_dt = parse_date_bound(arguments.get("until"), "until", is_upper=True)
 
         base_stmt = select(Recording).where(Recording.metadata_deleted_at.is_(None))
         if since_dt is not None:
@@ -831,7 +824,6 @@ def _execute_tool_sync(
                 f"Invalid status {status_filter!r}; expected upcoming, active, completed, failed."
             )
 
-        # Match query against title/segments/streams OR curated protocol_meta (summary/notes/terms)
         stmt, empty_for_principal = apply_recordings_search_filters(
             base_stmt,
             principal=principal,
@@ -840,22 +832,6 @@ def _execute_tool_sync(
         )
         if empty_for_principal:
             return _tool_result("No recordings found.")
-        if q_str:
-            seg_stmt, _ = apply_recordings_search_filters(
-                select(Recording.id).where(Recording.metadata_deleted_at.is_(None)),
-                principal=principal,
-                q=q_str,
-            )
-            needle = f"%{q_str}%"
-            stmt = stmt.where(
-                or_(
-                    Recording.id.in_(seg_stmt),
-                    Recording.protocol_meta["summary"].astext.ilike(needle),
-                    Recording.protocol_meta["notes"].astext.ilike(needle),
-                    Recording.protocol_meta["term_replacements"].astext.ilike(needle),
-                    Recording.protocol_meta["speaker_overrides"].astext.ilike(needle),
-                )
-            )
 
         rows = db.scalars(
             stmt.order_by(desc(Recording.starts_at), desc(Recording.id)).limit(limit)
@@ -863,17 +839,80 @@ def _execute_tool_sync(
         if not rows:
             return _tool_result("No matching recordings found.")
 
-        needle_lower = q_str.lower()
         lines = [f"Found {len(rows)} recording(s):"]
-        for idx, rec in enumerate(rows):
+        for rec in rows:
             title = rec.title or f"{rec.provider} meeting"
             lines.append(
                 f"- **{title}** (`{rec.id}`) · {rec.provider} · "
                 f"{rec.starts_at.strftime('%Y-%m-%d %H:%M UTC')} · {_human_status_label(rec)}"
             )
-            if needle_lower and idx < 10:
-                lines.extend(_extract_query_snippets(db, rec, needle_lower))
         return _tool_result("\n".join(lines))
+
+    if name == "search_protocols":
+        raw_query = arguments.get("query")
+        query_str = str(raw_query or "").strip() if isinstance(raw_query, str) else ""
+        if not query_str:
+            return _tool_error("query must be a non-empty string.")
+        rec_id_arg = (
+            _parse_uuid(arguments["recording_id"]) if arguments.get("recording_id") else None
+        )
+        speaker_arg = str(arguments.get("speaker") or "").strip() or None
+        kind_arg = str(arguments.get("kind") or "all").strip().lower() or "all"
+        provider_arg = str(arguments.get("provider") or "").strip().lower() or None
+        limit_arg = max(1, min(30, _parse_int(arguments.get("limit"), 10, "limit")))
+
+        res = search_protocol_chunks(
+            db,
+            principal,
+            query=query_str,
+            recording_id=rec_id_arg,
+            speaker=speaker_arg,
+            kind=kind_arg,
+            since=arguments.get("since"),
+            until=arguments.get("until"),
+            provider=provider_arg,
+            limit=limit_arg,
+        )
+        notices: list[str] = []
+        if res.scanned_capped:
+            notices.append(
+                "_Note: Vector scan capped at the 20,000 most recent chunks; older matches rely "
+                "on full-text search._"
+            )
+        if res.lexical_only:
+            notices.append(
+                "_Note: Lexical search only (local ONNX embedding model unavailable)._"
+            )
+        if not res.hits:
+            return _tool_result(
+                "\n".join([*notices, "No matching protocol passages found."])
+            )
+
+        out_lines: list[str] = [*notices]
+        for rank_idx, hit in enumerate(res.hits, start=1):
+            date_str = hit.recording_starts_at.strftime("%Y-%m-%d")
+            cite = _format_citation_tag(
+                {"timestamp": hit.wall_clock, "offset_seconds": hit.start_seconds}
+            ).strip()
+            cite_part = f" · {cite}" if cite else ""
+            kf_suffix = (
+                f" (keyframe_id=`{hit.keyframe_id}`)" if hit.keyframe_id is not None else ""
+            )
+            speaker_prefix = (
+                f"**{hit.speaker_label}**: "
+                if (hit.chunk_kind == "slide" and hit.speaker_label)
+                else ""
+            )
+            header = (
+                f"{rank_idx}. **{hit.recording_title}** (`{hit.recording_id}`, {date_str}) · "
+                f"`{hit.chunk_kind}`{cite_part}{kf_suffix}"
+            )
+            if "\n" in hit.content:
+                indented = "\n".join(f"   {ln}" for ln in hit.content.splitlines())
+                out_lines.append(f"{header}\n{indented}")
+            else:
+                out_lines.append(f"{header} {speaker_prefix}{hit.content}")
+        return _tool_result("\n".join(out_lines))
 
     if name == "get_recording":
         rec_id = _parse_uuid(arguments.get("recording_id"))
@@ -1283,6 +1322,7 @@ def _execute_tool_sync(
                     meta.pop("summary", None)
         except ValueError as exc:
             return _tool_error(str(exc))
+        invalidate_recording_rag_index(meta)
         rec.protocol_meta = meta
         db.commit()
         return _tool_result(
@@ -1298,7 +1338,21 @@ def _execute_tool_sync(
 @mcp_app.list_tools()
 async def _sdk_list_tools() -> list[mcp_types.Tool]:
     scope = _ACTIVE_CALL_SCOPE.get()
-    return [tool for req_scope, tool in _SCOPED_TOOLS if req_scope in scope.auth.scopes]
+    open_world_search = get_settings().openai_chat_configured()
+    tools: list[mcp_types.Tool] = []
+    for req_scope, tool in _SCOPED_TOOLS:
+        if req_scope not in scope.auth.scopes:
+            continue
+        if tool.name == "search_protocols" and tool.annotations is not None:
+            tool = tool.model_copy(
+                update={
+                    "annotations": tool.annotations.model_copy(
+                        update={"openWorldHint": open_world_search}
+                    )
+                }
+            )
+        tools.append(tool)
+    return tools
 
 
 @mcp_app.call_tool(validate_input=False)
@@ -1464,9 +1518,10 @@ async def _dispatch_via_mcp_sdk(
             ),
             instructions=(
                 "Speaker-isolated meeting protocols (Meet, Teams, Webex, Zoom). "
-                "Use list_recordings (supports query + since/until) to find meetings, "
-                "get_recording for summary/decisions/tasks, get_transcript for verbatim quotes, "
-                "and get_keyframe to view shared slides as PNG images."
+                "Use search_protocols for keyword, speaker, or conceptual search across "
+                "completed protocols, list_recordings for chronological/status/provider "
+                "browsing, get_recording for summary/decisions/tasks, get_transcript for "
+                "verbatim quotes, and get_keyframe to view shared slides as PNG images."
             ),
         )
         return (

@@ -150,14 +150,21 @@ Für eine komplett englischsprachige Standard-Oberfläche samt englischem Bot-Ch
 claude mcp add --transport http wortlaut https://wortlaut.example.org/mcp
 ```
 
-Über `mcp:read` und optional `mcp:write` greifen KI-Clients ausschließlich auf die eigenen bzw. freigegebenen Besprechungen des angemeldeten Nutzers zu (inklusive Bildschirmfreigabe-Folien über das Ressourcen-Template `wortlaut://recordings/{recording_id}/keyframes/{keyframe_id}.png`); aktive MCP-Clients lassen sich jederzeit unter `/ui#view=mcp` einsehen und widerrufen.
+Über `mcp:read` und optional `mcp:write` greifen KI-Clients ausschließlich auf die eigenen bzw. freigegebenen Besprechungen des angemeldeten Nutzers zu (`search_protocols` für hybride semantische + Volltext-Suche mittels lokaler CPU-ONNX-Embeddings `multilingual-e5-small` `int8` und PostgreSQL-17-`tsvector`-RRF ohne `pgvector` oder externe `/v1/embeddings`-API, `list_recordings`, `get_recording`, `get_transcript`, `get_keyframe`, `schedule_recording`, `cancel_recording`, `update_protocol` sowie Bildschirmfreigabe-Folien über `wortlaut://recordings/{recording_id}/keyframes/{keyframe_id}.png`); aktive MCP-Clients lassen sich jederzeit unter `/ui#view=mcp` einsehen und widerrufen.
 
-### Lokale KI-Zusammenfassung & Aufgabenliste (Ollama)
+### KI-Zusammenfassung & optionaler OpenAI-kompatibler Endpunkt (Ollama oder OpenAI)
+
+`WORTLAUT_OPENAI_BASE_URL` aktiviert eine begrenzte reine Suchbegriffserweiterung für `search_protocols` (ohne Übertragung von Protokolltexten); Nachbereitungs-Zusammenfassungen und Folien-Textauszüge erfordern immer explizites `WORTLAUT_ENABLE_LLM_SUMMARY=true` und werden auf `/privacy` transparent ausgewiesen:
 
 ```dotenv
 WORTLAUT_ENABLE_LLM_SUMMARY=true
+# Option A — Selbstbetriebenes Ollama (Standard ohne WORTLAUT_OPENAI_BASE_URL):
 WORTLAUT_OLLAMA_URL=http://ollama.ollama.svc.cluster.local:11434
 WORTLAUT_OLLAMA_MODEL=qwen3.8:latest
+# Option B — Einzelner externer OpenAI-kompatibler Chat-Endpunkt (kein /v1/embeddings nötig):
+# WORTLAUT_OPENAI_BASE_URL=https://api.openai.com/v1
+# WORTLAUT_OPENAI_API_KEY=REPLACE_PRIVATELY
+# WORTLAUT_OPENAI_MODEL=gpt-4o-mini
 ```
 
 ### E-Mail-Einladungen (IMAP) & Ergebnisversand (SMTP)

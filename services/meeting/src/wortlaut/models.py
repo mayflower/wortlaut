@@ -1,5 +1,6 @@
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy import (
     BigInteger,
@@ -10,13 +11,15 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     String,
+    Text,
     UniqueConstraint,
     Uuid,
     func,
     text,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -430,3 +433,35 @@ class GlossaryEntry(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC), server_default=func.now()
     )
+
+
+class ProtocolChunk(Base):
+    __tablename__ = "protocol_chunks"
+    __table_args__ = (
+        UniqueConstraint("recording_id", "chunk_index", name="uq_protocol_chunks_rec_idx"),
+        CheckConstraint(
+            "chunk_kind IN ("
+            "'decision', 'action_item', 'summary', 'topic', 'notes', 'slide', 'transcript'"
+            ")",
+            name="protocol_chunks_kind",
+        ),
+        Index("ix_protocol_chunks_rec", "recording_id"),
+        Index("ix_protocol_chunks_search_tsv", "search_tsv", postgresql_using="gin"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    recording_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("recordings.id", ondelete="CASCADE")
+    )
+    chunk_index: Mapped[int] = mapped_column(Integer)
+    chunk_kind: Mapped[str] = mapped_column(String(24))
+    speaker_label: Mapped[str | None] = mapped_column(Text, nullable=True)
+    start_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    end_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    wall_clock: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    keyframe_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    content: Mapped[str] = mapped_column(Text)
+    search_tsv: Mapped[Any] = mapped_column(TSVECTOR)
+    embedding_model: Mapped[str] = mapped_column(String(80))
+    embedding_dim: Mapped[int] = mapped_column(Integer)
+    embedding: Mapped[bytes] = mapped_column(LargeBinary)

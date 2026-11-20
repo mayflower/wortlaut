@@ -299,7 +299,7 @@ PRIVACY_HTML = (
         <a href="/ui" class="priv-brand">"""
     + _BRAND_MARK_SVG
     + """<span>Wortlaut.cloud</span></a>
-        <span class="priv-pill">100 % Self-Hosted · Keine Cloud-Weitergabe</span>
+        <span class="priv-pill">__AI_PILL_DE__</span>
       </div>
       <div style="display: flex; align-items: center; gap: 8px;">
         <a href="/privacy?lang=en" class="priv-btn">EN</a>
@@ -333,11 +333,9 @@ PRIVACY_HTML = (
 
     <section class="priv-grid">
       <div class="priv-card-sm">
-        <h3>Keine externen KI-/Cloud-Dienste</h3>
+        <h3>__AI_CARD_TITLE_DE__</h3>
         <p>
-          Audioerfassung und Spracherkennung laufen ausschließlich innerhalb der eigenen,
-          selbstbetriebenen Infrastruktur auf dedizierter Hardware. Es werden keine
-          Audio- oder Textdaten an externe Cloud-Anbieter übertragen.
+          __AI_CARD_BODY_DE__
         </p>
       </div>
       <div class="priv-card-sm">
@@ -523,8 +521,8 @@ def _build_instance_info() -> dict:
         },
         "privacyUrl": s.privacy_url or "/privacy",
         "enable_keyframes": bool(s.enable_keyframes),
-        "llmSummaryEnabled": bool(s.enable_llm_summary and s.ollama_url),
-        "llmModel": s.ollama_model if s.enable_llm_summary else "",
+        "llmSummaryEnabled": s.llm_summary_configured(),
+        "llmModel": s.active_llm_model() if s.llm_summary_configured() else "",
         "asrLanguages": list(QWEN_ASR_LANGUAGES),
         "defaultAsrLanguage": effective_recording_language(None, s),
     }
@@ -574,7 +572,7 @@ PRIVACY_HTML_EN = (
         <a href="/ui" class="priv-brand">"""
     + _BRAND_MARK_SVG
     + """<span>Wortlaut.cloud</span></a>
-        <span class="priv-pill">100% Self-Hosted · Zero External Cloud Transfer</span>
+        <span class="priv-pill">__AI_PILL_EN__</span>
       </div>
       <div style="display: flex; align-items: center; gap: 8px;">
         <a href="/privacy?lang=de" class="priv-btn">DE</a>
@@ -602,11 +600,9 @@ PRIVACY_HTML_EN = (
     </section>
     <section class="priv-grid">
       <div class="priv-card-sm">
-        <h3>No External Cloud AI</h3>
+        <h3>__AI_CARD_TITLE_EN__</h3>
         <p>
-          Audio capture and speech-to-text run exclusively on self-hosted infrastructure
-          using a local Qwen3-ASR model. Zero audio or transcript data is sent to
-          third-party clouds.
+          __AI_CARD_BODY_EN__
         </p>
       </div>
       <div class="priv-card-sm">
@@ -662,13 +658,67 @@ def render_privacy(lang: str | None = None) -> str:
         audio_hours = s.audio_retention_hours
         transcript_days = s.transcript_retention_days
         enable_keyframes = bool(s.enable_keyframes)
+        openai_configured = s.openai_chat_configured()
+        llm_summary_on = bool(s.enable_llm_summary)
         effective_lang = (lang or s.default_locale or "de").strip().lower()
     except Exception:
         assistant_name = "wortlaut"
         audio_hours = 24
         transcript_days = 30
         enable_keyframes = True
+        openai_configured = False
+        llm_summary_on = False
         effective_lang = (lang or "de").strip().lower()
+    if not openai_configured:
+        ai_pill_de = "100 % Self-Hosted · Keine Cloud-Weitergabe"
+        ai_card_title_de = "Keine externen KI-/Cloud-Dienste"
+        ai_card_body_de = (
+            "Audioerfassung und Spracherkennung laufen ausschließlich innerhalb der eigenen, "
+            "selbstbetriebenen Infrastruktur auf dedizierter Hardware. Es werden keine "
+            "Audio- oder Textdaten an externe Cloud-Anbieter übertragen."
+        )
+        ai_pill_en = "100% Self-Hosted · Zero External Cloud Transfer"
+        ai_card_title_en = "No External Cloud AI"
+        ai_card_body_en = (
+            "Audio capture and speech-to-text run exclusively on self-hosted infrastructure "
+            "using a local Qwen3-ASR model. Zero audio or transcript data is sent to "
+            "third-party clouds."
+        )
+    elif not llm_summary_on:
+        ai_pill_de = "Self-Hosted Spracherkennung · Externe Suchbegriff-Erweiterung"
+        ai_card_title_de = "Lokale Spracherkennung &amp; begrenzte Such-KI"
+        ai_card_body_de = (
+            "Audioerfassung, Spracherkennung (Qwen3-ASR) und Protokollspeicherung laufen "
+            "vollständig auf selbstbetriebener Infrastruktur. Für die MCP-Protokollsuche wird "
+            "nur die kurze Suchanfrage (samt freigegebenen Glossarbegriffen, ohne Audiodaten "
+            "oder Protokolltexte) an den konfigurierten OpenAI-kompatiblen Dienst gesendet."
+        )
+        ai_pill_en = "Self-Hosted ASR · External Search Term Expansion"
+        ai_card_title_en = "Self-Hosted Speech-to-Text &amp; Query-Only Search AI"
+        ai_card_body_en = (
+            "Audio capture, speech-to-text (Qwen3-ASR), and transcript storage run on "
+            "self-hosted infrastructure. Only short MCP search queries and active glossary terms "
+            "(never audio or stored transcript passages) are sent to the configured "
+            "OpenAI-compatible chat endpoint for synonym expansion."
+        )
+    else:
+        ai_pill_de = "Self-Hosted Spracherkennung · Konfigurierter KI-Endpunkt aktiv"
+        ai_card_title_de = "Lokale Spracherkennung &amp; konfigurierter KI-Endpunkt"
+        ai_card_body_de = (
+            "Audioerfassung und Spracherkennung (Qwen3-ASR) laufen auf selbstbetriebener "
+            "Infrastruktur. Für Nachbereitungs-Zusammenfassungen, Folien-Textauszüge und "
+            "MCP-Suchbegriffserweiterung überträgt die Instanz bereinigte Protokolltexte und "
+            "beruhigte Folien-Standbilder (ausgenommen Opt-out-Personen und #pause-Abschnitte) "
+            "an den vom Betreiber konfigurierten OpenAI-kompatiblen Dienst."
+        )
+        ai_pill_en = "Self-Hosted ASR · Configured External AI Endpoint"
+        ai_card_title_en = "Self-Hosted Speech-to-Text &amp; Configured AI Endpoint"
+        ai_card_body_en = (
+            "Audio capture and speech-to-text (Qwen3-ASR) run on self-hosted infrastructure. "
+            "Post-call protocol summaries, slide text extraction, and MCP search query expansion "
+            "send curated transcript text and settled slide snapshots (excluding opted-out "
+            "speakers and #pause intervals) to the operator-configured OpenAI-compatible endpoint."
+        )
     escaped_name = html.escape(assistant_name)
     if enable_keyframes:
         video_title_de = "Keine Stimmprofile &amp; keine Kamerabilder"
@@ -743,7 +793,13 @@ def render_privacy(lang: str | None = None) -> str:
         )
     template = PRIVACY_HTML_EN if effective_lang.startswith("en") else PRIVACY_HTML
     return (
-        template.replace("__VIDEO_CARD_TITLE_DE__", video_title_de)
+        template.replace("__AI_PILL_DE__", ai_pill_de)
+        .replace("__AI_CARD_TITLE_DE__", ai_card_title_de)
+        .replace("__AI_CARD_BODY_DE__", ai_card_body_de)
+        .replace("__AI_PILL_EN__", ai_pill_en)
+        .replace("__AI_CARD_TITLE_EN__", ai_card_title_en)
+        .replace("__AI_CARD_BODY_EN__", ai_card_body_en)
+        .replace("__VIDEO_CARD_TITLE_DE__", video_title_de)
         .replace("__VIDEO_CARD_BODY_DE__", video_body_de)
         .replace("__TRANSCRIPT_RETENTION_ITEM_DE__", retention_item_de)
         .replace("__OPTOUT_EFFECT_DE__", optout_de)

@@ -134,6 +134,31 @@ class Settings(BaseSettings):
     ollama_url: str = "http://ollama.ollama.svc.cluster.local:11434"
     ollama_model: str = "qwen3.8:latest"
     ollama_timeout_seconds: int = 180
+    openai_base_url: str | None = None
+    openai_api_key: SecretStr | None = None
+    openai_model: str = "gpt-4o-mini"
+    openai_timeout_seconds: int = Field(default=120, ge=5, le=600)
+    rag_query_expansion_timeout_seconds: float = Field(default=1.5, ge=0.2, le=10.0)
+    embedding_model_dir: Path = Path("/app/models/multilingual-e5-small-int8")
+
+    def openai_chat_configured(self) -> bool:
+        return bool((self.openai_base_url or "").strip())
+
+    def llm_summary_configured(self) -> bool:
+        return bool(
+            self.enable_llm_summary
+            and (self.openai_chat_configured() or bool((self.ollama_url or "").strip()))
+        )
+
+    def active_llm_model(self) -> str:
+        return self.openai_model if self.openai_chat_configured() else self.ollama_model
+
+    def llm_summary_timeout_seconds(self) -> int:
+        return (
+            self.openai_timeout_seconds
+            if self.openai_chat_configured()
+            else self.ollama_timeout_seconds
+        )
 
     @field_validator("asr_languages", mode="before")
     @classmethod

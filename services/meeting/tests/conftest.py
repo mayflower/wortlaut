@@ -14,21 +14,56 @@ os.environ.setdefault("WORTLAUT_DATABASE_URL", "postgresql+psycopg://unused@loca
 os.environ.setdefault("WORTLAUT_ENABLE_PROCESSING", "false")
 
 
+def _deterministic_test_embedder(texts: list[str], prefix: str):
+    import hashlib
+    import re
+
+    import numpy as np
+
+    dim = 384
+    out = np.zeros((len(texts), dim), dtype=np.float32)
+    for row_idx, raw in enumerate(texts):
+        clean = " ".join(str(raw).lower().split())
+        tokens = re.findall(r"[0-9a-zäöüß]{2,}", clean)
+        feats: list[str] = []
+        for tok in tokens:
+            feats.append(f"w:{tok}")
+            if len(tok) >= 4:
+                for i in range(len(tok) - 3):
+                    feats.append(f"g:{tok[i : i + 4]}")
+        if not feats:
+            feats = [f"raw:{clean or 'empty'}"]
+        vec = out[row_idx]
+        for feat in feats:
+            digest = hashlib.sha256(feat.encode("utf-8")).digest()
+            idx = int.from_bytes(digest[:2], "little") % dim
+            sign = 1.0 if (digest[2] & 1) == 0 else -1.0
+            vec[idx] += sign
+        norm = float(np.linalg.norm(vec))
+        if norm > 0.0:
+            vec /= norm
+    return out
+
+
 @pytest.fixture(autouse=True)
 def reset_settings_cache():
     from wortlaut import mcp_oauth as mcp_oauth_module
     from wortlaut import oidc as oidc_module
+    from wortlaut import rag as rag_module
     from wortlaut.settings import get_settings
 
     get_settings.cache_clear()
     oidc_module._JWKS_CACHE.clear()
     oidc_module._DISCOVERY_CACHE.clear()
     mcp_oauth_module._REGISTER_RATE_BUCKETS.clear()
+    rag_module._reset_embedder_for_tests()
+    rag_module.set_embedder_override_for_tests(_deterministic_test_embedder)
     yield
     get_settings.cache_clear()
     oidc_module._JWKS_CACHE.clear()
     oidc_module._DISCOVERY_CACHE.clear()
     mcp_oauth_module._REGISTER_RATE_BUCKETS.clear()
+    rag_module._reset_embedder_for_tests()
 
 
 @pytest.fixture

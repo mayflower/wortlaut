@@ -124,7 +124,8 @@ Participants can control `wortlaut` directly from the conference chat without op
 `wortlaut` exposes a built-in **MCP Streamable HTTP** server at `POST /mcp` (`GET /mcp`, `DELETE /mcp`) with zero extra containers required:
 
 - **OAuth 2.1 Auto-Discovery (`mcp auth`)**: Serves RFC 9728 Protected Resource Metadata (`/.well-known/oauth-protected-resource/mcp`), RFC 8414 Authorization Server Metadata (`/.well-known/oauth-authorization-server`), and RFC 7591 Dynamic Client Registration (`/oauth/register`) with mandatory PKCE (`S256`) and an explicit browser consent screen (`/oauth/authorize`).
-- **Scopes & Tenant Isolation**: `mcp:read` grants read access to the authenticated user’s own/invited recordings, transcripts, `pause_windows`, exports, calendar events, and binary slide keyframes (`wortlaut://recordings/{recording_id}/keyframes/{keyframe_id}.png`). `mcp:write` additionally enables scheduling/cancelling recordings, editing protocol metadata, generating Ollama summaries, and toggling/linking calendar events.
+- **Scopes & Tenant Isolation**: `mcp:read` grants read access to the authenticated user’s own/invited recordings (`list_recordings` for chronological/status/provider browsing, `search_protocols` for hybrid semantic + full-text passage retrieval, `get_recording`, `get_transcript`, `get_keyframe`, and binary slide keyframes `wortlaut://recordings/{recording_id}/keyframes/{keyframe_id}.png`). `mcp:write` additionally enables scheduling/cancelling recordings (`schedule_recording`, `cancel_recording`) and updating protocol metadata/summaries (`update_protocol`).
+- **Hybrid RAG Search (`search_protocols`)**: `wortlaut-meeting` chunks completed protocols (`decision`, `action_item`, `summary`, `topic`, `notes`, `slide`, and speaker-attributed `transcript` windows excluding opted-out speakers and `#pause` intervals), computes 384-d CPU ONNX embeddings (`multilingual-e5-small` `int8`) locally without requiring an external `/v1/embeddings` API or PostgreSQL `pgvector`, and fuses cosine similarity with PostgreSQL 17 multi-language (`simple` + `german` + `english`) `tsvector` GIN ranking via Reciprocal Rank Fusion (RRF). RBAC pre-filtering executes in SQL before ranking.
 - **Connecting Clients**:
   ```sh
   claude mcp add --transport http wortlaut https://<your-wortlaut-domain>/mcp
@@ -145,11 +146,16 @@ WORTLAUT_ASR_ALLOW_CPU=false            # Set true when running without an NVIDI
 # --- wortlaut-meeting service ---
 WORTLAUT_ASR_GLOSSARY=                  # Optional comma-separated or JSON list of domain terms/acronyms
 WORTLAUT_MAX_OVERTIME_SECONDS=3600      # Auto-extend active meetings past ends_at (15m steps, up to 60m)
-WORTLAUT_ENABLE_LLM_SUMMARY=false       # Enable local Ollama executive summaries & action items
+WORTLAUT_ENABLE_LLM_SUMMARY=false       # Mandatory explicit opt-in for post-call summaries & slide text extraction
 WORTLAUT_OLLAMA_URL=http://ollama:11434
 WORTLAUT_OLLAMA_MODEL=qwen3.8:latest
+WORTLAUT_OPENAI_BASE_URL=               # Optional external OpenAI-compatible /v1 base URL (query-only RAG expansion; summaries only when WORTLAUT_ENABLE_LLM_SUMMARY=true)
+WORTLAUT_OPENAI_API_KEY=                # Optional Bearer secret (store in ignored .env or Kubernetes Secret only)
+WORTLAUT_OPENAI_MODEL=gpt-4o-mini
+WORTLAUT_OPENAI_TIMEOUT_SECONDS=120
+WORTLAUT_RAG_QUERY_EXPANSION_TIMEOUT_SECONDS=1.5
 WORTLAUT_RAW_AUDIO_RETENTION_HOURS=24   # Purge raw S3 audio chunks 24h after meeting end
-WORTLAUT_TRANSCRIPT_RETENTION_DAYS=30   # Purge transcripts & slide keyframes after 30 days
+WORTLAUT_TRANSCRIPT_RETENTION_DAYS=30   # Purge transcripts, slide keyframes, and RAG chunks after 30 days
 WORTLAUT_MAX_ACTIVE_MEETINGS=15
 WORTLAUT_MAX_STORED_AUDIO_BYTES=8589934592
 ```

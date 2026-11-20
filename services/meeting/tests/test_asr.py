@@ -690,7 +690,6 @@ def test_asr_glossary_and_context_prompt_exclude_opted_out_speakers(
 def test_per_recording_and_in_call_language_switching_across_30_languages(
     client, database, storage, monkeypatch
 ):
-    from wortlaut import exports as exports_module
     from wortlaut.languages import QWEN_ASR_LANGUAGES, normalize_asr_language
 
     assert len(QWEN_ASR_LANGUAGES) == 30
@@ -973,7 +972,7 @@ def test_per_recording_and_in_call_language_switching_across_30_languages(
         assert st_es.json()["asr_language"] == "Spanish"
 
         # 5. Ollama summary receives explicit target language ("Spanish") in system prompt
-        from wortlaut import exports as exports_module
+        from wortlaut import llm as llm_module
 
         captured_sys_prompts: list[str] = []
 
@@ -1002,7 +1001,7 @@ def test_per_recording_and_in_call_language_switching_across_30_languages(
             captured_sys_prompts.append(msgs[0]["content"] if msgs else "")
             return FakeSpanishOllama()
 
-        monkeypatch.setattr(exports_module.httpx, "post", capture_ollama)
+        monkeypatch.setattr(llm_module.httpx, "post", capture_ollama)
         sum_resp = client.post(f"/v1/recordings/{rec_id}/summary", headers=API)
         assert sum_resp.status_code == 200
         assert "written in Spanish" in captured_sys_prompts[0]

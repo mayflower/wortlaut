@@ -22,6 +22,7 @@ from wortlaut.models import (
     McpOAuthAuthorization,
     McpOAuthClient,
     McpOAuthGrant,
+    ProtocolChunk,
     Recording,
     RecordingKeyframe,
     TranscriptSegment,
@@ -39,6 +40,7 @@ def remove_audio_metadata(db, recording, stream_ids, now):
         return  # The SMTP result can still update its recipient metadata.
     if get_settings().s3_access_key and get_settings().s3_secret_key:
         get_storage().delete_recording_keyframes(recording.id)
+    db.execute(delete(ProtocolChunk).where(ProtocolChunk.recording_id == recording.id))
     db.execute(delete(RecordingKeyframe).where(RecordingKeyframe.recording_id == recording.id))
     jobs = select(AsrJob.id).where(AsrJob.stream_id.in_(stream_ids))
     db.execute(delete(TranscriptSegment).where(TranscriptSegment.id.in_(jobs)))
@@ -266,6 +268,7 @@ def retention_pass(engine):
                     kf.object_key = ""
                     kf.participant_name = None
                 ids = select(AsrJob.id).where(AsrJob.stream_id.in_(stream_ids))
+                db.execute(delete(ProtocolChunk).where(ProtocolChunk.recording_id == recording.id))
                 db.execute(delete(TranscriptSegment).where(TranscriptSegment.id.in_(ids)))
                 recording.protocol_meta = {}
                 recording.transcript_deleted_at = now

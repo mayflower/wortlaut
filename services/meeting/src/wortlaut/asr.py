@@ -620,7 +620,7 @@ def finalize_processing(engine):
                 failed_count += 1
             else:
                 meta["summary_claim_until"] = (
-                    now + timedelta(seconds=settings.ollama_timeout_seconds + 30)
+                    now + timedelta(seconds=settings.llm_summary_timeout_seconds() + 30)
                 ).isoformat()
                 recording.protocol_meta = meta
                 recording.processing = "processing"
@@ -629,7 +629,7 @@ def finalize_processing(engine):
 
     completed_ids = []
     for rec_id in ready_ids:
-        if settings.enable_llm_summary:
+        if settings.llm_summary_configured():
             from wortlaut.exports import generate_protocol_summary
 
             try:
@@ -644,7 +644,7 @@ def finalize_processing(engine):
             except Exception as exc:
                 reason = (
                     str(exc)
-                    if isinstance(exc, RuntimeError) and str(exc).startswith("ollama_")
+                    if isinstance(exc, RuntimeError) and str(exc).startswith(("ollama_", "llm_"))
                     else type(exc).__name__
                 )
                 logging.getLogger("wortlaut").warning(
@@ -677,7 +677,12 @@ def finalize_processing(engine):
                     rec.processing_error = unreadable
                 failed_count += 1
             else:
+                from wortlaut.rag import invalidate_recording_rag_index
+
                 rec.processing = "completed"
+                next_meta = dict(rec.protocol_meta or {})
+                invalidate_recording_rag_index(next_meta)
+                rec.protocol_meta = next_meta
                 completed_ids.append(rec.id)
             rec.processing_finished_at = now
             rec.audio_closed_at = now
@@ -708,7 +713,7 @@ def keyframe_context_pass(engine) -> bool:
     """Incrementally extract screen-share visual context during or right after a meeting."""
     settings = get_settings()
     if (
-        not settings.enable_llm_summary
+        not settings.llm_summary_configured()
         or not settings.enable_keyframes
         or not settings.s3_access_key
         or not settings.s3_secret_key
@@ -851,7 +856,7 @@ def keyframe_context_pass(engine) -> bool:
             png_bytes,
             summary_lang=claim_lang,
             settings=settings,
-            timeout=min(40.0, float(settings.ollama_timeout_seconds)),
+            timeout=min(40.0, float(settings.llm_summary_timeout_seconds())),
         )
     except Exception:
         read_failed = True
@@ -905,6 +910,10 @@ def keyframe_context_pass(engine) -> bool:
             )
             ctx_map[claim_kf_id] = extracted if extracted is not None else {"empty": True}
             meta["keyframe_context"] = ctx_map
+            if extracted is not None:
+                from wortlaut.rag import invalidate_recording_rag_index
+
+                invalidate_recording_rag_index(meta)
         locked_rec.protocol_meta = meta
         db.commit()
     return True

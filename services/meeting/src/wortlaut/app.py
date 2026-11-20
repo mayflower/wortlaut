@@ -147,6 +147,11 @@ from wortlaut.processing import (
     segmentation_pass,
     stream_quality,
 )
+from wortlaut.rag import (
+    invalidate_recording_rag_index,
+    purge_recording_rag_chunks,
+    rag_index_pass,
+)
 from wortlaut.recurrence import recurrence_pass
 from wortlaut.retention import retention_pass
 from wortlaut.settings import get_settings
@@ -187,6 +192,7 @@ async def lifespan(app: FastAPI):
                 (inference_pass, 2),
                 (keyframe_context_pass, 5),
                 (finalize_processing, 2),
+                (rag_index_pass, 5),
                 (retention_pass, 60),
             )
         ]
@@ -1743,12 +1749,13 @@ def rejoin_recording(recording_id: uuid.UUID, db: Db, principal: AuthPrincipal):
     if isinstance(recording.protocol_meta, dict):
         meta = dict(recording.protocol_meta)
         changed_meta = False
-        for key in ("summary", "summary_claim_until", "scheduled_ends_at"):
+        for key in ("summary", "summary_claim_until", "scheduled_ends_at", "rag_indexed_model"):
             if key in meta:
                 meta.pop(key, None)
                 changed_meta = True
         if changed_meta:
             recording.protocol_meta = meta
+    purge_recording_rag_chunks(db, recording.id)
     existing_delivery = db.get(Delivery, recording.id)
     if existing_delivery is not None:
         db.delete(existing_delivery)
@@ -1945,7 +1952,22 @@ def update_recording_protocol(
         meta["opted_out_speakers"] = cleaned_opt_out
         if cleaned_opt_out and body.summary is None:
             meta.pop("summary", None)
+        invalidate_recording_rag_index(meta)
+    elif any(
+        field is not None
+        for field in (
+            body.title,
+            body.notes,
+            body.summary,
+            body.speaker_overrides,
+            body.term_replacements,
+            body.segment_edits,
+        )
+    ):
+        invalidate_recording_rag_index(meta)
     recording.protocol_meta = meta
+    if body.opted_out_speakers is not None:
+        purge_recording_rag_chunks(db, recording.id)
     if body.opted_out_speakers:
         purge_opted_out_transcript_segments(db, recording)
         purge_opted_out_keyframes(db, recording)
@@ -1959,7 +1981,7 @@ def create_recording_summary(
     db: Db,
     principal: AuthPrincipal,
 ):
-    if not get_settings().enable_llm_summary:
+    if not get_settings().llm_summary_configured():
         raise HTTPException(
             503, "KI-Zusammenfassung ist deaktiviert (WORTLAUT_ENABLE_LLM_SUMMARY=false)"
         )
@@ -1977,7 +1999,7 @@ def create_recording_summary(
     except Exception as exc:
         reason = (
             str(exc)
-            if isinstance(exc, RuntimeError) and str(exc).startswith("ollama_")
+            if isinstance(exc, RuntimeError) and str(exc).startswith(("ollama_", "llm_"))
             else type(exc).__name__
         )
         raise HTTPException(502, f"KI-Zusammenfassung fehlgeschlagen ({reason})") from None
@@ -2120,6 +2142,22 @@ def delete_recording_keyframe(
     kf_id = kf.id
     kf.deleted_at = datetime.now(UTC)
     kf.participant_name = None
+    kf_key = str(kf_id)
+    meta = dict(recording.protocol_meta or {})
+    if isinstance(meta.get("keyframe_context"), dict):
+        ctx_copy = dict(meta["keyframe_context"])
+        ctx_copy.pop(kf_key, None)
+        meta["keyframe_context"] = ctx_copy
+    if isinstance(meta.get("keyframe_context_claims"), dict):
+        claims_copy = dict(meta["keyframe_context_claims"])
+        claims_copy.pop(kf_key, None)
+        if claims_copy:
+            meta["keyframe_context_claims"] = claims_copy
+        else:
+            meta.pop("keyframe_context_claims", None)
+    invalidate_recording_rag_index(meta)
+    recording.protocol_meta = meta
+    purge_recording_rag_chunks(db, recording.id, keyframe_id=kf_id)
     db.commit()
     if object_key and get_settings().s3_access_key and get_settings().s3_secret_key:
         try:
@@ -2502,6 +2540,14 @@ def worker_status(
             recording.protocol_meta = meta
         purge_opted_out_transcript_segments(db, recording, [attempt])
         purge_opted_out_keyframes(db, recording, [attempt])
+        cur_meta = recording.protocol_meta if isinstance(recording.protocol_meta, dict) else {}
+        had_rag_marker = "rag_indexed_model" in cur_meta
+        if had_rag_marker:
+            next_meta = dict(cur_meta)
+            invalidate_recording_rag_index(next_meta)
+            recording.protocol_meta = next_meta
+        if changed_opted or had_rag_marker or recording.processing == "completed":
+            purge_recording_rag_chunks(db, recording.id)
     recording.participation = body.participation
     settings = get_settings()
     if (
