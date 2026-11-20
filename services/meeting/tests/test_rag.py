@@ -933,7 +933,7 @@ def test_pause_exclusion_slide_chunking_and_empty_completed_recordings(database)
 # ---------------------------------------------------------------------------
 
 
-def test_sync_purge_on_opt_out_keyframe_delete_rejoin_and_retention(client, database):
+def test_sync_purge_on_opt_out_keyframe_delete_rejoin_and_retention(client, database, storage):
     from wortlaut import rag
     from wortlaut.retention import retention_pass
 
