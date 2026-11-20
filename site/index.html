@@ -3,22 +3,22 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>wortlaut.cloud — Speaker-Accurate Meeting Transcripts. 100% Self-Hosted.</title>
-  <meta name="description" content="wortlaut creates speaker-accurate verbatim transcripts and protocols for Google Meet, Microsoft Teams, Cisco Webex, and Zoom — 100% self-hosted on your own infrastructure under GNU AGPL-3.0." />
+  <title>wortlaut.cloud — Speaker-Accurate Meeting Protocols &amp; MCP Memory. 100% Self-Hosted.</title>
+  <meta name="description" content="wortlaut.cloud joins Google Meet, Microsoft Teams, Cisco Webex, and Zoom, captures isolated per-speaker audio and screen-share slides, produces structured protocols with timestamp citations, and connects meetings via Hybrid RAG MCP — 100% self-hosted under GNU AGPL-3.0." />
   <meta property="og:type" content="website" />
   <meta property="og:site_name" content="wortlaut.cloud" />
-  <meta property="og:title" content="wortlaut — Speaker-Accurate Meeting Transcripts. 100% Self-Hosted." />
-  <meta property="og:description" content="Isolated pre-mix WebRTC speaker capture, local Qwen3-ASR speech-to-text (30 languages), live chat opt-out, and automatic Google/M365 calendar writeback under AGPL-3.0." />
+  <meta property="og:title" content="wortlaut.cloud — Speaker-Accurate Meeting Protocols &amp; MCP Memory." />
+  <meta property="og:description" content="Isolated pre-mix WebRTC speaker capture, screen-share slide keyframes, live Horizon video tile with #pause Off-the-Record, local Hybrid RAG MCP search, and Ollama or OpenAI-compatible protocols under AGPL-3.0." />
   <meta property="og:image" content="https://raw.githubusercontent.com/mayflower/wortlaut/main/docs/assets/social-preview.png" />
   <meta name="twitter:card" content="summary_large_image" />
-  <meta name="twitter:title" content="wortlaut — Speaker-Accurate Meeting Transcripts. 100% Self-Hosted." />
-  <meta name="twitter:description" content="Self-hosted meeting transcripts for Google Meet, Microsoft Teams, Cisco Webex & Zoom — zero voiceprints, live chat opt-out, local GPU/CPU ASR." />
+  <meta name="twitter:title" content="wortlaut.cloud — Speaker-Accurate Meeting Protocols &amp; MCP Memory." />
+  <meta name="twitter:description" content="Self-hosted meeting transcription, screen-share slides, Hybrid RAG MCP, and live #pause / opt-out controls for Meet, Teams, Webex &amp; Zoom." />
   <meta name="twitter:image" content="https://raw.githubusercontent.com/mayflower/wortlaut/main/docs/assets/social-preview.png" />
   <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
   <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>
-  <!-- Reusable Platform Logo Symbols -->
+  <!-- Reusable SVG Symbols (Providers & UI Icons) -->
   <svg width="0" height="0" style="position:absolute;width:0;height:0;overflow:hidden;" aria-hidden="true">
     <defs>
       <linearGradient id="wxGradA" x1="0%" y1="0%" x2="100%" y2="100%">
@@ -58,6 +58,32 @@
         <rect x="4.8" y="8.5" width="11.5" height="11" rx="2.4" fill="#ffffff"/>
         <path d="M17.5 11.6l4.5-2.7a.8.8 0 0 1 1.2.7v8.8a.8.8 0 0 1-1.2.7l-4.5-2.7v-4.8z" fill="#ffffff"/>
       </symbol>
+
+      <symbol id="ic-wave" viewBox="0 0 24 24">
+        <path d="M2 10v4M6 6v12M10 3v18M14 8v8M18 5v14M22 10v4" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
+      </symbol>
+
+      <symbol id="ic-check" viewBox="0 0 16 16">
+        <path d="M3.2 8.4L6.4 11.6L12.8 4.8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      </symbol>
+
+      <symbol id="ic-play" viewBox="0 0 12 12">
+        <path d="M3 2.2L9.8 6L3 9.8V2.2Z" fill="currentColor"/>
+      </symbol>
+
+      <symbol id="ic-pause" viewBox="0 0 16 16">
+        <rect x="3.5" y="2.5" width="3" height="11" rx="1" fill="currentColor"/>
+        <rect x="9.5" y="2.5" width="3" height="11" rx="1" fill="currentColor"/>
+      </symbol>
+
+      <symbol id="ic-sun" viewBox="0 0 20 20">
+        <circle cx="10" cy="10" r="3.5" fill="none" stroke="currentColor" stroke-width="1.7"/>
+        <path d="M10 2.5v2M10 15.5v2M2.5 10h2M15.5 10h2M4.7 4.7l1.4 1.4M13.9 13.9l1.4 1.4M15.3 4.7l-1.4 1.4M6.1 13.9l-1.4 1.4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+      </symbol>
+
+      <symbol id="ic-moon" viewBox="0 0 20 20">
+        <path d="M16.2 12.6A6.8 6.8 0 0 1 7.4 3.8a6.8 6.8 0 1 0 8.8 8.8Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+      </symbol>
     </defs>
   </svg>
 
@@ -66,9 +92,7 @@
     <div class="container header-inner">
       <a href="#top" class="brand-link" aria-label="wortlaut.cloud">
         <span class="brand-mark" aria-hidden="true">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
-            <path d="M2 10v3M6 6v11M10 3v18M14 8v7M18 5v13M22 10v3"/>
-          </svg>
+          <svg width="17" height="17"><use href="#ic-wave"/></svg>
         </span>
         <span>wortlaut<span class="brand-domain">.cloud</span></span>
       </a>
@@ -76,17 +100,23 @@
       <nav class="main-nav" aria-label="Primary navigation">
         <a href="#how-it-works" data-i18n="nav_how">How it works</a>
         <a href="#features" data-i18n="nav_features">Features</a>
-        <a href="#privacy" data-i18n="nav_privacy">Privacy &amp; Opt-Out</a>
+        <a href="#privacy" data-i18n="nav_privacy">Privacy &amp; Controls</a>
         <a href="#self-hosting" data-i18n="nav_selfhost">Self-Hosting</a>
       </nav>
 
       <div class="header-actions">
-        <div class="lang-switch" role="group" aria-label="Language / Sprache">
+        <div class="lang-switch" role="group" aria-label="Language">
           <button type="button" class="lang-btn active" data-lang="en">EN</button>
           <button type="button" class="lang-btn" data-lang="de">DE</button>
         </div>
-        <a href="https://github.com/mayflower/wortlaut" target="_blank" rel="noopener noreferrer" class="btn btn-outline">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+
+        <button type="button" class="icon-toggle-btn" id="theme-toggle" aria-label="Switch color theme" title="Switch Light / Dark Stone">
+          <svg width="16" height="16" id="theme-icon-sun"><use href="#ic-sun"/></svg>
+          <svg width="16" height="16" id="theme-icon-moon" style="display:none;"><use href="#ic-moon"/></svg>
+        </button>
+
+        <a href="https://github.com/mayflower/wortlaut" target="_blank" rel="noopener noreferrer" class="btn btn-secondary">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
             <path d="M12 .5C5.65.5.5 5.65.5 12a11.5 11.5 0 0 0 7.86 10.92c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.38-3.88-1.38-.52-1.33-1.28-1.68-1.28-1.68-1.05-.71.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.76 2.7 1.25 3.36.96.1-.75.4-1.25.73-1.54-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.28 1.18-3.09-.12-.29-.51-1.46.11-3.04 0 0 .97-.31 3.17 1.18a11.05 11.05 0 0 1 5.78 0c2.2-1.49 3.16-1.18 3.16-1.18.63 1.58.24 2.75.12 3.04.74.81 1.18 1.83 1.18 3.09 0 4.42-2.69 5.39-5.25 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5Z"/>
           </svg>
           <span data-i18n="cta_github">GitHub</span>
@@ -101,196 +131,287 @@
     <section class="hero-section">
       <div class="container">
         <div class="hero-top">
-          <div class="eyebrow-badge">
-            <span class="pulse-dot" aria-hidden="true"></span>
-            <span data-i18n="hero_badge">Open Source (AGPL-3.0) · 100% Self-Hosted · 30 Languages · GDPR-Ready</span>
-          </div>
-
           <h1 class="hero-title" data-i18n-html="hero_title_html">
-            Speaker-accurate transcripts for your meetings.<br>
-            <span class="highlight">100% on your own infrastructure.</span>
+            Speaker-accurate meeting protocols.<br>
+            <span class="hero-subline">100% on your own infrastructure.</span>
           </h1>
 
           <p class="hero-subtitle" data-i18n="hero_subtitle">
-            wortlaut joins calls in Google Meet, Microsoft Teams, Cisco Webex, and Zoom as a transparent passive listener, captures each speaker’s isolated audio stream before mixing, and writes finished protocols straight back into your calendar invite — with live chat opt-out and zero third-party cloud leakage.
+            wortlaut joins Google Meet, Microsoft Teams, Cisco Webex, and Zoom with a transparent live video tile, captures isolated per-speaker audio and screen-share slides, produces structured protocols with clickable timestamp citations, and connects every meeting to your AI tools via Hybrid RAG MCP.
           </p>
 
           <div class="hero-cta-row">
             <a href="#self-hosting" class="btn btn-primary btn-lg" data-i18n="hero_cta_primary">Self-Host for Free</a>
-            <a href="#how-it-works" class="btn btn-outline btn-lg" data-i18n="hero_cta_secondary">See How It Works</a>
+            <a href="#features" class="btn btn-secondary btn-lg" data-i18n="hero_cta_secondary">Explore Features</a>
+          </div>
+
+          <div class="hero-meta-strip" data-i18n-html="hero_meta_html">
+            <span>GNU AGPL-3.0</span>
+            <span class="hero-meta-sep" aria-hidden="true">·</span>
+            <span>Zero Voiceprints</span>
+            <span class="hero-meta-sep" aria-hidden="true">·</span>
+            <span>30 Languages</span>
+            <span class="hero-meta-sep" aria-hidden="true">·</span>
+            <span>Local Hybrid RAG &amp; MCP</span>
+            <span class="hero-meta-sep" aria-hidden="true">·</span>
+            <span>v0.2.0</span>
           </div>
 
           <div class="platform-row" aria-label="Supported meeting platforms">
             <span class="platform-row-label" data-i18n="platforms_label">
-              Runs side-by-side in a single instance across:
+              Runs side-by-side in one instance across all four platforms:
             </span>
             <div class="platform-logos">
-              <!-- Google Meet Logo -->
-              <div class="platform-logo-card" title="Google Meet" aria-label="Google Meet">
-                <svg class="platform-logo-svg" viewBox="0 0 152 40" role="img" aria-label="Google Meet">
-                  <g transform="translate(2, 6) scale(0.39)">
-                    <path fill="#00832d" d="M49.5 36l8.53 9.75 11.47 7.33 2-17.02-2-16.64-11.69 6.44z"/>
-                    <path fill="#0066da" d="M0 51.5V66c0 3.315 2.685 6 6 6h14.5l3-10.96-3-9.54-9.95-3z"/>
-                    <path fill="#e94235" d="M20.5 0L0 20.5l10.55 3 9.95-3 2.95-9.41z"/>
-                    <path fill="#2684fc" d="M20.5 20.5H0v31h20.5z"/>
-                    <path fill="#00ac47" d="M82.6 8.68L69.5 19.42v33.66l13.16 10.79c1.97 1.54 4.85.135 4.85-2.37V11c0-2.535-2.945-3.925-4.91-2.32zM49.5 36v15.5h-29V72h43c3.315 0 6-2.685 6-6V53.08z"/>
-                    <path fill="#ffba00" d="M63.5 0h-43v20.5h29V36l20-16.57V6c0-3.315-2.685-6-6-6z"/>
-                  </g>
-                  <text x="44" y="25.5" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="17.5" font-weight="600" fill="#3c4043" letter-spacing="-0.2">Google <tspan font-weight="500" fill="#5f6368">Meet</tspan></text>
-                </svg>
-              </div>
-
-              <!-- Microsoft Teams Logo -->
-              <div class="platform-logo-card" title="Microsoft Teams" aria-label="Microsoft Teams">
-                <svg class="platform-logo-svg" viewBox="0 0 176 40" role="img" aria-label="Microsoft Teams">
-                  <g transform="translate(2, 4) scale(1.33)">
-                    <circle cx="19.5" cy="6.2" r="2.3" fill="#5059C9"/>
-                    <path d="M16.5 10h5a1.5 1.5 0 0 1 1.5 1.5v4.2a2.8 2.8 0 0 1-2.8 2.8h-2.2v-7A1.5 1.5 0 0 0 16.5 10z" fill="#5059C9"/>
-                    <circle cx="14.2" cy="4.8" r="2.8" fill="#7B83EB"/>
-                    <path d="M9.5 9.5h9a2 2 0 0 1 2 2v6a4.5 4.5 0 0 1-4.5 4.5h-4A4.5 4.5 0 0 1 7.5 17.5v-6a2 2 0 0 1 2-2z" fill="#7B83EB"/>
-                    <rect x="1" y="5.5" width="12" height="12" rx="2.2" fill="#4B53BC"/>
-                    <path d="M4.2 8.7h5.6v1.5H7.8v5.1H6.2v-5.1H4.2V8.7z" fill="#ffffff"/>
-                  </g>
-                  <text x="40" y="25.5" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="17" font-weight="600" fill="#252423" letter-spacing="-0.2">Microsoft <tspan font-weight="600" fill="#4B53BC">Teams</tspan></text>
-                </svg>
-              </div>
-
-              <!-- Cisco Webex Logo -->
-              <div class="platform-logo-card" title="Cisco Webex" aria-label="Cisco Webex">
-                <svg class="platform-logo-svg" viewBox="0 0 108 40" role="img" aria-label="Cisco Webex">
-                  <g transform="translate(2, 6)">
-                    <path d="M3 6.5a3 3 0 0 1 5.5-1.6l4.8 9.2 4.3-8.2a3 3 0 0 1 5.3 0l4.3 8.2 4.8-9.2a3 3 0 1 1 5.3 2.8l-7.4 14.2a3.1 3.1 0 0 1-5.5 0l-4.2-8-4.2 8a3.1 3.1 0 0 1-5.5 0L3.1 7.7A3 3 0 0 1 3 6.5z" fill="url(#wxGradA)"/>
-                    <path d="M14.6 15.9l3-5.8a3 3 0 0 1 5.3 0l4.3 8.2 4.8-9.2a3 3 0 1 1 5.3 2.8l-7.4 14.2a3.1 3.1 0 0 1-5.5 0l-4.5-8.6z" fill="url(#wxGradB)" opacity="0.9"/>
-                  </g>
-                  <text x="46" y="25.5" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="18.5" font-weight="700" fill="#0f172a" letter-spacing="-0.4">webex</text>
-                </svg>
-              </div>
-
-              <!-- Zoom Logo -->
-              <div class="platform-logo-card" title="Zoom" aria-label="Zoom">
-                <svg class="platform-logo-svg" viewBox="0 0 98 40" role="img" aria-label="Zoom">
-                  <g transform="translate(2, 6)">
-                    <rect x="0" y="0" width="28" height="28" rx="7.5" fill="#0B5CFF"/>
-                    <rect x="4.8" y="8.5" width="11.5" height="11" rx="2.4" fill="#ffffff"/>
-                    <path d="M17.5 11.6l4.5-2.7a.8.8 0 0 1 1.2.7v8.8a.8.8 0 0 1-1.2.7l-4.5-2.7v-4.8z" fill="#ffffff"/>
-                  </g>
-                  <text x="38" y="26.5" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="21" font-weight="800" fill="#0B5CFF" letter-spacing="-0.6">zoom</text>
-                </svg>
-              </div>
+              <span class="platform-chip">
+                <svg width="20" height="16" aria-hidden="true"><use href="#logo-icon-meet"/></svg>
+                Google Meet
+              </span>
+              <span class="platform-chip">
+                <svg width="18" height="18" aria-hidden="true"><use href="#logo-icon-teams"/></svg>
+                Microsoft Teams
+              </span>
+              <span class="platform-chip">
+                <svg width="20" height="16" aria-hidden="true"><use href="#logo-icon-webex"/></svg>
+                Cisco Webex
+              </span>
+              <span class="platform-chip">
+                <svg width="18" height="18" aria-hidden="true"><use href="#logo-icon-zoom"/></svg>
+                Zoom
+              </span>
             </div>
           </div>
         </div>
 
-        <!-- Clean Product Interface Preview -->
+        <!-- Product Workspace Showcase (Astryx Stone Ledger — Zero Nested Cards) -->
         <div class="app-showcase">
           <div class="app-window-bar">
             <div class="window-dots" aria-hidden="true"><span></span><span></span><span></span></div>
-            <span class="window-url" data-i18n="ui_window_url">wortlaut · Meeting Protocol</span>
-            <span class="badge-pill" data-i18n="ui_badge_done">✓ Linked in calendar invite</span>
+            <span class="window-url" data-i18n="ui_window_url">wortlaut.cloud / meetings / q2-architecture-review</span>
+            <span class="status-pill">
+              <svg width="13" height="13" aria-hidden="true"><use href="#ic-check"/></svg>
+              <span data-i18n="ui_badge_done">Linked in calendar invite</span>
+            </span>
           </div>
 
           <div class="app-layout">
-            <div class="app-sidebar">
+            <!-- Collapsible Astryx SideNav Mirror -->
+            <aside class="app-sidebar" aria-label="Workspace navigation preview">
               <div>
-                <div style="display:flex;align-items:center;justify-content:space-between;padding:4px 8px 16px;">
-                  <div style="display:flex;align-items:center;gap:8px;font-weight:700;font-size:14.5px;">
-                    <span class="brand-mark" style="width:24px;height:24px;border-radius:6px;">
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
-                        <path d="M2 10v3M6 6v11M10 3v18M14 8v7M18 5v13M22 10v3"/>
-                      </svg>
+                <div class="app-sidebar-brand">
+                  <span class="app-sidebar-brand-left">
+                    <span class="brand-mark brand-mark-sm" aria-hidden="true">
+                      <svg width="13" height="13"><use href="#ic-wave"/></svg>
                     </span>
                     wortlaut
-                  </div>
-                  <span class="mono" style="font-size:10.5px;color:var(--stone-500);border:1px solid var(--stone-200);padding:1px 6px;border-radius:5px;background:#fff;">EN | DE</span>
+                  </span>
+                  <span class="kbd-chip" aria-hidden="true">⌘K</span>
                 </div>
-                <div class="app-nav-list">
-                  <div class="app-nav-item" data-i18n="ui_nav_home">Home</div>
-                  <div class="app-nav-item active">
-                    <span data-i18n="ui_nav_rec">Recordings</span>
-                    <span class="mono" style="font-size:11px;background:var(--stone-100);padding:1px 7px;border-radius:99px;">14</span>
-                  </div>
-                  <div class="app-nav-item" data-i18n="ui_nav_cal">Calendar</div>
-                  <div class="app-nav-item" data-i18n="ui_nav_sys">System &amp; Help</div>
-                </div>
-              </div>
-              <div style="border-top:1px solid var(--stone-200);padding-top:12px;font-size:12px;color:var(--stone-500);">
-                <div style="font-weight:700;color:var(--stone-800);">Elena Rostova</div>
-                <div data-i18n="ui_sso_label">OIDC Single Sign-On</div>
-              </div>
-            </div>
 
+                <div class="app-nav-list">
+                  <div class="app-nav-item active">
+                    <span class="app-nav-label" data-i18n="ui_nav_meetings">Meetings</span>
+                    <span class="nav-count">14</span>
+                  </div>
+                  <div class="app-nav-item">
+                    <span class="app-nav-label" data-i18n="ui_nav_calendar">Calendar</span>
+                    <span class="nav-count">3</span>
+                  </div>
+                  <div class="app-nav-item">
+                    <span class="app-nav-label" data-i18n="ui_nav_glossary">Glossary</span>
+                    <span class="nav-count">28</span>
+                  </div>
+                  <div class="app-nav-item">
+                    <span class="app-nav-label">MCP</span>
+                    <span class="nav-count">2</span>
+                  </div>
+                  <div class="app-nav-item">
+                    <span class="app-nav-label" data-i18n="ui_nav_system">System</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="app-sidebar-footer">
+                <div class="sidebar-live-row">
+                  <span class="wl-waveform" aria-hidden="true"><span></span><span></span><span></span><span></span></span>
+                  <span data-i18n="ui_live_indicator">1 active recording</span>
+                </div>
+                <span data-i18n="ui_sidebar_note">Local ONNX RAG · AGPL-3.0</span>
+              </div>
+            </aside>
+
+            <!-- Main Meeting Detail Plane -->
             <div class="app-main">
               <div class="app-main-header">
                 <div>
-                  <h2 class="app-meeting-title" data-i18n="ui_meeting_title">Q4 Product &amp; Security Architecture Review</h2>
+                  <h2 class="app-meeting-title" dir="auto" data-i18n="ui_meeting_title">Q2 Architecture &amp; Release Review</h2>
                   <div class="app-meeting-meta">
-                    <span class="inline-provider-badge" title="Microsoft Teams">
-                      <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#logo-icon-teams"/></svg>
-                      <span>Microsoft Teams</span>
+                    <span class="inline-provider">
+                      <svg width="16" height="13" aria-hidden="true"><use href="#logo-icon-meet"/></svg>
+                      Google Meet
                     </span>
-                    <span>·</span>
-                    <span data-i18n="ui_meeting_meta">Today, 14:00 – 14:45 · 3 participants</span>
+                    <span aria-hidden="true">·</span>
+                    <span data-i18n="ui_meeting_date">Today, 14:00</span>
+                    <span aria-hidden="true">·</span>
+                    <span class="tabular" data-i18n="ui_meeting_dur">38 min · DE</span>
+                    <span aria-hidden="true">·</span>
+                    <span data-i18n="ui_meeting_verified">3 isolated speaker tracks</span>
                   </div>
                 </div>
-                <div style="display:flex;gap:8px;flex-wrap:wrap;">
-                  <span class="btn btn-outline" style="padding:6px 12px;font-size:12.5px;" data-i18n="ui_btn_share">Share Read Link</span>
-                  <span class="btn btn-primary" style="padding:6px 12px;font-size:12.5px;" data-i18n="ui_btn_export">Export Markdown</span>
+                <div class="app-header-actions" aria-hidden="true">
+                  <span class="mini-action-pill">Markdown</span>
+                  <span class="mini-action-pill">VTT</span>
+                  <span class="mini-action-pill" data-i18n="ui_btn_share">Share</span>
                 </div>
               </div>
 
-              <!-- Optional Local AI Summary Card -->
-              <div class="app-summary-box">
-                <div class="app-summary-head">
-                  <span data-i18n="ui_summary_label">Executive Summary &amp; Action Items</span>
-                  <span class="app-summary-tag" data-i18n="ui_summary_tag">Optional Local AI · Ollama</span>
+              <!-- Structured Protocol Band -->
+              <div class="ledger-band">
+                <div class="ledger-band-head">
+                  <span class="ledger-band-title" data-i18n="ui_protocol_title">Structured Protocol &amp; Decisions</span>
+                  <span class="ledger-band-meta" data-i18n="ui_protocol_engine">Ollama / OpenAI-compatible · Click timestamp to verify</span>
                 </div>
-                <p class="app-summary-text" data-i18n="ui_summary_body">
-                  Calendar OAuth2 writeback for Google Workspace and Microsoft 365 is live; external client calls stay opt-in via 1-click toggle, and in-call chat opt-out passed security review.
+                <p class="protocol-summary-text" data-i18n="ui_summary_text">
+                  The team confirmed the v0.2.0 Helm rollout on Kubernetes 1.32 with 4 GiB memory for local ONNX RAG embeddings, and finalized screen-share slide capture with fail-closed camera exclusion.
                 </p>
+                <ul class="decisions-list">
+                  <li>
+                    <span class="decision-text">
+                      <svg width="14" height="14" class="decision-marker" aria-hidden="true"><use href="#ic-check"/></svg>
+                      <span data-i18n="ui_dec_1">Ship Helm chart 0.2.0 with local CPU ONNX Hybrid RAG enabled by default.</span>
+                    </span>
+                    <button type="button" class="wl-citation-chip" data-cite-turn="turn-1" title="Jump to transcript turn">14:04</button>
+                  </li>
+                  <li>
+                    <span class="decision-text">
+                      <svg width="14" height="14" class="decision-marker" aria-hidden="true"><use href="#ic-check"/></svg>
+                      <span data-i18n="ui_dec_2">Expose all 8 MCP tools and slide PNG keyframes over OAuth 2.1 PKCE at /mcp.</span>
+                    </span>
+                    <button type="button" class="wl-citation-chip" data-cite-turn="turn-3" title="Jump to transcript turn">14:19</button>
+                  </li>
+                </ul>
               </div>
 
-              <div class="app-toolbar">
-                <div class="speaker-pills" role="group" aria-label="Filter speakers">
-                  <button type="button" class="speaker-pill active" data-speaker-filter="all" data-i18n="ui_filter_all">All (3)</button>
-                  <button type="button" class="speaker-pill" data-speaker-filter="1"><span class="platform-dot" style="background:var(--emerald-600);"></span>Elena Rostova (46%)</button>
-                  <button type="button" class="speaker-pill" data-speaker-filter="2"><span class="platform-dot" style="background:var(--indigo-600);"></span>Marcus Vance (34%)</button>
-                  <button type="button" class="speaker-pill" data-speaker-filter="3"><span class="platform-dot" style="background:var(--cyan-700);"></span>Clara Lindqvist (20%)</button>
+              <!-- Captured Screen-Share Keyframes Band -->
+              <div class="ledger-band">
+                <div class="ledger-band-head">
+                  <span class="ledger-band-title" data-i18n="ui_slides_title">Screen-Share Keyframes (2)</span>
+                  <span class="ledger-band-meta" data-i18n="ui_slides_meta">Share track verified · Participant cameras excluded · 30d TTL</span>
                 </div>
-                <div class="site-live-pill">
-                  <span class="site-waveform" aria-hidden="true"><span></span><span></span><span></span><span></span></span>
-                  <span data-i18n="ui_tracks_bound">3 isolated tracks</span>
+                <div class="keyframes-strip">
+                  <button type="button" class="keyframe-item" data-cite-turn="turn-1">
+                    <span class="keyframe-thumb" aria-hidden="true">
+                      <svg width="64" height="36" viewBox="0 0 64 36" fill="none">
+                        <rect x="4" y="5" width="22" height="10" rx="2" fill="#23252f" stroke="#10b981" stroke-width="1"/>
+                        <rect x="38" y="5" width="22" height="10" rx="2" fill="#23252f" stroke="#3a3d4c" stroke-width="1"/>
+                        <rect x="20" y="22" width="24" height="9" rx="2" fill="#23252f" stroke="#3a3d4c" stroke-width="1"/>
+                        <path d="M26 10h12M15 15l12 7M49 15l-12 7" stroke="#78716c" stroke-width="1"/>
+                      </svg>
+                    </span>
+                    <span class="keyframe-meta">
+                      <span class="keyframe-title" data-i18n="ui_slide_1_title">Hybrid RAG &amp; MCP Topology</span>
+                      <span class="keyframe-sub tabular">14:03 · 1280×720 PNG</span>
+                    </span>
+                  </button>
+                  <button type="button" class="keyframe-item" data-cite-turn="turn-3">
+                    <span class="keyframe-thumb" aria-hidden="true">
+                      <svg width="64" height="36" viewBox="0 0 64 36" fill="none">
+                        <line x1="6" y1="9" x2="40" y2="9" stroke="#fafaf9" stroke-width="2" stroke-linecap="round"/>
+                        <line x1="6" y1="16" x2="54" y2="16" stroke="#78716c" stroke-width="1.5" stroke-linecap="round"/>
+                        <line x1="6" y1="22" x2="46" y2="22" stroke="#78716c" stroke-width="1.5" stroke-linecap="round"/>
+                        <rect x="6" y="27" width="18" height="4" rx="2" fill="#10b981"/>
+                      </svg>
+                    </span>
+                    <span class="keyframe-meta">
+                      <span class="keyframe-title" data-i18n="ui_slide_2_title">v0.2.0 Rollout &amp; OAuth 2.1 Checklist</span>
+                      <span class="keyframe-sub tabular">14:18 · 1280×720 PNG</span>
+                    </span>
+                  </button>
                 </div>
               </div>
 
-              <div class="transcript-list">
-                <div class="transcript-turn" data-speaker-turn="1">
-                  <div class="turn-meta">
-                    <span>Elena Rostova</span>
-                    <span class="turn-snippet-pill" title="24h audio snippet verification">▶ 14:04</span>
+              <!-- Verbatim Transcript Ledger Band -->
+              <div class="ledger-band">
+                <div class="speaker-toolbar">
+                  <div class="speaker-chips" role="group" aria-label="Filter transcript by speaker">
+                    <button type="button" class="wl-speaker-chip active" data-speaker-filter="all" data-i18n="ui_filter_all">All (3)</button>
+                    <button type="button" class="wl-speaker-chip" data-speaker-filter="anna">
+                      Anna Weber <span class="wl-speaker-chip-pct">46%</span>
+                    </button>
+                    <button type="button" class="wl-speaker-chip" data-speaker-filter="markus">
+                      Markus Klein <span class="wl-speaker-chip-pct">34%</span>
+                    </button>
+                    <button type="button" class="wl-speaker-chip" data-speaker-filter="elena">
+                      Elena Rostova <span class="wl-speaker-chip-pct">20%</span>
+                    </button>
                   </div>
-                  <p class="turn-body" data-i18n-html="ui_turn1_text_html">
-                    Finished protocols are now written straight back into the <mark>Google Calendar and Outlook invite</mark> so every attendee finds the read-only link right where they look.
-                  </p>
+                  <span class="ledger-band-meta" data-i18n="ui_filter_hint">Filter by speaker · 24h audio check</span>
                 </div>
 
-                <div class="transcript-turn speaker-2" data-speaker-turn="2">
-                  <div class="turn-meta">
-                    <span>Marcus Vance</span>
-                    <span class="turn-snippet-pill" title="24h audio snippet verification">▶ 14:05</span>
+                <div class="transcript-ledger">
+                  <div class="wl-turn-row" id="turn-1" data-speaker-turn="anna">
+                    <div class="turn-head">
+                      <span class="turn-speaker-wrap">
+                        <span class="speaker-avatar" aria-hidden="true">AW</span>
+                        <span class="turn-speaker" dir="auto">Anna Weber</span>
+                      </span>
+                      <span class="turn-meta-right">
+                        <span class="turn-snippet-btn" title="24h verification snippet">
+                          <svg width="9" height="9" aria-hidden="true"><use href="#ic-play"/></svg>
+                          0:04
+                        </span>
+                        <span class="turn-time">14:04</span>
+                      </span>
+                    </div>
+                    <p class="turn-body" dir="auto" data-i18n="ui_turn_1">
+                      Let’s lock Helm chart 0.2.0 with local CPU ONNX embeddings on by default. Because each speaker track is isolated pre-mix, decisions stay accurately attributed even when two people talk at once.
+                    </p>
                   </div>
-                  <p class="turn-body" data-i18n-html="ui_turn2_text_html">
-                    And because each participant’s WebRTC track is captured before mixing, <mark>speaker attribution</mark> stays accurate even when two people overlap — across 30 languages.
-                  </p>
-                </div>
 
-                <div class="transcript-turn speaker-3" data-speaker-turn="3">
-                  <div class="turn-meta">
-                    <span>Clara Lindqvist</span>
-                    <span class="turn-snippet-pill" title="24h audio snippet verification">▶ 14:07</span>
+                  <div class="otr-ledger-marker" data-speaker-turn="marker">
+                    <span class="otr-marker-left">
+                      <svg width="13" height="13" aria-hidden="true"><use href="#ic-pause"/></svg>
+                      <span data-i18n="ui_otr_marker">Off the Record (#pause) — Audio buffers zeroed in RAM and slide capture halted</span>
+                    </span>
+                    <span class="otr-marker-time">14:11–14:14</span>
                   </div>
-                  <p class="turn-body" data-i18n-html="ui_turn3_text_html">
-                    Our DPO especially liked the <mark>in-call chat opt-out</mark>: anyone can type <code>opt out</code> or <code>nein</code> in chat to exclude their voice immediately without stopping the call for everyone else.
-                  </p>
+
+                  <div class="wl-turn-row" id="turn-2" data-speaker-turn="markus">
+                    <div class="turn-head">
+                      <span class="turn-speaker-wrap">
+                        <span class="speaker-avatar" aria-hidden="true">MK</span>
+                        <span class="turn-speaker" dir="auto">Markus Klein</span>
+                      </span>
+                      <span class="turn-meta-right">
+                        <span class="turn-snippet-btn" title="24h verification snippet">
+                          <svg width="9" height="9" aria-hidden="true"><use href="#ic-play"/></svg>
+                          0:03
+                        </span>
+                        <span class="turn-time">14:15</span>
+                      </span>
+                    </div>
+                    <p class="turn-body" dir="auto" data-i18n="ui_turn_2">
+                      We resumed with #resume right after the salary discussion. All temporary verification snippets still auto-expire after 24 hours and participant cameras stay strictly excluded from keyframes.
+                    </p>
+                  </div>
+
+                  <div class="wl-turn-row" id="turn-3" data-speaker-turn="elena">
+                    <div class="turn-head">
+                      <span class="turn-speaker-wrap">
+                        <span class="speaker-avatar" aria-hidden="true">ER</span>
+                        <span class="turn-speaker" dir="auto">Elena Rostova</span>
+                      </span>
+                      <span class="turn-meta-right">
+                        <span class="turn-snippet-btn" title="24h verification snippet">
+                          <svg width="9" height="9" aria-hidden="true"><use href="#ic-play"/></svg>
+                          0:05
+                        </span>
+                        <span class="turn-time">14:19</span>
+                      </span>
+                    </div>
+                    <p class="turn-body" dir="auto" data-i18n="ui_turn_3">
+                      Agreed — let’s expose all 8 MCP tools and native PNG slide keyframes over OAuth 2.1 PKCE at /mcp so Claude, Cursor, and Antigravity can search every decision with citations.
+                    </p>
+                  </div>
                 </div>
               </div>
             </div>
@@ -300,40 +421,35 @@
     </section>
 
     <!-- 2. HOW IT WORKS -->
-    <section id="how-it-works" class="section">
+    <section id="how-it-works" class="section section-surface">
       <div class="container">
         <div class="section-header">
-          <span class="section-kicker" data-i18n="how_kicker">HOW IT WORKS</span>
-          <h2 class="section-title" data-i18n="how_title">
-            From live conversation to verified protocol in three simple steps
-          </h2>
+          <h2 class="section-title" data-i18n="how_title">Three steps from calendar invite to searchable meeting memory</h2>
           <p class="section-desc" data-i18n="how_desc">
-            No browser extensions for attendees, no cloud bots in third-party guest lists, and no manual note-taking.
+            No browser extensions for participants, no per-seat cloud SaaS, and no opaque voiceprint profiles.
           </p>
         </div>
 
         <div class="steps-grid">
-          <div class="step-card">
-            <span class="step-number">01</span>
-            <h3 data-i18n="step1_title">1. Connect calendar, paste link, or invite</h3>
+          <div class="step-col">
+            <span class="step-index">01</span>
+            <h3 data-i18n="step1_title">Connect calendars or dispatch on demand</h3>
             <p data-i18n="step1_desc">
-              Link your Google Workspace or Microsoft 365 calendar once via OAuth2, paste a live meeting URL on the home screen, or invite your bot email address like a regular attendee.
+              Link Google Calendar or Microsoft 365 via OAuth2 PKCE (or IMAP/.ics), toggle auto-recording per event with one click, or paste any Meet, Teams, Webex, or Zoom link directly into the workspace.
             </p>
           </div>
-
-          <div class="step-card">
-            <span class="step-number">02</span>
-            <h3 data-i18n="step2_title">2. Transparent join &amp; live chat controls</h3>
+          <div class="step-col">
+            <span class="step-index">02</span>
+            <h3 data-i18n="step2_title">Transparent live join &amp; isolated capture</h3>
             <p data-i18n="step2_desc">
-              wortlaut joins displaying the inviter’s name with live voice-activity metering and on-screen chat commands on its 16:9 video tile: type “no” / “opt out” to exclude your voice, or “#pause” / “#resume” to go off the record.
+              wortlaut joins with a 1280×720 Horizon video tile showing active speaker and chat controls. It records each participant’s pre-mix WebRTC audio track and verified screen-share slides, while #pause and opt out act instantly.
             </p>
           </div>
-
-          <div class="step-card">
-            <span class="step-number">03</span>
-            <h3 data-i18n="step3_title">3. Calendar writeback, verify &amp; export</h3>
+          <div class="step-col">
+            <span class="step-index">03</span>
+            <h3 data-i18n="step3_title">Structured protocol, writeback &amp; MCP search</h3>
             <p data-i18n="step3_desc">
-              Right after the call, wortlaut writes the read-only protocol link directly into your calendar event, emails the transcript, and lets you verify 24h audio snippets, edit terms, or export Markdown.
+              Local 30-language speech recognition and Ollama or OpenAI-compatible protocol synthesis write decisions with [HH:MM:SS] citations back into your calendar invite, send summary mail via Wortlaut.Cloud Robot, and index everything for Hybrid RAG MCP.
             </p>
           </div>
         </div>
@@ -341,240 +457,363 @@
     </section>
 
     <!-- 3. INTERACTIVE FEATURES -->
-    <section id="features" class="section section-alt">
+    <section id="features" class="section">
       <div class="container">
         <div class="section-header">
-          <span class="section-kicker" data-i18n="feat_kicker">PRODUCT WORKFLOWS</span>
-          <h2 class="section-title" data-i18n="feat_title">
-            Everything teams need for accurate, trustworthy meeting protocols
-          </h2>
+          <h2 class="section-title" data-i18n="feat_title">Built for sovereign teams, verifiable records, and AI workflows</h2>
           <p class="section-desc" data-i18n="feat_desc">
-            Designed for daily engineering syncs, confidential client engagements, architecture decisions, and compliance-sensitive teams.
+            Inspect every layer of wortlaut.cloud 0.2.0 — from local Hybrid RAG MCP search to the in-call Horizon video tile.
           </p>
         </div>
 
-        <div class="feature-tabs-nav" role="tablist">
-          <button type="button" class="feature-tab-btn active" data-ftab="cal">
-            <span data-i18n="ftab1_title">Calendar &amp; Writeback</span>
-            <span class="sub" data-i18n="ftab1_sub">Google &amp; Microsoft 365</span>
-          </button>
-          <button type="button" class="feature-tab-btn" data-ftab="adhoc">
-            <span data-i18n="ftab2_title">Ad-hoc &amp; 30 Languages</span>
-            <span class="sub" data-i18n="ftab2_sub">Join in ~15s · Local Qwen3-ASR</span>
-          </button>
-          <button type="button" class="feature-tab-btn" data-ftab="share">
-            <span data-i18n="ftab3_title">Verify, Edit &amp; Summarize</span>
-            <span class="sub" data-i18n="ftab3_sub">Snippets, Ollama AI &amp; Exports</span>
-          </button>
-          <button type="button" class="feature-tab-btn" data-ftab="speaker">
-            <span data-i18n="ftab4_title">True Speaker Separation</span>
-            <span class="sub" data-i18n="ftab4_sub">Pre-mix WebRTC · Zero voiceprints</span>
-          </button>
+        <div class="feature-tabs-nav" role="tablist" aria-label="Core features">
+          <button type="button" class="feature-tab-btn active" role="tab" aria-selected="true" data-tab="mcp" data-i18n="ftab_mcp">Hybrid RAG &amp; MCP</button>
+          <button type="button" class="feature-tab-btn" role="tab" aria-selected="false" data-tab="horizon" data-i18n="ftab_horizon">Horizon Tile &amp; #pause</button>
+          <button type="button" class="feature-tab-btn" role="tab" aria-selected="false" data-tab="protocol" data-i18n="ftab_protocol">Protocols &amp; Slides</button>
+          <button type="button" class="feature-tab-btn" role="tab" aria-selected="false" data-tab="calendar" data-i18n="ftab_calendar">Calendar &amp; Writeback</button>
+          <button type="button" class="feature-tab-btn" role="tab" aria-selected="false" data-tab="audio" data-i18n="ftab_audio">Pre-Mix Audio &amp; 30 Langs</button>
         </div>
 
-        <!-- Feature Panel 1: Calendar -->
-        <div class="feature-panel active" data-fpanel="cal">
-          <div>
-            <h3 data-i18n="f1_title">Auto-record your own meetings, toggle client calls in 1 click, and link protocols in the invite</h3>
-            <p class="lead" data-i18n="f1_lead">
-              Connect Google Calendar or Microsoft 365 via OAuth2 PKCE in seconds. You stay in complete control of every call:
+        <!-- Panel 1: Hybrid RAG & MCP -->
+        <div class="feature-panel active" data-panel="mcp" role="tabpanel">
+          <div class="feature-copy">
+            <h3 data-i18n="fmcp_title">Search every meeting decision directly from your AI client</h3>
+            <p class="lead" data-i18n="fmcp_lead">
+              Expose your self-hosted meeting archive over Streamable HTTP MCP at /mcp with OAuth 2.1 PKCE. Hybrid retrieval fuses local CPU INT8 ONNX semantic embeddings with PostgreSQL full-text search via Reciprocal Rank Fusion — zero external vector database required.
             </p>
             <ul class="check-list">
-              <li><span class="check-icon">✓</span><span data-i18n="f1_li1">Self-organized meetings with confirmed guests are scheduled automatically (and can be opted out with 1 click anytime).</span></li>
-              <li><span class="check-icon">✓</span><span data-i18n="f1_li2">External client invitations can be toggled on with a single click — without adding a bot email to the client’s guest list.</span></li>
-              <li><span class="check-icon">✓</span><span data-i18n="f1_li3">Automatic Calendar Writeback: once completed, wortlaut appends the protected read-only protocol link straight into your Google Calendar or Outlook event.</span></li>
+              <li>
+                <svg width="15" height="15" class="check-svg" aria-hidden="true"><use href="#ic-check"/></svg>
+                <span data-i18n="fmcp_b1">Local multilingual-e5-small-int8 embeddings on CPU + PostgreSQL tsvector across decisions, action items, summaries, slides, and transcripts.</span>
+              </li>
+              <li>
+                <svg width="15" height="15" class="check-svg" aria-hidden="true"><use href="#ic-check"/></svg>
+                <span data-i18n="fmcp_b2">8 focused MCP tools: list_recordings, search_protocols, get_recording, get_transcript, get_keyframe (native PNG ImageContent), schedule_recording, cancel_recording, and update_protocol.</span>
+              </li>
+              <li>
+                <svg width="15" height="15" class="check-svg" aria-hidden="true"><use href="#ic-check"/></svg>
+                <span data-i18n="fmcp_b3">Strict per-user access scoping via Dex OIDC + revocable OAuth 2.1 grants directly in the MCP workspace view.</span>
+              </li>
             </ul>
           </div>
 
-          <div class="preview-box">
-            <div style="font-size:12.5px;font-weight:600;color:var(--stone-600);" data-i18n="f1_demo_label">
-              Calendar Workspace (click the toggle switch to test):
+          <div class="ledger-preview">
+            <div class="ledger-preview-header">
+              <span class="mono">MCP · search_protocols()</span>
+              <span class="ledger-preview-sub">ONNX INT8 + Postgres FTS · RRF</span>
             </div>
-            <div class="cal-row">
-              <div class="cal-row-left">
-                <span class="cal-provider-logo" title="Google Meet" aria-label="Google Meet">
-                  <svg width="22" height="18" viewBox="0 0 87.5 72" role="img" aria-label="Google Meet"><use href="#logo-icon-meet"/></svg>
+            <div class="rag-query-bar" role="group" aria-label="Sample RAG queries">
+              <button type="button" class="rag-query-pill active" data-rag-query="helm" data-i18n="rag_q_helm">"Helm rollout &amp; memory"</button>
+              <button type="button" class="rag-query-pill" data-rag-query="otr" data-i18n="rag_q_otr">"Off-the-Record policy"</button>
+              <button type="button" class="rag-query-pill" data-rag-query="slides" data-i18n="rag_q_slides">"Architecture slide PNG"</button>
+            </div>
+            <div id="rag-results-list">
+              <!-- Populated & localized by app.js -->
+            </div>
+            <div class="mcp-tools-footer">
+              <span>claude mcp add --transport http wortlaut https://host/mcp</span>
+              <span class="tabular">8 tools · OAuth 2.1</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Panel 2: Horizon Video Tile, #pause & Opt-Out -->
+        <div class="feature-panel" data-panel="horizon" role="tabpanel">
+          <div class="feature-copy">
+            <h3 data-i18n="fhor_title">Visible presence, live #pause, and instant speaker opt-out</h3>
+            <p class="lead" data-i18n="fhor_lead">
+              Participants never wonder whether a meeting is being recorded. wortlaut renders a clean 1280×720 Acoustic Horizon video tile engineered for 3×3 gallery grids, showing active speaker telemetry and literal chat commands at a glance.
+            </p>
+            <ul class="check-list">
+              <li>
+                <svg width="15" height="15" class="check-svg" aria-hidden="true"><use href="#ic-check"/></svg>
+                <span data-i18n="fhor_b1">Type #pause (#pause / #weiter / #resume) in the meeting chat for immediate Off-the-Record mode: audio PCM buffers are zeroed in RAM and slide capture stops instantly.</span>
+              </li>
+              <li>
+                <svg width="15" height="15" class="check-svg" aria-hidden="true"><use href="#ic-check"/></svg>
+                <span data-i18n="fhor_b2">Type no or opt out to permanently exclude your own voice and shared slides — existing utterances, audio, keyframes, and RAG chunks are purged immediately.</span>
+              </li>
+              <li>
+                <svg width="15" height="15" class="check-svg" aria-hidden="true"><use href="#ic-check"/></svg>
+                <span data-i18n="fhor_b3">State-Only Chroma: Emerald signals active capture; warm Amber signals Off-the-Record pause or waiting-room admission.</span>
+              </li>
+            </ul>
+          </div>
+
+          <div class="horizon-showcase">
+            <div class="horizon-controls">
+              <span class="ledger-band-meta" data-i18n="fhor_preview_label">Interactive 1280×720 video tile preview</span>
+              <div class="horizon-mode-switch" role="group" aria-label="Toggle Horizon tile state">
+                <button type="button" class="horizon-mode-btn active-live" id="ht-btn-live" data-i18n="ht_mode_live">Recording Active</button>
+                <button type="button" class="horizon-mode-btn" id="ht-btn-pause" data-i18n="ht_mode_pause">Off the Record (#pause)</button>
+              </div>
+            </div>
+
+            <div class="horizon-tile" id="horizon-tile-preview">
+              <div class="ht-top">
+                <div class="ht-brand">
+                  <span class="ht-icon" aria-hidden="true">
+                    <svg width="16" height="16"><use href="#ic-wave"/></svg>
+                  </span>
+                  <div>
+                    <div class="ht-brand-name">Wortlaut.cloud</div>
+                    <div class="ht-brand-sub" data-i18n="ht_sub">Q2 Architecture Review · Invited by Anna Weber</div>
+                  </div>
+                </div>
+                <span class="ht-status-pill" id="ht-status-pill">
+                  <span class="ht-status-dot" aria-hidden="true"></span>
+                  <span id="ht-status-text" data-i18n="ht_status_live">Recording active</span>
                 </span>
-                <div>
-                  <div style="font-weight:700;font-size:14px;" data-i18n="f1_ev1_title">Weekly Platform Sync</div>
-                  <div style="font-size:12px;color:var(--stone-500);" data-i18n="f1_ev1_meta">10:00 – 10:45 · Completed · Linked in calendar event</div>
+              </div>
+
+              <div class="ht-keycap-band">
+                <span class="ht-keycap-group">
+                  <span class="ht-keycap">no</span>
+                  <span class="ht-keycap">opt out</span>
+                  <span data-i18n="ht_cmd_optout">Exclude your voice</span>
+                </span>
+                <span class="ht-keycap-group">
+                  <span class="ht-keycap ht-keycap-accent">#pause</span>
+                  <span class="ht-keycap ht-keycap-accent">#resume</span>
+                  <span data-i18n="ht_cmd_otr">Off-the-Record in chat</span>
+                </span>
+              </div>
+
+              <div class="ht-center ht-live-body">
+                <div class="ht-speaker-name" dir="auto">Anna Weber</div>
+                <div class="ht-speaker-sub" data-i18n="ht_speaking_sub">Speaking now · Isolated WebRTC audio track</div>
+                <div class="ht-horizon-line" aria-hidden="true">
+                  <span class="ht-line-seg"></span>
+                  <span class="ht-wave-11">
+                    <span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span>
+                  </span>
+                  <span class="ht-line-seg"></span>
                 </div>
               </div>
-              <span class="badge-pill" data-i18n="f1_linked_badge">✓ Protocol linked</span>
-            </div>
-            <div class="cal-row" style="border-color:var(--emerald-500);box-shadow:var(--shadow-xs);">
-              <div class="cal-row-left">
-                <span class="cal-provider-logo" title="Microsoft Teams" aria-label="Microsoft Teams">
-                  <svg width="22" height="22" viewBox="0 0 24 24" role="img" aria-label="Microsoft Teams"><use href="#logo-icon-teams"/></svg>
+
+              <div class="ht-paused-body">
+                <span class="ht-pause-badge" aria-hidden="true">
+                  <svg width="16" height="16"><use href="#ic-pause"/></svg>
                 </span>
+                <div class="ht-pause-title" data-i18n="ht_pause_title">OFF THE RECORD · Recording paused</div>
+                <div class="ht-pause-desc" data-i18n="ht_pause_desc">Spoken audio and shared screens are discarded immediately and never stored.</div>
+                <div class="ht-pause-hint" data-i18n="ht_pause_hint">Type "#resume" in the meeting chat to continue</div>
+              </div>
+
+              <div class="ht-bottom">
+                <span class="ht-quote-avatar" aria-hidden="true">AW</span>
+                <span class="mono" style="font-size:12px;color:#9c9691;">14:04</span>
+                <span class="ht-quote-text" dir="auto" data-i18n="ht_quote">“We ship Helm chart 0.2.0 with local ONNX Hybrid RAG enabled by default.”</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Panel 3: Structured Protocols & Screen-Share Slides -->
+        <div class="feature-panel" data-panel="protocol" role="tabpanel">
+          <div class="feature-copy">
+            <h3 data-i18n="fpro_title">Structured protocols with verified screen-share context</h3>
+            <p class="lead" data-i18n="fpro_lead">
+              Every recording produces an executive summary, explicit decisions, topics, and action items with clickable [HH:MM:SS] transcript citations — enriched by settled screen-share keyframes captured strictly from presentation tracks.
+            </p>
+            <ul class="check-list">
+              <li>
+                <svg width="15" height="15" class="check-svg" aria-hidden="true"><use href="#ic-check"/></svg>
+                <span data-i18n="fpro_b1">Flexible protocol LLM: run 100% locally via Ollama or connect any OpenAI-compatible endpoint (vLLM, LiteLLM, OpenAI) with automatic disclosure on /privacy.</span>
+              </li>
+              <li>
+                <svg width="15" height="15" class="check-svg" aria-hidden="true"><use href="#ic-check"/></svg>
+                <span data-i18n="fpro_b2">Fail-closed screen-share slide keyframes (&lt;= 1280×720 PNG) exclude participant webcams, expire after 30 days, and support 1-click single-slide deletion.</span>
+              </li>
+              <li>
+                <svg width="15" height="15" class="check-svg" aria-hidden="true"><use href="#ic-check"/></svg>
+                <span data-i18n="fpro_b3">Export clean Markdown, TXT, WebVTT subtitles, or structured JSON — plus shareable read-only protocol links and optional passwordless editing.</span>
+              </li>
+            </ul>
+          </div>
+
+          <div class="ledger-preview">
+            <div class="ledger-preview-header">
+              <span data-i18n="fpro_card_head">Protocol Output &amp; Slide Governance</span>
+              <span class="ledger-preview-sub">Ollama / OpenAI API</span>
+            </div>
+            <div class="ledger-row ledger-row-col">
+              <div class="rag-hit-head">
+                <span class="rag-hit-title" data-i18n="fpro_row1_t">Decision + Clickable Evidence</span>
+                <span class="wl-citation-chip">14:04</span>
+              </div>
+              <p class="rag-hit-snippet" data-i18n="fpro_row1_d">
+                Every decision and action item carries a verifiable [HH:MM:SS] anchor jumping straight to the verbatim speaker utterance.
+              </p>
+            </div>
+            <div class="ledger-row ledger-row-col">
+              <div class="rag-hit-head">
+                <span class="rag-hit-title" data-i18n="fpro_row2_t">Screen-Share Keyframes</span>
+                <span class="status-pill" data-i18n="fpro_cam_badge">Camera excluded</span>
+              </div>
+              <p class="rag-hit-snippet" data-i18n="fpro_row2_d">
+                Captures settled presentation slides on Meet, Teams, Webex &amp; Zoom. Presenter opt-out purges all shared frames immediately.
+              </p>
+            </div>
+            <div class="ledger-row">
+              <span class="pipeline-label" data-i18n="fpro_exports_label">Direct Exports</span>
+              <div class="export-pills">
+                <span class="export-pill">.md</span>
+                <span class="export-pill">.txt</span>
+                <span class="export-pill">.vtt</span>
+                <span class="export-pill">.json</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Panel 4: Calendar Sync & Writeback -->
+        <div class="feature-panel" data-panel="calendar" role="tabpanel">
+          <div class="feature-copy">
+            <h3 data-i18n="fcal_title">Zero-friction calendar sync &amp; automatic link writeback</h3>
+            <p class="lead" data-i18n="fcal_lead">
+              Connect Google Workspace or Microsoft 365 via OAuth2 PKCE — or invite the bot email via IMAP/.ics. Decide per event with a single click whether wortlaut should attend.
+            </p>
+            <ul class="check-list">
+              <li>
+                <svg width="15" height="15" class="check-svg" aria-hidden="true"><use href="#ic-check"/></svg>
+                <span data-i18n="fcal_b1">Detects Google Meet, Microsoft Teams, Cisco Webex, and Zoom join URLs automatically across recurring and one-off invites.</span>
+              </li>
+              <li>
+                <svg width="15" height="15" class="check-svg" aria-hidden="true"><use href="#ic-check"/></svg>
+                <span data-i18n="fcal_b2">Writes the read-only protocol link straight back into the calendar event description as soon as transcription finishes.</span>
+              </li>
+              <li>
+                <svg width="15" height="15" class="check-svg" aria-hidden="true"><use href="#ic-check"/></svg>
+                <span data-i18n="fcal_b3">Sends crisp HTML &amp; plain-text summary notifications as "Wortlaut.Cloud Robot" when mail delivery is enabled.</span>
+              </li>
+            </ul>
+          </div>
+
+          <div class="ledger-preview">
+            <div class="ledger-preview-header">
+              <span data-i18n="fcal_card_head">Upcoming Meetings · OAuth2 Calendar Sync</span>
+              <span class="ledger-preview-sub" data-i18n="fcal_card_sub">Click to toggle recording</span>
+            </div>
+
+            <div class="ledger-row">
+              <div class="cal-row-left">
+                <span class="cal-provider-icon" aria-hidden="true"><svg width="18" height="15"><use href="#logo-icon-meet"/></svg></span>
                 <div>
-                  <div style="font-weight:700;font-size:14px;" data-i18n="f1_ev2_title">Client Architecture Workshop</div>
-                  <div style="font-size:12px;color:var(--stone-500);" data-i18n="f1_ev2_meta">14:00 – 15:00 · External invite · Enable with 1 click</div>
+                  <div class="cal-title" data-i18n="fcal_ev1_t">Weekly Engineering Sync</div>
+                  <div class="cal-meta tabular" data-i18n="fcal_ev1_m">Today 10:00 · Google Meet · Auto-writeback</div>
                 </div>
               </div>
-              <button type="button" id="demo-external-toggle" class="toggle-btn" data-i18n="toggle_on">● Record: On</button>
+              <span class="status-pill" data-i18n="toggle_on">Recording ON</span>
             </div>
-            <div class="cal-row">
+
+            <div class="ledger-row">
               <div class="cal-row-left">
-                <span class="cal-provider-logo" title="Zoom" aria-label="Zoom">
-                  <svg width="22" height="22" viewBox="0 0 28 28" role="img" aria-label="Zoom"><use href="#logo-icon-zoom"/></svg>
-                </span>
+                <span class="cal-provider-icon" aria-hidden="true"><svg width="18" height="18"><use href="#logo-icon-teams"/></svg></span>
                 <div>
-                  <div style="font-weight:700;font-size:14px;" data-i18n="f1_ev3_title">Sprint Review</div>
-                  <div style="font-size:12px;color:var(--stone-500);" data-i18n="f1_ev3_meta">16:30 – 17:15 · Auto-enabled (recurring series)</div>
+                  <div class="cal-title" data-i18n="fcal_ev2_t">Customer Steering Committee</div>
+                  <div class="cal-meta tabular" data-i18n="fcal_ev2_m">Today 13:30 · Microsoft Teams · 12 attendees</div>
                 </div>
               </div>
-              <span class="toggle-btn" data-i18n="toggle_on">● Record: On</span>
+              <span class="status-pill" data-i18n="toggle_on">Recording ON</span>
+            </div>
+
+            <div class="ledger-row">
+              <div class="cal-row-left">
+                <span class="cal-provider-icon" aria-hidden="true"><svg width="18" height="18"><use href="#logo-icon-zoom"/></svg></span>
+                <div>
+                  <div class="cal-title" data-i18n="fcal_ev3_t">External Partner Call</div>
+                  <div class="cal-meta tabular" data-i18n="fcal_ev3_m">Tomorrow 11:00 · Zoom · Click to toggle</div>
+                </div>
+              </div>
+              <button type="button" class="toggle-btn off" id="demo-external-toggle" aria-pressed="false" data-i18n="toggle_off">Recording OFF</button>
             </div>
           </div>
         </div>
 
-        <!-- Feature Panel 2: Ad-hoc & Multilingual ASR -->
-        <div class="feature-panel" data-fpanel="adhoc">
-          <div>
-            <h3 data-i18n="f2_title">Join unplanned calls in ~15 seconds — and transcribe locally across 30 languages</h3>
-            <p class="lead" data-i18n="f2_lead">
-              Paste any meeting URL when a spontaneous call turns important, and run state-of-the-art speech recognition entirely on your own GPU or CPU:
+        <!-- Panel 5: Pre-Mix Audio, 30 Languages & Glossary -->
+        <div class="feature-panel" data-panel="audio" role="tabpanel">
+          <div class="feature-copy">
+            <h3 data-i18n="faud_title">Isolated pre-mix audio, 30 languages, and your domain glossary</h3>
+            <p class="lead" data-i18n="faud_lead">
+              Instead of guessing speakers from a mixed room recording via biometric voiceprints, wortlaut captures each remote WebRTC audio stream separately before mixing and transcribes it locally with Qwen3-ASR 1.7B.
             </p>
             <ul class="check-list">
-              <li><span class="check-icon">✓</span><span data-i18n="f2_li1">Paste a Google Meet, Teams, Webex, or Zoom link — wortlaut spawns an isolated browser worker and joins within ~15 seconds.</span></li>
-              <li><span class="check-icon">✓</span><span data-i18n="f2_li2">Qwen3-ASR 1.7B detects the language of every segment automatically across 30 languages (3.88% German WER on the Open ASR Leaderboard).</span></li>
-              <li><span class="check-icon">✓</span><span data-i18n="f2_li3">Bilingual EN / DE Web-UI with live lobby/capture stepper and real-time full-text search while the call is still running.</span></li>
+              <li>
+                <svg width="15" height="15" class="check-svg" aria-hidden="true"><use href="#ic-check"/></svg>
+                <span data-i18n="faud_b1">Verified participant-session speaker binding across Meet, Teams, Webex, and Zoom — resilient even during crosstalk.</span>
+              </li>
+              <li>
+                <svg width="15" height="15" class="check-svg" aria-hidden="true"><use href="#ic-check"/></svg>
+                <span data-i18n="faud_b2">30 languages with automatic detection plus live per-recording language switching on GPU or CPU.</span>
+              </li>
+              <li>
+                <svg width="15" height="15" class="check-svg" aria-hidden="true"><use href="#ic-check"/></svg>
+                <span data-i18n="faud_b3">Built-in Glossary workspace teaches product names, acronyms, and customer terms directly to speech recognition.</span>
+              </li>
             </ul>
           </div>
 
-          <div class="preview-box">
-            <div style="font-weight:700;font-size:14.5px;" data-i18n="f2_demo_title">Start Ad-hoc Recording</div>
-            <div style="background:#ffffff;border:1px solid var(--stone-300);border-radius:var(--radius-sm);padding:10px 12px;font-family:var(--font-mono);font-size:12.5px;color:var(--stone-700);">
-              https://meet.google.com/abc-defg-hij
+          <div class="ledger-preview">
+            <div class="ledger-preview-header">
+              <span data-i18n="faud_card_head">Pre-Mix Acoustic Pipeline</span>
+              <span class="ledger-preview-sub">Qwen3-ASR 1.7B · 30 Langs</span>
             </div>
-            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
-              <div style="display:flex;gap:6px;">
-                <span class="speaker-pill" data-i18n="f2_dur_30">30 min</span>
-                <span class="speaker-pill" style="background:var(--stone-900);color:#ffffff;" data-i18n="f2_dur_60">60 min</span>
-                <span class="speaker-pill" data-i18n="f2_dur_90">90 min</span>
+            <div class="ledger-row">
+              <div>
+                <div class="pipeline-label" data-i18n="faud_step1_t">1. Pre-Mix WebRTC SSRC Capture</div>
+                <div class="pipeline-desc" data-i18n="faud_step1_d">Each participant stream stays physically isolated before mixing.</div>
               </div>
-              <span class="btn btn-primary" style="padding:7px 14px;font-size:13px;" data-i18n="f2_demo_btn">Record Now</span>
+              <span class="rag-kind-tag">No voiceprints</span>
             </div>
-            <div style="background:var(--emerald-50);border:1px solid var(--emerald-100);color:var(--emerald-800);border-radius:var(--radius-sm);padding:10px 12px;font-size:13px;font-weight:600;display:flex;align-items:center;gap:10px;">
-              <span class="site-waveform" aria-hidden="true"><span></span><span></span><span></span><span></span></span>
-              <span data-i18n="f2_demo_status">LIVE · Capturing 3 isolated tracks · Qwen3-ASR (30 langs)</span>
-            </div>
-          </div>
-        </div>
-
-        <!-- Feature Panel 3: Verify, Edit, Ollama Summary & Share -->
-        <div class="feature-panel" data-fpanel="share">
-          <div>
-            <h3 data-i18n="f3_title">Verify quotes by ear, polish domain terms, summarize with local Ollama, and export anywhere</h3>
-            <p class="lead" data-i18n="f3_lead">
-              wortlaut keeps the verbatim speaker-attributed transcript as your source of truth while giving your team powerful review and export tools:
-            </p>
-            <ul class="check-list">
-              <li><span class="check-icon">✓</span><span data-i18n="f3_li1">Click-to-listen verification &amp; inline editor: play back isolated 24h audio snippets to verify exact wording, rename guest speakers, and apply 1-click vocabulary replacements across the entire protocol.</span></li>
-              <li><span class="check-icon">✓</span><span data-i18n="f3_li2">Optional local AI summaries (Ollama): generate structured executive summaries, topic breakdowns, and action items on your own server with zero external API calls.</span></li>
-              <li><span class="check-icon">✓</span><span data-i18n="f3_li3">Scoped read-only links (wortlaut-read-…), automatic email delivery, open exports (.md, .txt, .vtt, .json), an OAuth 2.1 MCP server (/mcp), and OpenAPI (/docs).</span></li>
-            </ul>
-          </div>
-
-          <div class="preview-box">
-            <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px;">
-              <div style="background:#ffffff;border:1px solid var(--stone-200);border-radius:var(--radius-md);padding:14px;">
-                <div class="mono" style="font-size:12px;font-weight:700;color:var(--emerald-700);">Markdown (.md)</div>
-                <div style="font-size:13px;color:var(--stone-600);margin-top:4px;" data-i18n="f3_exp_md_desc">Ready for Notion, Confluence, GitHub, GitLab &amp; Jira</div>
+            <div class="ledger-row">
+              <div>
+                <div class="pipeline-label" data-i18n="faud_step2_t">2. Ephemeral 24h Verification Snippets</div>
+                <div class="pipeline-desc" data-i18n="faud_step2_d">Short per-turn audio clips for human spot checks, auto-purged after 24h.</div>
               </div>
-              <div style="background:#ffffff;border:1px solid var(--stone-200);border-radius:var(--radius-md);padding:14px;">
-                <div class="mono" style="font-size:12px;font-weight:700;color:var(--emerald-700);">Local AI (Ollama)</div>
-                <div style="font-size:13px;color:var(--stone-600);margin-top:4px;" data-i18n="f3_exp_ai_desc">Opt-in executive summary, topics &amp; action items on your GPU</div>
+              <span class="rag-kind-tag tabular">24h TTL</span>
+            </div>
+            <div class="ledger-row ledger-row-col">
+              <div class="pipeline-label" data-i18n="faud_step3_t">3. Active Domain Glossary</div>
+              <div class="glossary-chips">
+                <span class="glossary-chip">Wortlaut.cloud</span>
+                <span class="glossary-chip">RustFS</span>
+                <span class="glossary-chip">Kubernetes</span>
+                <span class="glossary-chip">Qwen3-ASR</span>
+                <span class="glossary-chip">OAuth 2.1 PKCE</span>
               </div>
-              <div style="background:#ffffff;border:1px solid var(--stone-200);border-radius:var(--radius-md);padding:14px;">
-                <div class="mono" style="font-size:12px;font-weight:700;color:var(--emerald-700);">WebVTT &amp; Text</div>
-                <div style="font-size:13px;color:var(--stone-600);margin-top:4px;" data-i18n="f3_exp_vtt_desc">Time-aligned .vtt captions &amp; clean .txt email protocols</div>
-              </div>
-              <div style="background:#ffffff;border:1px solid var(--stone-200);border-radius:var(--radius-md);padding:14px;">
-                <div class="mono" style="font-size:12px;font-weight:700;color:var(--emerald-700);">MCP &amp; REST API</div>
-                <div style="font-size:13px;color:var(--stone-600);margin-top:4px;" data-i18n="f3_exp_json_desc">OAuth 2.1 MCP (/mcp), slide keyframes &amp; OpenAPI (/docs)</div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Feature Panel 4: Speaker Attribution -->
-        <div class="feature-panel" data-fpanel="speaker">
-          <div>
-            <h3 data-i18n="f4_title">Clean speaker attribution before audio mixing — with zero biometric voiceprints</h3>
-            <p class="lead" data-i18n="f4_lead">
-              Conventional meeting bots record mixed room audio and guess speakers afterward using voice diarization. wortlaut solves speaker attribution at the transport layer:
-            </p>
-            <ul class="check-list">
-              <li><span class="check-icon">✓</span><span data-i18n="f4_li1">Each incoming WebRTC receiver stream is captured separately before mixing and bound directly to the verified conference participant session.</span></li>
-              <li><span class="check-icon">✓</span><span data-i18n="f4_li2">Even when participants overlap or interrupt each other, statements remain cleanly separated per track.</span></li>
-              <li><span class="check-icon">✓</span><span data-i18n="f4_li3">Zero biometric voiceprints are ever computed or stored — and if a provider hides a binding, wortlaut marks it transparently instead of guessing.</span></li>
-            </ul>
-          </div>
-
-          <div class="preview-box">
-            <div class="cal-row">
-              <span style="font-weight:700;font-size:13.5px;">Elena Rostova</span>
-              <span class="badge-pill" data-i18n="f4_badge">Isolated stream → Verified speaker</span>
-            </div>
-            <div class="cal-row">
-              <span style="font-weight:700;font-size:13.5px;">Marcus Vance</span>
-              <span class="badge-pill" data-i18n="f4_badge">Isolated stream → Verified speaker</span>
-            </div>
-            <div class="cal-row">
-              <span style="font-weight:700;font-size:13.5px;">Clara Lindqvist</span>
-              <span class="badge-pill" data-i18n="f4_badge">Isolated stream → Verified speaker</span>
-            </div>
-            <div class="chat-optout-demo">
-              <span class="mono" data-i18n="f4_optout_cmd">Chat: "no" / "opt out"</span>
-              <span style="color:var(--emerald-500);font-weight:600;" data-i18n="f4_optout_res">→ Stream dropped &amp; segments purged</span>
             </div>
           </div>
         </div>
       </div>
     </section>
 
-    <!-- 4. PRIVACY & TRUST -->
-    <section id="privacy" class="section">
+    <!-- 4. PRIVACY & COMPARISON -->
+    <section id="privacy" class="section section-surface">
       <div class="container">
         <div class="section-header">
-          <span class="section-kicker" data-i18n="priv_kicker">PRIVACY, CONSENT &amp; SECURITY</span>
-          <h2 class="section-title" data-i18n="priv_title">
-            Built for confidential conversations, European DPOs, and strict compliance
-          </h2>
+          <h2 class="section-title" data-i18n="priv_title">Privacy engineered into the architecture, not promised in a policy</h2>
           <p class="section-desc" data-i18n="priv_desc">
-            Why engineering organizations, consultancies, legal teams, and public-sector agencies run wortlaut instead of commercial cloud bots.
+            Designed for works councils, European data protection standards, and regulated engineering organizations.
           </p>
         </div>
 
         <div class="trust-grid">
-          <div class="trust-card">
-            <h3 data-i18n="trust1_title">100% Self-Hosted (Zero Cloud Leakage)</h3>
-            <p data-i18n="trust1_desc">
-              Sandboxed browser workers, Qwen3-ASR speech recognition, and optional Ollama summaries all run inside your own cluster or server. Not a single second of audio leaves your infrastructure.
-            </p>
+          <div class="trust-cell">
+            <h3 data-i18n="trust1_t">Zero voiceprints or biometric profiling</h3>
+            <p data-i18n="trust1_d">Speaker attribution relies exclusively on verified conference WebRTC session metadata — never biometric speaker embeddings or voice fingerprinting.</p>
           </div>
-
-          <div class="trust-card">
-            <h3 data-i18n="trust2_title">Live Chat Opt-Out &amp; Off-the-Record</h3>
-            <p data-i18n="trust2_desc">
-              wortlaut joins as “wortlaut (Inviter Name)”, never records participant cameras, and lets anyone type “no” / “opt out” to purge their stream or “#pause” / “#resume” to go off the record instantly.
-            </p>
+          <div class="trust-cell">
+            <h3 data-i18n="trust2_t">Fail-closed camera exclusion &amp; auto-expiry</h3>
+            <p data-i18n="trust2_d">Slide capture strictly filters for screen-share tracks and discards cameras. Verification audio expires automatically after 24 hours; keyframes expire after 30 days or on 1-click delete.</p>
           </div>
-
-          <div class="trust-card">
-            <h3 data-i18n="trust3_title">24h Audio Window &amp; Auto-Expiry</h3>
-            <p data-i18n="trust3_desc">
-              Isolated audio chunks are deleted automatically from S3 after 24 hours; transcripts expire after 30 days by default and can be purged permanently at any moment with a single click.
-            </p>
+          <div class="trust-cell">
+            <h3 data-i18n="trust3_t">Real-time consent: #pause &amp; opt out</h3>
+            <p data-i18n="trust3_d">Any attendee can pause capture Off-the-Record (#pause) or opt out permanently (no / opt out) via chat, immediately scrubbing their audio, text, slides, and RAG vectors.</p>
           </div>
-
-          <div class="trust-card">
-            <h3 data-i18n="trust4_title">OIDC Single Sign-On &amp; Tenant Isolation</h3>
-            <p data-i18n="trust4_desc">
-              Connect Keycloak, Authentik, Dex, Zitadel, Microsoft Entra ID, or Google via OIDC PKCE. Users only see their own recordings and invited meetings, plus HMAC-scoped read-only share links.
-            </p>
+          <div class="trust-cell">
+            <h3 data-i18n="trust4_t">Full infrastructure sovereignty &amp; live /privacy</h3>
+            <p data-i18n="trust4_d">Run 100% air-gapped with local ASR, local CPU ONNX RAG, and Ollama — or connect an OpenAI-compatible LLM endpoint that is automatically disclosed on your instance’s /privacy page.</p>
           </div>
         </div>
 
@@ -582,48 +821,51 @@
           <table class="comparison-table">
             <thead>
               <tr>
-                <th data-i18n="comp_th_crit">Criterion</th>
-                <th data-i18n="comp_th_cloud">Commercial Cloud Note-Takers</th>
-                <th class="highlight-col" data-i18n="comp_th_wortlaut">wortlaut (Open Source &amp; Self-Hosted)</th>
+                <th data-i18n="cmp_col_feat">Capability</th>
+                <th class="highlight-col">wortlaut.cloud (v0.2.0)</th>
+                <th data-i18n="cmp_col_saas">Typical Cloud Meeting Bots</th>
               </tr>
             </thead>
             <tbody>
               <tr>
-                <td data-i18n="comp_r1_c">Where are calls &amp; summaries processed?</td>
-                <td data-i18n="comp_r1_cloud">External vendor clouds &amp; third-party LLM APIs</td>
-                <td class="highlight-col" data-i18n="comp_r1_w">100% on your own infrastructure (Qwen3-ASR + optional Ollama)</td>
+                <td data-i18n="cmp_r1_k">Hosting &amp; Data Sovereignty</td>
+                <td class="highlight-col" data-i18n="cmp_r1_w">100% self-hosted (Docker Compose or Helm on your Kubernetes cluster)</td>
+                <td data-i18n="cmp_r1_s">Vendor cloud, third-party processors &amp; retention policies</td>
               </tr>
               <tr>
-                <td data-i18n="comp_r2_c">How are speakers identified?</td>
-                <td data-i18n="comp_r2_cloud">Mixed audio + biometric voice profiles (voiceprints)</td>
-                <td class="highlight-col" data-i18n="comp_r2_w">Isolated pre-mix WebRTC tracks bound to session — zero voiceprints</td>
+                <td data-i18n="cmp_r2_k">Speaker Attribution</td>
+                <td class="highlight-col" data-i18n="cmp_r2_w">Isolated pre-mix WebRTC tracks · Zero voiceprints</td>
+                <td data-i18n="cmp_r2_s">Mixed audio + biometric diarization guesses</td>
               </tr>
               <tr>
-                <td data-i18n="comp_r6_c">Individual attendee opt-out</td>
-                <td data-i18n="comp_r6_cloud">All-or-nothing (remove bot for everyone or leave call)</td>
-                <td class="highlight-col" data-i18n="comp_r6_w">Type “no” / “opt out” in chat — only that speaker is excluded &amp; purged</td>
+                <td data-i18n="cmp_r3_k">Conference Platforms</td>
+                <td class="highlight-col" data-i18n="cmp_r3_w">Google Meet, Microsoft Teams, Cisco Webex &amp; Zoom side-by-side</td>
+                <td data-i18n="cmp_r3_s">Often tiered or missing Webex / self-hosted control</td>
               </tr>
               <tr>
-                <td data-i18n="comp_r3_c">Camera &amp; screen recording</td>
-                <td data-i18n="comp_r3_cloud">Frequently records full video &amp; screen shares</td>
-                <td class="highlight-col" data-i18n="comp_r3_w">Participant cameras blocked fail-closed; optional static screen-share slide snapshots only</td>
+                <td data-i18n="cmp_r4_k">Screen-Share Slides</td>
+                <td class="highlight-col" data-i18n="cmp_r4_w">Settled PNG keyframes · Fail-closed camera exclusion · 1-click delete</td>
+                <td data-i18n="cmp_r4_s">Full MP4 video recording including participant webcams</td>
               </tr>
               <tr>
-                <td data-i18n="comp_r4_c">Supported platforms</td>
-                <td data-i18n="comp_r4_cloud">Often restricted or billed per seat &amp; platform</td>
-                <td class="highlight-col">
-                  <div class="table-platform-logos">
-                    <span class="mini-logo-pill" title="Google Meet"><svg width="16" height="13" viewBox="0 0 87.5 72" aria-hidden="true"><use href="#logo-icon-meet"/></svg> Meet</span>
-                    <span class="mini-logo-pill" title="Microsoft Teams"><svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><use href="#logo-icon-teams"/></svg> Teams</span>
-                    <span class="mini-logo-pill" title="Cisco Webex"><svg width="18" height="14" viewBox="0 0 36 28" aria-hidden="true"><use href="#logo-icon-webex"/></svg> Webex</span>
-                    <span class="mini-logo-pill" title="Zoom"><svg width="15" height="15" viewBox="0 0 28 28" aria-hidden="true"><use href="#logo-icon-zoom"/></svg> Zoom</span>
-                  </div>
-                </td>
+                <td data-i18n="cmp_r5_k">AI Search &amp; MCP</td>
+                <td class="highlight-col" data-i18n="cmp_r5_w">Local CPU ONNX Hybrid RAG + 8 OAuth 2.1 MCP tools (/mcp)</td>
+                <td data-i18n="cmp_r5_s">Proprietary chat box or extra paid AI add-on</td>
               </tr>
               <tr>
-                <td data-i18n="comp_r5_c">License &amp; cost</td>
-                <td data-i18n="comp_r5_cloud">Recurring monthly per-seat subscription</td>
-                <td class="highlight-col" data-i18n="comp_r5_w">Free open-source software under GNU AGPL-3.0</td>
+                <td data-i18n="cmp_r6_k">Live Participant Controls</td>
+                <td class="highlight-col" data-i18n="cmp_r6_w">1280×720 Horizon tile + chat #pause / #resume &amp; no / opt out</td>
+                <td data-i18n="cmp_r6_s">Manual kick-only or post-meeting deletion ticket</td>
+              </tr>
+              <tr>
+                <td data-i18n="cmp_r7_k">Protocol LLM Backend</td>
+                <td class="highlight-col" data-i18n="cmp_r7_w">Local Ollama or any OpenAI-compatible API (vLLM, LiteLLM, OpenAI)</td>
+                <td data-i18n="cmp_r7_s">Locked to vendor’s hosted LLM pipeline</td>
+              </tr>
+              <tr>
+                <td data-i18n="cmp_r8_k">License &amp; Pricing</td>
+                <td class="highlight-col" data-i18n="cmp_r8_w">GNU AGPL-3.0 · Free to self-host, unlimited seats</td>
+                <td data-i18n="cmp_r8_s">$18–$40+ per user / month</td>
               </tr>
             </tbody>
           </table>
@@ -631,81 +873,91 @@
       </div>
     </section>
 
-    <!-- 5. SELF-HOSTING & QUICKSTART -->
+    <!-- 5. SELF-HOSTING & QUICKSTART (Dark Acoustic Ledger) -->
     <section id="self-hosting" class="section section-dark">
       <div class="container">
         <div class="section-header">
-          <span class="section-kicker" data-i18n="qs_kicker">SELF-HOSTING &amp; QUICKSTART</span>
-          <h2 class="section-title" data-i18n="qs_title">
-            Up and running on your own server or Kubernetes cluster in minutes
-          </h2>
-          <p class="section-desc" data-i18n="qs_desc">
-            Free software under GNU AGPL-3.0 with multi-arch images on GHCR. Launch via hardened Docker Compose on a single VM, 1-command Helm Chart on Kubernetes, or locally.
+          <h2 class="section-title" data-i18n="sh_title">Deploy on your own server or Kubernetes cluster in minutes</h2>
+          <p class="section-desc" data-i18n="sh_desc">
+            Start with Docker Compose or install Helm chart 0.2.0 directly from GHCR — with bundled PostgreSQL 17.12, RustFS S3, local ONNX RAG, and optional NVIDIA GPU acceleration.
           </p>
         </div>
 
         <div class="quickstart-grid">
-          <div class="code-card">
-            <div class="code-card-header">
-              <div class="code-tabs">
-                <button type="button" class="code-tab active" data-ctab="compose" data-i18n="qs_tab1">Docker Compose</button>
-                <button type="button" class="code-tab" data-ctab="helm" data-i18n="qs_tab2">Helm (Kubernetes)</button>
-                <button type="button" class="code-tab" data-ctab="local" data-i18n="qs_tab3">Local / Contributors</button>
+          <div class="code-panel">
+            <div class="code-panel-header">
+              <div class="code-tabs" role="tablist" aria-label="Deployment snippets">
+                <button type="button" class="code-tab active" data-ctab="compose">Docker Compose</button>
+                <button type="button" class="code-tab" data-ctab="helm">Helm 0.2.0</button>
+                <button type="button" class="code-tab" data-ctab="mcp">MCP Client</button>
               </div>
-              <button type="button" class="copy-btn" data-copy="true" data-i18n="copy_btn">Copy</button>
+              <button type="button" class="copy-btn" data-copy data-i18n="copy_btn">Copy</button>
             </div>
 
-            <pre class="code-pane active" data-cpane="compose"><code data-i18n="qs_code_compose"># 1. Clone &amp; configure secrets
-git clone https://github.com/mayflower/wortlaut.git &amp;&amp; cd wortlaut
+<pre class="code-pane active" data-cpane="compose"><code>git clone https://github.com/mayflower/wortlaut.git
+cd wortlaut
 cp .env.example .env
 
-# 2. Launch stack (non-root meeting, docker-socket-proxy, Postgres 17 &amp; RustFS S3)
+# CPU quickstart (PostgreSQL 17.12, RustFS S3, Local ONNX RAG, Worker, ASR)
 docker compose up -d
 
-# Recommended with NVIDIA GPU (real-time Qwen3-ASR):
+# Or with NVIDIA GPU acceleration for Qwen3-ASR 1.7B:
 docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
-# Web-UI: http://127.0.0.1:34601/ui · API Docs: http://127.0.0.1:34601/docs</code></pre>
 
-            <pre class="code-pane" data-cpane="helm"><code data-i18n="qs_code_helm"># Zero-dependency evaluation (embedded PostgreSQL 17 + RustFS S3):
-helm upgrade --install wortlaut oci://ghcr.io/mayflower/charts/wortlaut \
+# Open Web UI at http://127.0.0.1:8000/ui</code></pre>
+
+<pre class="code-pane" data-cpane="helm"><code># Install Helm Chart 0.2.0 directly from GHCR
+helm upgrade --install wortlaut \
+  oci://ghcr.io/mayflower/charts/wortlaut \
+  --version 0.2.0 \
   --namespace wortlaut --create-namespace \
-  --set host=wortlaut.local \
   --set bundled.enabled=true \
-  --set asr.gpuCount=0 --set asr.allowCpu=true
+  --set ingress.host=wortlaut.example.com
 
-# Production cluster (external DB/S3, GPU node &amp; OIDC SSO):
-helm upgrade --install wortlaut oci://ghcr.io/mayflower/charts/wortlaut \
-  --namespace wortlaut --create-namespace \
-  --set host=wortlaut.example.org \
-  --set oidc.issuer=https://auth.example.org</code></pre>
+# Meeting defaults: 1Gi request / 4Gi limit (local CPU ONNX RAG)
+# Optional: --set llm.openaiBaseUrl=https://llm.example.com/v1</code></pre>
 
-            <pre class="code-pane" data-cpane="local"><code data-i18n="qs_code_local"># Option A: Bare-metal / local Linux process mode (no Kubernetes needed)
-./scripts/run-local.sh
+<pre class="code-pane" data-cpane="mcp"><code># Connect Claude Code / CLI via OAuth 2.1 PKCE
+claude mcp add --transport http wortlaut \
+  https://wortlaut.example.com/mcp
 
-# Option B: Contributor setup &amp; full integration test suite (Docker only)
-make setup-local
-make test-local</code></pre>
+# Or add to Cursor / Antigravity / Claude Desktop mcp_config.json:
+{
+  "mcpServers": {
+    "wortlaut": {
+      "serverUrl": "https://wortlaut.example.com/mcp"
+    }
+  }
+}</code></pre>
           </div>
 
-          <div style="display:flex;flex-direction:column;gap:18px;">
-            <div class="info-box">
-              <h3 data-i18n="qs_req_title">What’s included out of the box</h3>
-              <ul class="check-list">
-                <li style="color:var(--stone-200);"><span class="check-icon">✓</span><span data-i18n="qs_req_1">Hardened Docker Compose (isolated socket proxy, non-root) &amp; OCI Helm Chart with zero-dependency bundled mode (amd64 &amp; arm64)</span></li>
-                <li style="color:var(--stone-200);"><span class="check-icon">✓</span><span data-i18n="qs_req_2">Qwen3-ASR 1.7B: 30 languages (Qwen/Qwen3-ASR-1.7B-hf) — GPU recommended, CPU fallback built in</span></li>
-                <li style="color:var(--stone-200);"><span class="check-icon">✓</span><span data-i18n="qs_req_3">PostgreSQL 17 &amp; RustFS S3 object storage pre-wired in both Docker Compose and Helm bundled mode</span></li>
-                <li style="color:var(--stone-200);"><span class="check-icon">✓</span><span data-i18n="qs_req_4">Optional: OIDC SSO, Google/M365 Calendar OAuth2 writeback, local Ollama summaries, and DKIM-verified IMAP/SMTP mail</span></li>
-              </ul>
+          <div class="stack-ledger">
+            <h3 data-i18n="sh_stack_title">v0.2.0 Architecture at a Glance</h3>
+            <div class="stack-row">
+              <span class="stack-key" data-i18n="st_k_core">Core Stack</span>
+              <span class="stack-val" data-i18n="st_v_core">Python 3.14 (FastAPI), TypeScript/Playwright Worker, PostgreSQL 17.12, RustFS S3</span>
+            </div>
+            <div class="stack-row">
+              <span class="stack-key" data-i18n="st_k_asr">Speech &amp; RAG</span>
+              <span class="stack-val" data-i18n="st_v_asr">Qwen3-ASR 1.7B (30 languages, GPU/CPU) + local CPU INT8 ONNX (multilingual-e5-small-int8)</span>
+            </div>
+            <div class="stack-row">
+              <span class="stack-key" data-i18n="st_k_llm">Protocol LLM</span>
+              <span class="stack-val" data-i18n="st_v_llm">Local Ollama or any OpenAI-compatible API (vLLM, LiteLLM, OpenAI) with live /privacy disclosure</span>
+            </div>
+            <div class="stack-row">
+              <span class="stack-key" data-i18n="st_k_auth">Identity &amp; Mail</span>
+              <span class="stack-val" data-i18n="st_v_auth">Dex OIDC SSO, OAuth 2.1 PKCE MCP server, Google/M365 Calendar OAuth2, Wortlaut.Cloud Robot mail</span>
+            </div>
+            <div class="stack-row">
+              <span class="stack-key" data-i18n="st_k_lic">License</span>
+              <span class="stack-val" data-i18n="st_v_lic">GNU AGPL-3.0 · Fully auditable, zero telemetry, zero vendor lock-in</span>
             </div>
 
-            <div class="info-box" style="border-color:rgba(16,185,129,0.35);">
-              <h3 data-i18n="qs_oss_title">100% Open Source on GitHub</h3>
-              <p style="margin:0 0 16px;font-size:14px;color:var(--stone-300);" data-i18n="qs_oss_desc">
-                Explore the source code, configuration reference, OCI Helm chart, architecture docs, and security policy under the GNU Affero General Public License v3.0.
-              </p>
-              <a href="https://github.com/mayflower/wortlaut" target="_blank" rel="noopener noreferrer" class="btn btn-primary" style="width:100%;" data-i18n="qs_oss_btn">
-                View GitHub Repository →
-              </a>
+            <div class="stack-actions">
+              <a href="https://github.com/mayflower/wortlaut" target="_blank" rel="noopener noreferrer" class="btn btn-dark-primary" data-i18n="sh_btn_repo">View on GitHub</a>
+              <a href="https://github.com/mayflower/wortlaut/blob/main/docs/deployment.md" target="_blank" rel="noopener noreferrer" class="btn btn-dark-secondary" data-i18n="sh_btn_docs">Deployment Docs</a>
+              <a href="https://github.com/mayflower/wortlaut/blob/main/CHANGELOG.md" target="_blank" rel="noopener noreferrer" class="btn btn-dark-secondary">Changelog 0.2.0</a>
             </div>
           </div>
         </div>
@@ -713,45 +965,30 @@ make test-local</code></pre>
     </section>
   </main>
 
-  <!-- FOOTER -->
+  <!-- Footer -->
   <footer class="site-footer">
     <div class="container">
-      <div class="footer-inner">
-        <div>
-          <div style="display:flex;align-items:center;gap:10px;color:#ffffff;font-weight:700;font-size:17px;margin-bottom:6px;">
-            <span class="brand-mark" style="background:var(--emerald-700);width:28px;height:28px;border-radius:7px;">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
-                <path d="M2 10v3M6 6v11M10 3v18M14 8v7M18 5v13M22 10v3"/>
-              </svg>
-            </span>
-            wortlaut.cloud
-          </div>
-          <p style="margin:0;max-width:520px;" data-i18n="footer_tagline">
-            Speaker-accurate, self-hosted meeting transcripts and protocols for Google Meet, Microsoft Teams, Cisco Webex, and Zoom.
-          </p>
-        </div>
+      <div class="footer-top">
+        <a href="#top" class="brand-link footer-brand">
+          <span class="brand-mark" aria-hidden="true">
+            <svg width="16" height="16"><use href="#ic-wave"/></svg>
+          </span>
+          <span>wortlaut<span class="brand-domain">.cloud</span></span>
+        </a>
 
         <div class="footer-links">
-          <a href="#how-it-works" data-i18n="nav_how">How it works</a>
-          <a href="#features" data-i18n="nav_features">Features</a>
-          <a href="#privacy" data-i18n="nav_privacy">Privacy &amp; Opt-Out</a>
-          <a href="https://github.com/mayflower/wortlaut/blob/main/docs/configuration.md" target="_blank" rel="noopener noreferrer" data-i18n="footer_docs">Configuration</a>
-          <a href="https://github.com/mayflower/wortlaut/blob/main/charts/wortlaut/README.md" target="_blank" rel="noopener noreferrer">Helm Chart</a>
-          <a href="https://github.com/mayflower/wortlaut/blob/main/CHANGELOG.md" target="_blank" rel="noopener noreferrer">Changelog</a>
-          <a href="https://github.com/mayflower/wortlaut/blob/main/SECURITY.md" target="_blank" rel="noopener noreferrer" data-i18n="footer_security">Security</a>
           <a href="https://github.com/mayflower/wortlaut" target="_blank" rel="noopener noreferrer">GitHub</a>
+          <a href="https://github.com/mayflower/wortlaut/blob/main/docs/deployment.md" target="_blank" rel="noopener noreferrer" data-i18n="foot_docs">Documentation</a>
+          <a href="https://github.com/mayflower/wortlaut/blob/main/CHANGELOG.md" target="_blank" rel="noopener noreferrer">Changelog</a>
+          <a href="https://github.com/mayflower/wortlaut/tree/main/deploy/helm/wortlaut" target="_blank" rel="noopener noreferrer">Helm Chart</a>
+          <a href="https://github.com/mayflower/wortlaut/issues" target="_blank" rel="noopener noreferrer">Issues</a>
           <a href="https://github.com/mayflower/wortlaut/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">AGPL-3.0</a>
         </div>
       </div>
 
       <div class="footer-bottom">
-        <span data-i18n="footer_copy">© 2026 Mayflower GmbH · Free Software under GNU AGPL-3.0 · wortlaut.cloud</span>
-        <div class="footer-platform-logos" aria-label="Google Meet, Microsoft Teams, Cisco Webex, Zoom">
-          <span class="footer-logo-badge" title="Google Meet"><svg width="18" height="15" viewBox="0 0 87.5 72" role="img" aria-label="Google Meet"><use href="#logo-icon-meet"/></svg></span>
-          <span class="footer-logo-badge" title="Microsoft Teams"><svg width="18" height="18" viewBox="0 0 24 24" role="img" aria-label="Microsoft Teams"><use href="#logo-icon-teams"/></svg></span>
-          <span class="footer-logo-badge" title="Cisco Webex"><svg width="20" height="16" viewBox="0 0 36 28" role="img" aria-label="Cisco Webex"><use href="#logo-icon-webex"/></svg></span>
-          <span class="footer-logo-badge" title="Zoom"><svg width="17" height="17" viewBox="0 0 28 28" role="img" aria-label="Zoom"><use href="#logo-icon-zoom"/></svg></span>
-        </div>
+        <span data-i18n="foot_copy">Open Source under GNU AGPL-3.0 · Built by Mayflower</span>
+        <span>Meet · Teams · Webex · Zoom · MCP</span>
       </div>
     </div>
   </footer>

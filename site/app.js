@@ -1,511 +1,743 @@
 (function () {
+  "use strict";
+
   const I18N = {
     en: {
-      meta_title: "wortlaut.cloud — Speaker-Accurate Meeting Transcripts. 100% Self-Hosted.",
+      page_title: "wortlaut.cloud — Speaker-Accurate Meeting Protocols & MCP Memory. 100% Self-Hosted.",
       meta_desc:
-        "wortlaut creates speaker-accurate verbatim transcripts and protocols for Google Meet, Microsoft Teams, Cisco Webex, and Zoom — 100% self-hosted on your own infrastructure under GNU AGPL-3.0.",
-
+        "wortlaut.cloud joins Google Meet, Microsoft Teams, Cisco Webex, and Zoom, captures isolated per-speaker audio and screen-share slides, produces structured protocols with timestamp citations, and connects meetings via Hybrid RAG MCP — 100% self-hosted under GNU AGPL-3.0.",
       nav_how: "How it works",
       nav_features: "Features",
-      nav_privacy: "Privacy & Opt-Out",
+      nav_privacy: "Privacy & Controls",
       nav_selfhost: "Self-Hosting",
       cta_github: "GitHub",
       cta_install: "Get Started",
 
-      hero_badge: "Open Source (AGPL-3.0) · 100% Self-Hosted · 30 Languages · GDPR-Ready",
       hero_title_html:
-        'Speaker-accurate transcripts for your meetings.<br><span class="highlight">100% on your own infrastructure.</span>',
+        'Speaker-accurate meeting protocols.<br><span class="hero-subline">100% on your own infrastructure.</span>',
       hero_subtitle:
-        "wortlaut joins calls in Google Meet, Microsoft Teams, Cisco Webex, and Zoom as a transparent passive listener, captures each speaker’s isolated audio stream before mixing, and writes finished protocols straight back into your calendar invite — with live chat opt-out and zero third-party cloud leakage.",
+        "wortlaut joins Google Meet, Microsoft Teams, Cisco Webex, and Zoom with a transparent live video tile, captures isolated per-speaker audio and screen-share slides, produces structured protocols with clickable timestamp citations, and connects every meeting to your AI tools via Hybrid RAG MCP.",
       hero_cta_primary: "Self-Host for Free",
-      hero_cta_secondary: "See How It Works",
-      platforms_label: "Runs side-by-side in a single instance across:",
+      hero_cta_secondary: "Explore Features",
+      hero_meta_html:
+        '<span>GNU AGPL-3.0</span><span class="hero-meta-sep" aria-hidden="true">·</span><span>Zero Voiceprints</span><span class="hero-meta-sep" aria-hidden="true">·</span><span>30 Languages</span><span class="hero-meta-sep" aria-hidden="true">·</span><span>Local Hybrid RAG &amp; MCP</span><span class="hero-meta-sep" aria-hidden="true">·</span><span>v0.2.0</span>',
+      platforms_label: "Runs side-by-side in one instance across all four platforms:",
 
-      ui_window_url: "wortlaut · Meeting Protocol",
-      ui_badge_done: "✓ Linked in calendar invite",
-      ui_nav_home: "Home",
-      ui_nav_rec: "Recordings",
-      ui_nav_cal: "Calendar",
-      ui_nav_sys: "System & Help",
-      ui_sso_label: "OIDC Single Sign-On",
-      ui_meeting_title: "Q4 Product & Security Architecture Review",
-      ui_meeting_meta: "Today, 14:00 – 14:45 · 3 participants",
-      ui_btn_share: "Share Read Link",
-      ui_btn_export: "Export Markdown",
-      ui_summary_label: "Executive Summary & Action Items",
-      ui_summary_tag: "Optional Local AI · Ollama",
-      ui_summary_body:
-        "Calendar OAuth2 writeback for Google Workspace and Microsoft 365 is live; external client calls stay opt-in via 1-click toggle, and in-call chat opt-out passed security review.",
+      ui_window_url: "wortlaut.cloud / meetings / q2-architecture-review",
+      ui_badge_done: "Linked in calendar invite",
+      ui_nav_meetings: "Meetings",
+      ui_nav_calendar: "Calendar",
+      ui_nav_glossary: "Glossary",
+      ui_nav_system: "System",
+      ui_live_indicator: "1 active recording",
+      ui_sidebar_note: "Local ONNX RAG · AGPL-3.0",
+
+      ui_meeting_title: "Q2 Architecture & Release Review",
+      ui_meeting_date: "Today, 14:00",
+      ui_meeting_dur: "38 min · EN",
+      ui_meeting_verified: "3 isolated speaker tracks",
+      ui_btn_share: "Share",
+
+      ui_protocol_title: "Structured Protocol & Decisions",
+      ui_protocol_engine: "Ollama / OpenAI-compatible · Click timestamp to verify",
+      ui_summary_text:
+        "The team confirmed the v0.2.0 Helm rollout on Kubernetes 1.32 with 4 GiB memory for local ONNX RAG embeddings, and finalized screen-share slide capture with fail-closed camera exclusion.",
+      ui_dec_1: "Ship Helm chart 0.2.0 with local CPU ONNX Hybrid RAG enabled by default.",
+      ui_dec_2: "Expose all 8 MCP tools and slide PNG keyframes over OAuth 2.1 PKCE at /mcp.",
+
+      ui_slides_title: "Screen-Share Keyframes (2)",
+      ui_slides_meta: "Share track verified · Participant cameras excluded · 30d TTL",
+      ui_slide_1_title: "Hybrid RAG & MCP Topology",
+      ui_slide_2_title: "v0.2.0 Rollout & OAuth 2.1 Checklist",
+
       ui_filter_all: "All (3)",
-      ui_tracks_bound: "3 isolated tracks",
-      ui_turn1_text_html:
-        'Finished protocols are now written straight back into the <mark>Google Calendar and Outlook invite</mark> so every attendee finds the read-only link right where they look.',
-      ui_turn2_text_html:
-        'And because each participant’s WebRTC track is captured before mixing, <mark>speaker attribution</mark> stays accurate even when two people overlap — across 30 languages.',
-      ui_turn3_text_html:
-        'Our DPO especially liked the <mark>in-call chat opt-out</mark>: anyone can type <code>opt out</code> or <code>nein</code> in chat to exclude their voice immediately without stopping the call for everyone else.',
+      ui_filter_hint: "Filter by speaker · 24h audio check",
+      ui_turn_1:
+        "Let’s lock Helm chart 0.2.0 with local CPU ONNX embeddings on by default. Because each speaker track is isolated pre-mix, decisions stay accurately attributed even when two people talk at once.",
+      ui_otr_marker:
+        "Off the Record (#pause) — Audio buffers zeroed in RAM and slide capture halted",
+      ui_turn_2:
+        "We resumed with #resume right after the salary discussion. All temporary verification snippets still auto-expire after 24 hours and participant cameras stay strictly excluded from keyframes.",
+      ui_turn_3:
+        "Agreed — let’s expose all 8 MCP tools and native PNG slide keyframes over OAuth 2.1 PKCE at /mcp so Claude, Cursor, and Antigravity can search every decision with citations.",
 
-      how_kicker: "HOW IT WORKS",
-      how_title: "From live conversation to verified protocol in three simple steps",
+      how_title: "Three steps from calendar invite to searchable meeting memory",
       how_desc:
-        "No browser extensions for attendees, no cloud bots in third-party guest lists, and no manual note-taking.",
-      step1_title: "1. Connect calendar, paste link, or invite",
+        "No browser extensions for participants, no per-seat cloud SaaS, and no opaque voiceprint profiles.",
+      step1_title: "Connect calendars or dispatch on demand",
       step1_desc:
-        "Link your Google Workspace or Microsoft 365 calendar once via OAuth2, paste a live meeting URL on the home screen, or invite your bot email address like a regular attendee.",
-      step2_title: "2. Transparent join & live chat controls",
+        "Link Google Calendar or Microsoft 365 via OAuth2 PKCE (or IMAP/.ics), toggle auto-recording per event with one click, or paste any Meet, Teams, Webex, or Zoom link directly into the workspace.",
+      step2_title: "Transparent live join & isolated capture",
       step2_desc:
-        "wortlaut joins displaying the inviter’s name with live voice-activity metering and on-screen chat commands on its 16:9 video tile: type “no” / “opt out” to exclude your voice, or “#pause” / “#resume” to go off the record.",
-      step3_title: "3. Calendar writeback, verify & export",
+        "wortlaut joins with a 1280×720 Horizon video tile showing active speaker and chat controls. It records each participant’s pre-mix WebRTC audio track and verified screen-share slides, while #pause and opt out act instantly.",
+      step3_title: "Structured protocol, writeback & MCP search",
       step3_desc:
-        "Right after the call, wortlaut writes the read-only protocol link directly into your calendar event, emails the transcript, and lets you verify 24h audio snippets, edit terms, or export Markdown.",
+        "Local 30-language speech recognition and Ollama or OpenAI-compatible protocol synthesis write decisions with [HH:MM:SS] citations back into your calendar invite, send summary mail via Wortlaut.Cloud Robot, and index everything for Hybrid RAG MCP.",
 
-      feat_kicker: "PRODUCT WORKFLOWS",
-      feat_title: "Everything teams need for accurate, trustworthy meeting protocols",
+      feat_title: "Built for sovereign teams, verifiable records, and AI workflows",
       feat_desc:
-        "Designed for daily engineering syncs, confidential client engagements, architecture decisions, and compliance-sensitive teams.",
+        "Inspect every layer of wortlaut.cloud 0.2.0 — from local Hybrid RAG MCP search to the in-call Horizon video tile.",
+      ftab_mcp: "Hybrid RAG & MCP",
+      ftab_horizon: "Horizon Tile & #pause",
+      ftab_protocol: "Protocols & Slides",
+      ftab_calendar: "Calendar & Writeback",
+      ftab_audio: "Pre-Mix Audio & 30 Langs",
 
-      ftab1_title: "Calendar & Writeback",
-      ftab1_sub: "Google & Microsoft 365",
-      ftab2_title: "Ad-hoc & 30 Languages",
-      ftab2_sub: "Join in ~15s · Local Qwen3-ASR",
-      ftab3_title: "Verify, Edit & Summarize",
-      ftab3_sub: "Snippets, Ollama AI & Exports",
-      ftab4_title: "True Speaker Separation",
-      ftab4_sub: "Pre-mix WebRTC · Zero voiceprints",
+      fmcp_title: "Search every meeting decision directly from your AI client",
+      fmcp_lead:
+        "Expose your self-hosted meeting archive over Streamable HTTP MCP at /mcp with OAuth 2.1 PKCE. Hybrid retrieval fuses local CPU INT8 ONNX semantic embeddings with PostgreSQL full-text search via Reciprocal Rank Fusion — zero external vector database required.",
+      fmcp_b1:
+        "Local multilingual-e5-small-int8 embeddings on CPU + PostgreSQL tsvector across decisions, action items, summaries, slides, and transcripts.",
+      fmcp_b2:
+        "8 focused MCP tools: list_recordings, search_protocols, get_recording, get_transcript, get_keyframe (native PNG ImageContent), schedule_recording, cancel_recording, and update_protocol.",
+      fmcp_b3:
+        "Strict per-user access scoping via Dex OIDC + revocable OAuth 2.1 grants directly in the MCP workspace view.",
+      rag_q_helm: '"Helm rollout & memory"',
+      rag_q_otr: '"Off-the-Record policy"',
+      rag_q_slides: '"Architecture slide PNG"',
 
-      f1_title:
-        "Auto-record your own meetings, toggle client calls in 1 click, and link protocols in the invite",
-      f1_lead:
-        "Connect Google Calendar or Microsoft 365 via OAuth2 PKCE in seconds. You stay in complete control of every call:",
-      f1_li1:
-        "Self-organized meetings with confirmed guests are scheduled automatically (and can be opted out with 1 click anytime).",
-      f1_li2:
-        "External client invitations can be toggled on with a single click — without adding a bot email to the client’s guest list.",
-      f1_li3:
-        "Automatic Calendar Writeback: once completed, wortlaut appends the protected read-only protocol link straight into your Google Calendar or Outlook event.",
-      f1_demo_label: "Calendar Workspace (click the toggle switch to test):",
-      f1_ev1_title: "Weekly Platform Sync",
-      f1_ev1_meta: "10:00 – 10:45 · Completed · Linked in calendar event",
-      f1_linked_badge: "✓ Protocol linked",
-      f1_ev2_title: "Client Architecture Workshop",
-      f1_ev2_meta: "14:00 – 15:00 · External invite · Enable with 1 click",
-      f1_ev3_title: "Sprint Review",
-      f1_ev3_meta: "16:30 – 17:15 · Auto-enabled (recurring series)",
-      toggle_on: "● Record: On",
-      toggle_off: "○ Record: Off",
+      fhor_title: "Visible presence, live #pause, and instant speaker opt-out",
+      fhor_lead:
+        "Participants never wonder whether a meeting is being recorded. wortlaut renders a clean 1280×720 Acoustic Horizon video tile engineered for 3×3 gallery grids, showing active speaker telemetry and literal chat commands at a glance.",
+      fhor_b1:
+        "Type #pause (#pause / #resume) in the meeting chat for immediate Off-the-Record mode: audio PCM buffers are zeroed in RAM and slide capture stops instantly.",
+      fhor_b2:
+        "Type no or opt out to permanently exclude your own voice and shared slides — existing utterances, audio, keyframes, and RAG chunks are purged immediately.",
+      fhor_b3:
+        "State-Only Chroma: Emerald signals active capture; warm Amber signals Off-the-Record pause or waiting-room admission.",
+      fhor_preview_label: "Interactive 1280×720 video tile preview",
+      ht_mode_live: "Recording Active",
+      ht_mode_pause: "Off the Record (#pause)",
+      ht_sub: "Q2 Architecture Review · Invited by Anna Weber",
+      ht_status_live: "Recording active",
+      ht_status_paused: "Off the Record",
+      ht_cmd_optout: "Exclude your voice",
+      ht_cmd_otr: "Off-the-Record in chat",
+      ht_speaking_sub: "Speaking now · Isolated WebRTC audio track",
+      ht_pause_title: "OFF THE RECORD · Recording paused",
+      ht_pause_desc:
+        "Spoken audio and shared screens are discarded immediately and never stored.",
+      ht_pause_hint: 'Type "#resume" in the meeting chat to continue',
+      ht_quote: "“We ship Helm chart 0.2.0 with local ONNX Hybrid RAG enabled by default.”",
 
-      f2_title:
-        "Join unplanned calls in ~15 seconds — and transcribe locally across 30 languages",
-      f2_lead:
-        "Paste any meeting URL when a spontaneous call turns important, and run state-of-the-art speech recognition entirely on your own GPU or CPU:",
-      f2_li1:
-        "Paste a Google Meet, Teams, Webex, or Zoom link — wortlaut spawns an isolated browser worker and joins within ~15 seconds.",
-      f2_li2:
-        "Qwen3-ASR 1.7B detects the language of every segment automatically across 30 languages (3.88% German WER on the Open ASR Leaderboard).",
-      f2_li3:
-        "Bilingual EN / DE Web-UI with live lobby/capture stepper and real-time full-text search while the call is still running.",
-      f2_demo_title: "Start Ad-hoc Recording",
-      f2_dur_30: "30 min",
-      f2_dur_60: "60 min",
-      f2_dur_90: "90 min",
-      f2_demo_btn: "Record Now",
-      f2_demo_status: "LIVE · Capturing 3 isolated tracks · Qwen3-ASR (30 langs)",
+      fpro_title: "Structured protocols with verified screen-share context",
+      fpro_lead:
+        "Every recording produces an executive summary, explicit decisions, topics, and action items with clickable [HH:MM:SS] transcript citations — enriched by settled screen-share keyframes captured strictly from presentation tracks.",
+      fpro_b1:
+        "Flexible protocol LLM: run 100% locally via Ollama or connect any OpenAI-compatible endpoint (vLLM, LiteLLM, OpenAI) with automatic disclosure on /privacy.",
+      fpro_b2:
+        "Fail-closed screen-share slide keyframes (<= 1280×720 PNG) exclude participant webcams, expire after 30 days, and support 1-click single-slide deletion.",
+      fpro_b3:
+        "Export clean Markdown, TXT, WebVTT subtitles, or structured JSON — plus shareable read-only protocol links and optional editing.",
+      fpro_card_head: "Protocol Output & Slide Governance",
+      fpro_row1_t: "Decision + Clickable Evidence",
+      fpro_row1_d:
+        "Every decision and action item carries a verifiable [HH:MM:SS] anchor jumping straight to the verbatim speaker utterance.",
+      fpro_row2_t: "Screen-Share Keyframes",
+      fpro_cam_badge: "Camera excluded",
+      fpro_row2_d:
+        "Captures settled presentation slides on Meet, Teams, Webex & Zoom. Presenter opt-out purges all shared frames immediately.",
+      fpro_exports_label: "Direct Exports",
 
-      f3_title:
-        "Verify quotes by ear, polish domain terms, summarize with local Ollama, and export anywhere",
-      f3_lead:
-        "wortlaut keeps the verbatim speaker-attributed transcript as your source of truth while giving your team powerful review and export tools:",
-      f3_li1:
-        "Click-to-listen verification & inline editor: play back isolated 24h audio snippets to verify exact wording, rename guest speakers, and apply 1-click vocabulary replacements across the entire protocol.",
-      f3_li2:
-        "Optional local AI summaries (Ollama): generate structured executive summaries, topic breakdowns, and action items on your own server with zero external API calls.",
-      f3_li3:
-        "Scoped read-only links (wortlaut-read-…), automatic email delivery, open exports (.md, .txt, .vtt, .json), an OAuth 2.1 MCP server (/mcp), and OpenAPI (/docs).",
-      f3_exp_md_desc: "Ready for Notion, Confluence, GitHub, GitLab & Jira",
-      f3_exp_ai_desc: "Opt-in executive summary, topics & action items on your GPU",
-      f3_exp_vtt_desc: "Time-aligned .vtt captions & clean .txt email protocols",
-      f3_exp_json_desc: "OAuth 2.1 MCP (/mcp), slide keyframes & OpenAPI (/docs)",
+      fcal_title: "Zero-friction calendar sync & automatic link writeback",
+      fcal_lead:
+        "Connect Google Workspace or Microsoft 365 via OAuth2 PKCE — or invite the bot email via IMAP/.ics. Decide per event with a single click whether wortlaut should attend.",
+      fcal_b1:
+        "Detects Google Meet, Microsoft Teams, Cisco Webex, and Zoom join URLs automatically across recurring and one-off invites.",
+      fcal_b2:
+        "Writes the read-only protocol link straight back into the calendar event description as soon as transcription finishes.",
+      fcal_b3:
+        'Sends crisp HTML & plain-text summary notifications as "Wortlaut.Cloud Robot" when mail delivery is enabled.',
+      fcal_card_head: "Upcoming Meetings · OAuth2 Calendar Sync",
+      fcal_card_sub: "Click to toggle recording",
+      fcal_ev1_t: "Weekly Engineering Sync",
+      fcal_ev1_m: "Today 10:00 · Google Meet · Auto-writeback",
+      fcal_ev2_t: "Customer Steering Committee",
+      fcal_ev2_m: "Today 13:30 · Microsoft Teams · 12 attendees",
+      fcal_ev3_t: "External Partner Call",
+      fcal_ev3_m: "Tomorrow 11:00 · Zoom · Click to toggle",
+      toggle_on: "Recording ON",
+      toggle_off: "Recording OFF",
 
-      f4_title: "Clean speaker attribution before audio mixing — with zero biometric voiceprints",
-      f4_lead:
-        "Conventional meeting bots record mixed room audio and guess speakers afterward using voice diarization. wortlaut solves speaker attribution at the transport layer:",
-      f4_li1:
-        "Each incoming WebRTC receiver stream is captured separately before mixing and bound directly to the verified conference participant session.",
-      f4_li2:
-        "Even when participants overlap or interrupt each other, statements remain cleanly separated per track.",
-      f4_li3:
-        "Zero biometric voiceprints are ever computed or stored — and if a provider hides a binding, wortlaut marks it transparently instead of guessing.",
-      f4_badge: "Isolated stream → Verified speaker",
-      f4_optout_cmd: 'Chat: "no" / "opt out"',
-      f4_optout_res: "→ Stream dropped & segments purged",
+      faud_title: "Isolated pre-mix audio, 30 languages, and your domain glossary",
+      faud_lead:
+        "Instead of guessing speakers from a mixed room recording via biometric voiceprints, wortlaut captures each remote WebRTC audio stream separately before mixing and transcribes it locally with Qwen3-ASR 1.7B.",
+      faud_b1:
+        "Verified participant-session speaker binding across Meet, Teams, Webex, and Zoom — resilient even during crosstalk.",
+      faud_b2:
+        "30 languages with automatic detection plus live per-recording language switching on GPU or CPU.",
+      faud_b3:
+        "Built-in Glossary workspace teaches product names, acronyms, and customer terms directly to speech recognition.",
+      faud_card_head: "Pre-Mix Acoustic Pipeline",
+      faud_step1_t: "1. Pre-Mix WebRTC SSRC Capture",
+      faud_step1_d: "Each participant stream stays physically isolated before mixing.",
+      faud_step2_t: "2. Ephemeral 24h Verification Snippets",
+      faud_step2_d: "Short per-turn audio clips for human spot checks, auto-purged after 24h.",
+      faud_step3_t: "3. Active Domain Glossary",
 
-      priv_kicker: "PRIVACY, CONSENT & SECURITY",
-      priv_title: "Built for confidential conversations, European DPOs, and strict compliance",
+      priv_title: "Privacy engineered into the architecture, not promised in a policy",
       priv_desc:
-        "Why engineering organizations, consultancies, legal teams, and public-sector agencies run wortlaut instead of commercial cloud bots.",
-      trust1_title: "100% Self-Hosted (Zero Cloud Leakage)",
-      trust1_desc:
-        "Sandboxed browser workers, Qwen3-ASR speech recognition, and optional Ollama summaries all run inside your own cluster or server. Not a single second of audio leaves your infrastructure.",
-      trust2_title: "Live Chat Opt-Out & Off-the-Record",
-      trust2_desc:
-        "wortlaut joins as “wortlaut (Inviter Name)”, never records participant cameras, and lets anyone type “no” / “opt out” to purge their stream or “#pause” / “#resume” to go off the record instantly.",
-      trust3_title: "24h Audio Window & Auto-Expiry",
-      trust3_desc:
-        "Isolated audio chunks are deleted automatically from S3 after 24 hours; transcripts expire after 30 days by default and can be purged permanently at any moment with a single click.",
-      trust4_title: "OIDC Single Sign-On & Tenant Isolation",
-      trust4_desc:
-        "Connect Keycloak, Authentik, Dex, Zitadel, Microsoft Entra ID, or Google via OIDC PKCE. Users only see their own recordings and invited meetings, plus HMAC-scoped read-only share links.",
+        "Designed for works councils, European data protection standards, and regulated engineering organizations.",
+      trust1_t: "Zero voiceprints or biometric profiling",
+      trust1_d:
+        "Speaker attribution relies exclusively on verified conference WebRTC session metadata — never biometric speaker embeddings or voice fingerprinting.",
+      trust2_t: "Fail-closed camera exclusion & auto-expiry",
+      trust2_d:
+        "Slide capture strictly filters for screen-share tracks and discards cameras. Verification audio expires automatically after 24 hours; keyframes expire after 30 days or on 1-click delete.",
+      trust3_t: "Real-time consent: #pause & opt out",
+      trust3_d:
+        "Any attendee can pause capture Off-the-Record (#pause) or opt out permanently (no / opt out) via chat, immediately scrubbing their audio, text, slides, and RAG vectors.",
+      trust4_t: "Full infrastructure sovereignty & live /privacy",
+      trust4_d:
+        "Run 100% air-gapped with local ASR, local CPU ONNX RAG, and Ollama — or connect an OpenAI-compatible LLM endpoint that is automatically disclosed on your instance’s /privacy page.",
 
-      comp_th_crit: "Criterion",
-      comp_th_cloud: "Commercial Cloud Note-Takers",
-      comp_th_wortlaut: "wortlaut (Open Source & Self-Hosted)",
-      comp_r1_c: "Where are calls & summaries processed?",
-      comp_r1_cloud: "External vendor clouds & third-party LLM APIs",
-      comp_r1_w: "100% on your own infrastructure (Qwen3-ASR + optional Ollama)",
-      comp_r2_c: "How are speakers identified?",
-      comp_r2_cloud: "Mixed audio + biometric voice profiles (voiceprints)",
-      comp_r2_w: "Isolated pre-mix WebRTC tracks bound to session — zero voiceprints",
-      comp_r6_c: "Individual attendee opt-out",
-      comp_r6_cloud: "All-or-nothing (remove bot for everyone or leave call)",
-      comp_r6_w: "Type “no” / “opt out” in chat — only that speaker is excluded & purged",
-      comp_r3_c: "Camera & screen recording",
-      comp_r3_cloud: "Frequently records full video & screen shares",
-      comp_r3_w: "Participant cameras blocked fail-closed; optional static screen-share slide snapshots only",
-      comp_r4_c: "Supported platforms",
-      comp_r4_cloud: "Often restricted or billed per seat & platform",
-      comp_r5_c: "License & cost",
-      comp_r5_cloud: "Recurring monthly per-seat subscription",
-      comp_r5_w: "Free open-source software under GNU AGPL-3.0",
+      cmp_col_feat: "Capability",
+      cmp_col_saas: "Typical Cloud Meeting Bots",
+      cmp_r1_k: "Hosting & Data Sovereignty",
+      cmp_r1_w: "100% self-hosted (Docker Compose or Helm on your Kubernetes cluster)",
+      cmp_r1_s: "Vendor cloud, third-party processors & retention policies",
+      cmp_r2_k: "Speaker Attribution",
+      cmp_r2_w: "Isolated pre-mix WebRTC tracks · Zero voiceprints",
+      cmp_r2_s: "Mixed audio + biometric diarization guesses",
+      cmp_r3_k: "Conference Platforms",
+      cmp_r3_w: "Google Meet, Microsoft Teams, Cisco Webex & Zoom side-by-side",
+      cmp_r3_s: "Often tiered or missing Webex / self-hosted control",
+      cmp_r4_k: "Screen-Share Slides",
+      cmp_r4_w: "Settled PNG keyframes · Fail-closed camera exclusion · 1-click delete",
+      cmp_r4_s: "Full MP4 video recording including participant webcams",
+      cmp_r5_k: "AI Search & MCP",
+      cmp_r5_w: "Local CPU ONNX Hybrid RAG + 8 OAuth 2.1 MCP tools (/mcp)",
+      cmp_r5_s: "Proprietary chat box or extra paid AI add-on",
+      cmp_r6_k: "Live Participant Controls",
+      cmp_r6_w: "1280×720 Horizon tile + chat #pause / #resume & no / opt out",
+      cmp_r6_s: "Manual kick-only or post-meeting deletion ticket",
+      cmp_r7_k: "Protocol LLM Backend",
+      cmp_r7_w: "Local Ollama or any OpenAI-compatible API (vLLM, LiteLLM, OpenAI)",
+      cmp_r7_s: "Locked to vendor’s hosted LLM pipeline",
+      cmp_r8_k: "License & Pricing",
+      cmp_r8_w: "GNU AGPL-3.0 · Free to self-host, unlimited seats",
+      cmp_r8_s: "$18–$40+ per user / month",
 
-      qs_kicker: "SELF-HOSTING & QUICKSTART",
-      qs_title: "Up and running on your own server or Kubernetes cluster in minutes",
-      qs_desc:
-        "Free software under GNU AGPL-3.0 with multi-arch images on GHCR. Launch via hardened Docker Compose on a single VM, 1-command Helm Chart on Kubernetes, or locally.",
-      qs_tab1: "Docker Compose",
-      qs_tab2: "Helm (Kubernetes)",
-      qs_tab3: "Local / Contributors",
+      sh_title: "Deploy on your own server or Kubernetes cluster in minutes",
+      sh_desc:
+        "Start with Docker Compose or install Helm chart 0.2.0 directly from GHCR — with bundled PostgreSQL 17.12, RustFS S3, local ONNX RAG, and optional NVIDIA GPU acceleration.",
       copy_btn: "Copy",
-      copied_btn: "Copied!",
-      qs_code_compose: `# 1. Clone & configure secrets
-git clone https://github.com/mayflower/wortlaut.git && cd wortlaut
-cp .env.example .env
+      copied_btn: "Copied",
+      sh_stack_title: "v0.2.0 Architecture at a Glance",
+      st_k_core: "Core Stack",
+      st_v_core: "Python 3.14 (FastAPI), TypeScript/Playwright Worker, PostgreSQL 17.12, RustFS S3",
+      st_k_asr: "Speech & RAG",
+      st_v_asr: "Qwen3-ASR 1.7B (30 languages, GPU/CPU) + local CPU INT8 ONNX (multilingual-e5-small-int8)",
+      st_k_llm: "Protocol LLM",
+      st_v_llm: "Local Ollama or any OpenAI-compatible API (vLLM, LiteLLM, OpenAI) with live /privacy disclosure",
+      st_k_auth: "Identity & Mail",
+      st_v_auth: "Dex OIDC SSO, OAuth 2.1 PKCE MCP server, Google/M365 Calendar OAuth2, Wortlaut.Cloud Robot mail",
+      st_k_lic: "License",
+      st_v_lic: "GNU AGPL-3.0 · Fully auditable, zero telemetry, zero vendor lock-in",
+      sh_btn_repo: "View on GitHub",
+      sh_btn_docs: "Deployment Docs",
 
-# 2. Launch stack (non-root meeting, docker-socket-proxy, Postgres 17 & RustFS S3)
-docker compose up -d
-
-# Recommended with NVIDIA GPU (real-time Qwen3-ASR):
-docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
-# Web-UI: http://127.0.0.1:34601/ui · API Docs: http://127.0.0.1:34601/docs`,
-      qs_code_helm: `# Zero-dependency evaluation (embedded PostgreSQL 17 + RustFS S3):
-helm upgrade --install wortlaut oci://ghcr.io/mayflower/charts/wortlaut \\
-  --namespace wortlaut --create-namespace \\
-  --set host=wortlaut.local \\
-  --set bundled.enabled=true \\
-  --set asr.gpuCount=0 --set asr.allowCpu=true
-
-# Production cluster (external DB/S3, GPU node & OIDC SSO):
-helm upgrade --install wortlaut oci://ghcr.io/mayflower/charts/wortlaut \\
-  --namespace wortlaut --create-namespace \\
-  --set host=wortlaut.example.org \\
-  --set oidc.issuer=https://auth.example.org`,
-      qs_code_local: `# Option A: Bare-metal / local Linux process mode (no Kubernetes needed)
-./scripts/run-local.sh
-
-# Option B: Contributor setup & full integration test suite (Docker only)
-make setup-local
-make test-local`,
-      qs_req_title: "What’s included out of the box",
-      qs_req_1:
-        "Hardened Docker Compose (isolated socket proxy, non-root) & OCI Helm Chart with zero-dependency bundled mode (amd64 & arm64)",
-      qs_req_2:
-        "Qwen3-ASR 1.7B: 30 languages (Qwen/Qwen3-ASR-1.7B-hf) — GPU recommended, CPU fallback built in",
-      qs_req_3:
-        "PostgreSQL 17 & RustFS S3 object storage pre-wired in both Docker Compose and Helm bundled mode",
-      qs_req_4:
-        "Optional: OIDC SSO, Google/M365 Calendar OAuth2 writeback, local Ollama summaries, and DKIM-verified IMAP/SMTP mail",
-      qs_oss_title: "100% Open Source on GitHub",
-      qs_oss_desc:
-        "Explore the source code, configuration reference, OCI Helm chart, architecture docs, and security policy under the GNU Affero General Public License v3.0.",
-      qs_oss_btn: "View GitHub Repository →",
-
-      footer_tagline:
-        "Speaker-accurate, self-hosted meeting transcripts and protocols for Google Meet, Microsoft Teams, Cisco Webex, and Zoom.",
-      footer_docs: "Configuration",
-      footer_security: "Security",
-      footer_copy: "© 2026 Mayflower GmbH · Free Software under GNU AGPL-3.0 · wortlaut.cloud"
+      foot_docs: "Documentation",
+      foot_copy: "Open Source under GNU AGPL-3.0 · Built by Mayflower",
     },
 
     de: {
-      meta_title: "wortlaut.cloud — Sprechergenaue Wortprotokolle für deine Meetings. 100 % selbst gehostet.",
+      page_title: "wortlaut.cloud — Sprechergenaue Meeting-Protokolle & MCP-Wissensspeicher. 100 % Self-Hosted.",
       meta_desc:
-        "wortlaut erstellt sprechergenaue Wortprotokolle für Google Meet, Microsoft Teams, Cisco Webex und Zoom – 100 % selbst gehostet auf eurer eigenen Infrastruktur unter GNU AGPL-3.0.",
-
+        "wortlaut.cloud nimmt an Google Meet, Microsoft Teams, Cisco Webex und Zoom teil, erfasst getrennte Sprecherspuren und Screen-Share-Folien, erstellt strukturierte Protokolle mit Zeitstempel-Belegen und bindet Meetings per Hybrid-RAG-MCP an — 100 % Self-Hosted unter GNU AGPL-3.0.",
       nav_how: "So funktioniert’s",
       nav_features: "Funktionen",
-      nav_privacy: "Datenschutz & Opt-Out",
-      nav_selfhost: "Selbst hosten",
+      nav_privacy: "Datenschutz & Steuerung",
+      nav_selfhost: "Self-Hosting",
       cta_github: "GitHub",
       cta_install: "Jetzt starten",
 
-      hero_badge: "Open Source (AGPL-3.0) · 100 % Self-Hosted · 30 Sprachen · DSGVO-konform",
       hero_title_html:
-        'Sprechergenaue Wortprotokolle für deine Meetings.<br><span class="highlight">100 % auf deiner eigenen Infrastruktur.</span>',
+        'Sprechergenaue Meeting-Protokolle.<br><span class="hero-subline">100 % auf eigener Infrastruktur.</span>',
       hero_subtitle:
-        "wortlaut nimmt als transparenter, passiver Zuhörer an Google Meet, Microsoft Teams, Cisco Webex und Zoom teil, erfasst jede Tonspur vor dem Mischen getrennt nach Sprecher und verlinkt fertige Protokolle direkt im Kalendereintrag – inklusive Live-Opt-Out im Chat und ohne Datenabfluss an fremde Clouds.",
+        "wortlaut nimmt mit einer transparenten Live-Videokachel an Google Meet, Microsoft Teams, Cisco Webex und Zoom teil, erfasst getrennte WebRTC-Sprecherspuren sowie Screen-Share-Folien, erzeugt strukturierte Protokolle mit klickbaren Zeitstempel-Belegen und macht jedes Meeting per Hybrid-RAG-MCP für KI-Clients durchsuchbar.",
       hero_cta_primary: "Kostenlos selbst hosten",
-      hero_cta_secondary: "So funktioniert’s ansehen",
-      platforms_label: "Läuft parallel in einer einzigen Instanz mit:",
+      hero_cta_secondary: "Funktionen entdecken",
+      hero_meta_html:
+        '<span>GNU AGPL-3.0</span><span class="hero-meta-sep" aria-hidden="true">·</span><span>Ohne Voiceprints</span><span class="hero-meta-sep" aria-hidden="true">·</span><span>30 Sprachen</span><span class="hero-meta-sep" aria-hidden="true">·</span><span>Lokales Hybrid-RAG &amp; MCP</span><span class="hero-meta-sep" aria-hidden="true">·</span><span>v0.2.0</span>',
+      platforms_label: "Läuft parallel in einer Instanz für alle vier Plattformen:",
 
-      ui_window_url: "wortlaut · Besprechungsprotokoll",
-      ui_badge_done: "✓ Im Kalendereintrag verlinkt",
-      ui_nav_home: "Startseite",
-      ui_nav_rec: "Aufnahmen",
-      ui_nav_cal: "Kalender",
-      ui_nav_sys: "System & Hilfe",
-      ui_sso_label: "OIDC Single Sign-On",
-      ui_meeting_title: "Q4 Produkt- & Sicherheits-Architektur-Review",
-      ui_meeting_meta: "Heute, 14:00 – 14:45 Uhr · 3 Teilnehmende",
-      ui_btn_share: "Lese-Link teilen",
-      ui_btn_export: "Markdown exportieren",
-      ui_summary_label: "Zusammenfassung & Aufgaben",
-      ui_summary_tag: "Optionale lokale KI · Ollama",
-      ui_summary_body:
-        "Kalender-Rückschreiben für Google Workspace und Microsoft 365 ist aktiv; externe Kundentermine bleiben per 1-Klick-Schalter zuschaltbar und der Live-Chat-Opt-Out hat das Security-Review bestanden.",
+      ui_window_url: "wortlaut.cloud / aufnahmen / q2-architektur-review",
+      ui_badge_done: "Im Kalendereintrag verlinkt",
+      ui_nav_meetings: "Aufnahmen",
+      ui_nav_calendar: "Kalender",
+      ui_nav_glossary: "Glossar",
+      ui_nav_system: "System",
+      ui_live_indicator: "1 aktive Aufnahme",
+      ui_sidebar_note: "Lokales ONNX-RAG · AGPL-3.0",
+
+      ui_meeting_title: "Q2 Architektur- & Release-Review",
+      ui_meeting_date: "Heute, 14:00 Uhr",
+      ui_meeting_dur: "38 Min · DE",
+      ui_meeting_verified: "3 getrennte Sprecherspuren",
+      ui_btn_share: "Teilen",
+
+      ui_protocol_title: "Strukturiertes Protokoll & Entscheidungen",
+      ui_protocol_engine: "Ollama / OpenAI-kompatibel · Zeitstempel zum Prüfen anklicken",
+      ui_summary_text:
+        "Das Team beschloss das v0.2.0-Helm-Rollout auf Kubernetes 1.32 mit 4 GiB Memory-Limit für lokales ONNX-RAG sowie die Screen-Share-Folienerfassung mit striktem Kamera-Ausschluss.",
+      ui_dec_1: "Helm-Chart 0.2.0 mit lokalem CPU-ONNX-Hybrid-RAG als Standard ausliefern.",
+      ui_dec_2: "Alle 8 MCP-Tools und Folien-PNG-Keyframes per OAuth 2.1 PKCE unter /mcp freigeben.",
+
+      ui_slides_title: "Screen-Share-Keyframes (2)",
+      ui_slides_meta: "Freigabespur verifiziert · Teilnehmerkameras ausgeschlossen · 30 Tage TTL",
+      ui_slide_1_title: "Hybrid-RAG & MCP-Topologie",
+      ui_slide_2_title: "v0.2.0 Rollout- & OAuth-2.1-Checkliste",
+
       ui_filter_all: "Alle (3)",
-      ui_tracks_bound: "3 isolierte Spuren",
-      ui_turn1_text_html:
-        'Fertige Protokolle werden jetzt automatisch direkt in die <mark>Google-Calendar- und Outlook-Einladung</mark> zurückgeschrieben, sodass alle Eingeladenen den Lese-Link sofort im Termin finden.',
-      ui_turn2_text_html:
-        'Und weil jede WebRTC-Empfangsspur vor dem Mischen separat erfasst wird, bleibt die <mark>Sprecherzuordnung</mark> auch bei gleichzeitigem Sprechen sauber – in 30 Sprachen.',
-      ui_turn3_text_html:
-        'Unser Datenschutzbeauftragter hat besonders den <mark>Live-Opt-Out im Chat</mark> gelobt: Wer <code>no</code> oder <code>opt out</code> in den Chat schreibt, wird sofort ausgeschlossen, während das Meeting für alle anderen weiterläuft.',
+      ui_filter_hint: "Nach Sprecher filtern · 24h-Hörprobe",
+      ui_turn_1:
+        "Wir fixieren Helm-Chart 0.2.0 mit lokalen CPU-ONNX-Embeddings als Standard. Weil jede Sprecherspur vor dem Mix isoliert wird, bleiben Entscheidungen selbst bei Zwischenrufen exakt zugeordnet.",
+      ui_otr_marker:
+        "Off the Record (#pause) — Audio-Puffer im RAM genullt, Folienerfassung gestoppt",
+      ui_turn_2:
+        "Nach dem Gehaltsthema haben wir mit #resume fortgesetzt. Alle 24-Stunden-Hörproben laufen automatisch ab und Teilnehmerkameras bleiben strikt aus den Keyframes ausgeschlossen.",
+      ui_turn_3:
+        "Einverstanden — wir stellen alle 8 MCP-Tools und native PNG-Keyframes über OAuth 2.1 PKCE unter /mcp bereit, damit Claude, Cursor und Antigravity jede Entscheidung mit Belegen finden.",
 
-      how_kicker: "SO FUNKTIONIERT’S",
-      how_title: "In drei einfachen Schritten vom Gespräch zum geprüften Protokoll",
+      how_title: "In drei Schritten von der Einladung zum durchsuchbaren Meeting-Wissen",
       how_desc:
-        "Keine Browser-Erweiterungen für Teilnehmende, keine Cloud-Bots in fremden Gästelisten und kein manuelles Mitschreiben.",
-      step1_title: "1. Kalender verbinden, Link einfügen oder einladen",
+        "Keine Browser-Erweiterungen für Teilnehmende, kein Cloud-SaaS pro Nutzer und keine biometrischen Voiceprints.",
+      step1_title: "Kalender verbinden oder direkt starten",
       step1_desc:
-        "Verknüpfe einmalig deinen Google- oder Microsoft-365-Kalender per OAuth2, füge spontan einen Meeting-Link auf der Startseite ein oder lade die Bot-E-Mail-Adresse wie einen normalen Gast ein.",
-      step2_title: "2. Transparenter Beitritt & Live-Steuerung im Chat",
+        "Google Calendar oder Microsoft 365 per OAuth2 PKCE (oder IMAP/.ics) anbinden, Aufnahmen je Termin per Klick steuern oder beliebige Meet-, Teams-, Webex- oder Zoom-Links direkt einfügen.",
+      step2_title: "Transparente Live-Kachel & getrennte Erfassung",
       step2_desc:
-        "wortlaut tritt mit dem Namen der einladenden Person bei und zeigt Live-Tonaktivität sowie Chat-Befehle direkt auf seiner 16:9-Videokachel: „no“ / „opt out“ zum eigenen Ausnehmen oder „#pause“ / „#resume“ für Off-the-Record.",
-      step3_title: "3. Kalender-Link, Audio-Check & Export",
+        "wortlaut erscheint mit einer 1280×720-Horizon-Videokachel samt Sprecheranzeige und Chat-Befehlen, zeichnet jede WebRTC-Audiospur getrennt sowie verifizierte Folien auf und reagiert sofort auf #pause und opt out.",
+      step3_title: "Protokoll, Kalender-Rückschreibung & MCP-Suche",
       step3_desc:
-        "Direkt nach Gesprächsende trägt wortlaut den Lese-Link automatisch in deinen Kalendereintrag ein, versendet das Protokoll per E-Mail und erlaubt Audio-Snippet-Prüfung (24 h), Korrekturen und Markdown-Export.",
+        "Lokale Spracherkennung in 30 Sprachen und Ollama oder eine OpenAI-kompatible API schreiben Entscheidungen mit [HH:MM:SS]-Belegen in den Termin, versenden Mails als Wortlaut.Cloud Robot und indexieren alles für Hybrid-RAG-MCP.",
 
-      feat_kicker: "FUNKTIONEN IM ALLTAG",
-      feat_title: "Alles, was Teams für verlässliche Besprechungsprotokolle brauchen",
+      feat_title: "Gebaut für souveräne Teams, überprüfbare Protokolle und KI-Workflows",
       feat_desc:
-        "Entwickelt für tägliche Engineering-Syncs, vertrauliche Kundenprojekte, Architekturentscheidungen und datenschutzsensible Organisationen.",
+        "Alle Bausteine von wortlaut.cloud 0.2.0 — von der lokalen Hybrid-RAG-MCP-Suche bis zur Live-Horizon-Videokachel.",
+      ftab_mcp: "Hybrid-RAG & MCP",
+      ftab_horizon: "Horizon-Kachel & #pause",
+      ftab_protocol: "Protokolle & Folien",
+      ftab_calendar: "Kalender & Writeback",
+      ftab_audio: "Pre-Mix-Audio & 30 Sprachen",
 
-      ftab1_title: "Kalender & Rückschreiben",
-      ftab1_sub: "Google & Microsoft 365",
-      ftab2_title: "Ad-hoc & 30 Sprachen",
-      ftab2_sub: "In ~15 s im Call · Lokales Qwen3-ASR",
-      ftab3_title: "Prüfen, Editieren & KI",
-      ftab3_sub: "Audio-Snippets, Ollama & Exporte",
-      ftab4_title: "Echte Sprechertrennung",
-      ftab4_sub: "Vor dem Mix · Ohne Stimmprofile",
+      fmcp_title: "Alle Meeting-Entscheidungen direkt im KI-Client durchsuchen",
+      fmcp_lead:
+        "Stelle dein selbst gehostetes Protokollarchiv über Streamable-HTTP-MCP unter /mcp mit OAuth 2.1 PKCE bereit. Die Hybrid-Suche kombiniert lokale CPU-INT8-ONNX-Embeddings mit PostgreSQL-Volltextsuche per Reciprocal Rank Fusion — ganz ohne externe Vektordatenbank.",
+      fmcp_b1:
+        "Lokale multilingual-e5-small-int8-Embeddings auf der CPU + PostgreSQL tsvector über Entscheidungen, Aufgaben, Zusammenfassungen, Folien und Transkripte.",
+      fmcp_b2:
+        "8 fokussierte MCP-Tools: list_recordings, search_protocols, get_recording, get_transcript, get_keyframe (natives PNG-ImageContent), schedule_recording, cancel_recording und update_protocol.",
+      fmcp_b3:
+        "Strikte Nutzer-Berechtigung über Dex OIDC + widerrufbare OAuth-2.1-Freigaben direkt in der MCP-Ansicht der Web-UI.",
+      rag_q_helm: '"Helm-Rollout & Memory"',
+      rag_q_otr: '"Off-the-Record-Regel"',
+      rag_q_slides: '"Architektur-Folie PNG"',
 
-      f1_title:
-        "Eigene Termine automatisch protokollieren, Kundentermine per Klick zuschalten – inklusive Link im Termin",
-      f1_lead:
-        "Verbinde Google Calendar oder Microsoft 365 in wenigen Sekunden per OAuth2 PKCE. Du behältst bei jedem Gespräch die volle Kontrolle:",
-      f1_li1:
-        "Selbst organisierte Termine mit bestätigten Gästen werden automatisch eingeplant (und lassen sich jederzeit per Klick abwählen).",
-      f1_li2:
-        "Externe Kundentermine können mit einem einzigen Klick zugeschaltet werden – ohne einen Bot in die fremde Einladungsliste einzutragen.",
-      f1_li3:
-        "Automatisches Kalender-Rückschreiben: Nach Abschluss fügt wortlaut den geschützten Lese-Link direkt in deinen Google-Calendar- oder Outlook-Termin ein.",
-      f1_demo_label: "Kalender-Arbeitsbereich (Klicke auf den Schalter zum Testen):",
-      f1_ev1_title: "Wöchentliches Plattform-Sync",
-      f1_ev1_meta: "10:00 – 10:45 Uhr · Abgeschlossen · Im Termin verlinkt",
-      f1_linked_badge: "✓ Protokoll verlinkt",
-      f1_ev2_title: "Kunden-Architektur-Workshop",
-      f1_ev2_meta: "14:00 – 15:00 Uhr · Externer Termin · Per 1 Klick zuschaltbar",
-      f1_ev3_title: "Sprint-Review",
-      f1_ev3_meta: "16:30 – 17:15 Uhr · Automatisch aktiv (Terminserie)",
-      toggle_on: "● Aufzeichnen: An",
-      toggle_off: "○ Aufzeichnen: Aus",
+      fhor_title: "Sichtbare Präsenz, Live-#pause und sofortiges Opt-out",
+      fhor_lead:
+        "Niemand muss raten, ob gerade aufgezeichnet wird. wortlaut rendert eine ruhige 1280×720-Horizon-Videokachel, die selbst im 3×3-Galerieraster lesbar bleibt und aktive Sprecher sowie alle Chat-Kommandos direkt zeigt.",
+      fhor_b1:
+        "#pause (#pause / #weiter / #resume) im Meeting-Chat aktiviert sofort Off-the-Record: PCM-Audiopuffer werden im RAM genullt und die Folienerfassung stoppt augenblicklich.",
+      fhor_b2:
+        "no oder opt out schließt die eigene Stimme und geteilte Folien dauerhaft aus — vorhandene Beiträge, Audio, Keyframes und RAG-Chunks werden sofort gelöscht.",
+      fhor_b3:
+        "State-Only Chroma: Smaragdgrün zeigt aktive Aufzeichnung, warmes Amber signalisiert ausschließlich Off-the-Record-Pause oder Wartebereich.",
+      fhor_preview_label: "Interaktive Vorschau der 1280×720-Videokachel",
+      ht_mode_live: "Aufzeichnung aktiv",
+      ht_mode_pause: "Off the Record (#pause)",
+      ht_sub: "Q2 Architektur-Review · Eingeladen von Anna Weber",
+      ht_status_live: "Aufzeichnung aktiv",
+      ht_status_paused: "Off the Record",
+      ht_cmd_optout: "Eigene Stimme ausnehmen",
+      ht_cmd_otr: "Off-the-Record im Chat",
+      ht_speaking_sub: "Spricht gerade · Getrennte WebRTC-Audiospur",
+      ht_pause_title: "OFF THE RECORD · Aufnahme pausiert",
+      ht_pause_desc:
+        "Gesprochenes Audio und geteilte Bildschirme werden sofort verworfen und nicht gespeichert.",
+      ht_pause_hint: 'Mit „#resume“ oder „#weiter“ im Chat fortsetzen',
+      ht_quote: "„Wir liefern Helm-Chart 0.2.0 standardmäßig mit lokalem ONNX-Hybrid-RAG aus.“",
 
-      f2_title:
-        "Spontan in ~15 Sekunden im laufenden Call – lokal transkribiert in 30 Sprachen",
-      f2_lead:
-        "Füge jederzeit einen Meeting-Link ein, wenn ein Gespräch wichtig wird, und transkribiere komplett lokal auf deiner eigenen GPU oder CPU:",
-      f2_li1:
-        "Link für Google Meet, Teams, Webex oder Zoom einfügen – wortlaut startet einen isolierten Browser-Worker und tritt in rund 15 Sekunden bei.",
-      f2_li2:
-        "Qwen3-ASR 1.7B erkennt die Sprache jedes Segments automatisch in 30 Sprachen (3,88 % deutsche WER im Open ASR Leaderboard).",
-      f2_li3:
-        "Zweisprachige Oberfläche (DE / EN) mit Live-Status-Anzeige (Warteraum → Aufnahme) und Echtzeit-Volltextsuche noch während des Gesprächs.",
-      f2_demo_title: "Spontane Aufzeichnung starten",
-      f2_dur_30: "30 Min.",
-      f2_dur_60: "60 Min.",
-      f2_dur_90: "90 Min.",
-      f2_demo_btn: "Jetzt aufzeichnen",
-      f2_demo_status: "LIVE · 3 isolierte Tonspuren · Qwen3-ASR (30 Sprachen)",
+      fpro_title: "Strukturierte Protokolle mit verifiziertem Folien-Kontext",
+      fpro_lead:
+        "Jede Aufnahme liefert Zusammenfassung, explizite Entscheidungen, Themen und Aufgaben mit klickbaren [HH:MM:SS]-Transkript-Belegen — ergänzt um stabile Screen-Share-Keyframes direkt aus der Präsentationsspur.",
+      fpro_b1:
+        "Flexibles Protokoll-LLM: 100 % lokal über Ollama oder über beliebige OpenAI-kompatible Endpunkte (vLLM, LiteLLM, OpenAI) mit automatischer Angabe auf /privacy.",
+      fpro_b2:
+        "Fail-closed Screen-Share-Keyframes (<= 1280×720 PNG) schließen Teilnehmerkameras aus, verfallen nach 30 Tagen und lassen sich einzeln per Klick löschen.",
+      fpro_b3:
+        "Export als Markdown, TXT, WebVTT-Untertitel oder JSON — plus teilbare Nur-Lese-Protokolllinks und optionale Bearbeitung.",
+      fpro_card_head: "Protokoll-Ausgabe & Folien-Datenschutz",
+      fpro_row1_t: "Entscheidung + klickbarer Beleg",
+      fpro_row1_d:
+        "Jede Entscheidung und Aufgabe trägt einen [HH:MM:SS]-Anker, der direkt zur wörtlichen Sprecherpassage springt.",
+      fpro_row2_t: "Screen-Share-Keyframes",
+      fpro_cam_badge: "Kamera ausgeschlossen",
+      fpro_row2_d:
+        "Erfasst stabile Präsentationsfolien in Meet, Teams, Webex & Zoom. Bei Presenter-Opt-out werden alle Folien sofort entfernt.",
+      fpro_exports_label: "Direktexporte",
 
-      f3_title:
-        "Aussagen per Klick anhören, Fachbegriffe korrigieren, lokal per Ollama zusammenfassen & überallhin exportieren",
-      f3_lead:
-        "Das unverfälschte Wortprotokoll bleibt immer deine verlässliche Quelle – ergänzt um praktische Werkzeuge für Nachbereitung und Team-Freigabe:",
-      f3_li1:
-        "24-h-Audio-Prüfung & Inline-Editor: Höre dir einzelne Aussagen per Klick auf den Zeitstempel an, benenne Gäste um und ersetze Fachbegriffe im gesamten Protokoll mit einem Klick.",
-      f3_li2:
-        "Optionale lokale KI-Zusammenfassung (Ollama): Erzeuge Kurzfassungen, Themenblöcke und Aufgabenlisten auf deinem eigenen Server – ohne externe Cloud-APIs.",
-      f3_li3:
-        "Geschützte Lese-Links (wortlaut-read-…), automatischer E-Mail-Versand, Exporte als .md, .txt, .vtt, .json, OAuth-2.1-MCP-Server (/mcp) und OpenAPI (/docs).",
-      f3_exp_md_desc: "Direkt für Notion, Confluence, GitHub, GitLab & Jira",
-      f3_exp_ai_desc: "Optionale Zusammenfassung, Themen & Aufgaben auf eigener GPU",
-      f3_exp_vtt_desc: "Zeitgenaue .vtt-Untertitel & saubere .txt-Protokolle",
-      f3_exp_json_desc: "OAuth-2.1-MCP (/mcp), Folien-Keyframes & OpenAPI (/docs)",
+      fcal_title: "Nahtloser Kalender-Sync & automatisches Link-Writeback",
+      fcal_lead:
+        "Google Workspace oder Microsoft 365 per OAuth2 PKCE verbinden — oder einfach die Bot-Adresse per IMAP/.ics einladen. Per Klick entscheidest du je Termin, ob wortlaut teilnimmt.",
+      fcal_b1:
+        "Erkennt Google-Meet-, Microsoft-Teams-, Cisco-Webex- und Zoom-Links automatisch in Einzel- und Serienterminen.",
+      fcal_b2:
+        "Schreibt den Nur-Lese-Protokolllink unmittelbar nach Abschluss direkt zurück in die Beschreibung des Kalendereintrags.",
+      fcal_b3:
+        'Versendet aufgeräumte HTML- & Text-Benachrichtigungen als „Wortlaut.Cloud Robot“, sobald Mailversand aktiv ist.',
+      fcal_card_head: "Anstehende Meetings · OAuth2-Kalendersync",
+      fcal_card_sub: "Zum Umschalten klicken",
+      fcal_ev1_t: "Wöchentlicher Engineering-Sync",
+      fcal_ev1_m: "Heute 10:00 · Google Meet · Auto-Writeback",
+      fcal_ev2_t: "Kunden-Steuerkreis",
+      fcal_ev2_m: "Heute 13:30 · Microsoft Teams · 12 Teilnehmende",
+      fcal_ev3_t: "Externes Partnergespräch",
+      fcal_ev3_m: "Morgen 11:00 · Zoom · Zum Umschalten klicken",
+      toggle_on: "Aufnahme AN",
+      toggle_off: "Aufnahme AUS",
 
-      f4_title: "Saubere Sprecherzuordnung vor dem Mischen – ganz ohne biometrische Stimmprofile",
-      f4_lead:
-        "Herkömmliche Bots schneiden gemischtes Raumaudio mit und raten nachträglich per Stimmprofil, wer gesprochen hat. wortlaut löst das Problem an der Wurzel:",
-      f4_li1:
-        "Jede eingehende WebRTC-Empfangsspur wird vor dem Mischen separat erfasst und direkt der nachgewiesenen Teilnehmersitzung zugeordnet.",
-      f4_li2:
-        "Auch wenn mehrere Personen gleichzeitig sprechen oder sich ins Wort fallen, bleiben alle Aussagen sauber nach Spur getrennt.",
-      f4_li3:
-        "Es werden niemals biometrische Stimmprofile (Voiceprints) berechnet oder gespeichert – fehlt eine Zuordnung, kennzeichnet wortlaut das transparent statt zu raten.",
-      f4_badge: "Isolierte Tonspur → Geprüfte Sitzung",
-      f4_optout_cmd: 'Chat: "no" / "opt out"',
-      f4_optout_res: "→ Tonspur verworfen & Segmente gelöscht",
+      faud_title: "Getrenntes Pre-Mix-Audio, 30 Sprachen und dein Fachglossar",
+      faud_lead:
+        "Statt Sprecher aus einer gemischten Raumaufnahme per biometrischem Voiceprint zu erraten, greift wortlaut jeden eingehenden WebRTC-Audiostream getrennt vor dem Mix ab und transkribiert lokal mit Qwen3-ASR 1.7B.",
+      faud_b1:
+        "Nachgewiesene Teilnehmerbindung über Meet, Teams, Webex und Zoom — verlässlich auch bei gleichzeitigem Sprechen.",
+      faud_b2:
+        "30 Sprachen mit automatischer Erkennung sowie Live-Sprachumschaltung pro Aufnahme auf GPU oder CPU.",
+      faud_b3:
+        "Integrierte Glossar-Verwaltung trainiert Produktbegriffe, Kürzel und Kundennamen direkt in der Spracherkennung mit.",
+      faud_card_head: "Pre-Mix-Audio-Pipeline",
+      faud_step1_t: "1. Pre-Mix-WebRTC-SSRC-Erfassung",
+      faud_step1_d: "Jeder Teilnehmerstream bleibt vor dem Mix physisch isoliert.",
+      faud_step2_t: "2. Ephemere 24h-Verifikations-Hörproben",
+      faud_step2_d: "Kurze Clips pro Beitrag zur Gegenprüfung, automatische Löschung nach 24h.",
+      faud_step3_t: "3. Aktives Fachglossar",
 
-      priv_kicker: "DATENSCHUTZ, WIDERSPRUCH & SICHERHEIT",
-      priv_title: "Gebaut für vertrauliche Gespräche, Datenschutzbeauftragte und strenge Compliance",
+      priv_title: "Datenschutz in der Architektur statt nur in der Datenschutzerklärung",
       priv_desc:
-        "Warum Engineering-Teams, Beratungen, Kanzleien und öffentliche Auftraggeber wortlaut statt kommerzieller US-Cloud-Bots betreiben.",
-      trust1_title: "100 % Self-Hosted (Kein Cloud-Abfluss)",
-      trust1_desc:
-        "Isolierte Browser-Worker, Qwen3-ASR-Spracherkennung und optionale Ollama-Zusammenfassungen laufen komplett auf euren eigenen Servern. Keine Sekunde Audio verlässt eure Infrastruktur.",
-      trust2_title: "Live-Opt-Out & Off-the-Record im Chat",
-      trust2_desc:
-        "wortlaut tritt als „wortlaut (Name der einladenden Person)“ bei, zeichnet niemals Teilnehmer-Kamerabilder auf und erlaubt jederzeit „no“ / „opt out“ zum sofortigen Löschen der eigenen Spur oder „#pause“ / „#resume“ für Off-the-Record.",
-      trust3_title: "24-h-Audiofenster & automatische Löschfristen",
-      trust3_desc:
-        "Isolierte Roh-Audioschnipsel werden nach 24 Stunden automatisch aus S3 gelöscht, Protokolle standardmäßig nach 30 Tagen – oder jederzeit sofort per 1-Klick-Löschung.",
-      trust4_title: "OIDC Single Sign-On & Mandantentrennung",
-      trust4_desc:
-        "Anbindung an Keycloak, Authentik, Dex, Zitadel, Microsoft Entra ID oder Google per OIDC PKCE. Jede Person sieht nur eigene und eingeladene Termine sowie explizite Read-Only-Freigabelinks.",
+        "Entwickelt für Betriebsräte, europäische Datenschutzanforderungen und regulierte Organisationen.",
+      trust1_t: "Keine Voiceprints und kein biometrisches Profiling",
+      trust1_d:
+        "Die Sprecherzuordnung basiert ausschließlich auf verifizierten WebRTC-Teilnehmermetadaten — niemals auf Stimmabdrücken oder Diarisierungs-Raten.",
+      trust2_t: "Fail-closed Kamera-Ausschluss & automatischer Ablauf",
+      trust2_d:
+        "Die Folienerfassung filtert strikt nach Screen-Share-Spuren und verwirft Webcams. Hörproben verfallen nach 24 Stunden, Keyframes nach 30 Tagen oder sofort per Einzel-Löschung.",
+      trust3_t: "Echtzeit-Einwilligung: #pause & opt out",
+      trust3_d:
+        "Jede Person kann per Chat Off-the-Record pausieren (#pause) oder dauerhaft widersprechen (no / opt out) — Audio, Text, Folien und RAG-Vektoren werden sofort bereinigt.",
+      trust4_t: "Volle Souveränität & dynamisches /privacy",
+      trust4_d:
+        "Läuft 100 % offline mit lokalem ASR, lokalem CPU-ONNX-RAG und Ollama — oder optional mit einem OpenAI-kompatiblen LLM-Endpunkt, der automatisch unter /privacy ausgewiesen wird.",
 
-      comp_th_crit: "Kriterium",
-      comp_th_cloud: "Kommerzielle Cloud-Notetaker",
-      comp_th_wortlaut: "wortlaut (Open Source & Self-Hosted)",
-      comp_r1_c: "Wo werden Audio & Zusammenfassungen verarbeitet?",
-      comp_r1_cloud: "Fremde Hersteller-Clouds & externe LLM-APIs",
-      comp_r1_w: "100 % auf eigener Infrastruktur (Qwen3-ASR + optional Ollama)",
-      comp_r2_c: "Wie werden Sprecher erkannt?",
-      comp_r2_cloud: "Misch-Audio + biometrische Stimmprofile (Voiceprints)",
-      comp_r2_w: "Isolierte WebRTC-Spuren vor dem Mix – keinerlei Stimmprofile",
-      comp_r6_c: "Widerspruch einzelner Teilnehmender",
-      comp_r6_cloud: "Alles-oder-nichts (Bot für alle entfernen oder Call verlassen)",
-      comp_r6_w: "„no“ / „opt out“ im Chat tippen – nur diese Person wird sofort ausgenommen",
-      comp_r3_c: "Kamera- & Bildschirmaufnahme",
-      comp_r3_cloud: "Häufig kompletter Video- & Bildschirm-Mitschnitt",
-      comp_r3_w: "Kameras strikt gesperrt; optional nur statische Standbilder aktiver Bildschirmfreigaben",
-      comp_r4_c: "Unterstützte Plattformen",
-      comp_r4_cloud: "Oft eingeschränkt oder pro Sitzplatz & Plattform lizenziert",
-      comp_r5_c: "Lizenz & Kosten",
-      comp_r5_cloud: "Monatliche Abo-Kosten pro Sitzplatz",
-      comp_r5_w: "Freie Open-Source-Software unter GNU AGPL-3.0",
+      cmp_col_feat: "Merkmal",
+      cmp_col_saas: "Typische Cloud-Meeting-Bots",
+      cmp_r1_k: "Hosting & Datensouveränität",
+      cmp_r1_w: "100 % Self-Hosted (Docker Compose oder Helm im eigenen Kubernetes-Cluster)",
+      cmp_r1_s: "Hersteller-Cloud, Auftragsverarbeiter & Drittland-Speicherung",
+      cmp_r2_k: "Sprecherzuordnung",
+      cmp_r2_w: "Getrennte Pre-Mix-WebRTC-Spuren · Keine Voiceprints",
+      cmp_r2_s: "Gemischtes Audio + biometrische Diarisierung",
+      cmp_r3_k: "Konferenzplattformen",
+      cmp_r3_w: "Google Meet, Microsoft Teams, Cisco Webex & Zoom parallel",
+      cmp_r3_s: "Oft eingeschränkt oder ohne Webex / eigene Kontrolle",
+      cmp_r4_k: "Screen-Share-Folien",
+      cmp_r4_w: "Stabile PNG-Keyframes · Fail-closed Kamera-Ausschluss · 1-Klick-Löschung",
+      cmp_r4_s: "Komplette MP4-Videoaufnahme inklusive Teilnehmerkameras",
+      cmp_r5_k: "KI-Suche & MCP",
+      cmp_r5_w: "Lokales CPU-ONNX-Hybrid-RAG + 8 OAuth-2.1-MCP-Tools (/mcp)",
+      cmp_r5_s: "Proprietäres Chatfenster oder kostenpflichtiges KI-Add-on",
+      cmp_r6_k: "Live-Teilnehmersteuerung",
+      cmp_r6_w: "1280×720-Horizon-Kachel + Chat #pause / #resume & no / opt out",
+      cmp_r6_s: "Nur manuelles Entfernen oder nachträgliche Lösch-Anfrage",
+      cmp_r7_k: "Protokoll-LLM-Backend",
+      cmp_r7_w: "Lokales Ollama oder jede OpenAI-kompatible API (vLLM, LiteLLM, OpenAI)",
+      cmp_r7_s: "Fest an die gehostete LLM-Pipeline des Anbieters gebunden",
+      cmp_r8_k: "Lizenz & Kosten",
+      cmp_r8_w: "GNU AGPL-3.0 · Kostenlos selbst hostbar, unbegrenzte Nutzende",
+      cmp_r8_s: "18–40 €+ pro Nutzer und Monat",
 
-      qs_kicker: "SELBST HOSTEN & SCHNELLSTART",
-      qs_title: "In wenigen Minuten auf dem eigenen Server oder Kubernetes-Cluster startklar",
-      qs_desc:
-        "Freie Software unter GNU AGPL-3.0 mit Multi-Arch-Images auf GHCR. Starte per gehärtetem Docker Compose auf einer VM, per 1-Befehl-Helm-Chart in Kubernetes oder direkt lokal.",
-      qs_tab1: "Docker Compose",
-      qs_tab2: "Helm (Kubernetes)",
-      qs_tab3: "Lokal / Entwicklung",
+      sh_title: "In wenigen Minuten auf eigenem Server oder im Kubernetes-Cluster",
+      sh_desc:
+        "Starte mit Docker Compose oder installiere Helm-Chart 0.2.0 direkt aus GHCR — mit gebündeltem PostgreSQL 17.12, RustFS S3, lokalem ONNX-RAG und optionaler NVIDIA-GPU-Beschleunigung.",
       copy_btn: "Kopieren",
-      copied_btn: "Kopiert!",
-      qs_code_compose: `# 1. Repository klonen & Zugangsdaten anlegen
-git clone https://github.com/mayflower/wortlaut.git && cd wortlaut
-cp .env.example .env
+      copied_btn: "Kopiert",
+      sh_stack_title: "v0.2.0 Architektur auf einen Blick",
+      st_k_core: "Basis-Stack",
+      st_v_core: "Python 3.14 (FastAPI), TypeScript/Playwright-Worker, PostgreSQL 17.12, RustFS S3",
+      st_k_asr: "ASR & RAG",
+      st_v_asr: "Qwen3-ASR 1.7B (30 Sprachen, GPU/CPU) + lokales CPU-INT8-ONNX (multilingual-e5-small-int8)",
+      st_k_llm: "Protokoll-LLM",
+      st_v_llm: "Lokales Ollama oder OpenAI-kompatible API (vLLM, LiteLLM, OpenAI) mit dynamischem /privacy",
+      st_k_auth: "Identität & Mail",
+      st_v_auth: "Dex OIDC SSO, OAuth-2.1-PKCE-MCP-Server, Google/M365-Kalender-OAuth2, Wortlaut.Cloud Robot",
+      st_k_lic: "Lizenz",
+      st_v_lic: "GNU AGPL-3.0 · Vollständig auditierbar, keine Telemetrie, kein Vendor-Lock-in",
+      sh_btn_repo: "Auf GitHub ansehen",
+      sh_btn_docs: "Deployment-Doku",
 
-# 2. Stack starten (non-root meeting, docker-socket-proxy, Postgres 17 & RustFS S3)
-docker compose up -d
+      foot_docs: "Dokumentation",
+      foot_copy: "Open Source unter GNU AGPL-3.0 · Entwickelt von Mayflower",
+    },
+  };
 
-# Empfohlen mit NVIDIA-GPU (Echtzeit-ASR mit Qwen3-ASR):
-docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
-# Web-UI: http://127.0.0.1:34601/ui · API-Docs: http://127.0.0.1:34601/docs`,
-      qs_code_helm: `# Schnelltest ohne Vorarbeiten (integriertes PostgreSQL 17 + RustFS S3):
-helm upgrade --install wortlaut oci://ghcr.io/mayflower/charts/wortlaut \\
-  --namespace wortlaut --create-namespace \\
-  --set host=wortlaut.local \\
-  --set bundled.enabled=true \\
-  --set asr.gpuCount=0 --set asr.allowCpu=true
-
-# Produktiv-Cluster (externe DB/S3, GPU-Node & OIDC SSO):
-helm upgrade --install wortlaut oci://ghcr.io/mayflower/charts/wortlaut \\
-  --namespace wortlaut --create-namespace \\
-  --set host=wortlaut.example.org \\
-  --set oidc.issuer=https://auth.example.org`,
-      qs_code_local: `# Option A: Direkt lokal auf Linux starten (ohne Kubernetes)
-./scripts/run-local.sh
-
-# Option B: Contributor-Setup & komplette Integrationstests (nur Docker nötig)
-make setup-local
-make test-local`,
-      qs_req_title: "Direkt einsatzbereit im Lieferumfang",
-      qs_req_1:
-        "Gehärtetes Docker Compose (isolierter Socket-Proxy, non-root) & OCI-Helm-Chart inkl. Zero-Dependency-Bundled-Modus (amd64 & arm64)",
-      qs_req_2:
-        "Qwen3-ASR 1.7B: 30 Sprachen (Qwen/Qwen3-ASR-1.7B-hf) – GPU empfohlen, CPU-Fallback integriert",
-      qs_req_3:
-        "PostgreSQL 17 & RustFS S3-Objektspeicher sowohl in Docker Compose als auch im Helm-Bundled-Modus fertig vorkonfiguriert",
-      qs_req_4:
-        "Optional: OIDC SSO, Google/M365-Kalender-Rückschreiben, lokale Ollama-Zusammenfassungen und DKIM-geprüfter IMAP/SMTP-Mailversand",
-      qs_oss_title: "100 % Open Source auf GitHub",
-      qs_oss_desc:
-        "Quellcode, Konfigurationsreferenz, OCI-Helm-Chart, Architekturdokumentation und Sicherheitsrichtlinie stehen frei unter der GNU Affero General Public License v3.0 bereit.",
-      qs_oss_btn: "Zum GitHub-Repository →",
-
-      footer_tagline:
-        "Sprechergenaue, selbst gehostete Wortprotokolle für Google Meet, Microsoft Teams, Cisco Webex und Zoom.",
-      footer_docs: "Konfiguration",
-      footer_security: "Sicherheit",
-      footer_copy: "© 2026 Mayflower GmbH · Freie Software unter GNU AGPL-3.0 · wortlaut.cloud"
-    }
+  const RAG_DEMO = {
+    en: {
+      helm: [
+        {
+          title: "Q2 Architecture & Release Review",
+          kind: "decision",
+          ts: "14:04",
+          score: "RRF 0.94",
+          snippet:
+            "Ship Helm chart 0.2.0 with 1Gi request / 4Gi memory limit so local CPU INT8 ONNX RAG backfills cleanly without throttling.",
+        },
+        {
+          title: "Kubernetes Upgrade Sync",
+          kind: "action_item",
+          ts: "09:42",
+          score: "RRF 0.87",
+          snippet:
+            "Upgrade bundled PostgreSQL image to 17.12-bookworm and Python runtime to 3.14-slim-trixie before tagging 0.2.0.",
+        },
+      ],
+      otr: [
+        {
+          title: "Works Council & Privacy Alignment",
+          kind: "decision",
+          ts: "11:18",
+          score: "RRF 0.96",
+          snippet:
+            "Typing #pause in chat zeroes live PCM audio in RAM, halts keyframe capture, and switches the 1280×720 Horizon tile to amber Off-the-Record mode.",
+        },
+        {
+          title: "Q2 Architecture & Release Review",
+          kind: "transcript",
+          ts: "14:15",
+          score: "RRF 0.83",
+          snippet:
+            "Resumed with #resume after the confidential segment; temporary verification snippets auto-expire after 24 hours.",
+        },
+      ],
+      slides: [
+        {
+          title: "Q2 Architecture & Release Review",
+          kind: "slide_keyframe",
+          ts: "14:03",
+          score: "RRF 0.95",
+          snippet:
+            "Keyframe #1 (1280×720 PNG · camera excluded): Hybrid RAG & MCP topology diagram — call get_keyframe() to inspect native ImageContent.",
+        },
+        {
+          title: "Platform Security Review",
+          kind: "slide_keyframe",
+          ts: "16:27",
+          score: "RRF 0.85",
+          snippet:
+            "Keyframe #4 (1280×720 PNG · share track verified): OAuth 2.1 PKCE consent flow and revocable MCP client grants.",
+        },
+      ],
+    },
+    de: {
+      helm: [
+        {
+          title: "Q2 Architektur- & Release-Review",
+          kind: "decision",
+          ts: "14:04",
+          score: "RRF 0.94",
+          snippet:
+            "Helm-Chart 0.2.0 mit 1Gi Request / 4Gi Memory-Limit ausrollen, damit lokales CPU-INT8-ONNX-RAG sauber im Hintergrund indexiert.",
+        },
+        {
+          title: "Kubernetes-Upgrade-Sync",
+          kind: "action_item",
+          ts: "09:42",
+          score: "RRF 0.87",
+          snippet:
+            "Gebündeltes PostgreSQL auf 17.12-bookworm und Python-Runtime auf 3.14-slim-trixie vor dem 0.2.0-Tag aktualisieren.",
+        },
+      ],
+      otr: [
+        {
+          title: "Abstimmung Betriebsrat & Datenschutz",
+          kind: "decision",
+          ts: "11:18",
+          score: "RRF 0.96",
+          snippet:
+            "#pause im Chat nullt laufendes PCM-Audio im RAM, stoppt Keyframes und schaltet die 1280×720-Horizon-Kachel in den bernsteinfarbenen Off-the-Record-Modus.",
+        },
+        {
+          title: "Q2 Architektur- & Release-Review",
+          kind: "transcript",
+          ts: "14:15",
+          score: "RRF 0.83",
+          snippet:
+            "Nach dem vertraulichen Abschnitt per #resume fortgesetzt; 24-Stunden-Hörproben laufen automatisch ab.",
+        },
+      ],
+      slides: [
+        {
+          title: "Q2 Architektur- & Release-Review",
+          kind: "slide_keyframe",
+          ts: "14:03",
+          score: "RRF 0.95",
+          snippet:
+            "Keyframe #1 (1280×720 PNG · Kamera ausgeschlossen): Hybrid-RAG & MCP-Topologie — via get_keyframe() direkt als natives ImageContent abrufbar.",
+        },
+        {
+          title: "Plattform-Sicherheitsreview",
+          kind: "slide_keyframe",
+          ts: "16:27",
+          score: "RRF 0.85",
+          snippet:
+            "Keyframe #4 (1280×720 PNG · Freigabespur verifiziert): OAuth-2.1-PKCE-Consent-Flow und widerrufbare MCP-Grants.",
+        },
+      ],
+    },
   };
 
   let currentLang = "en";
+  let currentRagQuery = "helm";
+  let horizonPaused = false;
 
   function detectInitialLang() {
-    const params = new URLSearchParams(window.location.search);
-    const qLang = params.get("lang");
-    if (qLang === "en" || qLang === "de") return qLang;
+    const urlLang = new URLSearchParams(window.location.search).get("lang");
+    if (urlLang === "de" || urlLang === "en") return urlLang;
     try {
-      const saved = localStorage.getItem("wortlaut_cloud_lang");
-      if (saved === "en" || saved === "de") return saved;
+      const saved = localStorage.getItem("wortlaut_site_lang");
+      if (saved === "de" || saved === "en") return saved;
     } catch (_) {}
-    const browserLang = (navigator.language || (navigator.languages && navigator.languages[0]) || "").toLowerCase();
-    if (browserLang.startsWith("de")) return "de";
-    return "en";
+    const navLang = (navigator.language || "en").toLowerCase();
+    return navLang.startsWith("de") ? "de" : "en";
   }
 
-  function applyLanguage(lang) {
+  function detectInitialTheme() {
+    const urlTheme = new URLSearchParams(window.location.search).get("theme");
+    if (urlTheme === "dark" || urlTheme === "light") return urlTheme;
+    try {
+      const saved = localStorage.getItem("wortlaut_site_theme");
+      if (saved === "dark" || saved === "light") return saved;
+    } catch (_) {}
+    return "light";
+  }
+
+  function applyTheme(theme) {
+    const resolved = theme === "dark" ? "dark" : "light";
+    document.documentElement.setAttribute("data-theme", resolved);
+    const sunIcon = document.getElementById("theme-icon-sun");
+    const moonIcon = document.getElementById("theme-icon-moon");
+    if (sunIcon && moonIcon) {
+      sunIcon.style.display = resolved === "dark" ? "none" : "block";
+      moonIcon.style.display = resolved === "dark" ? "block" : "none";
+    }
+    try {
+      localStorage.setItem("wortlaut_site_theme", resolved);
+    } catch (_) {}
+  }
+
+  function renderRagResults() {
+    const container = document.getElementById("rag-results-list");
+    if (!container) return;
+    const hits = (RAG_DEMO[currentLang] && RAG_DEMO[currentLang][currentRagQuery]) || [];
+    container.textContent = "";
+
+    hits.forEach((hit) => {
+      const row = document.createElement("div");
+      row.className = "ledger-row ledger-row-col";
+
+      const head = document.createElement("div");
+      head.className = "rag-hit-head";
+
+      const left = document.createElement("span");
+      left.style.display = "inline-flex";
+      left.style.alignItems = "center";
+      left.style.gap = "8px";
+      left.style.flexWrap = "wrap";
+
+      const title = document.createElement("span");
+      title.className = "rag-hit-title";
+      title.textContent = hit.title;
+
+      const kind = document.createElement("span");
+      kind.className = "rag-kind-tag";
+      kind.textContent = hit.kind;
+
+      left.appendChild(title);
+      left.appendChild(kind);
+
+      const right = document.createElement("span");
+      right.style.display = "inline-flex";
+      right.style.alignItems = "center";
+      right.style.gap = "8px";
+
+      const ts = document.createElement("span");
+      ts.className = "wl-citation-chip";
+      ts.textContent = hit.ts;
+
+      const score = document.createElement("span");
+      score.className = "rag-score";
+      score.textContent = hit.score;
+
+      right.appendChild(ts);
+      right.appendChild(score);
+
+      head.appendChild(left);
+      head.appendChild(right);
+
+      const snippet = document.createElement("p");
+      snippet.className = "rag-hit-snippet";
+      snippet.textContent = hit.snippet;
+
+      row.appendChild(head);
+      row.appendChild(snippet);
+      container.appendChild(row);
+    });
+  }
+
+  function syncHorizonStatus() {
+    const tile = document.getElementById("horizon-tile-preview");
+    const statusText = document.getElementById("ht-status-text");
+    const btnLive = document.getElementById("ht-btn-live");
+    const btnPause = document.getElementById("ht-btn-pause");
+    if (!tile || !statusText || !btnLive || !btnPause) return;
+
+    tile.classList.toggle("is-paused", horizonPaused);
+    btnLive.classList.toggle("active-live", !horizonPaused);
+    btnPause.classList.toggle("active-pause", horizonPaused);
+    btnLive.setAttribute("aria-pressed", String(!horizonPaused));
+    btnPause.setAttribute("aria-pressed", String(horizonPaused));
+
+    const dict = I18N[currentLang];
+    statusText.textContent = horizonPaused ? dict.ht_status_paused : dict.ht_status_live;
+  }
+
+  function applyLang(lang) {
     currentLang = lang === "de" ? "de" : "en";
     const dict = I18N[currentLang];
     document.documentElement.lang = currentLang;
-    document.title = dict.meta_title;
+    document.title = dict.page_title;
+
     const metaDesc = document.querySelector('meta[name="description"]');
     if (metaDesc) metaDesc.setAttribute("content", dict.meta_desc);
 
     document.querySelectorAll("[data-i18n]").forEach((el) => {
       const key = el.getAttribute("data-i18n");
-      if (dict[key] !== undefined) el.textContent = dict[key];
+      if (key && dict[key] !== undefined) {
+        el.textContent = dict[key];
+      }
     });
 
     document.querySelectorAll("[data-i18n-html]").forEach((el) => {
       const key = el.getAttribute("data-i18n-html");
-      if (dict[key] !== undefined) el.innerHTML = dict[key];
+      if (key && dict[key] !== undefined) {
+        el.innerHTML = dict[key];
+      }
     });
 
     document.querySelectorAll(".lang-btn").forEach((btn) => {
-      btn.classList.toggle("active", btn.getAttribute("data-lang") === currentLang);
+      const active = btn.getAttribute("data-lang") === currentLang;
+      btn.classList.toggle("active", active);
+      btn.setAttribute("aria-pressed", String(active));
     });
 
     const extToggle = document.getElementById("demo-external-toggle");
@@ -514,16 +746,31 @@ make test-local`,
       extToggle.textContent = isOff ? dict.toggle_off : dict.toggle_on;
     }
 
+    renderRagResults();
+    syncHorizonStatus();
+
     try {
-      localStorage.setItem("wortlaut_cloud_lang", currentLang);
+      localStorage.setItem("wortlaut_site_lang", currentLang);
     } catch (_) {}
   }
 
   function initLanguageSwitcher() {
     document.querySelectorAll(".lang-btn").forEach((btn) => {
-      btn.addEventListener("click", () => applyLanguage(btn.getAttribute("data-lang")));
+      btn.addEventListener("click", () => {
+        applyLang(btn.getAttribute("data-lang"));
+      });
     });
-    applyLanguage(detectInitialLang());
+    applyLang(detectInitialLang());
+  }
+
+  function initThemeSwitcher() {
+    applyTheme(detectInitialTheme());
+    const btn = document.getElementById("theme-toggle");
+    if (!btn) return;
+    btn.addEventListener("click", () => {
+      const cur = document.documentElement.getAttribute("data-theme") || "light";
+      applyTheme(cur === "dark" ? "light" : "dark");
+    });
   }
 
   function initFeatureTabs() {
@@ -531,9 +778,15 @@ make test-local`,
     const panels = Array.from(document.querySelectorAll(".feature-panel"));
     buttons.forEach((btn, idx) => {
       btn.addEventListener("click", () => {
-        const target = btn.getAttribute("data-ftab");
-        buttons.forEach((b) => b.classList.toggle("active", b === btn));
-        panels.forEach((p) => p.classList.toggle("active", p.getAttribute("data-fpanel") === target));
+        const target = btn.getAttribute("data-tab");
+        buttons.forEach((b) => {
+          const isMatch = b === btn;
+          b.classList.toggle("active", isMatch);
+          b.setAttribute("aria-selected", String(isMatch));
+        });
+        panels.forEach((p) => {
+          p.classList.toggle("active", p.getAttribute("data-panel") === target);
+        });
       });
       btn.addEventListener("keydown", (ev) => {
         if (ev.key !== "ArrowRight" && ev.key !== "ArrowLeft") return;
@@ -545,13 +798,80 @@ make test-local`,
     });
   }
 
+  function initRagDemo() {
+    const pills = Array.from(document.querySelectorAll("[data-rag-query]"));
+    pills.forEach((pill) => {
+      pill.addEventListener("click", () => {
+        currentRagQuery = pill.getAttribute("data-rag-query") || "helm";
+        pills.forEach((p) => p.classList.toggle("active", p === pill));
+        renderRagResults();
+      });
+    });
+    renderRagResults();
+  }
+
+  function initHorizonDemo() {
+    const btnLive = document.getElementById("ht-btn-live");
+    const btnPause = document.getElementById("ht-btn-pause");
+    if (!btnLive || !btnPause) return;
+    btnLive.addEventListener("click", () => {
+      horizonPaused = false;
+      syncHorizonStatus();
+    });
+    btnPause.addEventListener("click", () => {
+      horizonPaused = true;
+      syncHorizonStatus();
+    });
+    syncHorizonStatus();
+  }
+
   function initCalendarToggle() {
     const extToggle = document.getElementById("demo-external-toggle");
     if (!extToggle) return;
     extToggle.addEventListener("click", () => {
       const isOff = extToggle.classList.toggle("off");
+      extToggle.setAttribute("aria-pressed", String(!isOff));
       const dict = I18N[currentLang];
       extToggle.textContent = isOff ? dict.toggle_off : dict.toggle_on;
+    });
+  }
+
+  function initSpeakerFilterAndCitations() {
+    const pills = Array.from(document.querySelectorAll("[data-speaker-filter]"));
+    const turns = Array.from(document.querySelectorAll("[data-speaker-turn]"));
+    const citeButtons = Array.from(document.querySelectorAll("[data-cite-turn]"));
+
+    function applyFilter(target) {
+      pills.forEach((p) => p.classList.toggle("active", p.getAttribute("data-speaker-filter") === target));
+      turns.forEach((t) => {
+        const speaker = t.getAttribute("data-speaker-turn");
+        const match = target === "all" || speaker === target;
+        t.style.display = match ? "" : "none";
+      });
+    }
+
+    pills.forEach((pill) => {
+      pill.addEventListener("click", () => {
+        applyFilter(pill.getAttribute("data-speaker-filter") || "all");
+      });
+    });
+
+    citeButtons.forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const turnId = btn.getAttribute("data-cite-turn");
+        if (!turnId) return;
+        applyFilter("all");
+        document.querySelectorAll(".wl-turn-row").forEach((row) => {
+          row.classList.toggle("wl-turn-cited", row.id === turnId);
+        });
+        document.querySelectorAll(".wl-citation-chip[data-cite-turn]").forEach((chip) => {
+          chip.classList.toggle("active", chip.getAttribute("data-cite-turn") === turnId);
+        });
+        const targetRow = document.getElementById(turnId);
+        if (targetRow) {
+          targetRow.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        }
+      });
     });
   }
 
@@ -583,28 +903,15 @@ make test-local`,
     });
   }
 
-  function initSpeakerFilterDemo() {
-    const pills = Array.from(document.querySelectorAll("[data-speaker-filter]"));
-    const turns = Array.from(document.querySelectorAll("[data-speaker-turn]"));
-    if (!pills.length || !turns.length) return;
-    pills.forEach((pill) => {
-      pill.addEventListener("click", () => {
-        const target = pill.getAttribute("data-speaker-filter");
-        pills.forEach((p) => p.classList.toggle("active", p === pill));
-        turns.forEach((t) => {
-          const match = target === "all" || t.getAttribute("data-speaker-turn") === target;
-          t.style.display = match ? "" : "none";
-        });
-      });
-    });
-  }
-
   document.addEventListener("DOMContentLoaded", () => {
+    initThemeSwitcher();
     initLanguageSwitcher();
     initFeatureTabs();
+    initRagDemo();
+    initHorizonDemo();
     initCalendarToggle();
+    initSpeakerFilterAndCitations();
     initCodeTabs();
     initCopyButtons();
-    initSpeakerFilterDemo();
   });
 })();
