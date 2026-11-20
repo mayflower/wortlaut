@@ -823,6 +823,19 @@ export function App() {
           }
           calendarConnectedCount={calendarConnections.length}
           glossaryCount={glossaryQuery.data?.effective_count || 0}
+          glossaryTooltip={
+            glossaryQuery.data
+              ? glossaryQuery.data.has_personal_scope
+                ? tr(
+                    `${glossaryQuery.data.personal_entries?.length || 0} persönlich · ${glossaryQuery.data.global_entries?.length || 0} Team`,
+                    `${glossaryQuery.data.personal_entries?.length || 0} personal · ${glossaryQuery.data.global_entries?.length || 0} team`
+                  )
+                : tr(
+                    `${glossaryQuery.data.global_entries?.length || 0} Team-Begriffe`,
+                    `${glossaryQuery.data.global_entries?.length || 0} team terms`
+                  )
+              : undefined
+          }
           mcpGrantCount={mcpGrantsQuery.data?.grants.length || 0}
           onOpenNewRecording={() => handleOpenNewModal('link')}
           onOpenAuthDialog={() => setAuthDialogOpen(true)}

@@ -14,6 +14,7 @@ export type ProcessingState = 'pending' | 'processing' | 'completed' | 'failed';
 
 export interface RecordingQualitySummary {
   durable_sample_count: number;
+  duration_seconds?: number;
   has_audio_gaps: boolean;
   capture_end_unknown: boolean;
   attribution_unknown: boolean;
@@ -133,6 +134,7 @@ export interface RecordingDetail extends RecordingSummary {
   ingest: {
     durable_sample_count: number;
     durable_chunk_count: number;
+    duration_seconds?: number;
     last_audio_activity: string | null;
   };
   asr: {
@@ -147,8 +149,10 @@ export interface RecordingDetail extends RecordingSummary {
 
 export interface SourceSummary {
   provider_source_id: string;
+  provider_source_ids?: string[];
   csi: number | null;
   signaled_participant_id: string | null;
+  signaled_participant_ids?: string[];
   participant_name: string | null;
   speaker_label: string;
   accepted_seconds: number;

@@ -1348,6 +1348,10 @@ export function formatWallClockTime(
 }
 
 export function getSourceFilterKey(src: SourceSummary): string {
+  const pids = (src.signaled_participant_ids || []).filter(Boolean);
+  if (pids.length > 1) {
+    return `participants:${pids.join(',')}`;
+  }
   if (src.signaled_participant_id) {
     return `participant:${src.signaled_participant_id}`;
   }
@@ -1361,6 +1365,13 @@ export function matchesSourceFilter(
   seg: TranscriptSegment,
   filterKey: string
 ): boolean {
+  if (filterKey.startsWith('participants:')) {
+    const targetPids = new Set(
+      filterKey.slice('participants:'.length).split(',').filter(Boolean)
+    );
+    const segPid = seg.participant_id || seg.speaker_id;
+    return Boolean(segPid && targetPids.has(segPid));
+  }
   if (filterKey.startsWith('participant:')) {
     const targetPid = filterKey.slice('participant:'.length);
     const segPid = seg.participant_id || seg.speaker_id;
@@ -1379,6 +1390,12 @@ export function matchesKeyframeSourceFilter(
   filterKey: string
 ): boolean {
   if (!filterKey || filterKey === 'all') return true;
+  if (filterKey.startsWith('participants:')) {
+    const targetPids = new Set(
+      filterKey.slice('participants:'.length).split(',').filter(Boolean)
+    );
+    return Boolean(kf.participant_id && targetPids.has(kf.participant_id));
+  }
   if (filterKey.startsWith('participant:')) {
     return kf.participant_id === filterKey.slice('participant:'.length);
   }

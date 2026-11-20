@@ -1152,6 +1152,42 @@ def prometheus_metrics(db: Db):
     )
 
 
+def _recording_audio_duration_seconds(
+    stream_rows: list[tuple[dict | None, int | None, int]],
+) -> float:
+    """Compute wall-clock audio span in seconds across isolated streams (never summing tracks)."""
+    origins: list[datetime] = []
+    ends: list[datetime] = []
+    fallback_max_sec = 0.0
+    for contract_raw, final_sample, last_chunk_end in stream_rows:
+        end_sample = final_sample if final_sample is not None else int(last_chunk_end or 0)
+        if end_sample <= 0:
+            continue
+        dur_sec = end_sample / RATE
+        if dur_sec > fallback_max_sec:
+            fallback_max_sec = dur_sec
+        contract = contract_raw if isinstance(contract_raw, dict) else {}
+        origin_raw = contract.get("session_utc_origin")
+        if isinstance(origin_raw, str) and origin_raw:
+            try:
+                origin_dt = datetime.fromisoformat(origin_raw)
+            except ValueError:
+                continue
+            mono_origin = contract.get("monotonic_origin_ms")
+            sess_mono = contract.get("session_monotonic_origin_ms")
+            offset_sec = (
+                (float(mono_origin) - float(sess_mono)) / 1000.0
+                if isinstance(mono_origin, (int, float))
+                and isinstance(sess_mono, (int, float))
+                else 0.0
+            )
+            origins.append(origin_dt)
+            ends.append(origin_dt + timedelta(seconds=max(0.0, offset_sec) + dur_sec))
+    if origins and ends:
+        return round(max(0.0, (max(ends) - min(origins)).total_seconds()), 1)
+    return round(fallback_max_sec, 1)
+
+
 @app.get("/v1/recordings")
 def list_recordings(
     db: Db,
@@ -1224,6 +1260,27 @@ def list_recordings(
             .where(Attempt.recording_id.in_(identifiers))
             .group_by(Attempt.recording_id)
         )
+    }
+    stream_spans_by_rec: dict[uuid.UUID, list[tuple[dict | None, int | None, int]]] = {}
+    if identifiers:
+        for rec_id_row, contract_row, final_sample_row, last_end_row in db.execute(
+            select(
+                Attempt.recording_id,
+                AudioStream.contract,
+                AudioStream.final_sample,
+                func.coalesce(func.max(AudioChunk.start_sample + AudioChunk.sample_count), 0),
+            )
+            .join(AudioStream, AudioStream.attempt_id == Attempt.id)
+            .outerjoin(AudioChunk, AudioChunk.stream_id == AudioStream.id)
+            .where(Attempt.recording_id.in_(identifiers))
+            .group_by(Attempt.recording_id, AudioStream.id)
+        ):
+            stream_spans_by_rec.setdefault(rec_id_row, []).append(
+                (contract_row, final_sample_row, int(last_end_row or 0))
+            )
+    duration_by_rec = {
+        rid: _recording_audio_duration_seconds(rows_for_rec)
+        for rid, rows_for_rec in stream_spans_by_rec.items()
     }
     sources = dict(
         db.execute(
@@ -1339,6 +1396,7 @@ def list_recordings(
                     "status": status,
                     "no_audio_received": not samples,
                     "durable_sample_count": samples,
+                    "duration_seconds": duration_by_rec.get(recording.id, 0.0),
                     "attribution_unknown": bool(unknown),
                     "capture_end_unknown": sources.get(recording.id, True),
                     "incomplete_drain": bool(incomplete_drain),
@@ -1474,9 +1532,16 @@ def get_recording(
         .join(AudioStream)
         .where(AudioChunk.stream_id.in_([s.id for s in streams]))
     ).one()
+    duration_seconds = _recording_audio_duration_seconds(
+        [
+            (s.contract, s.final_sample, int(a_info.get("last_durable_sample") or 0))
+            for s, a_info in zip(streams, result["audio"], strict=True)
+        ]
+    )
     result["ingest"] = {
         "durable_sample_count": samples,
         "durable_chunk_count": chunks,
+        "duration_seconds": duration_seconds,
         "last_audio_activity": last_audio,
     }
     counts = {status: count for status, count, _, _ in jobs}
@@ -1532,7 +1597,7 @@ def get_recording(
         "max_audio_level": round(max_audio_level, 3),
         "active_speakers": active_speakers[:4],
         "active_streams": diag.get("streams", 0),
-        "audio_seconds": round(samples / RATE, 1),
+        "audio_seconds": duration_seconds,
         "active_audio_seconds": round(diag.get("active_audio_samples", 0) / RATE, 1),
         "bound_receivers": sum(1 for r in receivers if r.get("signaled_participant_id")),
         "bound_named_receivers": sum(

@@ -1086,6 +1086,84 @@ def export_data(
             if isinstance(seg.get("language"), str) and seg.get("language")
         )
     )
+    live_active_sources: list[dict] = []
+    if recording.participation == "capturing" and attempts:
+        latest_diag = attempts[-1].diagnostics if attempts[-1].diagnostics else {}
+        if not bool((latest_diag.get("participant_sources") or {}).get("paused")):
+            for rcv in latest_diag.get("receiver_sources", []):
+                lvl = (rcv.get("rtp_stats") or {}).get("audio_level")
+                if not (isinstance(lvl, (int, float)) and lvl >= 0.01):
+                    continue
+                r_pid = rcv.get("signaled_participant_id")
+                r_sid = rcv.get("provider_source_id") or ""
+                r_name = rcv.get("participant_name") or (
+                    participant_names.get(r_pid) if r_pid else None
+                )
+                if not (r_name or r_pid):
+                    continue
+                r_label = (
+                    resolved_speaker_overrides.get(str(r_pid))
+                    if r_pid and str(r_pid) in resolved_speaker_overrides
+                    else (
+                        resolved_speaker_overrides.get(str(r_name))
+                        if r_name and str(r_name) in resolved_speaker_overrides
+                        else (r_name or r_pid or r_sid)
+                    )
+                )
+                live_active_sources.append(
+                    {
+                        "provider_source_id": r_sid,
+                        "signaled_participant_id": str(r_pid) if r_pid else None,
+                        "participant_name": str(r_name).strip() if r_name else None,
+                        "speaker_label": str(r_label).strip(),
+                        "csi": rcv.get("csi"),
+                        "source_kind": rcv.get("source_kind") or "speaker",
+                    }
+                )
+    if recording.processing not in ("completed", "failed") and streams:
+        stream_by_id = {s.id: s for s in streams}
+        for pending_job in db.scalars(
+            select(AsrJob).where(
+                AsrJob.stream_id.in_([s.id for s in streams]),
+                AsrJob.status.in_(("pending", "processing")),
+            )
+        ):
+            jb = pending_job.binding if isinstance(pending_job.binding, dict) else {}
+            st = stream_by_id.get(pending_job.stream_id)
+            st_c = st.contract if st and isinstance(st.contract, dict) else {}
+            j_pid = (
+                jb.get("participant_id")
+                or jb.get("speaker_id")
+                or st_c.get("participant_id")
+                or st_c.get("speaker_id")
+            )
+            j_name = (
+                jb.get("participant_name")
+                or (participant_names.get(j_pid) if j_pid else None)
+                or st_c.get("participant_name")
+            )
+            j_sid = jb.get("provider_source_id") or st_c.get("provider_source_id") or ""
+            if not (j_name or j_pid):
+                continue
+            j_label = (
+                resolved_speaker_overrides.get(str(j_pid))
+                if j_pid and str(j_pid) in resolved_speaker_overrides
+                else (
+                    resolved_speaker_overrides.get(str(j_name))
+                    if j_name and str(j_name) in resolved_speaker_overrides
+                    else (j_name or j_pid or j_sid)
+                )
+            )
+            live_active_sources.append(
+                {
+                    "provider_source_id": str(j_sid),
+                    "signaled_participant_id": str(j_pid) if j_pid else None,
+                    "participant_name": str(j_name).strip() if j_name else None,
+                    "speaker_label": str(j_label).strip(),
+                    "csi": None,
+                    "source_kind": jb.get("source_kind") or st_c.get("source_kind") or "speaker",
+                }
+            )
     return {
         "recording_id": str(recording.id),
         "provider": recording.provider,
@@ -1192,6 +1270,7 @@ def export_data(
             participant_names,
             bind_controls,
             opted_out_norm,
+            live_active_sources=live_active_sources,
         ),
         "segments": segments,
         "keyframes": keyframes,
@@ -1230,6 +1309,36 @@ def _format_markdown_source_ids(src: dict, recording_id: str | None = None) -> s
     return ", ".join(raw_ids)
 
 
+_GENERIC_SPEAKER_PREFIXES = (
+    "quelle ",
+    "sprecher ",
+    "teilnehmer ",
+    "speaker ",
+    "participant ",
+    "source ",
+    "freigabe-audio",
+    "screen share",
+)
+
+
+def _is_generic_speaker_label(
+    label: str | None,
+    pid: str | None = None,
+    sid: str | None = None,
+) -> bool:
+    clean = " ".join(str(label or "").split())
+    if not clean:
+        return True
+    if pid and clean == str(pid).strip():
+        return True
+    if sid and clean == str(sid).strip():
+        return True
+    low = clean.lower()
+    if low in ("unbekannt", "unknown", "sprecher", "teilnehmer", "speaker", "participant"):
+        return True
+    return low.startswith(_GENERIC_SPEAKER_PREFIXES)
+
+
 def _build_sources_summary(
     attempts,
     streams,
@@ -1238,6 +1347,7 @@ def _build_sources_summary(
     participant_names,
     bind_controls=(),
     opted_out_norm: set[str] | None = None,
+    live_active_sources=(),
 ):
     receiver_by_id = {}
     for attempt in attempts:
@@ -1365,6 +1475,7 @@ def _build_sources_summary(
                         "provider_source_ids": [sid],
                         "participant_name": eff_name,
                         "signaled_participant_id": eff_sig_id,
+                        "signaled_participant_ids": [eff_sig_id] if eff_sig_id else [],
                         "speaker_label": seg_lbl or eff_name or eff_sig_id or sid,
                         "csi": rcv.get("csi"),
                         "source_kind": kind,
@@ -1384,6 +1495,7 @@ def _build_sources_summary(
                     "provider_source_ids": [sid],
                     "participant_name": part_name,
                     "signaled_participant_id": sig_id,
+                    "signaled_participant_ids": [str(sig_id)] if sig_id else [],
                     "speaker_label": part_name or sig_id or sid,
                     "csi": rcv.get("csi"),
                     "source_kind": kind,
@@ -1394,41 +1506,86 @@ def _build_sources_summary(
                     "sample_text": None,
                 }
             )
+    for live_src in live_active_sources or ():
+        l_sid = str(live_src.get("provider_source_id") or "")
+        l_pid = live_src.get("signaled_participant_id")
+        l_pid_str = str(l_pid) if l_pid else None
+        l_name = live_src.get("participant_name")
+        l_lbl = str(live_src.get("speaker_label") or l_name or l_pid_str or l_sid)
+        summary.append(
+            {
+                "provider_source_id": l_sid,
+                "provider_source_ids": [l_sid] if l_sid else [],
+                "participant_name": l_name,
+                "signaled_participant_id": l_pid_str,
+                "signaled_participant_ids": [l_pid_str] if l_pid_str else [],
+                "speaker_label": l_lbl,
+                "csi": live_src.get("csi"),
+                "source_kind": live_src.get("source_kind") or "speaker",
+                "segment_count": 0,
+                "speech_seconds": 0.0,
+                "accepted_seconds": 0.0,
+                "first_start": None,
+                "sample_text": None,
+            }
+        )
     merged: list[dict] = []
     by_participant: dict[tuple[str, str], dict] = {}
     for item in summary:
         pid = item.get("signaled_participant_id")
-        lbl = str(item.get("speaker_label") or "")
-        merge_key: tuple[str, str] | None = None
+        sid = item.get("provider_source_id")
+        lbl = " ".join(str(item.get("speaker_label") or "").split())
+        p_name = " ".join(str(item.get("participant_name") or "").split())
+        resolved_name = (
+            lbl
+            if not _is_generic_speaker_label(lbl, pid, sid)
+            else (p_name if not _is_generic_speaker_label(p_name, pid, sid) else "")
+        )
+        candidate_keys: list[tuple[str, str]] = []
+        if resolved_name:
+            candidate_keys.append(("name", resolved_name.casefold()))
         if pid:
-            merge_key = ("pid", f"{pid}\0{lbl}" if item.get("segment_count", 0) > 0 else str(pid))
-        elif (
-            item.get("segment_count", 0) > 0
-            and lbl
-            and not lbl.lower().startswith(("quelle ", "sprecher "))
-        ):
-            merge_key = ("label", lbl)
-        if merge_key and merge_key in by_participant:
-            existing = by_participant[merge_key]
+            candidate_keys.append(("pid", str(pid)))
+        existing = next(
+            (by_participant[k] for k in candidate_keys if k in by_participant),
+            None,
+        )
+        if existing is not None:
             existing["segment_count"] += item["segment_count"]
             existing["speech_seconds"] = round(
                 existing["speech_seconds"] + item["speech_seconds"], 2
             )
+            if item["first_start"] is not None and (
+                existing["first_start"] is None or item["first_start"] < existing["first_start"]
+            ):
+                existing["first_start"] = item["first_start"]
             for src_id in item.get("provider_source_ids") or []:
-                if src_id not in existing["provider_source_ids"]:
+                if src_id and src_id not in existing["provider_source_ids"]:
                     existing["provider_source_ids"].append(src_id)
+            if not existing.get("provider_source_id") and item.get("provider_source_id"):
+                existing["provider_source_id"] = item["provider_source_id"]
+            for p_id in item.get("signaled_participant_ids") or []:
+                if p_id and p_id not in existing["signaled_participant_ids"]:
+                    existing["signaled_participant_ids"].append(p_id)
+            if not existing.get("signaled_participant_id") and pid:
+                existing["signaled_participant_id"] = pid
             if not existing.get("participant_name") and item.get("participant_name"):
                 existing["participant_name"] = item["participant_name"]
+            if (
+                existing.get("source_kind") == "screen_share"
+                and item.get("source_kind") == "speaker"
+            ):
+                existing["source_kind"] = "speaker"
             cand_sample = _pick_representative_sample_text(
                 [existing.get("sample_text") or "", item.get("sample_text") or ""]
             )
             if cand_sample:
                 existing["sample_text"] = cand_sample
+            for k in candidate_keys:
+                by_participant.setdefault(k, existing)
         else:
-            if merge_key:
-                by_participant[merge_key] = item
-                if pid and item.get("segment_count", 0) > 0:
-                    by_participant.setdefault(("pid", str(pid)), item)
+            for k in candidate_keys:
+                by_participant[k] = item
             merged.append(item)
     if opted_out_norm:
         for item in merged:

@@ -315,9 +315,17 @@ export function RecordingSidebar({
     return { hasError, reasonHint };
   };
 
-  const formatRowDuration = (row: RecordingSummary): string | null => {
+  const getRowAudioSeconds = (row: RecordingSummary): number => {
+    const dur = row.quality?.duration_seconds;
+    if (typeof dur === 'number' && Number.isFinite(dur) && dur > 0) {
+      return Math.round(dur);
+    }
     const samples = row.quality?.durable_sample_count || 0;
-    const audioSec = Math.round(samples / 16000);
+    return Math.round(samples / 16000);
+  };
+
+  const formatRowDuration = (row: RecordingSummary): string | null => {
+    const audioSec = getRowAudioSeconds(row);
     if (audioSec > 0) return formatDurationHuman(audioSec);
     const plannedMin = Math.max(
       0,
@@ -400,8 +408,7 @@ export function RecordingSidebar({
       header: tr('Dauer', 'Duration'),
       width: pixel(105),
       renderCell: (row) => {
-        const samples = row.quality?.durable_sample_count || 0;
-        const audioSec = Math.round(samples / 16000);
+        const audioSec = getRowAudioSeconds(row);
         if (audioSec > 0) {
           return (
             <Text

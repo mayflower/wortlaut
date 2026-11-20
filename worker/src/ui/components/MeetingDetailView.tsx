@@ -470,12 +470,28 @@ export function MeetingDetailView({
   const sampleSec = Math.round(
     (recording.ingest?.durable_sample_count || 0) / 16000
   );
+  const timelineDurationSec = (() => {
+    const ingestDur = recording.ingest?.duration_seconds;
+    if (typeof ingestDur === 'number' && Number.isFinite(ingestDur) && ingestDur > 0) {
+      return Math.round(ingestDur);
+    }
+    if (transcript.time_origin_utc && transcript.last_known_audio_utc) {
+      const span = Math.round(
+        (Date.parse(transcript.last_known_audio_utc) -
+          Date.parse(transcript.time_origin_utc)) /
+          1000
+      );
+      if (Number.isFinite(span) && span > 0) return span;
+    }
+    return sampleSec;
+  })();
   const isNormalEnd =
     !reason ||
     reason === 'normal' ||
     reason === 'room_empty' ||
     reason === 'source_binding_unverified' ||
-    ((reason === 'cancelled' || reason === 'deadline') && sampleSec > 0);
+    ((reason === 'cancelled' || reason === 'deadline') &&
+      (sampleSec > 0 || timelineDurationSec > 0));
   const hasError =
     recording.processing === 'failed' ||
     ((recording.participation === 'ended' ||
@@ -763,7 +779,9 @@ export function MeetingDetailView({
                     hasTabularNumbers
                   >
                     {startFormatted}
-                    {sampleSec > 0 ? ` · ${formatDurationHuman(sampleSec)}` : ''}
+                    {timelineDurationSec > 0
+                      ? ` · ${formatDurationHuman(timelineDurationSec)}`
+                      : ''}
                   </Text>
 
                   {isOperator ? (
@@ -948,8 +966,8 @@ export function MeetingDetailView({
                                   'Type "#resume" in the meeting chat to continue recording.'
                                 )
                               : tr(
-                                  `Sprecher zugeordnet: ${live.bound_named_receivers ?? 0}/${live.total_receivers ?? 0} · Sprache: ${formatDurationHuman(live.active_audio_seconds || 0)} · Chat: „no“ (Opt-out), „#pause“ (Pause)`,
-                                  `Bound speakers: ${live.bound_named_receivers ?? 0}/${live.total_receivers ?? 0} · Speech: ${formatDurationHuman(live.active_audio_seconds || 0)} · Chat: “no” (opt-out), “#pause” (pause)`
+                                  `Audiospuren zugeordnet: ${live.bound_named_receivers ?? 0}/${live.total_receivers ?? 0} · Sprache: ${formatDurationHuman(live.active_audio_seconds || 0)} · Chat: „no“ (Opt-out), „#pause“ (Pause)`,
+                                  `Bound audio tracks: ${live.bound_named_receivers ?? 0}/${live.total_receivers ?? 0} · Speech: ${formatDurationHuman(live.active_audio_seconds || 0)} · Chat: “no” (opt-out), “#pause” (pause)`
                                 )}
                           </Text>
                         </VStack>

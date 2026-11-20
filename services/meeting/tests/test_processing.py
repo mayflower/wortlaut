@@ -1499,3 +1499,247 @@ def test_shared_sfu_dom_flap_canonicalization_and_multi_speaker_sources_summary(
     assert "Irgendwann was war da war das neue Logo" in seg_by_speaker["Martin Wild"]
     assert "Frage dazu. Können wir die Changelogs" in seg_by_speaker["Maria Haubner"]
     assert "Diesmal habe ich sechs Usability-Tickets" in seg_by_speaker["Kerstin Flederer"]
+
+
+def test_parallel_stream_duration_dedup_screenshare_speaker_and_live_active_speaker(
+    client, database, storage
+):
+    """Regression test for GitHub issues #16, #17, and #18."""
+    import uuid as uuid_mod
+    from datetime import UTC, datetime, timedelta
+
+    from sqlalchemy.orm import Session
+
+    from wortlaut.exports import export_data
+    from wortlaut.models import (
+        AsrJob,
+        Attempt,
+        AudioChunk,
+        AudioStream,
+        Recording,
+        TranscriptSegment,
+    )
+
+    now = datetime(2026, 11, 19, 10, 0, 0, tzinfo=UTC)
+    rec_id = uuid_mod.uuid4()
+    att_id = uuid_mod.uuid4()
+    origin_iso = now.isoformat()
+    one_min_samples = 60 * 16000  # 60s per track -> 3 parallel tracks = 180s summed, 60s wall-clock
+
+    with Session(database) as db:
+        rec = Recording(
+            id=rec_id,
+            idempotency_key=f"issues-16-17-18-{rec_id}",
+            request_digest=rec_id.hex,
+            meeting_url="https://meet.google.com/abc-defg-hij",
+            provider="google_meet",
+            title="Live 3-Track Regression",
+            starts_at=now,
+            ends_at=now + timedelta(hours=1),
+            participation="capturing",
+            processing="pending",
+            protocol_meta={},
+        )
+        att = Attempt(
+            id=att_id,
+            recording_id=rec_id,
+            credential_hash=rec_id.hex,
+            credential_expires_at=now + timedelta(hours=2),
+            worker_id="worker-issues",
+            diagnostics={
+                "streams": 3,
+                "active_audio_samples": 30 * 16000,
+                "participant_sources": {"paused": False, "total": 3, "sources": []},
+                "receiver_sources": [
+                    {
+                        "provider_source_id": f"google_meet:{rec_id}:receiver:0",
+                        "signaled_participant_id": "devices/person-a-mic",
+                        "participant_name": "Person A",
+                        "source_kind": "speaker",
+                        "rtp_stats": {"audio_level": 0.0},
+                    },
+                    {
+                        "provider_source_id": f"google_meet:{rec_id}:receiver:1",
+                        "signaled_participant_id": "devices/person-e",
+                        "participant_name": "Person E",
+                        "source_kind": "speaker",
+                        "rtp_stats": {"audio_level": 0.08},
+                    },
+                    {
+                        "provider_source_id": f"google_meet:{rec_id}:receiver:2",
+                        "signaled_participant_id": "devices/person-a-share",
+                        "participant_name": "Person A",
+                        "source_kind": "screen_share",
+                        "rtp_stats": {"audio_level": 0.0},
+                    },
+                ],
+            },
+        )
+        db.add(rec)
+        db.flush()
+        db.add(att)
+        db.flush()
+
+        streams_by_idx = []
+        for idx, (pid, pname, skind) in enumerate(
+            [
+                ("devices/person-a-mic", "Person A", "speaker"),
+                ("devices/person-e", "Person E", "speaker"),
+                ("devices/person-a-share", "Person A", "screen_share"),
+            ]
+        ):
+            st_id = uuid_mod.uuid4()
+            st_ext = uuid_mod.uuid4()
+            ep = uuid_mod.uuid4()
+            st = AudioStream(
+                id=st_id,
+                attempt_id=att_id,
+                stream_id=st_ext,
+                epoch=ep,
+                contract={
+                    "session_utc_origin": origin_iso,
+                    "monotonic_origin_ms": 0,
+                    "session_monotonic_origin_ms": 0,
+                    "provider_source_id": f"google_meet:{rec_id}:receiver:{idx}",
+                    "participant_id": pid,
+                    "participant_name": pname,
+                    "source_kind": skind,
+                    "attribution_unknown": False,
+                },
+                scan_complete=False,
+            )
+            db.add(st)
+            db.flush()
+            db.add(
+                AudioChunk(
+                    id=f"iss-chunk-{rec_id.hex[:8]}-{idx}",
+                    stream_id=st_id,
+                    sequence=0,
+                    start_sample=0,
+                    sample_count=one_min_samples,
+                    object_key=f"recordings/{rec_id}/{st_ext}/0.pcm",
+                    object_size=one_min_samples * 2,
+                    checksum="a" * 64,
+                    contract={
+                        "provider_source_id": f"google_meet:{rec_id}:receiver:{idx}",
+                        "participant_id": pid,
+                        "participant_name": pname,
+                        "source_kind": skind,
+                        "attribution_unknown": False,
+                    },
+                )
+            )
+            streams_by_idx.append((st_id, st_ext, ep))
+
+        # Person A has segments on BOTH mic device and screen-share device (#16)
+        for job_idx, (st_idx, pid, skind, s0, s1, txt) in enumerate(
+            [
+                (0, "devices/person-a-mic", "speaker", 2.0, 22.0, "Hauptbeitrag von Person A."),
+                (
+                    2,
+                    "devices/person-a-share",
+                    "screen_share",
+                    30.0,
+                    38.0,
+                    "Kurzer Nachtrag während Screenshare.",
+                ),
+            ]
+        ):
+            st_id, st_ext, ep = streams_by_idx[st_idx]
+            jid = f"iss-job-{rec_id.hex[:8]}-{job_idx}"
+            db.add(
+                AsrJob(
+                    id=jid,
+                    stream_id=st_id,
+                    start_sample=int(s0 * 16000),
+                    end_sample=int(s1 * 16000),
+                    core_start=int(s0 * 16000),
+                    core_end=int(s1 * 16000),
+                    binding={"participant_id": pid, "participant_name": "Person A"},
+                    status="completed",
+                )
+            )
+            db.flush()
+            db.add(
+                TranscriptSegment(
+                    id=jid,
+                    result={
+                        "id": jid,
+                        "stream_id": str(st_ext),
+                        "epoch": str(ep),
+                        "session_utc_origin": origin_iso,
+                        "provider_source_id": f"google_meet:{rec_id}:receiver:{st_idx}",
+                        "participant_id": pid,
+                        "speaker_id": pid,
+                        "participant_name": "Person A",
+                        "source_kind": skind,
+                        "attribution_unknown": False,
+                        "start": s0,
+                        "end": s1,
+                        "text": txt,
+                        "words": [],
+                        "confidence": 0.95,
+                    },
+                )
+            )
+
+        # Person F has a pending ASR job (not yet transcribed) during the live call (#17)
+        st0_id = streams_by_idx[0][0]
+        db.add(
+            AsrJob(
+                id=f"iss-pending-{rec_id.hex[:8]}",
+                stream_id=st0_id,
+                start_sample=40 * 16000,
+                end_sample=45 * 16000,
+                core_start=40 * 16000,
+                core_end=45 * 16000,
+                binding={"participant_id": "devices/person-f", "participant_name": "Person F"},
+                status="pending",
+            )
+        )
+        db.commit()
+
+    headers = {"Authorization": "Bearer fixture-api-token"}
+
+    # #18: Wall-clock duration_seconds is 60.0s (not 180.0s); durable_sample_count stays exact
+    list_resp = client.get("/v1/recordings", headers=headers)
+    assert list_resp.status_code == 200
+    listed = next(item for item in list_resp.json()["items"] if item["id"] == str(rec_id))
+    assert listed["quality"]["durable_sample_count"] == 3 * one_min_samples
+    assert listed["quality"]["duration_seconds"] == 60.0
+
+    detail_resp = client.get(f"/v1/recordings/{rec_id}", headers=headers)
+    assert detail_resp.status_code == 200
+    detail = detail_resp.json()
+    assert detail["ingest"]["durable_sample_count"] == 3 * one_min_samples
+    assert detail["ingest"]["duration_seconds"] == 60.0
+    assert detail["live_status"]["audio_seconds"] == 60.0
+    assert detail["live_status"]["active_speakers"] == ["Person E"]
+
+    # #16 + #17: Person A merged across mic + screenshare; live Person E + pending F visible
+    with Session(database) as db:
+        rec = db.get(Recording, rec_id)
+        exported_live = export_data(db, rec)
+
+    by_name = {s["participant_name"]: s for s in exported_live["sources_summary"]}
+    assert sorted(by_name.keys()) == ["Person A", "Person E", "Person F"]
+    person_a = by_name["Person A"]
+    assert person_a["segment_count"] == 2
+    assert person_a["speech_seconds"] == 28.0
+    assert sorted(person_a["signaled_participant_ids"]) == [
+        "devices/person-a-mic",
+        "devices/person-a-share",
+    ]
+    assert person_a["source_kind"] == "speaker"
+    assert by_name["Person E"]["segment_count"] == 0
+    assert by_name["Person F"]["segment_count"] == 0
+
+    # Once completed, 0-segment live/pending placeholders do not pollute the finished protocol
+    with Session(database) as db:
+        rec = db.get(Recording, rec_id)
+        rec.participation = "ended"
+        rec.processing = "completed"
+        db.commit()
+        exported_done = export_data(db, rec)
+
+    assert [s["participant_name"] for s in exported_done["sources_summary"]] == ["Person A"]

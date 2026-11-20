@@ -75,6 +75,18 @@ function countBulkCandidates(raw: string): number {
   return count;
 }
 
+function resolveInitialScope(glossary: GlossaryOverview | null): GlossaryScope {
+  if (!glossary) return 'personal';
+  if (
+    glossary.default_scope === 'personal' &&
+    (glossary.personal_entries?.length || 0) === 0 &&
+    (glossary.global_entries?.length || 0) > 0
+  ) {
+    return 'global';
+  }
+  return glossary.default_scope;
+}
+
 export function GlossaryWorkspace({
   token,
   glossary,
@@ -84,8 +96,7 @@ export function GlossaryWorkspace({
   const { tr } = useI18n();
   const canEditGlobal = Boolean(glossary?.can_edit_global);
   const hasPersonalScope = Boolean(glossary?.has_personal_scope);
-  const defaultScope: GlossaryScope =
-    glossary?.default_scope || (canEditGlobal ? 'global' : 'personal');
+  const defaultScope: GlossaryScope = resolveInitialScope(glossary);
 
   const [activeScope, setActiveScope] = useState<GlossaryScope>(defaultScope);
   const scopeInitializedRef = useRef(false);
@@ -94,7 +105,7 @@ export function GlossaryWorkspace({
     if (!glossary) return;
     if (!scopeInitializedRef.current) {
       scopeInitializedRef.current = true;
-      setActiveScope(glossary.default_scope);
+      setActiveScope(resolveInitialScope(glossary));
       return;
     }
     if (activeScope === 'personal' && !glossary.has_personal_scope) {
@@ -696,14 +707,46 @@ export function GlossaryWorkspace({
                   <EmptyState
                     headingLevel={3}
                     icon={<BookOpen className="h-8 w-8" />}
-                    title={tr(
-                      'Noch keine Glossarbegriffe hinterlegt',
-                      'No glossary terms configured yet'
-                    )}
-                    description={tr(
-                      'Hinterlegte Eigennamen, Kunden- und Produktbegriffe verbessern die Spracherkennung sowie die Schreibweise in KI-Zusammenfassungen sofort für neue Aufnahmen.',
-                      'Saved proper nouns, customer names, and product terms immediately improve speech recognition accuracy and AI summary spelling on upcoming recordings.'
-                    )}
+                    title={
+                      activeScope === 'personal'
+                        ? tr(
+                            'Noch keine persönlichen Glossarbegriffe hinterlegt',
+                            'No personal glossary terms configured yet'
+                          )
+                        : tr(
+                            'Noch keine Team-Glossarbegriffe hinterlegt',
+                            'No team glossary terms configured yet'
+                          )
+                    }
+                    description={
+                      activeScope === 'personal' &&
+                      (glossary?.global_entries.length || 0) > 0
+                        ? tr(
+                            `${glossary?.global_entries.length || 0} Begriffe aus dem Team-Glossar sind bereits für Ihre Besprechungen aktiv. Persönliche Begriffe ergänzen oder überschreiben diese für Ihre eigenen Aufnahmen.`,
+                            `${glossary?.global_entries.length || 0} terms from the Team Glossary are already active for your meetings. Personal terms extend or override them for your own recordings.`
+                          )
+                        : tr(
+                            'Hinterlegte Eigennamen, Kunden- und Produktbegriffe verbessern die Spracherkennung sowie die Schreibweise in KI-Zusammenfassungen sofort für neue Aufnahmen.',
+                            'Saved proper nouns, customer names, and product terms immediately improve speech recognition accuracy and AI summary spelling on upcoming recordings.'
+                          )
+                    }
+                    actions={
+                      activeScope === 'personal' &&
+                      (glossary?.global_entries.length || 0) > 0 ? (
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          label={tr(
+                            `Team-Glossar anzeigen (${glossary?.global_entries.length || 0})`,
+                            `View Team Glossary (${glossary?.global_entries.length || 0})`
+                          )}
+                          onClick={() => {
+                            setSearchQuery('');
+                            setActiveScope('global');
+                          }}
+                        />
+                      ) : undefined
+                    }
                   />
                 ) : filteredEntries.length === 0 ? (
                   <EmptyState

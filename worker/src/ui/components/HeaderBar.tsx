@@ -51,6 +51,7 @@ export interface HeaderBarProps {
   calendarCount: number;
   calendarConnectedCount?: number;
   glossaryCount?: number;
+  glossaryTooltip?: string;
   mcpGrantCount?: number;
   onOpenNewRecording: () => void;
   onOpenAuthDialog: () => void;
@@ -212,6 +213,7 @@ export function HeaderBar({
   calendarCount,
   calendarConnectedCount = 0,
   glossaryCount = 0,
+  glossaryTooltip,
   mcpGrantCount = 0,
   onOpenNewRecording,
   onOpenAuthDialog,
@@ -399,7 +401,9 @@ export function HeaderBar({
             onClick={() => onChangeNav('glossary')}
             endContent={
               glossaryCount > 0 ? (
-                <Token size="sm" label={String(glossaryCount)} />
+                <span title={glossaryTooltip}>
+                  <Token size="sm" label={String(glossaryCount)} />
+                </span>
               ) : undefined
             }
           />

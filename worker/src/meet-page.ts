@@ -2433,12 +2433,25 @@ function install(config: MeetCaptureConfig) {
       let chunkActive = false;
       if (!silenceChunk) {
         const view = new DataView(pcm.buffer, pcm.byteOffset, pcm.byteLength);
-        for (let i = 0; i + 1 < pcm.byteLength; i += 2) {
-          if (Math.abs(view.getInt16(i, true)) >= 200) {
-            state.active_audio_samples += metadata.sample_count;
-            chunkActive = true;
-            break;
+        const totalSamples = Math.floor(pcm.byteLength / 2);
+        const frameSamples = 320; // 20ms at 16 kHz — avoid counting a full 5s chunk for one brief click
+        let activeSamplesInChunk = 0;
+        for (let start = 0; start < totalSamples; start += frameSamples) {
+          const end = Math.min(totalSamples, start + frameSamples);
+          let frameActive = false;
+          for (let s = start; s < end; s += 1) {
+            if (Math.abs(view.getInt16(s * 2, true)) >= 200) {
+              frameActive = true;
+              break;
+            }
           }
+          if (frameActive) {
+            activeSamplesInChunk += end - start;
+          }
+        }
+        if (activeSamplesInChunk > 0) {
+          state.active_audio_samples += activeSamplesInChunk;
+          chunkActive = true;
         }
       }
       for (const source of sources.values()) {
