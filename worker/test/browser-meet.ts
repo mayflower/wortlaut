@@ -1547,6 +1547,34 @@ try {
     const zoomOptOutState = await zoom.inspect();
     assert.ok(zoomOptOutState.participant_sources.opted_out?.includes('Clara Zoom'));
     assert.ok(zoomOptOutState.participant_sources.opted_out?.includes('4201'));
+    // Verify real Zoom WebClient worker:zoom envelopes (evt 4098 self exclusion + evt 7937 Base64url dn2 & audioSsrc)
+    await zoomPage.evaluate(() => {
+      const code = `
+        postMessage({type: 'message', data: JSON.stringify({evt: 4098, body: {userID: 16789504}})});
+        postMessage({type: 'message', data: JSON.stringify({evt: 7937, body: {add: [
+          {id: 16789504, dn2: 'd29ydGxhdXQ'},
+          {id: 16786432, dn2: 'w4RsaWNlIFpvb20'}
+        ], update: null, remove: null}})});
+        postMessage({type: 'message', data: JSON.stringify({evt: 7937, body: {add: null, remove: null, update: [
+          {id: 16789504, audioSsrc: 16789505, muted: false},
+          {id: 16786432, audioSsrc: 16786433, muted: false}
+        ]}})});
+      `;
+      const blob = new Blob([code], {type: 'application/javascript'});
+      const w = new Worker(URL.createObjectURL(blob));
+      (window as any).__testZoomWorker = w;
+    });
+    await zoomPage.waitForFunction(() => {
+      const inspected = window.wortlautMeet.inspect();
+      return inspected.participant_sources.sources.some(
+        s => s.participant_id === '16786432' && s.participant_name === 'Älice Zoom' && s.audio_csis.includes(16786433),
+      );
+    }, undefined, {timeout: 10000});
+    const zoomWorkerState = await zoom.inspect();
+    assert.ok(
+      !zoomWorkerState.participant_sources.sources.some(s => s.participant_id === '16789504'),
+      'Zoom self userID from evt 4098 must be excluded from participant_sources',
+    );
     await zoom.stop('normal');
     assert.equal((await zoom.inspect()).participation, 'ended');
     assert.equal(await zoomPage.getByRole('button', {name: 'Leave', exact: true}).count(), 0);
@@ -1669,7 +1697,8 @@ try {
       const snap = tile.getSnapshot();
       const ctx = tile.canvas.getContext('2d')!;
       const sample = ctx.getImageData(100, 70, 200, 40).data;
-      const footerSample = ctx.getImageData(60, 620, 400, 40).data;
+      // Acoustic Horizon emerald VU wave bars render centered around (640, 408)
+      const footerSample = ctx.getImageData(540, 380, 200, 60).data;
       let nonDarkPixels = 0;
       for (let i = 0; i < sample.length; i += 4) {
         if (sample[i] > 40 || sample[i + 1] > 40 || sample[i + 2] > 40) nonDarkPixels += 1;

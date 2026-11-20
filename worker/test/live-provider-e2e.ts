@@ -299,8 +299,13 @@ async function loadConfig(): Promise<LiveConfig> {
  * Starts a sandboxed Chromium process with synthetic media flags and a WAV file
  * fed directly into Chromium's C++ fake audio capture device.
  */
-async function launchSpeakerBrowser(wavFilePath: string, locale = 'de-DE', headed = false): Promise<Browser> {
-  if (!headed) {
+async function launchSpeakerBrowser(
+  wavFilePath: string,
+  locale = 'de-DE',
+  headed = false,
+  forceXvfb = false,
+): Promise<Browser> {
+  if (!headed && !forceXvfb) {
     return await chromium.launch({
       headless: true,
       args: [
@@ -325,7 +330,10 @@ async function launchSpeakerBrowser(wavFilePath: string, locale = 'de-DE', heade
   };
   try {
     const env = {...process.env};
-    if (process.platform === 'linux' && !env.DISPLAY) {
+    if (forceXvfb || !env.DISPLAY) {
+      delete env.WAYLAND_DISPLAY;
+    }
+    if (process.platform === 'linux' && (forceXvfb || !env.DISPLAY)) {
       display = spawn('Xvfb', ['-displayfd', '3', '-screen', '0', '1280x720x24', '-nolisten', 'tcp'], {
         stdio: ['ignore', 'ignore', 'ignore', 'pipe'],
       });
@@ -667,7 +675,7 @@ async function installSenderGate(context: BrowserContext, wavPath?: string): Pro
         const TrackGenCtor = (window as unknown as {MediaStreamTrackGenerator?: new (init: {kind: 'video'}) => MediaStreamTrack & {writable: WritableStream<unknown>}}).MediaStreamTrackGenerator;
         const VideoFrameCtor = (window as unknown as {VideoFrame?: new (source: HTMLCanvasElement, init: {timestamp: number}) => {close: () => void}}).VideoFrame;
         let stream: MediaStream;
-        if (typeof TrackGenCtor === 'function' && typeof VideoFrameCtor === 'function') {
+        if (!isZoom() && typeof TrackGenCtor === 'function' && typeof VideoFrameCtor === 'function') {
           const gen = new TrackGenCtor({kind: 'video'});
           const writer = gen.writable.getWriter();
           const pushFrame = () => {
@@ -692,6 +700,17 @@ async function installSenderGate(context: BrowserContext, wavPath?: string): Pro
         for (const vt of stream.getVideoTracks()) {
           try {
             Object.defineProperty(vt, 'contentHint', {value: 'detail', configurable: true});
+            if (isZoom()) {
+              const origSettings = vt.getSettings.bind(vt);
+              vt.getSettings = () => ({
+                ...origSettings(),
+                width: targetW,
+                height: targetH,
+                frameRate: 10,
+                displaySurface: 'monitor',
+                cursor: 'always',
+              }) as MediaTrackSettings;
+            }
           } catch {
             // ignore
           }
@@ -952,6 +971,17 @@ async function clickIfVisible(locator: Locator): Promise<boolean> {
  * Joins a real Google Meet, Webex, or Microsoft Teams room as an active speaker
  * with microphone ON and camera OFF.
  */
+async function saveJoinDiagnostic(page: Page, provider: Provider, tag: string): Promise<string> {
+  const out = resolve(ROOT_DIR, `.dev/live-e2e-${provider}-${tag}.png`);
+  try {
+    await mkdir(dirname(out), {recursive: true});
+    await page.screenshot({path: out, timeout: 10000, animations: 'disabled'});
+  } catch (err) {
+    return `(screenshot unavailable: ${err instanceof Error ? err.message.slice(0, 80) : String(err)})`;
+  }
+  return out;
+}
+
 async function joinRoomAsSpeaker(
   page: Page,
   provider: Provider,
@@ -961,10 +991,62 @@ async function joinRoomAsSpeaker(
   evictExistingSession = false,
   useWebexHostDashboard = false,
 ): Promise<void> {
-  const initialUrl =
-    provider === 'webex' && useWebexHostDashboard && /^https:\/\/[^/]+\.webex\.com\/meet\//i.test(meetingUrl)
-      ? 'https://web.webex.com/meetings'
-      : meetingUrl;
+  const hardTimeoutMs = (timeoutSec + 20) * 1000;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      joinRoomAsSpeakerInner(
+        page,
+        provider,
+        meetingUrl,
+        displayName,
+        timeoutSec,
+        evictExistingSession,
+        useWebexHostDashboard,
+      ),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          reject(
+            new Error(
+              `Hard-Timeout (${Math.round(hardTimeoutMs / 1000)}s) beim Beitritt von "${displayName}" zu ${provider} (url=${redactMeetingUrl(page.url())})`,
+            ),
+          );
+        }, hardTimeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function joinRoomAsSpeakerInner(
+  page: Page,
+  provider: Provider,
+  meetingUrl: string,
+  displayName: string,
+  timeoutSec: number,
+  evictExistingSession = false,
+  useWebexHostDashboard = false,
+): Promise<void> {
+  let initialUrl = meetingUrl;
+  if (
+    provider === 'webex' &&
+    useWebexHostDashboard &&
+    /^https:\/\/[^/]+\.webex\.com\/meet\//i.test(meetingUrl)
+  ) {
+    initialUrl = 'https://web.webex.com/meetings';
+  } else if (provider === 'zoom') {
+    try {
+      const parsed = new URL(meetingUrl);
+      const joinMatch = parsed.pathname.match(/^\/[js]\/([0-9]{9,11})\/?$/);
+      if (joinMatch) {
+        parsed.pathname = `/wc/${joinMatch[1]}/join`;
+        initialUrl = parsed.toString();
+      }
+    } catch {
+      // keep original meetingUrl
+    }
+  }
   await page.goto(initialUrl, {waitUntil: 'domcontentloaded', timeout: 45000});
   const deadline = Date.now() + timeoutSec * 1000;
 
@@ -973,6 +1055,12 @@ async function joinRoomAsSpeaker(
     const meetWaitingRe =
       /Please wait until a meeting host brings you into the call|invited to the call by the (?:meeting )?organizer|Asking to be let in|You[’']ll join the call when someone lets you|Someone in the call (?:will|can) let you in|Waiting (?:for the host|to be let in)|Host hasn[’']t joined yet|Messages from the organizer|Chat is unavailable|Um Teilnahme (?:gebeten|bitten)|Teilnahme wird angefragt|(?:Sie|Du)\s+(?:können|kannst|nehmen|nimmst)\s+teil(?:nehmen)?,\s*sobald|Jemand.*(?:(?:lässt|lassen)\s+(?:Sie|dich).*(?:ein|teilnehmen)|kann\s+(?:Sie|dich).*einlassen)|Bitte warten(?:\s+Sie)?,\s*bis.*(?:einlässt|eingeladen)|vom Organisator.*eingeladen|Nachrichten vom Organisator|Chat nicht verfügbar|noch nicht eingelassen/i;
     while (Date.now() < deadline) {
+      if (/^https:\/\/accounts\.google\.com\//i.test(page.url())) {
+        const shot = await saveJoinDiagnostic(page, 'google_meet', 'auth-required');
+        throw new Error(
+          `Google Meet Host-Session abgelaufen (Redirect auf accounts.google.com). Bitte "PROVIDER=google_meet make test-live-login" ausführen (Screenshot: ${shot}).`,
+        );
+      }
       // Check if already in call (NOT in knocking lobby, which also renders a Leave button!)
       const leaveCss = page.locator(
         'button[aria-label*="Anruf verlassen" i], button[aria-label*="Leave call" i], button[aria-label*="Besprechung verlassen" i], button[aria-label*="Leave meeting" i]',
@@ -1094,7 +1182,13 @@ async function joinRoomAsSpeaker(
       }
       await delay(1000);
     }
-    throw new Error(`Timeout beim Beitritt von "${displayName}" zu Google Meet (${meetingUrl})`);
+    const shot = await saveJoinDiagnostic(page, 'google_meet', 'join-timeout');
+    const preview = (await page.locator('body').innerText({timeout: 2000}).catch(() => ''))
+      .replace(/\s+/g, ' ')
+      .slice(0, 220);
+    throw new Error(
+      `Timeout beim Beitritt von "${displayName}" zu Google Meet (${meetingUrl}, url=${redactMeetingUrl(page.url())}, screenshot=${shot}, text="${preview}")`,
+    );
   }
 
   if (provider === 'teams') {
@@ -1294,17 +1388,24 @@ async function joinRoomAsSpeaker(
   }
 
   if (provider === 'zoom') {
-    const parsed = new URL(meetingUrl);
-    const joinMatch = parsed.pathname.match(/^\/[js]\/([0-9]{9,11})\/?$/);
-    if (joinMatch) {
-      parsed.pathname = `/wc/${joinMatch[1]}/join`;
-      await page.goto(parsed.toString(), {waitUntil: 'domcontentloaded', timeout: 45000});
-    }
     const zoomWaitingRe =
       /Please wait, the meeting host will let you in soon|Waiting for the host to start|Waiting Room|Host has joined\. We've let them know you're here|Bitte warten Sie, der Host lässt Sie in Kürze ein|Warten auf den Beginn des Meetings|Warteraum/i;
+    const zoomBlockedRe =
+      /automated bots aren['’]t allowed|verify you are human|sign in to join|anmelden, um (?:dem meeting )?beizutreten/i;
     let joinClicked = false;
     while (Date.now() < deadline) {
-      const bodyText = await page.locator('body').innerText().catch(() => '');
+      const bodyText = await page.locator('body').innerText({timeout: 3000}).catch(() => '');
+      const hasCaptchaChallenge = await page
+        .locator('iframe[title*="recaptcha challenge" i], iframe[src*="hcaptcha.com/captcha" i], iframe[src*="arkoselabs" i]')
+        .first()
+        .isVisible()
+        .catch(() => false);
+      if (hasCaptchaChallenge || zoomBlockedRe.test(bodyText)) {
+        const shot = await saveJoinDiagnostic(page, 'zoom', 'join-blocked');
+        throw new Error(
+          `Zoom blockiert den automatisierten Beitritt für "${displayName}" (CAPTCHA/Anmeldepflicht; Screenshot: ${shot}).`,
+        );
+      }
       const leaveVisible = await page
         .getByRole('button', {name: /^(Leave|Leave Meeting|Leave meeting|Verlassen|Meeting verlassen)(?: \(.*\))?$/i})
         .first()
@@ -1350,21 +1451,27 @@ async function joinRoomAsSpeaker(
         .locator('#input-for-name, #inputname, input[name="inputname"]')
         .or(page.getByRole('textbox', {name: /^(Your Name|Name|Ihr Name|Geben Sie Ihren Namen ein)$/i}));
       if (await nameInput.first().isVisible().catch(() => false)) {
-        await nameInput.first().fill(displayName).catch(() => {});
+        await nameInput.first().fill(displayName, {timeout: 3000}).catch(() => {});
       }
 
       const joinBtn = page
         .locator('button.preview-join-button:not([disabled]), #joinBtn:not([disabled])')
         .or(page.getByRole('button', {name: /^(Join|Beitreten|Teilnehmen)$/i}));
       if (await joinBtn.first().isVisible().catch(() => false)) {
-        await joinBtn.first().click({timeout: 5000}).catch(() => {});
+        await joinBtn.first().click({timeout: 3000}).catch(() => {});
         joinClicked = true;
         await delay(1500);
         continue;
       }
       await delay(1000);
     }
-    throw new Error(`Timeout beim Beitritt von "${displayName}" zu Zoom (${meetingUrl})`);
+    const shot = await saveJoinDiagnostic(page, 'zoom', 'join-timeout');
+    const preview = (await page.locator('body').innerText({timeout: 2000}).catch(() => ''))
+      .replace(/\s+/g, ' ')
+      .slice(0, 220);
+    throw new Error(
+      `Timeout beim Beitritt von "${displayName}" zu Zoom (${redactMeetingUrl(meetingUrl)}, url=${redactMeetingUrl(page.url())}, screenshot=${shot}, text="${preview}")`,
+    );
   }
 }
 
@@ -1926,6 +2033,8 @@ async function startSyntheticScreenShare(page: Page, provider: Provider): Promis
   await setSyntheticShareSlide(page, 0);
   try {
     if (provider === 'zoom') {
+      await page.mouse.move(640, 680).catch(() => {});
+      await delay(300);
       const shareBtn = page
         .locator(
           'button[aria-label*="Share Screen" i], button[aria-label*="Bildschirm freigeben" i], .footer-button__share-icon',
@@ -2441,12 +2550,16 @@ async function runProviderLiveTest(provider: Provider, config: LiveConfig) {
         (config.speakerCount >= 4 ? ` (+ Late-Joiner "${config.speakerDName}" während aktivem Call)` : '') +
         `...`,
     );
-    browserA = await launchSpeakerBrowser(wavPathA, localeA, config.headed);
+    const forceXvfb =
+      !config.headed &&
+      (provider === 'google_meet' || provider === 'zoom') &&
+      process.platform === 'linux';
+    browserA = await launchSpeakerBrowser(wavPathA, localeA, config.headed, forceXvfb);
     if (config.speakerCount >= 2) {
-      browserB = await launchSpeakerBrowser(wavPathB, localeB, config.headed);
+      browserB = await launchSpeakerBrowser(wavPathB, localeB, config.headed, forceXvfb);
     }
     if (config.speakerCount >= 3) {
-      browserC = await launchSpeakerBrowser(wavPathA, localeA, config.headed);
+      browserC = await launchSpeakerBrowser(wavPathA, localeA, config.headed, forceXvfb);
     }
 
     const hostStatePath = config.hostStorageState[provider];

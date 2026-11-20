@@ -510,8 +510,67 @@ function install(config: MeetCaptureConfig) {
   const webexSlideVideoSsrcToParticipant = new Map<number, string>();
   let webexCurrentActiveSpeakerCsis: number[] = [];
   let webexLastActiveSpeakerAt = 0;
+  let zoomSelfUserId: string | null = null;
+  const zoomAudioSsrcToParticipant = new Map<number, string>();
+  let zoomSawShareEvent = false;
+  let zoomActiveSharePresenterId: string | null = null;
   const sources = new Map<RTCRtpReceiver, {id: string; track?: MediaStreamTrack; recovered?: boolean; silentSamples?: number}>();
   const sourceLastVoicedAt = new Map<string, number>();
+
+  function decodeZoomDisplayName(raw: unknown): string | null {
+    if (typeof raw !== 'string') return null;
+    const trimmed = raw.trim();
+    if (!trimmed || trimmed.length > 400) return null;
+    try {
+      const b64 = trimmed.replace(/-/g, '+').replace(/_/g, '/');
+      const padded = b64.padEnd(Math.ceil(b64.length / 4) * 4, '=');
+      const bin = atob(padded);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      const decoded = new TextDecoder('utf-8', {fatal: false}).decode(bytes).trim();
+      if (!decoded || decoded.length > 200) return null;
+      for (let i = 0; i < decoded.length; i++) {
+        if (decoded.charCodeAt(i) < 0x20) return null;
+      }
+      return decoded;
+    } catch {
+      return null;
+    }
+  }
+
+  function extractZoomAudioSsrcFromStreamId(value: string): number | null {
+    const m = /^(\d+)\+CS\+/.exec(value);
+    if (!m) return null;
+    const parsed = Number(m[1]);
+    return validCsi(parsed) ? parsed : null;
+  }
+
+  function syncZoomSdpBindings(): boolean {
+    if (config.provider !== 'zoom' || !zoomAudioSsrcToParticipant.size) return false;
+    let changed = false;
+    for (const [cname, group] of sdpCnames) {
+      let zoomAudioSsrc = extractZoomAudioSsrcFromStreamId(cname);
+      if (zoomAudioSsrc === null) {
+        for (const sid of group.stream_ids) {
+          zoomAudioSsrc = extractZoomAudioSsrcFromStreamId(sid);
+          if (zoomAudioSsrc !== null) break;
+        }
+      }
+      if (zoomAudioSsrc === null) continue;
+      const pid = zoomAudioSsrcToParticipant.get(zoomAudioSsrc);
+      if (!pid || pid === zoomSelfUserId || ignoredParticipantIds.has(pid)) continue;
+      if (ingestParticipantRecord({
+        participant_id: pid,
+        participant_name: protoNames.get(pid) ?? domNames.get(pid) ?? participants.get(pid)?.participant_name ?? null,
+        audio_csis: [zoomAudioSsrc, ...group.audio_ssrcs],
+        stream_ids: [...group.stream_ids],
+        track_ids: [...group.track_ids],
+      })) {
+        changed = true;
+      }
+    }
+    return changed;
+  }
 
   function findWebexParticipantByCsi(csi: number): string | null {
     for (const [pid, set] of webexParticipantOwnedCsis) {
@@ -684,6 +743,7 @@ function install(config: MeetCaptureConfig) {
     if (typeof rawId !== 'string' || !rawId.trim() || rawId.length > 200) return false;
     const id = rawId.trim();
     if (isWebexParticipant && id === webexSelfParticipantId) return false;
+    if (config.provider === 'zoom' && id === zoomSelfUserId) return false;
     if (ignoredParticipantIds.has(id)) return false;
     const rawName = domNames.get(id) ??
       node.participant_name ?? node.participantName ?? node.displayName ??
@@ -1597,6 +1657,7 @@ function install(config: MeetCaptureConfig) {
         })) updated = true;
       }
     }
+    if (config.provider === 'zoom' && syncZoomSdpBindings()) updated = true;
     if (updated) void inspectReceivers();
   }
 
@@ -1742,6 +1803,110 @@ function install(config: MeetCaptureConfig) {
             }
           }
         }
+        if (config.provider === 'zoom' && typeof record.evt === 'number') {
+          const zoomBody = record.body && typeof record.body === 'object' && !Array.isArray(record.body)
+            ? (record.body as Record<string, unknown>)
+            : undefined;
+          if (record.evt === 4098 && zoomBody) {
+            const rawSelf = zoomBody.userID ?? zoomBody.userId;
+            if ((typeof rawSelf === 'number' && Number.isFinite(rawSelf)) || (typeof rawSelf === 'string' && rawSelf.trim())) {
+              const selfId = String(rawSelf).trim();
+              zoomSelfUserId = selfId;
+              ignoredParticipantIds.add(selfId);
+              domNames.delete(selfId);
+              protoNames.delete(selfId);
+              if (participants.delete(selfId)) {
+                totalParticipants = Math.max(0, totalParticipants - 1);
+                updated = true;
+              }
+              for (const [ssrc, pid] of zoomAudioSsrcToParticipant) {
+                if (pid === selfId) zoomAudioSsrcToParticipant.delete(ssrc);
+              }
+              if (zoomActiveSharePresenterId === selfId) zoomActiveSharePresenterId = null;
+            }
+          } else if (record.evt === 7937 && zoomBody) {
+            const handleZoomUser = (item: unknown) => {
+              if (!item || typeof item !== 'object' || Array.isArray(item)) return;
+              const u = item as Record<string, unknown>;
+              const rawUid = u.id ?? u.userId ?? u.userID;
+              if (
+                !(typeof rawUid === 'number' && Number.isFinite(rawUid)) &&
+                !(typeof rawUid === 'string' && rawUid.trim())
+              ) {
+                return;
+              }
+              const pid = String(rawUid).trim();
+              if (!pid || pid === zoomSelfUserId || ignoredParticipantIds.has(pid)) return;
+              const decodedName =
+                decodeZoomDisplayName(u.dn2) ??
+                (typeof u.dn === 'string' && u.dn.trim() && u.dn.trim().length <= 200 ? u.dn.trim() : null) ??
+                (typeof u.userName === 'string' && u.userName.trim() && u.userName.trim().length <= 200 ? u.userName.trim() : null) ??
+                (typeof u.displayName === 'string' && u.displayName.trim() && u.displayName.trim().length <= 200 ? u.displayName.trim() : null);
+              if (decodedName && isIgnoredParticipantName(decodedName)) {
+                ignoredParticipantIds.add(pid);
+                domNames.delete(pid);
+                protoNames.delete(pid);
+                if (participants.delete(pid)) {
+                  totalParticipants = Math.max(0, totalParticipants - 1);
+                  updated = true;
+                }
+                for (const [ssrc, ownerId] of zoomAudioSsrcToParticipant) {
+                  if (ownerId === pid) zoomAudioSsrcToParticipant.delete(ssrc);
+                }
+                return;
+              }
+              if (decodedName && (protoNames.size < 256 || protoNames.has(pid))) {
+                protoNames.set(pid, decodedName);
+              }
+              const audioSsrc = u.audioSsrc;
+              if (validCsi(audioSsrc) && (zoomAudioSsrcToParticipant.size < 512 || zoomAudioSsrcToParticipant.has(audioSsrc))) {
+                zoomAudioSsrcToParticipant.set(audioSsrc, pid);
+              }
+              if (ingestParticipantRecord({
+                participant_id: pid,
+                participant_name: decodedName ?? protoNames.get(pid) ?? domNames.get(pid) ?? null,
+                ...(validCsi(audioSsrc) ? {audio_csis: [audioSsrc]} : {}),
+              })) {
+                updated = true;
+              }
+            };
+            if (Array.isArray(zoomBody.add)) {
+              for (const item of zoomBody.add.slice(0, 256)) handleZoomUser(item);
+            }
+            if (Array.isArray(zoomBody.update)) {
+              for (const item of zoomBody.update.slice(0, 256)) handleZoomUser(item);
+            }
+            if (Array.isArray(zoomBody.remove)) {
+              for (const item of zoomBody.remove.slice(0, 256)) {
+                const rawUid = item && typeof item === 'object' ? (item as Record<string, unknown>).id : item;
+                if (
+                  (typeof rawUid === 'number' && Number.isFinite(rawUid)) ||
+                  (typeof rawUid === 'string' && rawUid.trim())
+                ) {
+                  const pid = String(rawUid).trim();
+                  for (const [ssrc, ownerId] of zoomAudioSsrcToParticipant) {
+                    if (ownerId === pid) zoomAudioSsrcToParticipant.delete(ssrc);
+                  }
+                  if (zoomActiveSharePresenterId === pid) zoomActiveSharePresenterId = null;
+                }
+              }
+            }
+            if (syncZoomSdpBindings()) updated = true;
+          } else if (record.evt === 20225 && zoomBody) {
+            zoomSawShareEvent = true;
+            const activeStatus = zoomBody.bStatus === 1 || zoomBody.bStatus === true;
+            const rawActive = zoomBody.activeNodeID ?? zoomBody.activeNodeId;
+            const activeId =
+              (typeof rawActive === 'number' && Number.isFinite(rawActive) && rawActive > 0)
+                ? String(rawActive)
+                : (typeof rawActive === 'string' && rawActive.trim() && rawActive.trim() !== '0' ? rawActive.trim() : null);
+            if (activeStatus && activeId && activeId !== zoomSelfUserId && !ignoredParticipantIds.has(activeId)) {
+              zoomActiveSharePresenterId = activeId;
+            } else if (zoomBody.bStatus === 0 || zoomBody.bStatus === false || !activeId) {
+              zoomActiveSharePresenterId = null;
+            }
+          }
+        }
         if (ingestParticipantRecord(record)) {
           syncOptOutCrossLinks();
           updated = true;
@@ -1778,7 +1943,10 @@ function install(config: MeetCaptureConfig) {
             }
           }
         }
-        for (const b64Key of ['message', 'body'] as const) {
+        const nestedJsonKeys = config.provider === 'zoom'
+          ? (['message', 'body', 'data'] as const)
+          : (['message', 'body'] as const);
+        for (const b64Key of nestedJsonKeys) {
           const b64Val = record[b64Key];
           if (typeof b64Val === 'string' && b64Val.startsWith('H4sI') && b64Val.length <= 262144) {
             try {
@@ -2637,6 +2805,34 @@ function install(config: MeetCaptureConfig) {
       return remember({csi: firstCsi, signaled_participant_id: p.participant_id,
         participant_name: p.participant_name, source_kind: 'speaker', bound: true});
     }
+    if (config.provider === 'zoom' && streamIds.length > 0) {
+      const zoomMatches = new Map<string, {pid: string; name: string | null; csi: number}>();
+      for (const sid of streamIds) {
+        const zSsrc = extractZoomAudioSsrcFromStreamId(sid);
+        if (zSsrc === null) continue;
+        const pid = zoomAudioSsrcToParticipant.get(zSsrc);
+        if (!pid || pid === zoomSelfUserId || ignoredParticipantIds.has(pid)) continue;
+        const name = participants.get(pid)?.participant_name ?? protoNames.get(pid) ?? domNames.get(pid) ?? null;
+        zoomMatches.set(pid, {pid, name, csi: zSsrc});
+      }
+      if (zoomMatches.size === 1) {
+        const hit = [...zoomMatches.values()][0];
+        ingestParticipantRecord({
+          participant_id: hit.pid,
+          participant_name: hit.name,
+          audio_csis: [hit.csi, ...ssrcs],
+          stream_ids: streamIds,
+          track_ids: [receiver.track.id],
+        });
+        return remember({
+          csi: hit.csi,
+          signaled_participant_id: hit.pid,
+          participant_name: participants.get(hit.pid)?.participant_name ?? hit.name,
+          source_kind: 'speaker',
+          bound: true,
+        });
+      }
+    }
     if (previous && csrcs.length === 0 && previous.signaled_participant_id) {
       const latestParticipant = participants.get(previous.signaled_participant_id);
       return {
@@ -2768,6 +2964,9 @@ function install(config: MeetCaptureConfig) {
             entry.requestedAt = performance.now(); observer?.postMessage({type: 'snapshot', id: entry.id});
           }
         }
+        if (config.provider === 'webex') {
+          updateWebexActiveSpeakerBindings();
+        }
         for (const [receiver, source] of sources) {
           const rtpStat = receiverStats.get(receiver);
           const rtpHasDecodedEnergy =
@@ -2776,6 +2975,7 @@ function install(config: MeetCaptureConfig) {
           const forceReattach =
             hasSignaledOrDomParticipants &&
             state.active_audio_samples === 0 &&
+            !sourceLastVoicedAt.has(source.id) &&
             rtpHasDecodedEnergy &&
             (source.silentSamples ?? 0) >= 16000 * 10 &&
             !source.recovered &&
@@ -2792,9 +2992,6 @@ function install(config: MeetCaptureConfig) {
               source.track = undefined;
             }
           }
-        }
-        if (config.provider === 'webex') {
-          updateWebexActiveSpeakerBindings();
         }
         for (const receiver of live) {
           let source = sources.get(receiver);
@@ -2884,7 +3081,16 @@ function install(config: MeetCaptureConfig) {
       const pname = explicit.getAttribute('data-presenter-name')?.trim() || null;
       if (pid || pname) return {presenterId: pid, presenterName: pname};
     }
+    if (zoomActiveSharePresenterId && !ignoredParticipantIds.has(zoomActiveSharePresenterId)) {
+      const signaledName =
+        participants.get(zoomActiveSharePresenterId)?.participant_name ??
+        protoNames.get(zoomActiveSharePresenterId) ??
+        domNames.get(zoomActiveSharePresenterId) ??
+        null;
+      return {presenterId: zoomActiveSharePresenterId, presenterName: signaledName};
+    }
     const banners = document.querySelectorAll(
+      '.sharee-sharing-indicator__tip, [class*="sharee-sharing-indicator"], ' +
       '[class*="share-info"], [class*="sharing-banner"], [class*="view-sharing"], ' +
       '[aria-label*="screen" i], [aria-label*="Bildschirm" i]',
     );
@@ -3158,18 +3364,91 @@ function install(config: MeetCaptureConfig) {
 
       if (config.provider === 'zoom') {
         teardownProbeVideo();
-        const rawCanvases = Array.from(
-          document.querySelectorAll<HTMLCanvasElement>(
-            'canvas#sharee-container-canvas, .sharing-layout-container canvas, [class*="sharee-container"] canvas',
-          ),
-        );
-        const shareCanvas = rawCanvases.find(
-          (c) =>
-            c !== window.wortlautVideoTile?.canvas &&
-            !c.hasAttribute('data-wortlaut-video-tile') &&
-            !c.closest('.gallery-video-container, .speaker-active-container, .video-avatar'),
-        );
-        if (!shareCanvas) {
+        const excludedCameraSelector =
+          '.gallery-video-container, .speaker-active-container, .video-avatar, #sv-active-video, .sharer-client-sharing-canvas-container';
+        const isExcludedZoomCanvas = (c: HTMLCanvasElement) =>
+          c === window.wortlautVideoTile?.canvas ||
+          c.hasAttribute('data-wortlaut-video-tile') ||
+          /(?:-anno|-anno-presenter)$/i.test(c.id) ||
+          Boolean(c.closest(excludedCameraSelector));
+        const isValidZoomShareVideo = (v: HTMLVideoElement) => {
+          if (
+            v.hasAttribute('data-wortlaut-keyframe-probe') ||
+            v.id === 'sharer-client-sharing-canvas' ||
+            v.id === 'sharer-client-sharing-video' ||
+            v.id === '__ZOOM_SDK_SHARING_VIDEO__' ||
+            Boolean(v.closest(excludedCameraSelector))
+          ) {
+            return false;
+          }
+          if (v.readyState < 2 || v.videoWidth < 2 || v.videoHeight < 2) return false;
+          const src = v.srcObject;
+          if (src instanceof MediaStream) {
+            if (src.getVideoTracks().some((t) => isOutboundOrSelfVideoTrack(t))) return false;
+          }
+          return true;
+        };
+
+        let shareSurface: {element: HTMLVideoElement | HTMLCanvasElement; width: number; height: number; sourceSuffix: string} | null = null;
+        if (!zoomSawShareEvent || zoomActiveSharePresenterId !== null) {
+          const shareContainers = Array.from(
+            document.querySelectorAll(
+              '.sharing-layout, .sharing-layout-container, [class*="sharee-container"], video-player-container[class*="sharee"]',
+            ),
+          ).filter((el) => !el.closest(excludedCameraSelector));
+
+          const shadowVideos: HTMLVideoElement[] = [];
+          const shadowCanvases: HTMLCanvasElement[] = [];
+          const visitedRoots = new Set<Element | ShadowRoot>();
+          const stack: Array<Element | ShadowRoot> = [...shareContainers];
+          while (stack.length > 0 && visitedRoots.size < 64) {
+            const root = stack.pop()!;
+            if (visitedRoots.has(root)) continue;
+            visitedRoots.add(root);
+            for (const el of Array.from(root.querySelectorAll('video, canvas, video-player-container, video-player'))) {
+              if (el.tagName === 'VIDEO') {
+                shadowVideos.push(el as HTMLVideoElement);
+              } else if (el.tagName === 'CANVAS') {
+                shadowCanvases.push(el as HTMLCanvasElement);
+              }
+              if (el.shadowRoot && !visitedRoots.has(el.shadowRoot)) {
+                stack.push(el.shadowRoot);
+              }
+            }
+            if (root instanceof Element && root.shadowRoot && !visitedRoots.has(root.shadowRoot)) {
+              stack.push(root.shadowRoot);
+            }
+          }
+
+          const readyShareVideo = shadowVideos.find(isValidZoomShareVideo);
+          if (readyShareVideo) {
+            shareSurface = {
+              element: readyShareVideo,
+              width: readyShareVideo.videoWidth,
+              height: readyShareVideo.videoHeight,
+              sourceSuffix: 'share_video:1',
+            };
+          } else {
+            const rawCanvases = [
+              ...Array.from(
+                document.querySelectorAll<HTMLCanvasElement>(
+                  'canvas#sharee-container-canvas, .sharing-layout-container canvas, [class*="sharee-container"] canvas',
+                ),
+              ),
+              ...shadowCanvases,
+            ];
+            const shareCanvas = rawCanvases.find((c) => !isExcludedZoomCanvas(c));
+            if (shareCanvas) {
+              shareSurface = {
+                element: shareCanvas,
+                width: shareCanvas.width || shareCanvas.clientWidth,
+                height: shareCanvas.height || shareCanvas.clientHeight,
+                sourceSuffix: 'share_canvas:1',
+              };
+            }
+          }
+        }
+        if (!shareSurface) {
           state.keyframes.active_share = false;
           const nonShareCanvas = Array.from(
             document.querySelectorAll<HTMLCanvasElement>(
@@ -3198,13 +3477,11 @@ function install(config: MeetCaptureConfig) {
         }
         state.keyframes.capability = 'active';
         state.keyframes.active_share = true;
-        const w = shareCanvas.width || shareCanvas.clientWidth;
-        const h = shareCanvas.height || shareCanvas.clientHeight;
         await sampler.tick({
-          element: shareCanvas,
-          sourceWidth: w,
-          sourceHeight: h,
-          provider_source_id: `zoom:${config.meeting_id}:share_canvas:1`,
+          element: shareSurface.element,
+          sourceWidth: shareSurface.width,
+          sourceHeight: shareSurface.height,
+          provider_source_id: `zoom:${config.meeting_id}:${shareSurface.sourceSuffix}`,
           participant_id: owner.participant_id,
           participant_name: owner.participant_name,
         });

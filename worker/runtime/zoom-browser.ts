@@ -393,7 +393,7 @@ export class ZoomBrowser {
       this.capturing = true;
       await this.ensureComputerAudioJoined();
       if (!this.videoStarted) await this.ensureOutgoingVideoStarted();
-      if (!this.videoStopped) await this.stopIncomingVideoIfPossible();
+      if (!this.videoStopped && this.bootstrap.enable_keyframes === false) await this.stopIncomingVideoIfPossible();
       if (!this.rosterOpened) await this.ensureRosterOpen();
       if (!this.chatSent) await this.sendChatIntro();
     }
