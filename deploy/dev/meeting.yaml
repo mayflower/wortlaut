@@ -82,8 +82,8 @@ spec:
             capabilities:
               drop: [ALL]
           resources:
-            requests: {cpu: 100m, memory: 256Mi}
-            limits: {cpu: '2', memory: 1Gi}
+            requests: {cpu: 100m, memory: 512Mi}
+            limits: {cpu: '2', memory: 4Gi}
           startupProbe:
             httpGet: {path: /health/ready, port: 8000}
             failureThreshold: 30
