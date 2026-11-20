@@ -5,7 +5,7 @@ RUN npm ci
 COPY worker/ ./
 RUN npm run build
 
-FROM python:3.14-slim-trixie
+FROM python:3.15-slim-trixie
 RUN apt-get update && apt-get upgrade -y --no-install-recommends && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 ARG WORTLAUT_FETCH_EMBEDDING_MODEL=1
