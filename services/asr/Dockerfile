@@ -2,7 +2,7 @@
 # former NeMo-based image shipped, so the shared MPS GPU sees an unchanged client.
 # Model revision is pinned in app.py.
 FROM nvcr.io/nvidia/pytorch:25.09-py3@sha256:f3b4a33fd60d5e0358287bb44d57e91eda45e8f1681fef1bfd6c969371417130
-RUN pip install --no-cache-dir transformers==5.23.0 fastapi==0.163.1 'uvicorn[standard]==0.54.0' \
+RUN pip install --no-cache-dir transformers==5.23.0 fastapi==0.165.0 'uvicorn[standard]==0.54.0' \
     && python -c 'from transformers import AutoModelForMultimodalLM, AutoProcessor'
 WORKDIR /app
 COPY services/asr/app.py /app/app.py

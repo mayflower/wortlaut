@@ -26,7 +26,7 @@ spec:
       automountServiceAccountToken: false
       containers:
         - name: postgres
-          image: postgres:17.11-bookworm@sha256:665dc7b37ac52a17e298511414c21d23ffa4e6a6ef6225b3e5d59c7afb35e994
+          image: postgres:17.12-bookworm@sha256:837bed18782820fe967067cb5328b02b0d9992c1be9a37ee0c9c492cfc03af3b
           env:
             - name: POSTGRES_USER
               value: wortlaut

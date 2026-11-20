@@ -218,7 +218,7 @@ WORTLAUT_SMTP_FROM=bot@example.org
 
 ## Entwicklung & Mitwirken
 
-Externe Mitwirkende benötigen lokal lediglich Python 3.12 (`uv`), Node.js 22+ und Docker — **kein Kubernetes-Cluster erforderlich** (siehe [CONTRIBUTING.md](CONTRIBUTING.md)):
+Externe Mitwirkende benötigen lokal lediglich Python 3.14 (`uv`), Node.js 22+ und Docker — **kein Kubernetes-Cluster erforderlich** (siehe [CONTRIBUTING.md](CONTRIBUTING.md)):
 
 ```sh
 make setup-local   # Python- & Node-Abhängigkeiten installieren, Bundles bauen & Git-QA-Hooks einrichten

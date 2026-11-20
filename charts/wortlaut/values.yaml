@@ -34,6 +34,9 @@ llmSummary:
   enabled: false
   ollamaUrl: ""
   ollamaModel: qwen3.8:latest
+  openaiBaseUrl: ""
+  openaiModel: gpt-4o-mini
+  openaiTimeoutSeconds: 120
 
 capacity:
   maxActiveMeetings: 15

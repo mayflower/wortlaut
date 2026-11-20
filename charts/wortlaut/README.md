@@ -69,7 +69,10 @@ helm upgrade --install wortlaut ./charts/wortlaut \
 | `asr.modelRepo` | `Qwen/Qwen3-ASR-1.7B-hf` | Hugging Face model ID loaded by `wortlaut-asr` |
 | `asr.languages` | `"*"` | Default ASR languages (`*` = all 30 languages, or e.g. `German,English`; switchable per recording) |
 | `asr.glossary` | `""` | Optional comma-separated domain vocabulary / acronyms passed to Qwen3-ASR |
-| `llmSummary.enabled` | `false` | Enable optional local Ollama executive summaries & action items |
+| `llmSummary.enabled` | `false` | Enable optional LLM executive summaries, decisions, action items & RAG query expansion (Ollama or OpenAI-compatible API) |
+| `llmSummary.openaiBaseUrl` | `""` | Optional OpenAI-compatible API base URL (e.g. `https://api.openai.com/v1` or local vLLM/LiteLLM); takes precedence over Ollama when set |
+| `llmSummary.openaiModel` | `gpt-4o-mini` | Model ID for the OpenAI-compatible chat completions API |
+| `llmSummary.openaiTimeoutSeconds` | `120` | Timeout in seconds for OpenAI-compatible LLM requests |
 
 ### Optional Secret Keys (`wortlaut-runtime`)
 
@@ -82,3 +85,4 @@ helm upgrade --install wortlaut ./charts/wortlaut \
 | `WORTLAUT_MICROSOFT_CALENDAR_TENANT_ID` | Entra Tenant ID or `common` |
 | `WORTLAUT_OLLAMA_URL` | Local Ollama HTTP base URL (e.g. `http://ollama:11434`) for executive summaries |
 | `WORTLAUT_OLLAMA_MODEL` | Ollama model identifier (default `qwen3.8:latest`) |
+| `WORTLAUT_OPENAI_API_KEY` | Optional Bearer API key for `llmSummary.openaiBaseUrl` (never logged or returned via API) |

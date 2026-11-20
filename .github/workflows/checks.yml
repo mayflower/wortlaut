@@ -24,8 +24,8 @@ jobs:
           persist-credentials: false
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
-          version: 0.13.8
-          python-version: '3.12'
+          version: 0.13.9
+          python-version: '3.14'
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '26'
@@ -68,7 +68,7 @@ jobs:
     timeout-minutes: 20
     services:
       postgres:
-        image: postgres:17.9-bookworm@sha256:47f917f7409eacd22fc5dfb1dee634e1b55cf0c01d1a7eb701be2227a03e0641
+        image: postgres:17.12-bookworm@sha256:837bed18782820fe967067cb5328b02b0d9992c1be9a37ee0c9c492cfc03af3b
         env:
           POSTGRES_USER: wortlaut_test
           POSTGRES_PASSWORD: fixture-postgres-password
@@ -92,8 +92,8 @@ jobs:
           persist-credentials: false
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
-          version: 0.13.8
-          python-version: '3.12'
+          version: 0.13.9
+          python-version: '3.14'
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '26'

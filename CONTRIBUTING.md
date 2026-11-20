@@ -13,7 +13,7 @@ Before proposing changes, please keep our core invariants in mind:
 
 ## Local Development Without a Kubernetes Cluster
 
-You only need **Python 3.12 + [`uv`](https://docs.astral.sh/uv/)**, **Node.js 22+**, and **Docker** installed locally:
+You only need **Python 3.14 + [`uv`](https://docs.astral.sh/uv/)**, **Node.js 22+**, and **Docker** installed locally:
 
 ```bash
 # 1. Install Python & Node.js dependencies, build worker/UI bundles, and install git QA hooks

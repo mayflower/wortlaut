@@ -241,7 +241,7 @@ curl --fail-with-body "http://127.0.0.1:34601/v1/recordings/$RECORDING_ID/export
 
 ## Contributing & Local Development
 
-External contributors only need Python 3.12 (`uv`), Node.js 22+, and Docker — **no Kubernetes cluster required** (see [CONTRIBUTING.md](CONTRIBUTING.md)):
+External contributors only need Python 3.14 (`uv`), Node.js 22+, and Docker — **no Kubernetes cluster required** (see [CONTRIBUTING.md](CONTRIBUTING.md)):
 
 ```sh
 make setup-local   # Install Python & Node dependencies, build bundles, and install git QA hooks

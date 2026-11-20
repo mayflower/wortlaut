@@ -25,6 +25,11 @@ data:
 {{- if .Values.llmSummary.ollamaModel }}
   WORTLAUT_OLLAMA_MODEL: {{ .Values.llmSummary.ollamaModel | quote }}
 {{- end }}
+{{- if .Values.llmSummary.openaiBaseUrl }}
+  WORTLAUT_OPENAI_BASE_URL: {{ .Values.llmSummary.openaiBaseUrl | quote }}
+  WORTLAUT_OPENAI_MODEL: {{ .Values.llmSummary.openaiModel | default "gpt-4o-mini" | quote }}
+  WORTLAUT_OPENAI_TIMEOUT_SECONDS: {{ .Values.llmSummary.openaiTimeoutSeconds | default 120 | toString | quote }}
+{{- end }}
 {{- if .Values.calendarOAuth.googleClientId }}
   WORTLAUT_GOOGLE_CALENDAR_CLIENT_ID: {{ .Values.calendarOAuth.googleClientId | quote }}
 {{- end }}
