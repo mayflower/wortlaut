@@ -6,6 +6,7 @@ import zipfile
 from datetime import UTC, datetime, timedelta
 from email import policy
 from email.parser import BytesParser
+from email.utils import parseaddr
 
 import pytest
 from aiosmtpd.controller import Controller
@@ -16,7 +17,7 @@ from test_processing import send_pcm
 from test_recordings import API, create
 
 from wortlaut.asr import commit_result, finalize_processing
-from wortlaut.mail import smtp_pass
+from wortlaut.mail import format_sender_header, smtp_pass
 from wortlaut.models import AsrJob, Attempt, AudioStream, Delivery, Recording
 from wortlaut.processing import segmentation_pass
 from wortlaut.settings import get_settings
@@ -138,6 +139,13 @@ def test_successful_real_smtp_has_three_exports_and_does_not_send_without_audio(
         "json",
     }
     assert smtp.envelopes == [["operator@example.org"]]
+    assert parseaddr(message["From"]) == ("Wortlaut.Cloud Robot", "bot@example.org")
+    assert format_sender_header("robot@wortlaut.cloud") == (
+        '"Wortlaut.Cloud Robot" <robot@wortlaut.cloud>'
+    )
+    assert format_sender_header("Custom Name <bot@example.org>") == (
+        "Custom Name <bot@example.org>"
+    )
     assert str(recording) not in message["Subject"]
     assert "Wortprotokoll" in message["Subject"]
     body = message.get_body(preferencelist=("plain",)).get_content()

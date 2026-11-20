@@ -3,6 +3,7 @@
 import hashlib
 import html
 import json
+from email.utils import parseaddr
 from functools import lru_cache
 from pathlib import Path
 
@@ -472,7 +473,7 @@ def _build_instance_info() -> dict:
 
     bot_email: str | None = None
     if s.smtp_from and s.smtp_from != "wortlaut@localhost":
-        bot_email = s.smtp_from
+        bot_email = parseaddr(s.smtp_from)[1] or s.smtp_from
     elif s.imap_username and "@" in s.imap_username:
         bot_email = s.imap_username
 

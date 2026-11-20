@@ -8,7 +8,7 @@ import uuid
 import zipfile
 from datetime import UTC, datetime, timedelta
 from email.message import EmailMessage
-from email.utils import parseaddr
+from email.utils import formataddr, parseaddr
 from html import escape
 from urllib.parse import urlsplit
 
@@ -689,11 +689,21 @@ def _build_completed_bodies(
     return plain_body, html_body
 
 
+DEFAULT_SMTP_FROM_NAME = "Wortlaut.Cloud Robot"
+
+
+def format_sender_header(raw_from: str) -> str:
+    display_name, address = parseaddr(raw_from)
+    addr = (address or raw_from).strip()
+    name = display_name.strip() or DEFAULT_SMTP_FROM_NAME
+    return formataddr((name, addr))
+
+
 def build_message(db, recording, delivery):
     settings = get_settings()
     data = export_data(db, recording)
     message = EmailMessage()
-    message["From"] = settings.smtp_from
+    message["From"] = format_sender_header(settings.smtp_from)
     message["To"] = ", ".join(delivery.recipients)
     message["Message-ID"] = delivery.message_id
     period = data["scheduled_period"]
@@ -885,7 +895,8 @@ def transmit(message, recipients):
                 return "failed", {}, "smtp_credentials_missing"
             connection.login(settings.smtp_username, settings.smtp_password.get_secret_value())
         sending = True
-        refused = connection.send_message(message, to_addrs=recipients)
+        envelope_from = parseaddr(settings.smtp_from)[1] or None
+        refused = connection.send_message(message, from_addr=envelope_from, to_addrs=recipients)
         return "accepted", {address: int(result[0]) for address, result in refused.items()}, None
     except smtplib.SMTPRecipientsRefused as error:
         return (
