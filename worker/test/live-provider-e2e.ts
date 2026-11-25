@@ -2755,6 +2755,7 @@ async function runProviderLiveTest(provider: Provider, config: LiveConfig) {
         meeting_url: meetingUrl,
         starts_at: startsAt,
         ends_at: endsAt,
+        ...(provider === 'teams' ? {guest_name: 'Wortlaut.cloud (Alice Test)'} : {}),
       },
       {'Idempotency-Key': randomUUID()},
     );

@@ -2384,6 +2384,24 @@ def _recording_inviter_name(db: Session, recording: Recording) -> str | None:
     return _humanize_inviter_name(inviter)
 
 
+def sanitize_teams_display_name(name: str) -> str:
+    """Sanitize display name for Microsoft Teams pre-join validation.
+
+    Teams rejects parentheses and most punctuation in guest names, allowing only
+    letters, digits, spaces, and `- ' . _ @`. Convert `Base (Inviter)` cleanly
+    to `Base - Inviter` so the Join button is never left disabled.
+    """
+    raw = (name or "").strip()
+    if not raw:
+        return "wortlaut"
+    cleaned = re.sub(r"\s*\(\s*", " - ", raw)
+    cleaned = cleaned.replace(")", " ")
+    cleaned = re.sub(r"[^\w\s'._@-]", " ", cleaned, flags=re.UNICODE)
+    cleaned = re.sub(r"\s*-\s*-\s*", " - ", cleaned)
+    cleaned = " ".join(cleaned.split()).strip(" -")
+    return cleaned[:60].rstrip(" -") or "wortlaut"
+
+
 def recording_display_name(db: Session, recording: Recording, settings=None) -> str:
     settings = settings or get_settings()
     base = (recording.guest_name or settings.assistant_name or "wortlaut").strip() or "wortlaut"
@@ -2502,7 +2520,8 @@ def bootstrap(
         if not settings.enable_teams:
             raise HTTPException(503, "teams_not_configured")
         return {**common, "teams": {
-            "display_name": display_name, "locale": settings.teams_locale,
+            "display_name": sanitize_teams_display_name(display_name),
+            "locale": settings.teams_locale,
         }}
     if recording.provider == "zoom":
         if not settings.enable_zoom:

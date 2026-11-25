@@ -3,7 +3,7 @@ import {AudioTransport} from '../src/transport.js';
 import {readSystemScreenText} from './browser.js';
 import {KeyframeTransport, type KeyframeUploadMetadata} from './keyframe-transport.js';
 import {installMeetCapture, MeetError, mergeKeyframeDiagnostics} from './meet.js';
-import {isTeamsOrigin} from '../src/teams-url.js';
+import {isTeamsOrigin, sanitizeTeamsDisplayName} from '../src/teams-url.js';
 import {installVideoTile, type VideoTilePatch} from './video-tile.js';
 
 export type TeamsBootstrap = {provider: 'teams'; meeting_id: string; attempt_id: string;
@@ -17,7 +17,7 @@ export type TeamsBootstrap = {provider: 'teams'; meeting_id: string; attempt_id:
 const browserLabel = /^(Continue on this browser|Join on the web instead|In diesem Browser fortfahren|Stattdessen im Web teilnehmen)$/i;
 const joinLabel = /^(Join now|Jetzt teilnehmen)$/i;
 const leaveLabel = /^(Leave|Leave meeting|Verlassen|Besprechung verlassen)(?: \(.*\))?$/i;
-const waiting = /Someone will let you in\b|You[’']re in the lobby|Waiting.*(?:admit|let you in)|Please wait until someone admits|Jemand wird Sie.*einlassen|Sie (?:befinden sich|sind) im Wartebereich|Warten.*(?:Zulassung|eingelassen)/i;
+const waiting = /Someone.*(?:will|should) let you in\b|We['’]ve let people.*know you['’]re waiting|When the meeting starts.*know you['’]re waiting|You[’']re in the lobby|Waiting.*(?:admit|let you in)|Please wait until someone admits|Jemand.*(?:wird|sollte) Sie.*(?:einlassen|hereinlassen)|Wir haben.*mitgeteilt.*dass Sie warten|Wenn die Besprechung beginnt.*dass Sie warten|Sie (?:befinden sich|sind) im Wartebereich|Warten.*(?:Zulassung|eingelassen|herein)/i;
 
 // Join flow reference: Vexa f1a62fbbdfd2c98cb162582d82c31fe8102acc89.
 export class TeamsBrowser {
@@ -169,8 +169,9 @@ export class TeamsBrowser {
           this.initialized = true;
         }
         await this.dismissMediaPrompt();
-        await name.first().fill(this.bootstrap.teams.display_name, {timeout: 4000}).catch(() => {});
-        if ((await name.first().inputValue().catch(() => '')) !== this.bootstrap.teams.display_name) {
+        const displayName = sanitizeTeamsDisplayName(this.bootstrap.teams.display_name);
+        await name.first().fill(displayName, {timeout: 4000}).catch(() => {});
+        if ((await name.first().inputValue().catch(() => '')) !== displayName) {
           await this.dismissMediaPrompt();
           await new Promise(resolve => setTimeout(resolve, 150));
           continue;

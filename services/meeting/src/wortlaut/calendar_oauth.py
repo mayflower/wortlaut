@@ -2,6 +2,7 @@
 
 import base64
 import hashlib
+import html
 import json
 import logging
 import re
@@ -33,7 +34,7 @@ from wortlaut.models import (
 )
 from wortlaut.oidc import Principal
 from wortlaut.settings import derive_subkey, get_settings
-from wortlaut.validation import normalize_meeting_url
+from wortlaut.validation import normalize_meeting_url, unwrap_conference_redirect
 
 CalendarOAuthProvider = Literal["google", "microsoft"]
 
@@ -91,8 +92,9 @@ def extract_conference_target(texts: list[str]) -> tuple[str, str] | None:
     for content in texts:
         if not content:
             continue
-        for candidate in re.findall(r'https://[^\s<>"\']+', content):
-            candidate = candidate.rstrip(".,;)>]")
+        decoded_content = html.unescape(content)
+        for candidate in re.findall(r'https://[^\s<>"\']+', decoded_content):
+            candidate = unwrap_conference_redirect(candidate.rstrip(".,;)>]"))
             try:
                 provider, target = normalize_meeting_url(candidate)
             except ValueError:

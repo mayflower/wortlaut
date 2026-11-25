@@ -475,3 +475,78 @@ def test_all_four_providers_enabled_by_default(client, monkeypatch):
         body = resp.json()
         assert body["provider"] == provider
         assert boot_key in body
+
+
+def test_teams_display_name_sanitization_and_calendar_url_formats():
+    from wortlaut.app import sanitize_teams_display_name
+    from wortlaut.calendar import meeting_link
+    from wortlaut.calendar_oauth import extract_conference_target
+    from wortlaut.validation import normalize_meeting_url
+
+    # Parentheses & forbidden punctuation break Teams pre-join validation; sanitize cleanly.
+    assert (
+        sanitize_teams_display_name("Wortlaut.cloud (Johann Peter Hartmann)")
+        == "Wortlaut.cloud - Johann Peter Hartmann"
+    )
+    assert sanitize_teams_display_name("wortlaut (Mick Hohmann)") == "wortlaut - Mick Hohmann"
+    assert (
+        sanitize_teams_display_name("wortlaut (Björn Müller / R&D)")
+        == "wortlaut - Björn Müller R D"
+    )
+    assert sanitize_teams_display_name("() / :") == "wortlaut"
+
+    # Unencoded Teams /l/meetup-join/ path with ':' and '@' (decoded by Google/Apple Calendar)
+    unencoded = (
+        "https://teams.microsoft.com/l/meetup-join/"
+        "19:meeting_NjQ3M2==@thread.v2/0?context=%7b%22Tid%22%3a%22abc%22%7d"
+    )
+    prov, norm = normalize_meeting_url(unencoded)
+    assert prov == "teams"
+    assert norm == unencoded
+
+    # Outlook /dl/launcher/launcher.html wrapper
+    launcher = (
+        "https://teams.microsoft.com/dl/launcher/launcher.html"
+        "?url=%2F_%23%2Fl%2Fmeetup-join%2F19%3Ameeting_abc%40thread.v2%2F0%3Fcontext%3D%257B%257D"
+        "&type=meetup-join"
+    )
+    prov_l, norm_l = normalize_meeting_url(launcher)
+    assert prov_l == "teams"
+    assert norm_l.startswith("https://teams.microsoft.com/l/meetup-join/19:meeting_abc@thread.v2/0?")
+
+    # Teams v2 hash URL
+    v2_url = (
+        "https://teams.microsoft.com/v2/?meetingjoin=true"
+        "#/l/meetup-join/19:meeting_xyz@thread.v2/0?context=%7b%7d"
+    )
+    prov_v2, norm_v2 = normalize_meeting_url(v2_url)
+    assert prov_v2 == "teams"
+    assert norm_v2 == "https://teams.microsoft.com/l/meetup-join/19:meeting_xyz@thread.v2/0?context=%7b%7d"
+
+    # Calendar HTML description with &amp; entity encoding
+    html_desc = (
+        '<a href="https://teams.microsoft.com/meet/3847003177954612?p=Pass123&amp;anon=true">'
+        "Join Teams</a>"
+    )
+    extracted = extract_conference_target([html_desc])
+    assert extracted == (
+        "teams",
+        "https://teams.microsoft.com/meet/3847003177954612?p=Pass123&anon=true",
+    )
+
+    # Outlook SafeLinks wrapper around a Teams meeting link
+    safelink = (
+        "https://eur01.safelinks.protection.outlook.com/?url="
+        "https%3A%2F%2Fteams.microsoft.com%2Fl%2Fmeetup-join%2F19%253ameeting_123%2540thread.v2%2F0"
+        "%3Fcontext%3D%257b%257d&amp;data=05%7C02%7Cuser%40example.com"
+    )
+    extracted_sl = extract_conference_target([safelink])
+    assert extracted_sl is not None
+    assert extracted_sl[0] == "teams"
+    assert extracted_sl[1].startswith(
+        "https://teams.microsoft.com/l/meetup-join/19%3ameeting_123%40thread.v2/0?"
+    )
+
+    # IMAP/ICS calendar extraction also unescapes HTML and unwraps SafeLinks
+    ics_link = meeting_link({"DESCRIPTION": safelink}, "")
+    assert ics_link == extracted_sl[1]

@@ -3,6 +3,31 @@ import {spawn} from 'node:child_process';
 import {once} from 'node:events';
 import {createServer} from 'node:http';
 import {test} from 'node:test';
+import {isTeamsMeeting, sanitizeTeamsDisplayName} from '../src/teams-url.js';
+
+test('teams URL validation and display name sanitization handle calendar invites', () => {
+  assert.equal(
+    isTeamsMeeting(new URL('https://teams.microsoft.com/l/meetup-join/19:meeting_abc==@thread.v2/0?context=%7b%7d')),
+    true,
+  );
+  assert.equal(
+    isTeamsMeeting(new URL('https://teams.microsoft.com/meet/3847003177954612?p=abc')),
+    true,
+  );
+  assert.equal(
+    isTeamsMeeting(new URL('https://teams.microsoft.com/evil/path')),
+    false,
+  );
+  assert.equal(
+    sanitizeTeamsDisplayName('Wortlaut.cloud (Johann Peter Hartmann)'),
+    'Wortlaut.cloud - Johann Peter Hartmann',
+  );
+  assert.equal(
+    sanitizeTeamsDisplayName('wortlaut (Björn Müller / R&D)'),
+    'wortlaut - Björn Müller R D',
+  );
+  assert.equal(sanitizeTeamsDisplayName('() / :'), 'wortlaut');
+});
 
 test('claimed startup failure reports terminal status; rejected claim never bootstraps', async () => {
   for (const rejectClaim of [false, true]) {

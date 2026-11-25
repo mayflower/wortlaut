@@ -1,6 +1,7 @@
 """Authenticated MIME/ICS intake and single occurrences; no provider URL fetches."""
 
 import hashlib
+import html
 import imaplib
 import re
 import ssl
@@ -20,7 +21,7 @@ from sqlalchemy.orm import Session
 from wortlaut.controller import request_cancellation
 from wortlaut.models import CalendarEntry, MailCursor, MailImport, Recording
 from wortlaut.settings import get_settings
-from wortlaut.validation import normalize_meeting_url
+from wortlaut.validation import normalize_meeting_url, unwrap_conference_redirect
 
 MAIL_LOCK = 749836125
 
@@ -105,8 +106,9 @@ def meeting_link(event, mail_text):
     # ICS is authoritative; the mail body is a fallback, not another event.
     for content in ("\n".join(fields), mail_text):
         candidates = set()
-        for candidate in re.findall(r'https://[^\s<>"\']+', content):
-            candidate = candidate.rstrip(".,;)")
+        decoded_content = html.unescape(content or "")
+        for candidate in re.findall(r'https://[^\s<>"\']+', decoded_content):
+            candidate = unwrap_conference_redirect(candidate.rstrip(".,;)>]"))
             try:
                 provider, target = normalize_meeting_url(candidate)
             except ValueError:
