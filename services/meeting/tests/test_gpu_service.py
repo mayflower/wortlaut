@@ -875,3 +875,30 @@ def test_all_30_qwen_asr_languages_and_per_request_language_switching(monkeypatc
         "/v1/transcribe", content=pcm, headers={**base_headers, "X-ASR-Languages": "Klingon"}
     )
     assert bad.status_code == 400
+
+    # 5. Auto (`*`) dynamically masks CJK/Greek once step-1 selects a Latin language (German),
+    # and catches space-prefixed partial CJK BPE bytes (`ĠåĹ` -> U+FFFD).
+    vocab["Ġ\u00e5\u0139"] = 55
+    vocab["ĠHallo"] = 56
+    orig_to_str = Tokenizer.convert_tokens_to_string
+
+    def to_str_with_partial(self, group):
+        if group == ["Ġ\u00e5\u0139"]:
+            return " \ufffd"
+        return orig_to_str(self, group)
+
+    monkeypatch.setattr(Tokenizer, "convert_tokens_to_string", to_str_with_partial)
+    asr2 = service.QwenASR(proc, Network())
+    assert 55 in asr2._latin_forbidden_token_ids
+    service.model = asr2
+
+    Processor.target_lang = "German"
+    Processor.target_text = "Hallo"
+    Processor.target_tok = 56
+    res_auto_de = client.post(
+        "/v1/transcribe", content=pcm, headers={**base_headers, "X-ASR-Languages": "*"}
+    )
+    assert res_auto_de.status_code == 200
+    assert res_auto_de.json()["language"] == "German"
+    assert observed["jp_token_allowed"] is False
+    assert observed["greek_token_allowed"] is False

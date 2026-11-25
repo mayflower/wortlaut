@@ -584,18 +584,26 @@ def _format_citation_tag(item: dict[str, Any]) -> str:
     return ""
 
 
+_NON_FAILURE_END_REASONS = ("normal", "room_empty", "cancelled")
+
+
 def _human_status_label(rec: Recording) -> str:
     if rec.participation == "scheduled":
         return "upcoming"
+    if rec.processing == "failed":
+        return f"failed ({rec.processing_error or rec.participation_reason or 'processing_failed'})"
+    if rec.participation == "ended":
+        reason = rec.participation_reason
+        if reason == "cancelled":
+            return "cancelled"
+        if reason not in (None, *_NON_FAILURE_END_REASONS):
+            return f"failed ({reason})"
+        if rec.processing == "completed":
+            if reason == "room_empty":
+                return "completed (room_empty)"
+            return "completed"
     if rec.processing == "completed":
         return "completed"
-    if rec.processing == "failed" or (
-        rec.participation == "ended"
-        and rec.participation_reason not in (None, "normal", "room_empty", "cancelled")
-    ):
-        return f"failed ({rec.processing_error or rec.participation_reason})"
-    if rec.participation == "ended" and rec.participation_reason == "cancelled":
-        return "cancelled"
     return f"active ({rec.participation}/{rec.processing})"
 
 
@@ -807,15 +815,21 @@ def _execute_tool_sync(
                 )
             )
         elif status_filter == "completed":
-            base_stmt = base_stmt.where(Recording.processing == "completed")
+            base_stmt = base_stmt.where(
+                Recording.processing == "completed",
+                or_(
+                    Recording.participation_reason.is_(None),
+                    Recording.participation_reason.in_(("normal", "room_empty")),
+                ),
+            )
         elif status_filter == "failed":
             base_stmt = base_stmt.where(
                 or_(
                     Recording.processing == "failed",
                     and_(
                         Recording.participation == "ended",
-                        Recording.processing != "completed",
-                        Recording.participation_reason != "cancelled",
+                        Recording.participation_reason.is_not(None),
+                        ~Recording.participation_reason.in_(_NON_FAILURE_END_REASONS),
                     ),
                 )
             )
@@ -943,6 +957,10 @@ def _execute_tool_sync(
             f"- Segments: {len(segs)} · Keyframes: {len(keyframes)} · "
             f"Pause windows: {len(pause_windows)}"
         )
+        if rec.participation_reason and rec.participation_reason != "normal":
+            lines.append(f"- End reason: `{rec.participation_reason}`")
+        if len(segs) == 0 and rec.participation == "ended" and rec.processing == "completed":
+            lines.append("- Note: No speech segments were captured for this recording.")
         if speakers:
             lines.append(f"- Speakers ({len(speakers)}): {', '.join(speakers)}")
 

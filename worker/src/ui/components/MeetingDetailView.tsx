@@ -664,6 +664,11 @@ export function MeetingDetailView({
                         participation={recording.participation}
                         processing={recording.processing}
                         hasError={hasError}
+                        hasSpeech={
+                          transcript.segments.length > 0 ||
+                          sampleSec > 0 ||
+                          timelineDurationSec > 0
+                        }
                       />
                     </HStack>
                   </VStack>

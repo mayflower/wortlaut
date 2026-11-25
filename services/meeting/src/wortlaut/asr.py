@@ -46,15 +46,105 @@ class InvalidResult(ValueError):
 MIN_SEGMENT_CONFIDENCE = 0.35
 MIN_PEAK_WORD_CONFIDENCE = 0.55
 MIN_SINGLE_WORD_CONFIDENCE = 0.28
+MIN_SHORT_SINGLE_WORD_CONFIDENCE = 0.42
+SHORT_SINGLE_WORD_MAX_SECONDS = 0.8
+SHORT_SCRIPT_HALLUCINATION_MAX_SECONDS = 2.5
+
+LATIN_SCRIPT_LANGUAGES = frozenset(
+    {
+        "German",
+        "English",
+        "French",
+        "Spanish",
+        "Portuguese",
+        "Indonesian",
+        "Italian",
+        "Vietnamese",
+        "Turkish",
+        "Malay",
+        "Dutch",
+        "Swedish",
+        "Danish",
+        "Finnish",
+        "Polish",
+        "Czech",
+        "Filipino",
+        "Hungarian",
+        "Romanian",
+    }
+)
+_NON_LATIN_SCRIPT_RE = re.compile(
+    r"[\u0370-\u052f\u0600-\u06ff\u0900-\u0dff\u0e00-\u0eff"
+    r"\u1100-\u11ff\u3000-\u30ff\u3130-\u318f\u3400-\u4dbf"
+    r"\u4e00-\u9fff\uac00-\ud7af\uf900-\ufaff\uff01-\uffef]"
+)
+_LATIN_LETTER_RE = re.compile(r"[A-Za-zÀ-ÖØ-öø-ÿ]")
 
 
-def _is_low_confidence_hallucination(word_confidences: list[float], word_count: int) -> bool:
+def _is_latin_only_spec(lang_spec: str | None) -> bool:
+    if not lang_spec or lang_spec.strip().lower() in ("auto", "*", "all"):
+        return False
+    parts = [p.strip() for p in lang_spec.split(",") if p.strip()]
+    return bool(parts) and all(p in LATIN_SCRIPT_LANGUAGES for p in parts)
+
+
+def _sanitize_unexpected_script_words(
+    accepted: list[dict],
+    *,
+    duration: float,
+    detected_language: str | None,
+    lang_spec: str | None,
+    primary_language: str | None,
+) -> list[dict]:
+    """Strip stray CJK/non-Latin filler tokens in Latin speech and drop short CJK hallucinations."""
+    if not accepted:
+        return accepted
+    joined = " ".join(str(w.get("word") or "") for w in accepted)
+    if not _NON_LATIN_SCRIPT_RE.search(joined):
+        return accepted
+
+    latin_only = _is_latin_only_spec(lang_spec)
+    detected_is_latin = detected_language in LATIN_SCRIPT_LANGUAGES
+    primary_is_latin = primary_language in LATIN_SCRIPT_LANGUAGES
+    latin_count = len(_LATIN_LETTER_RE.findall(joined))
+    non_latin_count = len(_NON_LATIN_SCRIPT_RE.findall(joined))
+
+    if latin_only or detected_is_latin or (latin_count >= 4 and latin_count > non_latin_count * 2):
+        cleaned = [
+            w
+            for w in accepted
+            if not (
+                _NON_LATIN_SCRIPT_RE.search(str(w.get("word") or ""))
+                and not _LATIN_LETTER_RE.search(str(w.get("word") or ""))
+            )
+        ]
+        return cleaned
+
+    if (
+        primary_is_latin
+        and latin_count == 0
+        and len(accepted) <= 2
+        and duration <= SHORT_SCRIPT_HALLUCINATION_MAX_SECONDS
+    ):
+        return []
+
+    return accepted
+
+
+def _is_low_confidence_hallucination(
+    word_confidences: list[float], word_count: int, *, duration: float | None = None
+) -> bool:
     if not word_confidences or len(word_confidences) != word_count:
         return False
     mean_conf = sum(word_confidences) / len(word_confidences)
     peak_conf = max(word_confidences)
     if word_count == 1:
-        return peak_conf < MIN_SINGLE_WORD_CONFIDENCE
+        threshold = (
+            MIN_SHORT_SINGLE_WORD_CONFIDENCE
+            if duration is not None and duration < SHORT_SINGLE_WORD_MAX_SECONDS
+            else MIN_SINGLE_WORD_CONFIDENCE
+        )
+        return peak_conf < threshold
     return mean_conf < MIN_SEGMENT_CONFIDENCE and peak_conf < MIN_PEAK_WORD_CONFIDENCE
 
 
@@ -91,7 +181,14 @@ def _is_number(value) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
 
-def segment_result(job: AsrJob, stream: AudioStream, response: dict):
+def segment_result(
+    job: AsrJob,
+    stream: AudioStream,
+    response: dict,
+    *,
+    lang_spec: str | None = None,
+    primary_language: str | None = None,
+):
     words = response.get("words")
     if not isinstance(words, list) or (response.get("text") and not words):
         raise InvalidResult("words_unavailable")
@@ -129,11 +226,21 @@ def segment_result(job: AsrJob, stream: AudioStream, response: dict):
     # A transcript that hit the generation budget without an end marker or
     # repeats the same n-gram in a loop is a decoder loop, not speech.
     truncated = response.get("truncated") is True
+    detected_language = (
+        response.get("language") if isinstance(response.get("language"), str) else None
+    )
+    accepted = _sanitize_unexpected_script_words(
+        accepted,
+        duration=duration,
+        detected_language=detected_language,
+        lang_spec=lang_spec,
+        primary_language=primary_language,
+    )
     word_confs = [w["confidence"] for w in accepted if "confidence" in w]
     if (
         truncated
         or _has_repetition_loop(accepted)
-        or _is_low_confidence_hallucination(word_confs, len(accepted))
+        or _is_low_confidence_hallucination(word_confs, len(accepted), duration=duration)
     ):
         accepted = []
         word_confs = []
@@ -448,6 +555,44 @@ def _resolve_primary_language(
                 and (not _is_number(prior_conf) or float(prior_conf) >= 0.55)
             ):
                 return prior_lang
+    attempt = db.get(Attempt, stream.attempt_id) if stream.attempt_id else None
+    if attempt is not None:
+        rec_stream_ids = list(
+            db.scalars(
+                select(AudioStream.id)
+                .join(Attempt, Attempt.id == AudioStream.attempt_id)
+                .where(Attempt.recording_id == attempt.recording_id)
+            ).all()
+        )
+        if rec_stream_ids:
+            recent_segs = list(
+                db.scalars(
+                    select(TranscriptSegment)
+                    .join(AsrJob, AsrJob.id == TranscriptSegment.id)
+                    .where(
+                        AsrJob.stream_id.in_(rec_stream_ids),
+                        AsrJob.id != job.id,
+                    )
+                    .order_by(AsrJob.created_at.desc())
+                    .limit(16)
+                ).all()
+            )
+            lang_weights: dict[str, int] = {}
+            for seg in recent_segs:
+                if not isinstance(seg.result, dict):
+                    continue
+                seg_lang = seg.result.get("language")
+                seg_text = " ".join(str(seg.result.get("text") or "").split())
+                seg_conf = seg.result.get("confidence")
+                if (
+                    isinstance(seg_lang, str)
+                    and seg_lang
+                    and len(seg_text) >= 12
+                    and (not _is_number(seg_conf) or float(seg_conf) >= 0.55)
+                ):
+                    lang_weights[seg_lang] = lang_weights.get(seg_lang, 0) + len(seg_text)
+            if lang_weights:
+                return max(lang_weights.items(), key=lambda kv: kv[1])[0]
     return None
 
 
@@ -522,7 +667,13 @@ def inference_pass(engine):
                 or payload.get("pcm_sha256") != hashlib.sha256(pcm).hexdigest()
             ):
                 raise InvalidResult("gpu_result_identity_mismatch")
-            result = segment_result(job, stream, payload)
+            result = segment_result(
+                job,
+                stream,
+                payload,
+                lang_spec=lang_spec,
+                primary_language=primary_language,
+            )
             commit_result(db, identifier, result)
             outcome = "completed"
         except httpx.HTTPError:

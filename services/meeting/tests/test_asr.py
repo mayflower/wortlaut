@@ -1217,3 +1217,208 @@ def test_persistent_glossary_editor_tenancy_asr_and_export_aliases(
         )
     finally:
         get_settings.cache_clear()
+
+
+def test_segment_result_strips_cjk_filler_and_rejects_short_cjk_hallucination():
+    now = datetime.now(UTC)
+    stream = AudioStream(
+        id=uuid.uuid4(),
+        attempt_id=uuid.uuid4(),
+        stream_id=uuid.uuid4(),
+        epoch=uuid.uuid4(),
+        contract={
+            "provider_source_id": "meet-rcv-1",
+            "source_kind": "speaker",
+            "participant_id": "spk-1",
+            "speaker_id": "spk-1",
+            "participant_name": "Christian",
+            "attribution_unknown": False,
+            "session_utc_origin": now.isoformat(),
+            "monotonic_origin_ms": 0,
+            "session_monotonic_origin_ms": 0,
+        },
+    )
+    job = AsrJob(
+        id=str(uuid.uuid4()),
+        stream_id=stream.id,
+        start_sample=0,
+        end_sample=16000,
+        core_start=0,
+        core_end=16000,
+        status="processing",
+        binding=dict(stream.contract),
+    )
+
+    # 1. Stray CJK filler token inside a German segment is cleanly stripped.
+    mixed = segment_result(
+        job,
+        stream,
+        {
+            "language": "German",
+            "text": "嗯。 Okay, das macht es schwieriger.",
+            "words": [
+                {"word": "嗯。", "confidence": 0.45},
+                {"word": "Okay,", "confidence": 0.91},
+                {"word": "das", "confidence": 0.94},
+                {"word": "macht", "confidence": 0.92},
+                {"word": "es", "confidence": 0.93},
+                {"word": "schwieriger.", "confidence": 0.89},
+            ],
+        },
+        lang_spec="German,English",
+        primary_language="German",
+    )
+    assert mixed["text"] == "Okay, das macht es schwieriger."
+    assert len(mixed["words"]) == 5
+
+    # 2. Pure short CJK hallucination in an established German auto-mode meeting is dropped.
+    hallucinated = segment_result(
+        job,
+        stream,
+        {
+            "language": "Chinese",
+            "text": "可以。",
+            "words": [{"word": "可以。", "confidence": 0.82}],
+        },
+        lang_spec="auto",
+        primary_language="German",
+    )
+    assert hallucinated["text"] == ""
+    assert hallucinated["words"] == []
+
+    # 3. Genuine Chinese meeting (primary_language="Chinese") stays completely untouched.
+    genuine_zh = segment_result(
+        job,
+        stream,
+        {
+            "language": "Chinese",
+            "text": "可以。",
+            "words": [{"word": "可以。", "confidence": 0.82}],
+        },
+        lang_spec="auto",
+        primary_language="Chinese",
+    )
+    assert genuine_zh["text"] == "可以。"
+
+    # 4. Ultra-short low-confidence single-word noise blip (<0.8s, conf<0.42) is dropped,
+    # while a clear short "Ja." (>=0.42) is preserved.
+    short_job = AsrJob(
+        id=str(uuid.uuid4()),
+        stream_id=stream.id,
+        start_sample=0,
+        end_sample=8000,
+        core_start=0,
+        core_end=8000,
+        status="processing",
+        binding=dict(stream.contract),
+    )
+    noise_blip = segment_result(
+        short_job,
+        stream,
+        {
+            "language": "German",
+            "text": "personen.",
+            "words": [{"word": "personen.", "confidence": 0.35}],
+        },
+        lang_spec="auto",
+        primary_language="German",
+    )
+    assert noise_blip["text"] == ""
+
+    clear_ja = segment_result(
+        short_job,
+        stream,
+        {
+            "language": "German",
+            "text": "Ja.",
+            "words": [{"word": "Ja.", "confidence": 0.78}],
+        },
+        lang_spec="auto",
+        primary_language="German",
+    )
+    assert clear_ja["text"] == "Ja."
+
+
+def test_resolve_primary_language_falls_back_to_recording_majority(database):
+    from wortlaut.asr import _resolve_primary_language
+    from wortlaut.models import Attempt, Recording
+
+    now = datetime.now(UTC)
+    with Session(database) as db:
+        rec = Recording(
+            id=uuid.uuid4(),
+            idempotency_key=f"lang-fallback-{uuid.uuid4().hex}",
+            request_digest=f"digest-{uuid.uuid4().hex}",
+            provider="google_meet",
+            meeting_url="https://meet.google.com/aaa-bbbb-ccc",
+            title="Deutsch Meeting",
+            starts_at=now,
+            ends_at=now + timedelta(hours=1),
+            participation="capturing",
+            processing="pending",
+            protocol_meta={},
+        )
+        db.add(rec)
+        db.flush()
+        att = Attempt(
+            id=uuid.uuid4(),
+            recording_id=rec.id,
+            credential_hash="h",
+            credential_expires_at=now + timedelta(hours=2),
+            diagnostics={},
+        )
+        db.add(att)
+        db.flush()
+        stream_a = AudioStream(
+            id=uuid.uuid4(),
+            attempt_id=att.id,
+            stream_id=uuid.uuid4(),
+            epoch=uuid.uuid4(),
+            contract={"participant_id": "a", "speaker_id": "a", "participant_name": "Alice"},
+        )
+        stream_b = AudioStream(
+            id=uuid.uuid4(),
+            attempt_id=att.id,
+            stream_id=uuid.uuid4(),
+            epoch=uuid.uuid4(),
+            contract={"participant_id": "b", "speaker_id": "b", "participant_name": "Bob"},
+        )
+        db.add_all([stream_a, stream_b])
+        db.flush()
+        job_a = AsrJob(
+            id=str(uuid.uuid4()),
+            stream_id=stream_a.id,
+            start_sample=0,
+            end_sample=48000,
+            core_start=0,
+            core_end=48000,
+            status="completed",
+            binding=dict(stream_a.contract),
+        )
+        job_b = AsrJob(
+            id=str(uuid.uuid4()),
+            stream_id=stream_b.id,
+            start_sample=48000,
+            end_sample=56000,
+            core_start=48000,
+            core_end=56000,
+            status="processing",
+            binding=dict(stream_b.contract),
+        )
+        db.add_all([job_a, job_b])
+        db.flush()
+        db.add(
+            TranscriptSegment(
+                id=job_a.id,
+                result={
+                    "id": job_a.id,
+                    "language": "German",
+                    "confidence": 0.89,
+                    "text": "Guten Morgen zusammen, lasst uns mit dem Architektur-Review starten.",
+                },
+            )
+        )
+        db.commit()
+
+        resolved = _resolve_primary_language(db, job_b, stream_b, "auto", get_settings())
+        assert resolved == "German"

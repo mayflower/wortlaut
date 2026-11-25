@@ -347,11 +347,15 @@ export function RecordingSidebar({
       width: pixel(175),
       renderCell: (row) => {
         const { hasError } = getRowErrorState(row);
+        const hasSpeech =
+          (row.quality?.durable_sample_count || 0) > 0 ||
+          (row.quality?.duration_seconds || 0) > 0;
         return (
           <StatusBadge
             participation={row.participation}
             processing={row.processing}
             hasError={hasError}
+            hasSpeech={hasSpeech}
           />
         );
       },
@@ -959,6 +963,11 @@ export function RecordingSidebar({
                                   participation={row.participation}
                                   processing={row.processing}
                                   hasError={hasError}
+                                  hasSpeech={
+                                    (row.quality?.durable_sample_count || 0) >
+                                      0 ||
+                                    (row.quality?.duration_seconds || 0) > 0
+                                  }
                                 />
                                 <ProviderBadge
                                   provider={row.provider}

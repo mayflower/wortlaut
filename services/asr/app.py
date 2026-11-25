@@ -264,6 +264,9 @@ class QwenASR:
             else ()
         )
         self.end_token_id = self._end_marker_token_id()
+        self.latin_lang_token_ids = frozenset(
+            tid for lang, tid in self.all_lang_ids.items() if lang in LATIN_SCRIPT_LANGUAGES
+        )
         self._latin_forbidden_token_ids = self._scan_non_latin_script_token_ids()
         self.forbidden_script_token_ids = (
             list(self._latin_forbidden_token_ids)
@@ -293,12 +296,13 @@ class QwenASR:
             if tok == ASR_TEXT_MARKER:
                 continue
             piece = self.tokenizer.convert_tokens_to_string([tok])
+            raw_body = tok.lstrip(SPACE_MARKER)
             if piece and (
                 _DISALLOWED_SCRIPT_RE.search(piece)
                 or (
                     "\ufffd" in piece
-                    and len(tok) <= 2
-                    and 0xE3 <= ord(tok[0]) <= 0xED
+                    and bool(raw_body)
+                    and any(0xE3 <= ord(ch) <= 0xED for ch in raw_body)
                 )
             ):
                 forbidden.append(tid)
@@ -409,10 +413,25 @@ class QwenASR:
 
         prompt_len = inputs["input_ids"].shape[1]
         gen_kwargs = {}
-        if allowed_ids or forbidden_ids:
+        latin_lang_ids = self.latin_lang_token_ids
+        dynamic_latin_forbidden = self._latin_forbidden_token_ids
+        if allowed_ids or forbidden_ids or (latin_lang_ids and dynamic_latin_forbidden):
             lang_marker_id = self.language_token_id
             none_id = self.none_token_id
             end_id = self.end_token_id
+
+            def _apply_forbidden_mask(scores, token_ids: list[int], cache_suffix: str):
+                if hasattr(torch, "tensor") and hasattr(scores, "device"):
+                    dev_key = f"{scores.device}:{cache_suffix}"
+                    idx = self._forbidden_tensor_cache.get(dev_key)
+                    if idx is None:
+                        idx = torch.tensor(token_ids, dtype=torch.long, device=scores.device)
+                        self._forbidden_tensor_cache[dev_key] = idx
+                else:
+                    idx = token_ids
+                masked = scores.clone()
+                masked[:, idx] = float("-inf")
+                return masked
 
             def gate_step(input_ids, scores):
                 step_pos = input_ids.shape[1] - prompt_len
@@ -439,19 +458,16 @@ class QwenASR:
                     masked[:, end_id] = scores[:, end_id]
                     return masked
                 if forbidden_ids and step_pos >= 2:
-                    if hasattr(torch, "tensor") and hasattr(scores, "device"):
-                        dev_key = str(scores.device)
-                        idx = self._forbidden_tensor_cache.get(dev_key)
-                        if idx is None:
-                            idx = torch.tensor(
-                                forbidden_ids, dtype=torch.long, device=scores.device
-                            )
-                            self._forbidden_tensor_cache[dev_key] = idx
-                    else:
-                        idx = forbidden_ids
-                    masked = scores.clone()
-                    masked[:, idx] = float("-inf")
-                    return masked
+                    return _apply_forbidden_mask(scores, forbidden_ids, "explicit")
+                if (
+                    not forbidden_ids
+                    and dynamic_latin_forbidden
+                    and latin_lang_ids
+                    and step_pos >= 2
+                    and input_ids.shape[1] > prompt_len + 1
+                    and int(input_ids[0, prompt_len + 1]) in latin_lang_ids
+                ):
+                    return _apply_forbidden_mask(scores, dynamic_latin_forbidden, "latin_dynamic")
                 return scores
 
             gen_kwargs["logits_processor"] = [gate_step]

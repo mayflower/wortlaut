@@ -1244,3 +1244,49 @@ def test_mcp_tools_resources_multi_user_isolation_and_ui_revocation(
     assert rfc_rev.status_code == 200
     assert _rpc(ro_headers, "ping").status_code == 401
     assert client.get("/v1/mcp/grants", headers=alice_ui_hdrs).json()["grants"] == []
+
+
+def test_mcp_status_classification_for_failed_join_and_room_empty(database):
+    from wortlaut.mcp_server import _human_status_label
+    from wortlaut.models import Recording
+
+    now = datetime.now(UTC)
+    failed_join = Recording(
+        id=uuid.uuid4(),
+        provider="teams",
+        meeting_url="https://teams.microsoft.com/l/meetup-join/test",
+        title="Teams Admission Timeout",
+        starts_at=now,
+        ends_at=now + timedelta(hours=1),
+        participation="ended",
+        participation_reason="admission_timeout",
+        processing="completed",
+        protocol_meta={},
+    )
+    empty_room = Recording(
+        id=uuid.uuid4(),
+        provider="google_meet",
+        meeting_url="https://meet.google.com/aaa-bbbb-ccc",
+        title="Empty Room",
+        starts_at=now,
+        ends_at=now + timedelta(hours=1),
+        participation="ended",
+        participation_reason="room_empty",
+        processing="completed",
+        protocol_meta={},
+    )
+    cancelled = Recording(
+        id=uuid.uuid4(),
+        provider="zoom",
+        meeting_url="https://zoom.us/j/123456789",
+        title="Cancelled Call",
+        starts_at=now,
+        ends_at=now + timedelta(hours=1),
+        participation="ended",
+        participation_reason="cancelled",
+        processing="completed",
+        protocol_meta={},
+    )
+    assert _human_status_label(failed_join) == "failed (admission_timeout)"
+    assert _human_status_label(empty_room) == "completed (room_empty)"
+    assert _human_status_label(cancelled) == "cancelled"

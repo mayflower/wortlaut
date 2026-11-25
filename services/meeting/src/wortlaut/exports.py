@@ -2208,9 +2208,10 @@ def extract_keyframe_visual_context(
             '{"view": "Kurze Beschreibung der Ansicht (max. 1 Satz)", '
             '"items": ["Sichtbare Ticket-IDs mit Titel (z. B. MAIS-270: ...), PR-Nummern, '
             'Folienüberschriften oder Dateinamen"], '
-            '"terms": ["Sichtbare Produktnamen, Bibliotheken und Fachbegriffe in '
+            '"terms": ["Sichtbare Produktnamen, Modell-IDs, Bibliotheken und Fachbegriffe in '
             'exakter Originalschreibweise"]}\n'
-            "Erfinde nichts hinzu; gib nur klar lesbare Einträge zurück."
+            "Übernimm Ziffern, Versionsnummern (z. B. 3.0 vs. 3.8), Modell-IDs und Dateinamen "
+            "zeichengetreu; erfinde nichts hinzu und lasse unscharfen Text weg."
         )
         usr_prompt = "Analysiere diesen geteilten Bildschirm-Ausschnitt."
     else:
@@ -2219,9 +2220,10 @@ def extract_keyframe_visual_context(
             "strictly as a JSON object with these fields:\n"
             f'{{"view": "Concise 1-sentence description in {summary_lang}", '
             '"items": ["Visible ticket IDs with title, PR numbers, slide headings, or files"], '
-            '"terms": ["Visible product names, libraries, and technical terms in exact '
-            'spelling"]}\n'
-            "Do not guess unreadable text."
+            '"terms": ["Visible product names, model IDs, libraries, and technical terms in '
+            'exact spelling"]}\n'
+            "Transcribe digits, version numbers, model IDs, and filenames verbatim; "
+            "do not guess blurry text."
         )
         usr_prompt = "Analyze this shared screen frame."
     from wortlaut.llm import chat_completion_json
@@ -2460,15 +2462,27 @@ def generate_protocol_summary(db: Session, recording_id: uuid.UUID) -> dict:
     }
     screen_context_lines: list[str] = []
     visual_terms: list[str] = []
+    last_kf_sig: tuple[str, tuple[str, ...]] | None = None
     for kf in _select_representative_keyframes(active_keyframes, max_count=12):
         kf_ctx = cached_kf_ctx.get(str(kf.get("id") or ""))
         if not kf_ctx:
             continue
+        kf_sig = (
+            _single_line(kf_ctx.get("view") or "").lower(),
+            tuple(
+                _single_line(x).lower()
+                for x in (kf_ctx.get("items") or [])[:10]
+                if _single_line(x)
+            ),
+        )
+        for vt in kf_ctx.get("terms") or []:
+            visual_terms.append(vt)
+        if kf_sig == last_kf_sig:
+            continue
+        last_kf_sig = kf_sig
         line = _format_keyframe_context_line(kf, kf_ctx, origin_utc, effective_repls)
         if line:
             screen_context_lines.append(line)
-        for vt in kf_ctx.get("terms") or []:
-            visual_terms.append(vt)
 
     is_detailed_meeting = (
         total_speech_seconds >= 900.0
@@ -2530,14 +2544,15 @@ def generate_protocol_summary(db: Session, recording_id: uuid.UUID) -> dict:
             "'Sichtbarer Bildschirmkontext' vorliegt, nutze die dort sichtbare Ticket-ID bzw. "
             "Bezeichnung zur Präzisierung. Verschmelze niemals zwei benachbarte Karten/Tickets "
             "auf einem Board zu einer erfundenen Misch-Aufgabe.\n"
-            "- Übernimm die exakte Schreibweise der Teilnehmendennamen und Fachbegriffe; "
-            "korrigiere offensichtliche phonetische Spracherkennungsfehler bei bekannten "
-            "Eigennamen, Werkzeugen, Konferenzplattformen und Glossar-/Bildschirmbegriffen "
-            "anhand des Kontexts (z. B. Jitsi statt 'Jetzti'/'Chitzy', Wortlaut statt "
-            "'Wordlaut'/'Boardlaut', MkDocs statt 'MakeDocs', Diataxis statt 'Diary-Taxus', "
-            "RAG/Default-RAG statt 'Rack'/'Default-Rack', Databricks statt 'DataWorks', "
-            "Genie Spaces statt 'Synia Spaces' im Databricks-Kontext, Ragas/DeepEval statt "
-            "'Agas'/'Deepiva', Langfuse/LangGraph statt 'Langviews'/'Langraft', "
+            "- Übernimm die exakte Schreibweise der Teilnehmendennamen und Fachbegriffe. "
+            "Sichtbare Begriffe, Dateinamen und Überschriften aus 'Sichtbarer Bildschirmkontext' "
+            "und 'Fachbegriffe / Glossar' haben stets Vorrang vor phonetisch ähnlichen "
+            "Spracherkennungsfehlern im Wortprotokoll (z. B. Resale/Token-Reselling statt "
+            "'Token-Recycling' bei sichtbarer Resale-Datei, Voicebot statt 'Voiceboard', "
+            "Jitsi statt 'Jetzti'/'Chitzy', Wortlaut statt 'Wordlaut'/'Wortcloud', "
+            "MkDocs statt 'MakeDocs', Diataxis statt 'Diary-Taxus', RAG statt 'Rack', "
+            "Databricks statt 'DataWorks', KEDA/Coder/SeaweedFS/MinIO/Argo CD/SonarQube "
+            "statt phonetischer Verhörer, Langfuse/LangGraph statt 'Langviews'/'Langraft', "
             "HubSpot statt 'Hopspot', Jira statt 'Chirer').\n"
             "- Trenne Nebenbemerkungen zu Alternativmodellen, Smalltalk oder Drittsystemen sauber "
             "von der tatsächlich besprochenen bzw. gezeigten Lösung."
@@ -2590,12 +2605,14 @@ def generate_protocol_summary(db: Session, recording_id: uuid.UUID) -> dict:
             "- When speakers refer deictically to shared screen items ('this ticket', 'this one') "
             "and a timestamp-matching screen-share context entry exists, cite the visible ticket "
             "ID/title accurately; never conflate two adjacent cards on a board into one task.\n"
-            "- Preserve exact spelling of participant names and domain terminology; normalize "
-            "unambiguous phonetic ASR misspellings of known platforms, developer tools, proper "
-            "nouns, and glossary/screen terms from context (e.g. Jitsi instead of 'Jetzti', "
-            "Wortlaut instead of 'Wordlaut', MkDocs instead of 'MakeDocs', RAG instead of 'Rack', "
-            "Databricks instead of 'DataWorks', Ragas/DeepEval, Langfuse/LangGraph, HubSpot, "
-            "Jira).\n"
+            "- Preserve exact spelling of participant names and domain terminology. Visible "
+            "terms, filenames, and headings from screen-share context and the glossary are "
+            "authoritative over phonetically similar ASR misspellings in the transcript "
+            "(e.g. Resale/Token-Reselling instead of 'Token-Recycling' when a resale file is "
+            "shown, Voicebot instead of 'Voiceboard', Jitsi instead of 'Jetzti', Wortlaut "
+            "instead of 'Wordlaut'/'Wortcloud', MkDocs instead of 'MakeDocs', RAG instead of "
+            "'Rack', Databricks instead of 'DataWorks', KEDA/Coder/SeaweedFS/MinIO/"
+            "Argo CD/SonarQube, Langfuse/LangGraph, HubSpot, Jira).\n"
             "- Keep side remarks or small talk distinct from the demonstrated solution."
         )
     meta_lines = [f"Titel der Besprechung: {title}"]

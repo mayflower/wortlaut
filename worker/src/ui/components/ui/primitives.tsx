@@ -228,10 +228,12 @@ export function StatusBadge({
   participation,
   processing,
   hasError,
+  hasSpeech,
 }: {
   participation: ParticipationState;
   processing?: string;
   hasError?: boolean;
+  hasSpeech?: boolean;
 }) {
   const { lang, tr } = useI18n();
   let variant: 'success' | 'warning' | 'error' | 'accent' | 'neutral' = 'neutral';
@@ -269,8 +271,13 @@ export function StatusBadge({
           ? tr('Verarbeitungsfehler', 'Processing error')
           : tr('Mit Hinweis beendet', 'Ended with notice');
     } else if (processing === 'completed') {
-      variant = 'success';
-      label = tr('Protokoll fertig', 'Transcript ready');
+      if (hasSpeech === false) {
+        variant = 'neutral';
+        label = tr('Keine Sprache', 'No speech');
+      } else {
+        variant = 'success';
+        label = tr('Protokoll fertig', 'Transcript ready');
+      }
     } else {
       variant = 'accent';
       isPulsing = true;
