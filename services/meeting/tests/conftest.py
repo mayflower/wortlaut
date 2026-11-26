@@ -159,12 +159,14 @@ def signed_invite(monkeypatch, tmp_path):
     record = b"v=DKIM1; k=rsa; p=" + base64.b64encode(public)
     monkeypatch.setattr(intake, "dkim_dns", lambda name, timeout=5: record)
     monkeypatch.setenv("WORTLAUT_MAIL_SENDER_AUTH", "dkim")
-    monkeypatch.setenv("WORTLAUT_MAIL_ALLOWED_SENDER_DOMAINS", '["mayflower.de"]')
+    monkeypatch.setenv("WORTLAUT_MAIL_ALLOWED_SENDER_DOMAINS", '["acme.example.org"]')
     monkeypatch.setenv("WORTLAUT_MAIL_REPLY_TO_SENDER", "true")
     get_settings.cache_clear()
 
-    def sign(raw=None, domain=b"mayflower.de", length=False, headers=None, **kwargs):
-        raw = raw or mail(sender="owner@mayflower.de", organizer="owner@mayflower.de", **kwargs)
+    def sign(raw=None, domain=b"acme.example.org", length=False, headers=None, **kwargs):
+        raw = raw or mail(
+            sender="owner@acme.example.org", organizer="owner@acme.example.org", **kwargs
+        )
         signature = dkim.sign(
             raw, b"test", domain, key.read_bytes(), length=length,
             include_headers=headers or [b"from", b"content-type", b"mime-version"],

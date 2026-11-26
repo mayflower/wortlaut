@@ -21,7 +21,7 @@ data:
             "type": "query",
             "datasource": { "type": "prometheus", "uid": "prometheus" },
             "query": "label_values(kube_pod_info{pod=~\"wortlaut-.*\"}, namespace)",
-            "current": { "text": "wortlaut-johann", "value": "wortlaut-johann" },
+            "current": { "text": "wortlaut-dev", "value": "wortlaut-dev" },
             "refresh": 2
           }
         ]

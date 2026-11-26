@@ -331,13 +331,13 @@ def test_rejoin_timeline_exports_access_controls_optout_retention_and_mcp(
 
     alice_token, _ = issue_user_session_token(
         sub="sub-alice",
-        email="alice@mayflower.de",
+        email="alice@acme.example.org",
         name="Alice Meier",
         exp=int(time.time()) + 3600,
     )
     bob_token, _ = issue_user_session_token(
         sub="sub-bob",
-        email="bob@mayflower.de",
+        email="bob@acme.example.org",
         name="Bob Unrelated",
         exp=int(time.time()) + 3600,
     )
@@ -675,7 +675,7 @@ def test_rejoin_timeline_exports_access_controls_optout_retention_and_mcp(
                 client_id="mcp-kf-client",
                 client_name="Keyframe MCP Test",
                 owner_sub="sub-alice",
-                owner_email="alice@mayflower.de",
+                owner_email="alice@acme.example.org",
                 owner_name="Alice Meier",
                 is_operator=False,
                 scopes=["mcp:read"],
@@ -1183,7 +1183,7 @@ def test_keyframe_visual_context_enriches_asr_prompt_summary_and_purges_on_optou
                             "sequence": seq,
                             "provider_source_id": "rtc:slides:board",
                             "participant_id": "spaces/r/devices/presenter",
-                            "participant_name": "Johann Peter Hartmann",
+                            "participant_name": "Alex Weber",
                             "captured_at": (t0 + timedelta(seconds=offset_s)).isoformat(),
                             "width": 640,
                             "height": 360,
@@ -1199,7 +1199,7 @@ def test_keyframe_visual_context_enriches_asr_prompt_summary_and_purges_on_optou
         with Session(database) as db:
             rec = db.get(Recording, rec_id)
             att = db.get(Attempt, att_id)
-            rec.title = "Review Interne Projekte - Voicebot + mAIstack"
+            rec.title = "Review Interne Projekte - Voicebot + AcmeStack"
             st = AudioStream(
                 attempt_id=att.id,
                 stream_id=uuid.uuid4(),
@@ -1209,7 +1209,7 @@ def test_keyframe_visual_context_enriches_asr_prompt_summary_and_purges_on_optou
                     "source_kind": "speaker",
                     "speaker_id": "spaces/r/devices/presenter",
                     "participant_id": "spaces/r/devices/presenter",
-                    "participant_name": "Johann Peter Hartmann",
+                    "participant_name": "Alex Weber",
                     "attribution_unknown": False,
                     "session_utc_origin": t0.isoformat(),
                     "monotonic_origin_ms": 0,
@@ -1233,7 +1233,7 @@ def test_keyframe_visual_context_enriches_asr_prompt_summary_and_purges_on_optou
                     "source_kind": "speaker",
                     "speaker_id": "spaces/r/devices/presenter",
                     "participant_id": "spaces/r/devices/presenter",
-                    "participant_name": "Johann Peter Hartmann",
+                    "participant_name": "Alex Weber",
                     "attribution_unknown": False,
                 },
                 status="completed",
@@ -1252,7 +1252,7 @@ def test_keyframe_visual_context_enriches_asr_prompt_summary_and_purges_on_optou
                         "start": 20.0,
                         "end": 28.0,
                         "text": (
-                            "Der hier kann rüber in Progress, und für mAIstack "
+                            "Der hier kann rüber in Progress, und für AcmeStack "
                             "planen wir den Lasttest."
                         ),
                         "words": [{"word": "Der", "confidence": 0.9}],
@@ -1283,20 +1283,20 @@ def test_keyframe_visual_context_enriches_asr_prompt_summary_and_purges_on_optou
 
         vision_responses = [
             {
-                "view": "Jira-Board mAIstack Sprint",
+                "view": "Jira-Board AcmeStack Sprint",
                 "items": [
-                    {"id": "MAIS-270", "title": "Unmaintainedtes Ragas durch DeepEval ersetzen"},
+                    {"id": "PROJ-270", "title": "Unmaintainedtes Ragas durch DeepEval ersetzen"},
                 ],
-                "terms": ["mAIstack", "Ragas", "DeepEval"],
+                "terms": ["AcmeStack", "Ragas", "DeepEval"],
             },
             {
                 "view": "Jira-Board Spalte Ready to Implement",
                 "items": [
                     {
-                        "id": "MAIS-156",
-                        "title": "mAIstack für 100 gleichzeitig aktive Nutzer skalieren",
+                        "id": "PROJ-156",
+                        "title": "AcmeStack für 100 gleichzeitig aktive Nutzer skalieren",
                     },
-                    {"id": "MAIS-211", "title": "Databricks Unity Catalog Functions-MCP"},
+                    {"id": "PROJ-211", "title": "Databricks Unity Catalog Functions-MCP"},
                 ],
                 "terms": ["Databricks", "Unity Catalog", "Bucketeer", "OFREP"],
             },
@@ -1311,20 +1311,20 @@ def test_keyframe_visual_context_enriches_asr_prompt_summary_and_purges_on_optou
                 return FakeOllamaResp(vision_responses[idx])
             return FakeOllamaResp(
                 {
-                    "summary": "Review des mAIstack-Boards mit Status zu MAIS-270 und MAIS-156.",
+                    "summary": "Review des AcmeStack-Boards mit Status zu PROJ-270 und PROJ-156.",
                     "topics": [
                         {
-                            "title": "Evaluation & Skalierung (MAIS-270, MAIS-156)",
+                            "title": "Evaluation & Skalierung (PROJ-270, PROJ-156)",
                             "details": (
-                                "MAIS-270 wechselt in Progress; Lasttest für 100 Nutzer "
-                                "auf mAIstack geplant."
+                                "PROJ-270 wechselt in Progress; Lasttest für 100 Nutzer "
+                                "auf AcmeStack geplant."
                             ),
                         }
                     ],
                     "action_items": [
                         {
-                            "owner": "Johann Peter Hartmann",
-                            "task": "Lasttest-Konzept für mAIstack (MAIS-156) erstellen.",
+                            "owner": "Alex Weber",
+                            "task": "Lasttest-Konzept für AcmeStack (PROJ-156) erstellen.",
                             "due": "",
                         }
                     ],
@@ -1344,7 +1344,7 @@ def test_keyframe_visual_context_enriches_asr_prompt_summary_and_purges_on_optou
             rec = db.get(Recording, rec_id)
             ctx_map = rec.protocol_meta["keyframe_context"]
             assert ctx_map[uploaded_ids[0]] == {"skipped": True}
-            assert "MAIS-270: Unmaintainedtes Ragas durch DeepEval ersetzen" in (
+            assert "PROJ-270: Unmaintainedtes Ragas durch DeepEval ersetzen" in (
                 ctx_map[uploaded_ids[1]]["items"]
             )
             st_row = db.get(AudioStream, stream_db_id)
@@ -1360,9 +1360,9 @@ def test_keyframe_visual_context_enriches_asr_prompt_summary_and_purges_on_optou
         assert len(ollama_calls) == 3
         summary_user_prompt = ollama_calls[-1]["messages"][1]["content"]
         assert "Sichtbarer Bildschirmkontext" in summary_user_prompt
-        assert "MAIS-270: Unmaintainedtes Ragas durch DeepEval ersetzen" in summary_user_prompt
+        assert "PROJ-270: Unmaintainedtes Ragas durch DeepEval ersetzen" in summary_user_prompt
         assert (
-            "MAIS-156: mAIstack für 100 gleichzeitig aktive Nutzer skalieren"
+            "PROJ-156: AcmeStack für 100 gleichzeitig aktive Nutzer skalieren"
             in summary_user_prompt
         )
         assert "OFREP" in summary_user_prompt
@@ -1371,7 +1371,7 @@ def test_keyframe_visual_context_enriches_asr_prompt_summary_and_purges_on_optou
         opt_res = client.patch(
             f"/v1/recordings/{rec_id}",
             headers=op_hdrs,
-            json={"opted_out_speakers": ["Johann Peter Hartmann"]},
+            json={"opted_out_speakers": ["Alex Weber"]},
         )
         assert opt_res.status_code == 200
         with Session(database) as db:

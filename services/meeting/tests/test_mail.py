@@ -357,7 +357,7 @@ def test_dkim_calendar_result_goes_to_authenticated_sender(
         db.get(Recording, recording).calendar_entry_id = entry.id
         db.commit()
     smtp_pass(database)
-    assert smtp.envelopes == [["owner@mayflower.de"]]
+    assert smtp.envelopes == [["owner@acme.example.org"]]
     assert len(list(smtp.messages[0].iter_attachments())) == 4
 
 
@@ -387,7 +387,7 @@ def test_failed_join_without_audio_sends_notification_mail(
     # Non-participation with 0 audio streams immediately finalizes processing
     # without waiting for a separate finalize_processing pass.
     smtp_pass(database)
-    assert smtp.envelopes == [["owner@mayflower.de"]]
+    assert smtp.envelopes == [["owner@acme.example.org"]]
     assert len(smtp.messages) == 1
     message = smtp.messages[0]
     assert "fehlgeschlagen (lobby_timeout)" in message["Subject"]

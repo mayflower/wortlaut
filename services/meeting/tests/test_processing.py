@@ -669,7 +669,7 @@ def test_coalesce_protocol_segments_merges_broken_sentences_without_lexical_blac
         {
             "id": "s2",
             "stream_id": "st2",
-            "speaker_label": "Johann Peter Hartmann",
+            "speaker_label": "Alex Weber",
             "start": 14.0,
             "end": 14.8,
             "text": "Genau richtig.",
@@ -687,7 +687,7 @@ def test_coalesce_protocol_segments_merges_broken_sentences_without_lexical_blac
         {
             "id": "s4",
             "stream_id": "st2",
-            "speaker_label": "Johann Peter Hartmann",
+            "speaker_label": "Alex Weber",
             "start": 27.0,
             "end": 34.0,
             "text": "Super, dann nehmen wir das so in das Protokoll auf.",
@@ -701,7 +701,7 @@ def test_coalesce_protocol_segments_merges_broken_sentences_without_lexical_blac
         coalesced[0]["text"]
         == "Dann kann man noch das gewollte Feature direkt im System aktivieren."
     )
-    assert coalesced[1]["speaker_label"] == "Johann Peter Hartmann"
+    assert coalesced[1]["speaker_label"] == "Alex Weber"
     assert coalesced[1]["text"] == "Super, dann nehmen wir das so in das Protokoll auf."
 
     # Post-meeting edit on coalesced turn s1 (bound=26.0) still merges s3 without duplication,
@@ -739,7 +739,7 @@ def test_coalesce_protocol_segments_preserves_distinct_speaker_ids_sharing_displ
             "stream_id": "stream-a",
             "speaker_id": "spaces/room/devices/268",
             "participant_id": "spaces/room/devices/268",
-            "speaker_label": "Johann-Peter Hartmann",
+            "speaker_label": "Alex Weber",
             "start": 5.0,
             "end": 11.0,
             "text": "Wir prüfen die getrennten Audioquellen.",
@@ -750,7 +750,7 @@ def test_coalesce_protocol_segments_preserves_distinct_speaker_ids_sharing_displ
             "stream_id": "stream-b",
             "speaker_id": "spaces/room/devices/270",
             "participant_id": "spaces/room/devices/270",
-            "speaker_label": "Johann-Peter Hartmann",
+            "speaker_label": "Alex Weber",
             "start": 13.0,
             "end": 19.0,
             "text": "Der zweite Teilnehmer spricht zur gleichen Zeit.",
@@ -1128,7 +1128,7 @@ def test_timeline_coalesces_same_speaker_chunks_when_participant_name_resolves(
         # Chunk 0: speaker_id verified, participant_name not yet resolved.
         send_pcm(socket, bound_id, pcm_chunk, 0, 0)
         # Bind at sample 32000: same verified speaker_id, participant_name resolved!
-        named_id = {**bound_id, "participant_name": "Johann Peter Hartmann"}
+        named_id = {**bound_id, "participant_name": "Alex Weber"}
         socket.send_json(
             {
                 "type": "bind",
@@ -1140,7 +1140,7 @@ def test_timeline_coalesces_same_speaker_chunks_when_participant_name_resolves(
                 "source_kind": "speaker",
                 "speaker_id": named_id["speaker_id"],
                 "participant_id": named_id["participant_id"],
-                "participant_name": "Johann Peter Hartmann",
+                "participant_name": "Alex Weber",
                 "attribution_unknown": False,
             }
         )
@@ -1165,7 +1165,7 @@ def test_timeline_coalesces_same_speaker_chunks_when_participant_name_resolves(
         assert len(runs) == 1
         assert runs[0].start == 0 and runs[0].end == 64000
         assert runs[0].binding["speaker_id"] == "spaces/room/devices/192"
-        assert runs[0].binding["participant_name"] == "Johann Peter Hartmann"
+        assert runs[0].binding["participant_name"] == "Alex Weber"
 
 
 def test_floor_holding_backchannels_and_multiplexed_sources_summary():
@@ -1239,7 +1239,7 @@ def test_floor_holding_backchannels_and_multiplexed_sources_summary():
             "speaker_label": "Nico Briegel",
             "start": 45.0,
             "end": 54.0,
-            "text": "Aus Komm.ONE-Sicht ist uns wichtig, dass kein Kamerabild gespeichert wird.",
+            "text": "Aus Acme.ONE-Sicht ist uns wichtig, dass kein Kamerabild gespeichert wird.",
         },
     ]
     sources = _build_sources_summary(
@@ -1252,7 +1252,7 @@ def test_floor_holding_backchannels_and_multiplexed_sources_summary():
     assert len(sources) == 1
     assert (
         sources[0]["sample_text"]
-        == "Aus Komm.ONE-Sicht ist uns wichtig, dass kein Kamerabild gespeichert wird."
+        == "Aus Acme.ONE-Sicht ist uns wichtig, dass kein Kamerabild gespeichert wird."
     )
     assert sources[0]["provider_source_ids"] == [
         f"google_meet:{rec_id}:receiver:3",
@@ -1285,7 +1285,7 @@ def test_shared_sfu_dom_flap_canonicalization_and_multi_speaker_sources_summary(
                 "sources": [
                     {
                         "participant_id": "spaces/r/devices/526",
-                        "participant_name": "Johann Peter Hartmann",
+                        "participant_name": "Alex Weber",
                         "audio_csis": [101],
                         "share_audio_csis": [],
                     },
@@ -1360,14 +1360,14 @@ def test_shared_sfu_dom_flap_canonicalization_and_multi_speaker_sources_summary(
         db.flush()
 
         # Simulate transient DOM viewport name flaps on shared SFU receivers:
-        # - Maria (devices/537) has "Johann Peter Hartmann" on her first 0.3s clause "Frage dazu."
-        # - Kerstin (devices/525) has "Johann Peter Hartmann" on an early short clause
+        # - Maria (devices/537) has "Alex Weber" on her first 0.3s clause "Frage dazu."
+        # - Kerstin (devices/525) has "Alex Weber" on an early short clause
         # - Martin (devices/529) has a mid-sentence 0.25s flap "Was war" inside his turn
         raw_segs = [
             (
                 streams[0],
                 "spaces/r/devices/526",
-                "Johann Peter Hartmann",
+                "Alex Weber",
                 10.0,
                 22.0,
                 "Wir starten mit dem Board-Review.",
@@ -1375,7 +1375,7 @@ def test_shared_sfu_dom_flap_canonicalization_and_multi_speaker_sources_summary(
             (
                 streams[2],
                 "spaces/r/devices/525",
-                "Johann Peter Hartmann",
+                "Alex Weber",
                 30.0,
                 30.3,
                 "Diesmal",
@@ -1399,7 +1399,7 @@ def test_shared_sfu_dom_flap_canonicalization_and_multi_speaker_sources_summary(
             (
                 streams[0],
                 "spaces/r/devices/529",
-                "Johann Peter Hartmann",
+                "Alex Weber",
                 52.1,
                 52.35,
                 "was war",
@@ -1423,7 +1423,7 @@ def test_shared_sfu_dom_flap_canonicalization_and_multi_speaker_sources_summary(
             (
                 streams[1],
                 "spaces/r/devices/537",
-                "Johann Peter Hartmann",
+                "Alex Weber",
                 90.0,
                 90.3,
                 "Frage dazu.",
@@ -1487,7 +1487,7 @@ def test_shared_sfu_dom_flap_canonicalization_and_multi_speaker_sources_summary(
     summary_names = [s["participant_name"] for s in exported["sources_summary"]]
     assert sorted(summary_names) == [
         "Ingrid Stevens",
-        "Johann Peter Hartmann",
+        "Alex Weber",
         "Kerstin Flederer",
         "Maria Haubner",
         "Martin Wild",

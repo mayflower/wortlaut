@@ -6,7 +6,7 @@ for tool in kubectl tilt docker uv npm; do
 done
 mkdir -p .dev
 chmod 700 .dev
-source_config=${WORTLAUT_SOURCE_KUBECONFIG:-"$HOME/.kube/data-lan-mayflower"}
+source_config=${WORTLAUT_SOURCE_KUBECONFIG:-"$HOME/.kube/config"}
 if [ ! -f .dev/kubeconfig ]; then
   if [ ! -f "$source_config" ]; then
     printf 'Set WORTLAUT_SOURCE_KUBECONFIG to a kubeconfig containing data.\n' >&2

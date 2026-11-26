@@ -572,8 +572,8 @@ export function GlossaryWorkspace({
                           }
                         }}
                         placeholder={tr(
-                          'mAIstack, Mainova, Hertener Stadtwerke, Europa-Park, s.Oliver\nMistack | Maystack -> mAIstack',
-                          'mAIstack, Mainova, Hertener Stadtwerke, Europa-Park, s.Oliver\nMistack | Maystack -> mAIstack'
+                          'Kubernetes, PostgreSQL, S/4HANA, AcmePay\nKube Nettes | Kuber Netis -> Kubernetes',
+                          'Kubernetes, PostgreSQL, S/4HANA, AcmePay\nKube Nettes | Kuber Netis -> Kubernetes'
                         )}
                         className="w-full rounded-md border border-[var(--color-border)] bg-[var(--color-background-surface)] px-3 py-2 text-[16px] md:text-[14px] leading-relaxed text-[var(--color-text-primary)] wl-focus-accent"
                       />
@@ -620,8 +620,8 @@ export function GlossaryWorkspace({
                             value={termInput}
                             onChange={setTermInput}
                             placeholder={tr(
-                              'z. B. mAIstack, Hertener Stadtwerke…',
-                              'e.g. mAIstack, Hertener Stadtwerke…'
+                              'z. B. Kubernetes, AcmePay…',
+                              'e.g. Kubernetes, AcmePay…'
                             )}
                           />
                           <TextInput
@@ -633,8 +633,8 @@ export function GlossaryWorkspace({
                             value={aliasInput}
                             onChange={setAliasInput}
                             placeholder={tr(
-                              'z. B. Mistack, Maystack',
-                              'e.g. Mistack, Maystack'
+                              'z. B. Kube Nettes, AcmiPay',
+                              'e.g. Kube Nettes, AcmiPay'
                             )}
                           />
                         </div>
@@ -804,8 +804,8 @@ export function GlossaryWorkspace({
                                     value={editAliasesDraft}
                                     onChange={setEditAliasesDraft}
                                     placeholder={tr(
-                                      'z. B. Mistack, Maystack',
-                                      'e.g. Mistack, Maystack'
+                                      'z. B. Kube Nettes, AcmiPay',
+                                      'e.g. Kube Nettes, AcmiPay'
                                     )}
                                   />
                                 </div>

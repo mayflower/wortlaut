@@ -485,10 +485,10 @@ def test_teams_display_name_sanitization_and_calendar_url_formats():
 
     # Parentheses & forbidden punctuation break Teams pre-join validation; sanitize cleanly.
     assert (
-        sanitize_teams_display_name("Wortlaut.cloud (Johann Peter Hartmann)")
-        == "Wortlaut.cloud - Johann Peter Hartmann"
+        sanitize_teams_display_name("Wortlaut.cloud (Alex Weber)")
+        == "Wortlaut.cloud - Alex Weber"
     )
-    assert sanitize_teams_display_name("wortlaut (Mick Hohmann)") == "wortlaut - Mick Hohmann"
+    assert sanitize_teams_display_name("wortlaut (Max Richter)") == "wortlaut - Max Richter"
     assert (
         sanitize_teams_display_name("wortlaut (Björn Müller / R&D)")
         == "wortlaut - Björn Müller R D"

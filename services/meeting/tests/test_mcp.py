@@ -33,8 +33,8 @@ def _setup_mock_dex(monkeypatch):
 
     monkeypatch.setenv("WORTLAUT_OIDC_ISSUER", "https://id.example.org")
     monkeypatch.setenv("WORTLAUT_OIDC_CLIENT_ID", "wortlaut")
-    monkeypatch.setenv("WORTLAUT_OIDC_ALLOWED_DOMAINS", '["mayflower.de"]')
-    monkeypatch.setenv("WORTLAUT_OIDC_ADMIN_EMAILS", '["admin@mayflower.de"]')
+    monkeypatch.setenv("WORTLAUT_OIDC_ALLOWED_DOMAINS", '["acme.example.org"]')
+    monkeypatch.setenv("WORTLAUT_OIDC_ADMIN_EMAILS", '["admin@acme.example.org"]')
     get_settings.cache_clear()
 
     private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
@@ -58,7 +58,7 @@ def _setup_mock_dex(monkeypatch):
 
     active_user = {
         "sub": "sub-alice",
-        "email": "alice@mayflower.de",
+        "email": "alice@acme.example.org",
         "name": "Alice Meier",
         "nonce": "",
     }
@@ -313,7 +313,7 @@ def test_mcp_discovery_registration_and_oauth_security(client, database, monkeyp
     active_user.update(
         {
             "sub": "sub-alice",
-            "email": "alice@mayflower.de",
+            "email": "alice@acme.example.org",
             "name": "Alice Meier",
             "nonce": dex_qs["nonce"][0],
         }
@@ -356,7 +356,7 @@ def test_mcp_discovery_registration_and_oauth_security(client, database, monkeyp
         client,
         active_user,
         sub="sub-alice",
-        email="alice@mayflower.de",
+        email="alice@acme.example.org",
         name="Alice Meier",
         scopes=["mcp:read", "mcp:write"],
     )
@@ -444,7 +444,7 @@ def test_mcp_discovery_registration_and_oauth_security(client, database, monkeyp
     active_user.update(
         {
             "sub": "sub-alice",
-            "email": "alice@mayflower.de",
+            "email": "alice@acme.example.org",
             "name": "Alice Meier",
             "nonce": ceil_dex_qs["nonce"][0],
         }
@@ -659,7 +659,7 @@ def test_mcp_tools_resources_multi_user_isolation_and_ui_revocation(
             provider="google_meet",
             title="Architektur-Board Q4",
             owner_sub="sub-alice",
-            owner_email="alice@mayflower.de",
+            owner_email="alice@acme.example.org",
             starts_at=now - timedelta(hours=1),
             ends_at=now - timedelta(minutes=15),
             participation="ended",
@@ -680,7 +680,7 @@ def test_mcp_tools_resources_multi_user_isolation_and_ui_revocation(
             provider="teams",
             title="Bob Vertrauliches HR-Gespräch",
             owner_sub="sub-bob",
-            owner_email="bob@mayflower.de",
+            owner_email="bob@acme.example.org",
             starts_at=now + timedelta(hours=2),
             ends_at=now + timedelta(hours=3),
             participation="scheduled",
@@ -816,7 +816,7 @@ def test_mcp_tools_resources_multi_user_isolation_and_ui_revocation(
         client,
         active_user,
         sub="sub-alice",
-        email="alice@mayflower.de",
+        email="alice@acme.example.org",
         name="Alice Meier",
         scopes=["mcp:read"],
         client_name="Cursor ReadOnly",
@@ -825,7 +825,7 @@ def test_mcp_tools_resources_multi_user_isolation_and_ui_revocation(
         client,
         active_user,
         sub="sub-alice",
-        email="alice@mayflower.de",
+        email="alice@acme.example.org",
         name="Alice Meier",
         scopes=["mcp:read", "mcp:write"],
         client_name="Claude Code ReadWrite",
@@ -834,7 +834,7 @@ def test_mcp_tools_resources_multi_user_isolation_and_ui_revocation(
         client,
         active_user,
         sub="sub-bob",
-        email="bob@mayflower.de",
+        email="bob@acme.example.org",
         name="Bob Schmidt",
         scopes=["mcp:read", "mcp:write"],
         client_name="Bob Desktop MCP",
@@ -1185,14 +1185,14 @@ def test_mcp_tools_resources_multi_user_isolation_and_ui_revocation(
     # Web-UI MCP grant management (/v1/mcp/grants): Alice sees her 2 grants, not Bob's
     alice_ui_token, _ = issue_user_session_token(
         sub="sub-alice",
-        email="alice@mayflower.de",
+        email="alice@acme.example.org",
         name="Alice Meier",
         exp=int(time.time()) + 3600,
     )
     alice_ui_hdrs = {"Authorization": f"Bearer {alice_ui_token}"}
     bob_ui_token, _ = issue_user_session_token(
         sub="sub-bob",
-        email="bob@mayflower.de",
+        email="bob@acme.example.org",
         name="Bob Schmidt",
         exp=int(time.time()) + 3600,
     )

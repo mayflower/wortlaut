@@ -9,12 +9,12 @@ import {extractGlossarySuggestions} from '../src/ui/glossaryLearning.js';
 test('extractGlossarySuggestions detects localized term fixes and ignores noise', () => {
   assert.deepEqual(
     extractGlossarySuggestions(
-      'Wir deployen auf Kubernetis mit Meistack.',
-      'Wir deployen auf Kubernetes mit mAIstack.',
+      'Wir deployen auf Kubernetis mit AcmiPay.',
+      'Wir deployen auf Kubernetes mit AcmePay.',
     ),
     [
       {from: 'Kubernetis', to: 'Kubernetes'},
-      {from: 'Meistack', to: 'mAIstack'},
+      {from: 'AcmiPay', to: 'AcmePay'},
     ],
   );
   assert.deepEqual(
@@ -57,8 +57,8 @@ test('teams URL validation and display name sanitization handle calendar invites
     false,
   );
   assert.equal(
-    sanitizeTeamsDisplayName('Wortlaut.cloud (Johann Peter Hartmann)'),
-    'Wortlaut.cloud - Johann Peter Hartmann',
+    sanitizeTeamsDisplayName('Wortlaut.cloud (Alex Weber)'),
+    'Wortlaut.cloud - Alex Weber',
   );
   assert.equal(
     sanitizeTeamsDisplayName('wortlaut (Björn Müller / R&D)'),

@@ -250,7 +250,7 @@ function install(config: MeetCaptureConfig) {
   const NOTETAKER_BOT_RE =
     /\b(fireflies(\.ai)?|otter(\.ai)?|read\.ai|fathom|tl;dv|tldv|meetgeek|fellow(\.app)?|avoma|sembly|supernormal|grain|krisp|tactiq|airgram|notta|nyota|circleback|sonnet|bluedot|granola|notetaker|note[\s-]*taker|meeting[\s-]*bot|ai[\s-]*notetaker|ai[\s-]*assistant)\b/i;
   const SELF_OR_UI_TEXT_RE =
-    /^(?:(?:synia\s+)?wortlaut(?:\b.*)?|you|sie|ich)$/i;
+    /^(?:wortlaut(?:\b.*)?|you|sie|ich)$/i;
   const UI_CHROME_TEXT_RE =
     /(vollständigen videofeed|full video|bildausschnitt|reframing)/i;
   const BOT_INTRO_OR_URL_RE =
@@ -269,9 +269,9 @@ function install(config: MeetCaptureConfig) {
     if (typeof rawText !== 'string') return null;
     const cleaned = rawText.trim().replace(/\s+/g, ' ');
     if (!cleaned || cleaned.length > maxLen || BOT_INTRO_OR_URL_RE.test(cleaned)) return null;
-    const hasMention = /^[@#]?(?:synia\s+)?wortlaut(?:\.cloud|\s+demo)?\b/i.test(cleaned);
+    const hasMention = /^[@#]?wortlaut(?:\.cloud|\s+demo)?\b/i.test(cleaned);
     const stripped = cleaned
-      .replace(/^[@#]?(?:synia\s+)?wortlaut(?:\.cloud|\s+demo)?(?:\s*\([^)]*\))?[\s,:;-]*/i, '')
+      .replace(/^[@#]?wortlaut(?:\.cloud|\s+demo)?(?:\s*\([^)]*\))?[\s,:;-]*/i, '')
       .trim();
     return stripped ? {hasMention, stripped} : null;
   }

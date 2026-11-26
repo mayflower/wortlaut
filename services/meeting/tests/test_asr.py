@@ -546,9 +546,9 @@ def test_asr_glossary_and_context_prompt_exclude_opted_out_speakers(
     s_csv = Settings(
         database_url="postgresql://u:p@localhost/db",
         api_token="tok",
-        asr_glossary="Mayflower, mAIstack; Astryx\nMayflower",
+        asr_glossary="AcmeCorp, AcmePay; CloudSync\nAcmeCorp",
     )
-    assert s_csv.asr_glossary == ["Mayflower", "mAIstack", "Astryx"]
+    assert s_csv.asr_glossary == ["AcmeCorp", "AcmePay", "CloudSync"]
     s_json = Settings(
         database_url="postgresql://u:p@localhost/db",
         api_token="tok",
@@ -556,7 +556,7 @@ def test_asr_glossary_and_context_prompt_exclude_opted_out_speakers(
     )
     assert s_json.asr_glossary == ["Qwen3-ASR", "Wortlaut"]
 
-    monkeypatch.setenv("WORTLAUT_ASR_GLOSSARY", "Mayflower, mAIstack, Astryx")
+    monkeypatch.setenv("WORTLAUT_ASR_GLOSSARY", "AcmeCorp, AcmePay, CloudSync")
     monkeypatch.setenv("WORTLAUT_ASR_TOKEN", "fixture-gpu-token")
     get_settings.cache_clear()
     try:
@@ -567,13 +567,13 @@ def test_asr_glossary_and_context_prompt_exclude_opted_out_speakers(
                 request_digest="d" * 64,
                 provider="google_meet",
                 meeting_url="https://meet.google.com/abc-defg-hij",
-                title="mAIstack Architektur Sync",
+                title="AcmePay Architektur Sync",
                 starts_at=now,
                 ends_at=now + timedelta(minutes=30),
                 protocol_meta={
                     "opted_out_speakers": ["Geheimer Gast"],
-                    "term_replacements": {"meistack": "mAIstack"},
-                    "speaker_overrides": {"spaces/r/devices/9": "Björn Schotte"},
+                    "term_replacements": {"acmipay": "AcmePay"},
+                    "speaker_overrides": {"spaces/r/devices/9": "Lukas Brenner"},
                 },
             )
             db.add(rec)
@@ -587,7 +587,7 @@ def test_asr_glossary_and_context_prompt_exclude_opted_out_speakers(
                         "sources": [
                             {
                                 "participant_id": "spaces/r/devices/1",
-                                "participant_name": "Johann Peter Hartmann",
+                                "participant_name": "Alex Weber",
                             },
                             {
                                 "participant_id": "spaces/r/devices/2",
@@ -609,7 +609,7 @@ def test_asr_glossary_and_context_prompt_exclude_opted_out_speakers(
                     "session_utc_origin": now.isoformat(),
                     "participant_id": "spaces/r/devices/1",
                     "speaker_id": "spaces/r/devices/1",
-                    "participant_name": "Johann Peter Hartmann",
+                    "participant_name": "Alex Weber",
                 },
             )
             db.add(st)
@@ -659,7 +659,7 @@ def test_asr_glossary_and_context_prompt_exclude_opted_out_speakers(
                 binding={
                     "speaker_id": "spaces/r/devices/1",
                     "participant_id": "spaces/r/devices/1",
-                    "participant_name": "Johann Peter Hartmann",
+                    "participant_name": "Alex Weber",
                 },
                 status="pending",
             )
@@ -667,12 +667,12 @@ def test_asr_glossary_and_context_prompt_exclude_opted_out_speakers(
             db.flush()
             prompt = build_asr_context_prompt(db, cur_job, st, get_settings())
             assert prompt is not None
-            assert "mAIstack Architektur Sync" in prompt
-            assert "Johann Peter Hartmann" in prompt
+            assert "AcmePay Architektur Sync" in prompt
+            assert "Alex Weber" in prompt
             assert "Robin Gloster" in prompt
-            assert "Björn Schotte" in prompt
+            assert "Lukas Brenner" in prompt
             assert "Geheimer Gast" not in prompt
-            assert "Mayflower" in prompt and "Astryx" in prompt
+            assert "AcmeCorp" in prompt and "CloudSync" in prompt
             assert "Wir starten heute mit dem" in prompt
             encoded = base64.b64encode(prompt.encode("utf-8")).decode("ascii")
             assert base64.b64decode(encoded).decode("utf-8") == prompt
@@ -1061,8 +1061,8 @@ def test_persistent_glossary_editor_tenancy_asr_and_export_aliases(
             json={
                 "scope": "global",
                 "raw_text": (
-                    "Mainova, Hertener Stadtwerke, S/4HANA\n"
-                    "Mistack | Maystack -> mAIstack"
+                    "NordGrid, Stadtwerke Nord, S/4HANA\n"
+                    "AcmiPay | AkmePay -> AcmePay"
                 ),
             },
         )
@@ -1084,9 +1084,9 @@ def test_persistent_glossary_editor_tenancy_asr_and_export_aliases(
         assert "LegacyEnvTerm" not in after_global
         assert del_slash.json()["suppressed_env_terms"] == ["LegacyEnvTerm"]
         assert "S/4HANA" not in after_global
-        assert "Mainova" in after_global
-        assert "Hertener Stadtwerke" in after_global
-        assert after_global["mAIstack"]["aliases"] == ["Mistack", "Maystack"]
+        assert "NordGrid" in after_global
+        assert "Stadtwerke Nord" in after_global
+        assert after_global["AcmePay"]["aliases"] == ["AcmiPay", "AkmePay"]
 
         # 3. Alice adds personal confidential term + alias (scope="auto" routes to personal);
         #    Bob never sees Alice's personal entries.
@@ -1185,7 +1185,7 @@ def test_persistent_glossary_editor_tenancy_asr_and_export_aliases(
                         "start_sample": 0,
                         "end_sample": 32000,
                         "confidence": 0.92,
-                        "text": "Wir nutzen Mistack fuer Projekt Fönix bei Mainova.",
+                        "text": "Wir nutzen AcmiPay fuer Projekt Fönix bei NordGrid.",
                         "words": [],
                     },
                 )
@@ -1195,18 +1195,18 @@ def test_persistent_glossary_editor_tenancy_asr_and_export_aliases(
             prompt = build_asr_context_prompt(db, job, stream, get_settings())
             assert prompt is not None
             assert "Projekt Phoenix" in prompt
-            assert "mAIstack" in prompt
-            assert "Mainova" in prompt
+            assert "AcmePay" in prompt
+            assert "NordGrid" in prompt
             assert "LegacyEnvTerm" not in prompt
 
             exported = export_data(db, rec)
             assert (
                 exported["segments"][0]["text"]
-                == "Wir nutzen mAIstack fuer Projekt Phoenix bei Mainova."
+                == "Wir nutzen AcmePay fuer Projekt Phoenix bei NordGrid."
             )
             # Raw segment in DB stays untouched (lossless display-time normalization)
             raw_seg = db.get(TranscriptSegment, job.id)
-            assert raw_seg.result["text"] == "Wir nutzen Mistack fuer Projekt Fönix bei Mainova."
+            assert raw_seg.result["text"] == "Wir nutzen AcmiPay fuer Projekt Fönix bei NordGrid."
 
         assert (
             client.get(
@@ -1438,14 +1438,14 @@ def test_calendar_agenda_extraction_and_asr_prompt_injection(database):
     # 1. Google Calendar HTML description strips Meet boilerplate, URLs, and PINs
     google_desc = (
         "<p>Agenda:</p><ul><li>Migration von FireHOL auf nftables</li>"
-        "<li>mAIstack Release 2.4 &amp; Keycloak SSO</li></ul>"
+        "<li>AcmePay Release 2.4 &amp; Keycloak SSO</li></ul>"
         "-::~:~::~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~::~:~::-\n"
         "Join with Google Meet: https://meet.google.com/abc-defg-hij\n"
         "PIN: 987 654#\n"
     )
     cleaned_google = extract_calendar_agenda(google_desc)
     assert cleaned_google == (
-        "Migration von FireHOL auf nftables · mAIstack Release 2.4 & Keycloak SSO"
+        "Migration von FireHOL auf nftables · AcmePay Release 2.4 & Keycloak SSO"
     )
     assert "987 654" not in cleaned_google
     assert "meet.google.com" not in cleaned_google

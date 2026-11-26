@@ -241,17 +241,19 @@ def test_meeting_link_formats_and_help_or_account_urls():
 def test_dkim_invitation_authentication(client, database, signed_invite):
     valid = signed_invite()
     rejected = [
-        mail(sender="owner@mayflower.de", organizer="owner@mayflower.de"),
+        mail(sender="owner@acme.example.org", organizer="owner@acme.example.org"),
         signed_invite(domain=b"attacker.example"),
         signed_invite(length=True),
         signed_invite(headers=[b"from"]),
         valid.replace(b"example.webex.com", b"attacker.webex.com"),
-        valid.replace(b"From: owner@mayflower.de", b"From: other@mayflower.de"),
-        b"From: other@mayflower.de\r\n" + valid,
+        valid.replace(b"From: owner@acme.example.org", b"From: other@acme.example.org"),
+        b"From: other@acme.example.org\r\n" + valid,
         b"Content-Type: text/calendar\r\n" + valid,
-        signed_invite(raw=mail(sender="owner@mayflower.de.attacker.org")),
-        signed_invite(raw=mail(sender="owner@mayflower.de", organizer="other@mayflower.de")),
-        b"DKIM-Signature: broken\r\n" + mail(sender="owner@mayflower.de"),
+        signed_invite(raw=mail(sender="owner@acme.example.org.attacker.org")),
+        signed_invite(
+            raw=mail(sender="owner@acme.example.org", organizer="other@acme.example.org")
+        ),
+        b"DKIM-Signature: broken\r\n" + mail(sender="owner@acme.example.org"),
     ]
     for raw in rejected:
         assert imported(client, raw)["status"] == "rejected"
@@ -266,10 +268,10 @@ def test_dkim_invitation_authentication(client, database, signed_invite):
     ] == result["recording_id"]
     # Explicit organizer_permissions allow a trusted sender to forward external invitations.
     settings = get_settings()
-    settings.organizer_permissions = {"owner@mayflower.de": ["*"]}
+    settings.organizer_permissions = {"owner@acme.example.org": ["*"]}
     try:
         forwarded = signed_invite(raw=mail(
-            uid="forwarded-ext", sender="owner@mayflower.de", organizer="customer@external.org"
+            uid="forwarded-ext", sender="owner@acme.example.org", organizer="customer@external.org"
         ))
         assert imported(client, forwarded)["status"] == "accepted"
     finally:
@@ -308,7 +310,7 @@ def test_instant_invitations_plain_html_identity_and_replay(client, database, si
         message["Date"] = format_datetime(datetime.now(UTC) - timedelta(hours=age))
         message["Message-ID"] = f"<{uuid.uuid4()}@notifications.google.com>"
         message.set_content(text or (
-            "owner@mayflower.de lädt Sie zu einem gerade stattfindenden Videoanruf ein\n"
+            "owner@acme.example.org lädt Sie zu einem gerade stattfindenden Videoanruf ein\n"
             "meet.google.com/abc-defg-hij"
         ), subtype="html" if html else "plain")
         return signed_invite(raw=message.as_bytes(), domain=domain, headers=headers or [
@@ -323,7 +325,7 @@ def test_instant_invitations_plain_html_identity_and_replay(client, database, si
         notice(headers=[b"from", b"content-type", b"mime-version", b"content-transfer-encoding"]),
         notice("outsider@example.org lädt Sie zu einem gerade stattfindenden Videoanruf ein "
                "meet.google.com/abc-defg-hij"),
-        notice("owner@mayflower.de lädt Sie zu einem gerade stattfindenden Videoanruf ein "
+        notice("owner@acme.example.org lädt Sie zu einem gerade stattfindenden Videoanruf ein "
                "meet.google.com/abc-defg-hij meet.google.com/xyz-abcd-efg"),
         notice("meet.google.com/abc-defg-hij"),
         notice().replace(b"abc-defg-hij", b"xyz-abcd-efg"),
@@ -343,25 +345,27 @@ def test_instant_invitations_plain_html_identity_and_replay(client, database, si
         assert recording.meeting_url == "https://meet.google.com/abc-defg-hij"
         assert recording.starts_at >= received
         assert timedelta(minutes=104) < recording.ends_at - recording.starts_at < timedelta(hours=2)
-        assert db.get(CalendarEntry, recording.calendar_entry_id).organizer == "owner@mayflower.de"
+        assert (
+            db.get(CalendarEntry, recording.calendar_entry_id).organizer == "owner@acme.example.org"
+        )
     calendar_rows = client.get("/v1/calendar", headers=API).json()["events"]
     assert any(row.get("title") == "Ad-hoc Projekt-Sync" for row in calendar_rows)
     assert imported(client, notice(
-        '<p>owner@mayflower.de is inviting you to an ongoing video call</p>'
+        '<p>owner@acme.example.org is inviting you to an ongoing video call</p>'
         '<a href="https://meet.google.com/abc-defg-hij?hs=151">Join</a>', html=True,
     ))["status"] == "accepted"
     assert imported(client, notice(
         "Join https://meet.google.com/abc-defg-hij",
-        from_address="owner@mayflower.de", domain=b"mayflower.de",
+        from_address="owner@acme.example.org", domain=b"acme.example.org",
     ))["status"] == "accepted"
     teams_instant = imported(client, notice(
         "Join https://teams.microsoft.com/meet/123456789?p=fixture",
-        from_address="owner@mayflower.de", domain=b"mayflower.de",
+        from_address="owner@acme.example.org", domain=b"acme.example.org",
     ))
     assert (teams_instant["status"], teams_instant["provider"]) == ("accepted", "teams")
     webex_instant = imported(client, notice(
         "Join https://example.webex.com/meet/owner",
-        from_address="owner@mayflower.de", domain=b"mayflower.de",
+        from_address="owner@acme.example.org", domain=b"acme.example.org",
     ))
     assert (webex_instant["status"], webex_instant["provider"]) == ("accepted", "webex")
 
@@ -401,30 +405,30 @@ def test_oauth_calendar_to_asr_summary_mail_and_writeback_end_to_end(
     google_events = {
         "g-evt-active": {
             "id": "g-evt-active",
-            "iCalUID": "ical-g-active@mayflower.de",
+            "iCalUID": "ical-g-active@acme.example.org",
             "status": "confirmed",
             "summary": "Architektur-Sync Google",
             "description": "Agenda: Quartalsplanung",
             "hangoutLink": "https://meet.google.com/abc-defg-hij",
-            "organizer": {"email": "owner@mayflower.de", "self": True},
+            "organizer": {"email": "owner@acme.example.org", "self": True},
             "attendees": [
-                {"email": "owner@mayflower.de", "responseStatus": "accepted"},
-                {"email": "alice@mayflower.de", "responseStatus": "accepted"},
+                {"email": "owner@acme.example.org", "responseStatus": "accepted"},
+                {"email": "alice@acme.example.org", "responseStatus": "accepted"},
             ],
             "start": {"dateTime": starts_iso},
             "end": {"dateTime": ends_iso},
         },
         "g-evt-lobby-timeout": {
             "id": "g-evt-lobby-timeout",
-            "iCalUID": "ical-g-lobby@mayflower.de",
+            "iCalUID": "ical-g-lobby@acme.example.org",
             "status": "confirmed",
             "summary": "Skills und Kollegen Negativfall",
             "description": "Nur bei echtem Transkript verlinken",
             "hangoutLink": "https://meet.google.com/qwj-xons-uxb",
-            "organizer": {"email": "owner@mayflower.de", "self": True},
+            "organizer": {"email": "owner@acme.example.org", "self": True},
             "attendees": [
-                {"email": "owner@mayflower.de", "responseStatus": "accepted"},
-                {"email": "colleague@mayflower.de", "responseStatus": "accepted"},
+                {"email": "owner@acme.example.org", "responseStatus": "accepted"},
+                {"email": "colleague@acme.example.org", "responseStatus": "accepted"},
             ],
             "start": {"dateTime": starts_iso},
             "end": {"dateTime": ends_iso},
@@ -433,14 +437,14 @@ def test_oauth_calendar_to_asr_summary_mail_and_writeback_end_to_end(
     ms_events = {
         "ms-evt-active": {
             "id": "ms-evt-active",
-            "iCalUId": "ical-ms-active@mayflower.de",
+            "iCalUId": "ical-ms-active@acme.example.org",
             "isCancelled": False,
             "isOrganizer": True,
             "subject": "Teams Sprint Review",
-            "organizer": {"emailAddress": {"address": "owner@mayflower.de"}},
+            "organizer": {"emailAddress": {"address": "owner@acme.example.org"}},
             "attendees": [
                 {
-                    "emailAddress": {"address": "bob@mayflower.de"},
+                    "emailAddress": {"address": "bob@acme.example.org"},
                     "status": {"response": "accepted"},
                 }
             ],
@@ -552,7 +556,7 @@ def test_oauth_calendar_to_asr_summary_mail_and_writeback_end_to_end(
     monkeypatch.setattr(cal_oauth, "MICROSOFT_EVENTS_URL", f"{base}/ms/events")
     monkeypatch.setenv("WORTLAUT_ENABLE_GOOGLE_MEET", "true")
     monkeypatch.setenv("WORTLAUT_ENABLE_TEAMS", "true")
-    monkeypatch.setenv("WORTLAUT_API_URL", "https://wortlaut.data.mayflower.tech")
+    monkeypatch.setenv("WORTLAUT_API_URL", "https://wortlaut.example.org")
     monkeypatch.setenv("WORTLAUT_ASR_URL", base)
     monkeypatch.setenv("WORTLAUT_ASR_TOKEN", "fixture-asr-token")
     monkeypatch.setenv("WORTLAUT_ENABLE_LLM_SUMMARY", "true")
@@ -560,26 +564,26 @@ def test_oauth_calendar_to_asr_summary_mail_and_writeback_end_to_end(
     monkeypatch.setenv("WORTLAUT_SMTP_HOST", "127.0.0.1")
     monkeypatch.setenv("WORTLAUT_SMTP_PORT", str(smtp_port))
     monkeypatch.setenv("WORTLAUT_SMTP_TLS", "none")
-    monkeypatch.setenv("WORTLAUT_SMTP_FROM", "wortlaut@mayflower.de")
-    monkeypatch.setenv("WORTLAUT_RESULT_RECIPIENTS", '{"default":["owner@mayflower.de"]}')
+    monkeypatch.setenv("WORTLAUT_SMTP_FROM", "wortlaut@acme.example.org")
+    monkeypatch.setenv("WORTLAUT_RESULT_RECIPIENTS", '{"default":["owner@acme.example.org"]}')
     get_settings.cache_clear()
 
     try:
         with Session(database) as db:
             g_conn = CalendarConnection(
                 owner_sub="sub-owner",
-                owner_email="owner@mayflower.de",
+                owner_email="owner@acme.example.org",
                 provider="google",
-                account_email="owner@mayflower.de",
+                account_email="owner@acme.example.org",
                 encrypted_access_token=cal_oauth.encrypt_secret("google-token"),
                 encrypted_refresh_token=cal_oauth.encrypt_secret("google-refresh"),
                 token_expires_at=now + timedelta(hours=1),
             )
             ms_conn = CalendarConnection(
                 owner_sub="sub-owner",
-                owner_email="owner@mayflower.de",
+                owner_email="owner@acme.example.org",
                 provider="microsoft",
-                account_email="owner@mayflower.de",
+                account_email="owner@acme.example.org",
                 encrypted_access_token=cal_oauth.encrypt_secret("ms-token"),
                 encrypted_refresh_token=cal_oauth.encrypt_secret("ms-refresh"),
                 token_expires_at=now + timedelta(hours=1),
@@ -746,7 +750,7 @@ def test_oauth_calendar_to_asr_summary_mail_and_writeback_end_to_end(
         assert patched_ids == {("google", "g-evt-active"), ("microsoft", "ms-evt-active")}
         from html import unescape
 
-        token_prefix = "https://wortlaut.data.mayflower.tech/ui#view=meetings&id="
+        token_prefix = "https://wortlaut.example.org/ui#view=meetings&id="
         g_desc = google_events["g-evt-active"]["description"]
         ms_body = unescape(ms_events["ms-evt-active"]["body"]["content"])
         assert token_prefix in g_desc and "token=wortlaut-read-" in g_desc
@@ -928,9 +932,9 @@ def test_calendar_toggle_concurrent_with_sync_no_postgres_deadlock(database, mon
     with Session(database) as db:
         conn = CalendarConnection(
             owner_sub="sub-deadlock",
-            owner_email="owner@mayflower.de",
+            owner_email="owner@acme.example.org",
             provider="google",
-            account_email="owner@mayflower.de",
+            account_email="owner@acme.example.org",
             encrypted_access_token=cal_oauth.encrypt_secret("valid-token"),
             encrypted_refresh_token=cal_oauth.encrypt_secret("valid-refresh"),
             token_expires_at=now + timedelta(hours=1),
@@ -941,7 +945,7 @@ def test_calendar_toggle_concurrent_with_sync_no_postgres_deadlock(database, mon
         ev1 = CalendarSyncedEvent(
             connection_id=conn.id,
             owner_sub="sub-deadlock",
-            owner_email="owner@mayflower.de",
+            owner_email="owner@acme.example.org",
             calendar_provider="google",
             external_event_id="evt-concurrent-1",
             ical_uid="uid-concurrent-1",
@@ -959,7 +963,7 @@ def test_calendar_toggle_concurrent_with_sync_no_postgres_deadlock(database, mon
         ev2 = CalendarSyncedEvent(
             connection_id=conn.id,
             owner_sub="sub-deadlock",
-            owner_email="owner@mayflower.de",
+            owner_email="owner@acme.example.org",
             calendar_provider="google",
             external_event_id="evt-concurrent-2",
             ical_uid="uid-concurrent-2",
@@ -992,7 +996,7 @@ def test_calendar_toggle_concurrent_with_sync_no_postgres_deadlock(database, mon
                 "starts_at": now + timedelta(hours=1),
                 "ends_at": now + timedelta(hours=2),
                 "organizer_email": "ext@example.org",
-                "attendee_emails": ["owner@mayflower.de", "ext@example.org"],
+                "attendee_emails": ["owner@acme.example.org", "ext@example.org"],
                 "is_self_organized": False,
                 "default_auto_record": False,
                 "meeting_provider": "google_meet",
@@ -1006,7 +1010,7 @@ def test_calendar_toggle_concurrent_with_sync_no_postgres_deadlock(database, mon
                 "starts_at": now + timedelta(hours=3),
                 "ends_at": now + timedelta(hours=4),
                 "organizer_email": "ext@example.org",
-                "attendee_emails": ["owner@mayflower.de", "ext@example.org"],
+                "attendee_emails": ["owner@acme.example.org", "ext@example.org"],
                 "is_self_organized": False,
                 "default_auto_record": False,
                 "meeting_provider": "google_meet",
@@ -1019,7 +1023,7 @@ def test_calendar_toggle_concurrent_with_sync_no_postgres_deadlock(database, mon
     principal = Principal(
         kind="user",
         sub="sub-deadlock",
-        email="owner@mayflower.de",
+        email="owner@acme.example.org",
         name="Owner",
         is_admin=False,
     )

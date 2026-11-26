@@ -11,7 +11,17 @@ if len(namespace) > 63 or any([c not in 'abcdefghijklmnopqrstuvwxyz0123456789-' 
 if not os.getenv('KUBECONFIG', ''):
     fail('Use make setup and make dev for the project-local data kubeconfig')
 
-registry = 'registry.data.mayflower.zone/' + namespace
+dev_env = {}
+if os.path.exists('.dev/dev.env'):
+    for line in str(read_file('.dev/dev.env')).splitlines():
+        line = line.strip()
+        if line and not line.startswith('#') and '=' in line:
+            k, v = line.split('=', 1)
+            dev_env[k.strip()] = v.strip()
+
+dev_domain = os.getenv('WORTLAUT_DEV_DOMAIN', dev_env.get('WORTLAUT_DEV_DOMAIN', 'wortlaut-dev.example.org'))
+dev_registry_host = os.getenv('WORTLAUT_DEV_REGISTRY', dev_env.get('WORTLAUT_DEV_REGISTRY', 'localhost:5000'))
+registry = dev_registry_host.rstrip('/') + '/' + namespace
 default_registry(registry)
 update_settings(max_parallel_updates=1)
 build_env = {'KUBECONFIG': os.getenv('KUBECONFIG'), 'WORTLAUT_NAMESPACE': namespace}
@@ -39,12 +49,12 @@ for obj in objects:
             if subject['kind'] == 'ServiceAccount':
                 subject['namespace'] = namespace
     if obj['kind'] == 'Ingress':
-        hostname = namespace + '.data.mayflower.zone'
+        hostname = namespace + '.' + dev_domain
         obj['spec']['rules'][0]['host'] = hostname
         obj['spec']['tls'][0]['hosts'] = [hostname]
     if obj['kind'] == 'ConfigMap' and obj['metadata']['name'] == 'wortlaut-config':
-        obj['data']['WORTLAUT_SDK_PAGE_URL'] = 'https://' + namespace + '.data.mayflower.zone/sdk/'
-        obj['data']['WORTLAUT_API_URL'] = 'https://' + namespace + '.data.mayflower.zone/'
+        obj['data']['WORTLAUT_SDK_PAGE_URL'] = 'https://' + namespace + '.' + dev_domain + '/sdk/'
+        obj['data']['WORTLAUT_API_URL'] = 'https://' + namespace + '.' + dev_domain + '/'
         obj['data']['WORTLAUT_NAMESPACE'] = namespace
 k8s_yaml(encode_yaml_stream(objects))
 

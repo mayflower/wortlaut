@@ -526,8 +526,8 @@ test('Web-UI automatically refetches settled transcript summary and 1-click Goog
             {
               id: randomUUID(),
               provider: 'google',
-              account_email: 'johann@mayflower.de',
-              owner_email: 'johann@mayflower.de',
+              account_email: 'alex@example.org',
+              owner_email: 'alex@example.org',
               last_synced_at: '2026-11-18T13:45:00Z',
               sync_error: null,
               created_at: '2026-11-09T14:53:33Z',
@@ -549,7 +549,7 @@ test('Web-UI automatically refetches settled transcript summary and 1-click Goog
               title: 'Gruppe-DEV Zweekly',
               guest_name: 'wortlaut',
               language: 'de',
-              owner_email: 'johann@mayflower.de',
+              owner_email: 'alex@example.org',
               starts_at: '2026-11-18T13:00:00Z',
               ends_at: '2026-11-18T14:00:00Z',
               participation: 'ended',
@@ -581,7 +581,7 @@ test('Web-UI automatically refetches settled transcript summary and 1-click Goog
           title: 'Gruppe-DEV Zweekly',
           guest_name: 'wortlaut',
           language: 'de',
-          owner_email: 'johann@mayflower.de',
+          owner_email: 'alex@example.org',
           starts_at: '2026-11-18T13:00:00Z',
           ends_at: '2026-11-18T14:00:00Z',
           participation: 'ended',
@@ -670,8 +670,8 @@ test('Web-UI automatically refetches settled transcript summary and 1-click Goog
               start: 5,
               end: 9,
               text: 'Kurzes Update zum Glossar-Editor.',
-              speaker_label: 'Johann Peter Hartmann',
-              participant_name: 'Johann Peter Hartmann',
+              speaker_label: 'Alex Weber',
+              participant_name: 'Alex Weber',
               attribution_unknown: false,
             },
           ],
@@ -832,7 +832,7 @@ test('Web-UI fixes glossary tab/count mismatch (#15), merged multi-ID speaker fi
           kind: 'user',
           is_admin: false,
           sub: 'sub-user',
-          email: 'ingrid@mayflower.de',
+          email: 'clara@example.org',
           name: 'Ingrid',
           oidc_enabled: true,
           providers: {google_meet: true, teams: true, webex: false, zoom: false},
@@ -870,7 +870,7 @@ test('Web-UI fixes glossary tab/count mismatch (#15), merged multi-ID speaker fi
           default_scope: 'personal',
           global_entries: [
             {term_key: 'wortlaut', term: 'wortlaut', aliases: [], source: 'team', editable: false},
-            {term_key: 'maistack', term: 'mAIstack', aliases: ['MyStack'], source: 'team', editable: false},
+            {term_key: 'acmepay', term: 'AcmePay', aliases: ['AcmiPay'], source: 'team', editable: false},
           ],
           personal_entries: personalGlossaryEntries,
           suppressed_env_terms: [],
@@ -903,7 +903,7 @@ test('Web-UI fixes glossary tab/count mismatch (#15), merged multi-ID speaker fi
           default_scope: 'personal',
           global_entries: [
             {term_key: 'wortlaut', term: 'wortlaut', aliases: [], source: 'team', editable: false},
-            {term_key: 'maistack', term: 'mAIstack', aliases: ['MyStack'], source: 'team', editable: false},
+            {term_key: 'acmepay', term: 'AcmePay', aliases: ['AcmiPay'], source: 'team', editable: false},
           ],
           personal_entries: personalGlossaryEntries,
           suppressed_env_terms: [],
@@ -934,7 +934,7 @@ test('Web-UI fixes glossary tab/count mismatch (#15), merged multi-ID speaker fi
               title: 'Live 3-Spur Meeting',
               guest_name: 'wortlaut',
               language: 'de',
-              owner_email: 'ingrid@mayflower.de',
+              owner_email: 'clara@example.org',
               starts_at: '2026-11-19T09:00:00Z',
               ends_at: '2026-11-19T10:00:00Z',
               participation: 'capturing',
@@ -975,7 +975,7 @@ test('Web-UI fixes glossary tab/count mismatch (#15), merged multi-ID speaker fi
           title: 'Live 3-Spur Meeting',
           guest_name: 'wortlaut',
           language: 'de',
-          owner_email: 'ingrid@mayflower.de',
+          owner_email: 'clara@example.org',
           starts_at: '2026-11-19T09:00:00Z',
           ends_at: '2026-11-19T10:00:00Z',
           participation: 'capturing',
@@ -1171,7 +1171,7 @@ test('Web-UI fixes glossary tab/count mismatch (#15), merged multi-ID speaker fi
     const glossaryBadge = page.locator('span[title="0 persönlich · 2 Team"]');
     await glossaryBadge.waitFor({state: 'visible', timeout: 5000});
     await page.getByRole('button', {name: /Glossar/}).click();
-    await page.getByText('mAIstack').waitFor({state: 'visible', timeout: 5000});
+    await page.getByText('AcmePay').waitFor({state: 'visible', timeout: 5000});
 
     // Switching to empty Personal tab explains active Team Glossary terms and links back to Team Glossary
     await page.getByText('Persönlich (0)', {exact: true}).click();
@@ -1182,7 +1182,7 @@ test('Web-UI fixes glossary tab/count mismatch (#15), merged multi-ID speaker fi
         timeout: 5000,
       });
     await page.getByRole('button', {name: 'Team-Glossar anzeigen (2)'}).click();
-    await page.getByText('mAIstack').waitFor({state: 'visible', timeout: 5000});
+    await page.getByText('AcmePay').waitFor({state: 'visible', timeout: 5000});
 
     // Active learning: inline turn edit proposes 1-click Glossary entry and refreshes sidebar count
     await page.goto(`${baseUrl}/ui#view=meetings&id=${recordingId}&token=user-session-token`);

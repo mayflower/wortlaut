@@ -39,7 +39,7 @@ def test_oidc_discovery_and_pyjwt_es256_eddsa_verification(client, monkeypatch):
     monkeypatch.setenv("WORTLAUT_OIDC_ISSUER", "https://sso.corp.internal/realms/main")
     monkeypatch.setenv("WORTLAUT_OIDC_INTERNAL_ISSUER", "http://keycloak.svc:8080/realms/main")
     monkeypatch.setenv("WORTLAUT_OIDC_CLIENT_ID", "wortlaut-web")
-    monkeypatch.setenv("WORTLAUT_OIDC_ALLOWED_DOMAINS", '["mayflower.de"]')
+    monkeypatch.setenv("WORTLAUT_OIDC_ALLOWED_DOMAINS", '["acme.example.org"]')
     get_settings.cache_clear()
 
     ec_priv = ec.generate_private_key(ec.SECP256R1())
@@ -106,7 +106,7 @@ def test_oidc_discovery_and_pyjwt_es256_eddsa_verification(client, monkeypatch):
                 "iat": now,
                 "exp": now + 600,
                 "nonce": "n-123",
-                "email": "clara@mayflower.de",
+                "email": "clara@acme.example.org",
                 "email_verified": True,
                 "name": "Clara Auth",
             },
@@ -116,7 +116,7 @@ def test_oidc_discovery_and_pyjwt_es256_eddsa_verification(client, monkeypatch):
         )
         claims = oidc_mod.verify_dex_id_token(tok, expected_nonce="n-123")
         assert claims["sub"] == f"user-{alg}"
-        assert claims["email"] == "clara@mayflower.de"
+        assert claims["email"] == "clara@acme.example.org"
 
     assert "http://keycloak.svc:8080/realms/main/protocol/openid-connect/certs" in seen_urls
 
@@ -182,9 +182,9 @@ def test_calendar_oauth_pagination_truncation_guard_and_refresh_token_preservati
                             "start": {"dateTime": (now + timedelta(hours=1)).isoformat()},
                             "end": {"dateTime": (now + timedelta(hours=2)).isoformat()},
                             "hangoutLink": "https://meet.google.com/abc-defg-hij",
-                            "organizer": {"email": "alice@mayflower.de", "self": True},
+                            "organizer": {"email": "alice@acme.example.org", "self": True},
                             "attendees": [
-                                {"email": "bob@mayflower.de", "responseStatus": "accepted"}
+                                {"email": "bob@acme.example.org", "responseStatus": "accepted"}
                             ],
                         }
                         for i in range(2)
@@ -203,9 +203,9 @@ def test_calendar_oauth_pagination_truncation_guard_and_refresh_token_preservati
                         "start": {"dateTime": (now + timedelta(days=10)).isoformat()},
                         "end": {"dateTime": (now + timedelta(days=10, hours=1)).isoformat()},
                         "hangoutLink": "https://meet.google.com/klm-nopq-rst",
-                        "organizer": {"email": "alice@mayflower.de", "self": True},
+                        "organizer": {"email": "alice@acme.example.org", "self": True},
                         "attendees": [
-                            {"email": "bob@mayflower.de", "responseStatus": "accepted"}
+                            {"email": "bob@acme.example.org", "responseStatus": "accepted"}
                         ],
                     }
                 ]
@@ -217,9 +217,9 @@ def test_calendar_oauth_pagination_truncation_guard_and_refresh_token_preservati
     with Session(database) as db:
         conn = CalendarConnection(
             owner_sub="sub-alice",
-            owner_email="alice@mayflower.de",
+            owner_email="alice@acme.example.org",
             provider="google",
-            account_email="alice@mayflower.de",
+            account_email="alice@acme.example.org",
             encrypted_access_token=cal_oauth.encrypt_secret("acc-1"),
             encrypted_refresh_token=cal_oauth.encrypt_secret("original-refresh-token"),
             token_expires_at=now + timedelta(hours=1),
@@ -264,14 +264,14 @@ def test_calendar_oauth_pagination_truncation_guard_and_refresh_token_preservati
         return _FakeResp({"access_token": "short-lived-1h-access", "expires_in": 3600})
 
     def fake_userinfo(url: str, **kwargs):
-        return _FakeResp({"email": "alice@mayflower.de"})
+        return _FakeResp({"email": "alice@acme.example.org"})
 
     monkeypatch.setattr(cal_oauth.httpx, "post", fake_post)
     monkeypatch.setattr(cal_oauth.httpx, "get", fake_userinfo)
     monkeypatch.setattr(cal_oauth, "sync_connection", lambda db, c, now=None: [])
 
     principal = Principal(
-        kind="user", sub="sub-alice", email="alice@mayflower.de", name="Alice", is_admin=False
+        kind="user", sub="sub-alice", email="alice@acme.example.org", name="Alice", is_admin=False
     )
     with Session(database) as db:
         cal_oauth.exchange_calendar_oauth_code(
@@ -798,8 +798,8 @@ def test_csrc_onset_binding_and_optout_purge_and_calendar_attendee_context(
         )
         _merge_recording_attendees(
             rec,
-            ["nico.briegel@komm.one", "vidya@example.org"],
-            ["Nico Briegel", "Vidya Munde-Müller", "Eve OptedOut"],
+            ["nico.meier@acme.one", "maya@example.org"],
+            ["Nico Meier", "Maya Lindner-Berg", "Eve OptedOut"],
         )
         att = Attempt(
             id=att_id,
@@ -844,7 +844,7 @@ def test_csrc_onset_binding_and_optout_purge_and_calendar_attendee_context(
                         "provider_source_id": prov_src,
                         "speaker_id": "volkmar-id",
                         "participant_id": "volkmar-id",
-                        "participant_name": "Volkmar Erben",
+                        "participant_name": "Stefan Novak",
                         "attribution_unknown": False,
                     },
                 ),
@@ -918,7 +918,7 @@ def test_csrc_onset_binding_and_optout_purge_and_calendar_attendee_context(
                 "provider_source_id": prov_src,
                 "speaker_id": "volkmar-id",
                 "participant_id": "volkmar-id",
-                "participant_name": "Volkmar Erben",
+                "participant_name": "Stefan Novak",
                 "attribution_unknown": False,
             },
             status="completed",
@@ -986,7 +986,7 @@ def test_csrc_onset_binding_and_optout_purge_and_calendar_attendee_context(
                         "source_kind": "speaker",
                         "provider_source_id": prov_src,
                         "participant_id": "volkmar-id",
-                        "participant_name": "Volkmar Erben",
+                        "participant_name": "Stefan Novak",
                         "speaker_id": "volkmar-id",
                         "attribution_unknown": False,
                         "start": 0.81,
@@ -1005,7 +1005,7 @@ def test_csrc_onset_binding_and_optout_purge_and_calendar_attendee_context(
                         "source_kind": "speaker",
                         "provider_source_id": prov_src,
                         "participant_id": "volkmar-id",
-                        "participant_name": "Volkmar Erben",
+                        "participant_name": "Stefan Novak",
                         "speaker_id": "volkmar-id",
                         "attribution_unknown": False,
                         "start": 4.0,
@@ -1024,7 +1024,7 @@ def test_csrc_onset_binding_and_optout_purge_and_calendar_attendee_context(
                         "source_kind": "speaker",
                         "provider_source_id": prov_src,
                         "participant_id": "volkmar-id",
-                        "participant_name": "Volkmar Erben",
+                        "participant_name": "Stefan Novak",
                         "speaker_id": "volkmar-id",
                         "attribution_unknown": False,
                         "start": 4.5,
@@ -1068,16 +1068,16 @@ def test_csrc_onset_binding_and_optout_purge_and_calendar_attendee_context(
 
         ctx_prompt = build_asr_context_prompt(db, j_v_cont, stream)
         assert ctx_prompt is not None
-        assert "Nico Briegel" in ctx_prompt
-        assert "Vidya Munde-Müller" in ctx_prompt
-        assert "Komm.ONE" in ctx_prompt
+        assert "Nico Meier" in ctx_prompt
+        assert "Maya Lindner-Berg" in ctx_prompt
+        assert "Acme.ONE" in ctx_prompt
         assert "Eve OptedOut" not in ctx_prompt
         db.commit()
 
     tx = client.get(f"/v1/recordings/{rec_id}/transcript", headers=API).json()
     assert tx["quality"]["attribution_unknown"] is False
     assert len(tx["segments"]) == 1
-    assert tx["segments"][0]["speaker_label"] == "Volkmar Erben"
+    assert tx["segments"][0]["speaker_label"] == "Stefan Novak"
     assert (
         tx["segments"][0]["text"]
         == "Na, wollte ich nur sagen, die haben sich intern zusammengesetzt. Genau. Danke."
@@ -1113,16 +1113,16 @@ def test_group_calendar_writeback_and_oauth_reconnect_backfill(
     get_settings.cache_clear()
 
     now = datetime.now(UTC)
-    group_cal = "mayflower.de_brd1c7uol47s7r083108auess8@group.calendar.google.com"
+    group_cal = "acme.example.org_teamcal1234567890@group.calendar.google.com"
     ext_event_id = "j8td45g2mak59ua5tq5nkhaahu_20261118T130000Z"
     rec_id = uuid.uuid4()
 
     with Session(database) as db:
         conn = CalendarConnection(
-            owner_sub="sub-johann",
-            owner_email="johann@mayflower.de",
+            owner_sub="sub-alex",
+            owner_email="alex@acme.example.org",
             provider="google",
-            account_email="johann@mayflower.de",
+            account_email="alex@acme.example.org",
             encrypted_access_token=cal_oauth.encrypt_secret("readonly-access-token"),
             encrypted_refresh_token=cal_oauth.encrypt_secret("readonly-refresh-token"),
             token_expires_at=now + timedelta(hours=1),
@@ -1134,8 +1134,8 @@ def test_group_calendar_writeback_and_oauth_reconnect_backfill(
             meeting_url="https://meet.google.com/zweekly-room",
             provider="google_meet",
             title="Gruppe-DEV Zweekly",
-            owner_sub="sub-johann",
-            owner_email="johann@mayflower.de",
+            owner_sub="sub-alex",
+            owner_email="alex@acme.example.org",
             starts_at=now - timedelta(hours=1),
             ends_at=now,
             participation="ended",
@@ -1153,8 +1153,8 @@ def test_group_calendar_writeback_and_oauth_reconnect_backfill(
         db.flush()
         ev = CalendarSyncedEvent(
             connection_id=conn.id,
-            owner_sub="sub-johann",
-            owner_email="johann@mayflower.de",
+            owner_sub="sub-alex",
+            owner_email="alex@acme.example.org",
             calendar_provider="google",
             external_event_id=ext_event_id,
             title="Gruppe-DEV Zweekly",
@@ -1189,7 +1189,7 @@ def test_group_calendar_writeback_and_oauth_reconnect_backfill(
 
     def fake_get(url: str, **kwargs):
         if "oauth2/v3/userinfo" in url:
-            return _Resp(200, {"email": "johann@mayflower.de"})
+            return _Resp(200, {"email": "alex@acme.example.org"})
         return _Resp(200, {"id": ext_event_id, "description": "Wöchentlicher Sync"})
 
     def fake_patch(url: str, **kwargs):
@@ -1241,9 +1241,9 @@ def test_group_calendar_writeback_and_oauth_reconnect_backfill(
 
     principal = Principal(
         kind="user",
-        sub="sub-johann",
-        email="johann@mayflower.de",
-        name="Johann",
+        sub="sub-alex",
+        email="alex@acme.example.org",
+        name="Alex",
         is_admin=True,
     )
     with Session(database) as db:
@@ -1253,12 +1253,12 @@ def test_group_calendar_writeback_and_oauth_reconnect_backfill(
             provider="google",
             code="fresh-consent-code",
             code_verifier="w" * 48,
-            redirect_uri="https://wortlaut.data.mayflower.tech/auth/callback",
+            redirect_uri="https://wortlaut.example.org/auth/callback",
         )
 
     assert len(patched_calls) == 1
     patched_url, patched_params, patched_json = patched_calls[0]
-    assert "mayflower.de_brd1c7uol47s7r083108auess8%40group.calendar.google.com" in patched_url
+    assert "acme.example.org_teamcal1234567890%40group.calendar.google.com" in patched_url
     assert patched_params == {"sendUpdates": "none"}
     assert str(rec_id) in patched_json["description"]
     assert "Fortschritte bei Wortlaut" in patched_json["description"]
@@ -1330,7 +1330,7 @@ def test_immediate_opt_out_hides_live_speaker_zeros_s3_chunks_and_syncs_worker(
                         },
                         {
                             "participant_id": "spaces/s/devices/562",
-                            "participant_name": "Florian Eibeck",
+                            "participant_name": "Bob Example",
                         },
                     ],
                 },
@@ -1338,7 +1338,7 @@ def test_immediate_opt_out_hides_live_speaker_zeros_s3_chunks_and_syncs_worker(
                     {
                         "provider_source_id": f"google_meet:{rec_id}:receiver:0",
                         "signaled_participant_id": "spaces/s/devices/562",
-                        "participant_name": "Florian Eibeck",
+                        "participant_name": "Bob Example",
                         "rtp_stats": {"audio_level": 0.42},
                     },
                     {
@@ -1417,7 +1417,7 @@ def test_immediate_opt_out_hides_live_speaker_zeros_s3_chunks_and_syncs_worker(
                 "attribution_unknown": False,
                 "participant_id": "spaces/s/devices/562",
                 "speaker_id": "spaces/s/devices/562",
-                "participant_name": "Florian Eibeck",
+                "participant_name": "Bob Example",
             },
         )
         ch1_id = accept_chunk(
@@ -1431,21 +1431,21 @@ def test_immediate_opt_out_hides_live_speaker_zeros_s3_chunks_and_syncs_worker(
                 "sample_count": 16000,
                 "participant_id": "spaces/s/devices/562",
                 "speaker_id": "spaces/s/devices/562",
-                "participant_name": "Florian Eibeck",
+                "participant_name": "Bob Example",
             },
             florian_pcm,
         )
 
     # Before opt-out, live_status shows Florian as active speaker
     before = client.get(f"/v1/recordings/{rec_id}", headers=API).json()
-    assert before["live_status"]["active_speakers"] == ["Florian Eibeck"]
+    assert before["live_status"]["active_speakers"] == ["Bob Example"]
     assert before["live_status"]["max_audio_level"] == 0.42
 
     # Trigger opt-out via PATCH /v1/recordings/{id}
     patch = client.patch(
         f"/v1/recordings/{rec_id}",
         headers=API,
-        json={"opted_out_speakers": ["Florian Eibeck"]},
+        json={"opted_out_speakers": ["Bob Example"]},
     )
     assert patch.status_code == 200, patch.text
 
@@ -1479,7 +1479,7 @@ def test_immediate_opt_out_hides_live_speaker_zeros_s3_chunks_and_syncs_worker(
                 "sample_count": 16000,
                 "participant_id": "spaces/s/devices/562",
                 "speaker_id": "spaces/s/devices/562",
-                "participant_name": "Florian Eibeck",
+                "participant_name": "Bob Example",
             },
             florian_pcm,
         )
@@ -1506,7 +1506,7 @@ def test_immediate_opt_out_hides_live_speaker_zeros_s3_chunks_and_syncs_worker(
             "participant_sources": {
                 "available": True,
                 "total": 2,
-                "opted_out": ["Florian Eibeck"],
+                "opted_out": ["Bob Example"],
                 "opted_out_windows": [
                     {
                         "started_at": (now + timedelta(seconds=12)).isoformat(),
@@ -1518,7 +1518,7 @@ def test_immediate_opt_out_hides_live_speaker_zeros_s3_chunks_and_syncs_worker(
         },
     )
     assert hb.status_code == 200, hb.text
-    assert hb.json()["opted_out_speakers"] == ["Florian Eibeck"]
+    assert hb.json()["opted_out_speakers"] == ["Bob Example"]
 
     # 6. Protocol JSON, Markdown, and Plaintext exports show anonymous (OPTED OUT COMMENT) marker
     tx_after = client.get(f"/v1/recordings/{rec_id}/transcript", headers=API).json()
@@ -1536,9 +1536,9 @@ def test_immediate_opt_out_hides_live_speaker_zeros_s3_chunks_and_syncs_worker(
     md_resp = client.get(f"/v1/recordings/{rec_id}/exports/md", headers=API)
     assert md_resp.status_code == 200, md_resp.text
     assert "(OPTED OUT COMMENT)" in md_resp.text
-    assert "Florian Eibeck" not in md_resp.text
+    assert "Bob Example" not in md_resp.text
 
     txt_resp = client.get(f"/v1/recordings/{rec_id}/exports/txt", headers=API)
     assert txt_resp.status_code == 200, txt_resp.text
     assert "(OPTED OUT COMMENT)" in txt_resp.text
-    assert "Florian Eibeck" not in txt_resp.text
+    assert "Bob Example" not in txt_resp.text

@@ -28,8 +28,21 @@ def test_real_job_claim_cancel_exit_and_secret_cleanup(monkeypatch):
     values = dict(
         line.split("=", 1) for line in (root / ".dev/runtime.env").read_text().splitlines()
     )
+    dev_env_path = root / ".dev/dev.env"
+    dev_env = (
+        dict(
+            line.split("=", 1)
+            for line in dev_env_path.read_text().splitlines()
+            if "=" in line and not line.strip().startswith("#")
+        )
+        if dev_env_path.exists()
+        else {}
+    )
+    dev_domain = os.getenv(
+        "WORTLAUT_DEV_DOMAIN", dev_env.get("WORTLAUT_DEV_DOMAIN", "wortlaut-dev.example.org")
+    )
     namespace = "wortlaut-" + getpass.getuser()
-    origin = f"https://{namespace}.data.mayflower.zone/"
+    origin = f"https://{namespace}.{dev_domain}/"
     for name, value in values.items():
         monkeypatch.setenv(name, value)
     monkeypatch.setenv("WORTLAUT_API_URL", origin)

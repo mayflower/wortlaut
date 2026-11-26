@@ -2355,7 +2355,7 @@ def extract_keyframe_visual_context(
             "Extrahiere aus dem geteilten Konferenz-Bildschirmfoto präzise den sichtbaren "
             "Arbeitskontext als JSON-Objekt mit genau diesen Feldern:\n"
             '{"view": "Kurze Beschreibung der Ansicht (max. 1 Satz)", '
-            '"items": ["Sichtbare Ticket-IDs mit Titel (z. B. MAIS-270: ...), PR-Nummern, '
+            '"items": ["Sichtbare Ticket-IDs mit Titel (z. B. PROJ-270: ...), PR-Nummern, '
             'Folienüberschriften oder Dateinamen"], '
             '"terms": ["Sichtbare Produktnamen, Modell-IDs, Bibliotheken und Fachbegriffe in '
             'exakter Originalschreibweise"]}\n'
@@ -2703,13 +2703,8 @@ def generate_protocol_summary(db: Session, recording_id: uuid.UUID) -> dict:
             "- Übernimm die exakte Schreibweise der Teilnehmendennamen und Fachbegriffe. "
             "Sichtbare Begriffe, Dateinamen und Überschriften aus 'Sichtbarer Bildschirmkontext' "
             "und 'Fachbegriffe / Glossar' haben stets Vorrang vor phonetisch ähnlichen "
-            "Spracherkennungsfehlern im Wortprotokoll (z. B. Resale/Token-Reselling statt "
-            "'Token-Recycling' bei sichtbarer Resale-Datei, Voicebot statt 'Voiceboard', "
-            "Jitsi statt 'Jetzti'/'Chitzy', Wortlaut statt 'Wordlaut'/'Wortcloud', "
-            "MkDocs statt 'MakeDocs', Diataxis statt 'Diary-Taxus', RAG statt 'Rack', "
-            "Databricks statt 'DataWorks', KEDA/Coder/SeaweedFS/MinIO/Argo CD/SonarQube "
-            "statt phonetischer Verhörer, Langfuse/LangGraph statt 'Langviews'/'Langraft', "
-            "HubSpot statt 'Hopspot', Jira statt 'Chirer').\n"
+            "Spracherkennungsfehlern im Wortprotokoll (z. B. exakte Produkt-, Projekt- und "
+            "Toolnamen aus Glossar oder geteiltem Bildschirm statt phonetischer Verhörer).\n"
             "- Trenne Nebenbemerkungen zu Alternativmodellen, Smalltalk oder Drittsystemen sauber "
             "von der tatsächlich besprochenen bzw. gezeigten Lösung."
         )
@@ -2763,12 +2758,7 @@ def generate_protocol_summary(db: Session, recording_id: uuid.UUID) -> dict:
             "ID/title accurately; never conflate two adjacent cards on a board into one task.\n"
             "- Preserve exact spelling of participant names and domain terminology. Visible "
             "terms, filenames, and headings from screen-share context and the glossary are "
-            "authoritative over phonetically similar ASR misspellings in the transcript "
-            "(e.g. Resale/Token-Reselling instead of 'Token-Recycling' when a resale file is "
-            "shown, Voicebot instead of 'Voiceboard', Jitsi instead of 'Jetzti', Wortlaut "
-            "instead of 'Wordlaut'/'Wortcloud', MkDocs instead of 'MakeDocs', RAG instead of "
-            "'Rack', Databricks instead of 'DataWorks', KEDA/Coder/SeaweedFS/MinIO/"
-            "Argo CD/SonarQube, Langfuse/LangGraph, HubSpot, Jira).\n"
+            "authoritative over phonetically similar ASR misspellings in the transcript.\n"
             "- Keep side remarks or small talk distinct from the demonstrated solution."
         )
     meta_lines = [f"Titel der Besprechung: {title}"]

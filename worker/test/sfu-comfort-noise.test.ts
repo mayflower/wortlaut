@@ -123,7 +123,7 @@ test('shared SFU receiver ignores silent comfort-noise CSRCs during speech and p
       dc.send(
         JSON.stringify({
           participants: [
-            {participant_id: 'spaces/r/devices/christian', participant_name: 'Dr. Christian Speckner', audio_csis: [8101]},
+            {participant_id: 'spaces/r/devices/christian', participant_name: 'Dr. Clara Weber', audio_csis: [8101]},
             {participant_id: 'spaces/r/devices/maria', participant_name: 'Maria Haubner', audio_csis: [8102]},
             {participant_id: 'spaces/r/devices/andreas', participant_name: 'Andreas Haberberger', audio_csis: [8103]},
           ],

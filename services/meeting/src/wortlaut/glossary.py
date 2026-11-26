@@ -70,7 +70,7 @@ def normalize_glossary_aliases(
 
 
 def parse_bulk_glossary_input(raw_text: str) -> list[tuple[str, list[str]]]:
-    """Parse single, comma/newline-separated, or `Mistack -> mAIstack` glossary entries."""
+    """Parse single, comma/newline-separated, or `AcmiPay -> AcmePay` glossary entries."""
     by_key: dict[str, tuple[str, list[str]]] = {}
     for raw_line in (raw_text or "").splitlines():
         line = raw_line.strip()

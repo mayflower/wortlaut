@@ -588,7 +588,7 @@ def test_cjk_token_masking_none_suppression_and_context_prompt_header(monkeypatc
         " English": 13,
         "<asr_text>": 14,
         "<|im_end|>": 15,
-        "ĠMayflower": 16,
+        "ĠAcmeCorp": 16,
         "啊": 18,
         "叫": 19,
     }
@@ -628,7 +628,7 @@ def test_cjk_token_masking_none_suppression_and_context_prompt_header(monkeypatc
         def decode(self, generated, return_format):
             if self.mode == "none_with_cjk":
                 return [{"language": "None", "transcription": "啊，所以啊。"}]
-            return [{"language": "German", "transcription": "Mayflower"}]
+            return [{"language": "German", "transcription": "AcmeCorp"}]
 
     class Network:
         device, dtype = "cpu", "fp32"
@@ -669,7 +669,7 @@ def test_cjk_token_masking_none_suppression_and_context_prompt_header(monkeypatc
     monkeypatch.setenv("WORTLAUT_ASR_TOKEN", "ctx-token")
     service.model = asr
     client = TestClient(service.app)
-    ctx_str = "Thema: mAIstack Sync | Teilnehmende: Björn Müller | Glossar: Mayflower, Astryx"
+    ctx_str = "Thema: AcmeStack Sync | Teilnehmende: Björn Müller | Glossar: AcmeCorp, CloudSync"
     ctx_b64 = base64.b64encode(ctx_str.encode("utf-8")).decode("ascii")
     resp = client.post(
         "/v1/transcribe",
@@ -682,7 +682,7 @@ def test_cjk_token_masking_none_suppression_and_context_prompt_header(monkeypatc
         },
     )
     assert resp.status_code == 200
-    assert resp.json()["text"] == "Mayflower"
+    assert resp.json()["text"] == "AcmeCorp"
     assert captured["messages"][0] == {
         "role": "system",
         "content": [{"type": "text", "text": ctx_str}],

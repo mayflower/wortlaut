@@ -1527,8 +1527,8 @@ def test_oidc_dex_pkce_exchange_and_per_user_isolation(client, database, monkeyp
     from wortlaut.settings import get_settings
 
     monkeypatch.setenv("WORTLAUT_OIDC_ISSUER", "https://id.example.org")
-    monkeypatch.setenv("WORTLAUT_OIDC_ALLOWED_DOMAINS", '["mayflower.de"]')
-    monkeypatch.setenv("WORTLAUT_OIDC_ADMIN_EMAILS", '["admin@mayflower.de"]')
+    monkeypatch.setenv("WORTLAUT_OIDC_ALLOWED_DOMAINS", '["acme.example.org"]')
+    monkeypatch.setenv("WORTLAUT_OIDC_ADMIN_EMAILS", '["admin@acme.example.org"]')
     get_settings.cache_clear()
 
     private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
@@ -1590,7 +1590,7 @@ def test_oidc_dex_pkce_exchange_and_per_user_isolation(client, database, monkeyp
     monkeypatch.setattr(oidc_mod.httpx, "post", lambda *a, **kw: _FakeResp())
 
     next_id_token["value"] = _make_id_token(
-        "sub-mara", "mara.lindner@mayflower.de", "Mara Lindner", "nonce-mara"
+        "sub-mara", "mara.lindner@acme.example.org", "Mara Lindner", "nonce-mara"
     )
     ex_mara = client.post(
         "/v1/auth/oidc/exchange",
@@ -1604,16 +1604,16 @@ def test_oidc_dex_pkce_exchange_and_per_user_isolation(client, database, monkeyp
     assert ex_mara.status_code == 200
     mara_token = ex_mara.json()["token"]
     assert mara_token.startswith("wortlaut-user-")
-    assert ex_mara.json()["user"]["email"] == "mara.lindner@mayflower.de"
+    assert ex_mara.json()["user"]["email"] == "mara.lindner@acme.example.org"
     assert ex_mara.json()["user"]["is_admin"] is False
     mara_headers = {"Authorization": f"Bearer {mara_token}"}
 
     me_mara = client.get("/v1/auth/me", headers=mara_headers)
     assert me_mara.status_code == 200
-    assert me_mara.json()["email"] == "mara.lindner@mayflower.de"
+    assert me_mara.json()["email"] == "mara.lindner@acme.example.org"
 
     next_id_token["value"] = _make_id_token(
-        "sub-thomas", "thomas.berg@mayflower.de", "Thomas Berg", "nonce-thomas"
+        "sub-thomas", "thomas.berg@acme.example.org", "Thomas Berg", "nonce-thomas"
     )
     thomas_token = client.post(
         "/v1/auth/oidc/exchange",
@@ -1628,7 +1628,7 @@ def test_oidc_dex_pkce_exchange_and_per_user_isolation(client, database, monkeyp
 
     next_id_token["value"] = _make_id_token(
         "sub-admin",
-        "admin@mayflower.de",
+        "admin@acme.example.org",
         "Platform Admin",
         "nonce-admin",
     )
@@ -1659,7 +1659,7 @@ def test_oidc_dex_pkce_exchange_and_per_user_isolation(client, database, monkeyp
     )
     assert rec_mara.status_code == 200
     rec_mara_id = rec_mara.json()["id"]
-    assert rec_mara.json()["owner_email"] == "mara.lindner@mayflower.de"
+    assert rec_mara.json()["owner_email"] == "mara.lindner@acme.example.org"
 
     rec_thomas = client.post(
         "/v1/recordings",
@@ -1721,11 +1721,11 @@ def test_oidc_dex_pkce_exchange_and_per_user_isolation(client, database, monkeyp
     )
     assert boot.status_code == 200
     boot_data = boot.json()
-    assert boot_data["invited_by"] == "mara.lindner@mayflower.de"
+    assert boot_data["invited_by"] == "mara.lindner@acme.example.org"
     assert boot_data["invited_by_name"] == "Mara Lindner"
     assert boot_data["default_locale"] == "de"
     assert boot_data["meet"]["display_name"] == "wortlaut (Mara Lindner)"
-    assert "mara.lindner@mayflower.de" in boot_data["chat_intro"]
+    assert "mara.lindner@acme.example.org" in boot_data["chat_intro"]
     assert f"/ui#view=meetings&id={rec_mara_id}&token=wortlaut-read-{rec_mara_id}." in boot_data[
         "chat_intro"
     ]
@@ -1799,9 +1799,9 @@ def test_oidc_dex_pkce_exchange_and_per_user_isolation(client, database, monkeyp
         cal_oauth_mod.httpx,
         "post",
         lambda url, **kw: _FakeCalTokenResp(
-            "mara.lindner@mayflower.de"
+            "mara.lindner@acme.example.org"
             if "googleapis.com" in url
-            else "thomas.berg@mayflower.de"
+            else "thomas.berg@acme.example.org"
         ),
     )
     class _FakeCalGetResp:
@@ -1821,15 +1821,15 @@ def test_oidc_dex_pkce_exchange_and_per_user_isolation(client, database, monkeyp
                             "id": "gcal-own-1",
                             "status": "confirmed",
                             "summary": "Interner Sprint Planning",
-                            "organizer": {"email": "mara.lindner@mayflower.de", "self": True},
+                            "organizer": {"email": "mara.lindner@acme.example.org", "self": True},
                             "attendees": [
                                 {
-                                    "email": "mara.lindner@mayflower.de",
+                                    "email": "mara.lindner@acme.example.org",
                                     "self": True,
                                     "responseStatus": "accepted",
                                 },
                                 {
-                                    "email": "kollege@mayflower.de",
+                                    "email": "kollege@acme.example.org",
                                     "responseStatus": "accepted",
                                 },
                             ],
@@ -1841,7 +1841,7 @@ def test_oidc_dex_pkce_exchange_and_per_user_isolation(client, database, monkeyp
                             "id": "gcal-solo-blocker",
                             "status": "confirmed",
                             "summary": "Fokuszeit ohne Teilnehmer",
-                            "organizer": {"email": "mara.lindner@mayflower.de", "self": True},
+                            "organizer": {"email": "mara.lindner@acme.example.org", "self": True},
                             "start": {"dateTime": gcal_start},
                             "end": {"dateTime": gcal_end},
                             "hangoutLink": "https://meet.google.com/sol-blck-xyz",
@@ -1850,10 +1850,10 @@ def test_oidc_dex_pkce_exchange_and_per_user_isolation(client, database, monkeyp
                             "id": "gcal-unconfirmed-3",
                             "status": "confirmed",
                             "summary": "Latein Nachhilfe",
-                            "organizer": {"email": "mara.lindner@mayflower.de", "self": True},
+                            "organizer": {"email": "mara.lindner@acme.example.org", "self": True},
                             "attendees": [
                                 {
-                                    "email": "mara.lindner@mayflower.de",
+                                    "email": "mara.lindner@acme.example.org",
                                     "self": True,
                                     "responseStatus": "accepted",
                                 },
@@ -1908,13 +1908,13 @@ def test_oidc_dex_pkce_exchange_and_per_user_isolation(client, database, monkeyp
             "provider": "google",
             "code": "gcal-auth-code",
             "code_verifier": "g" * 44,
-            "redirect_uri": "https://wortlaut.data.mayflower.tech/auth/callback",
+            "redirect_uri": "https://wortlaut.example.org/auth/callback",
         },
     )
     assert gcal_ex.status_code == 200, gcal_ex.text
     gcal_data = gcal_ex.json()
     assert gcal_data["connection"]["provider"] == "google"
-    assert gcal_data["connection"]["account_email"] == "mara.lindner@mayflower.de"
+    assert gcal_data["connection"]["account_email"] == "mara.lindner@acme.example.org"
     events_by_ext = {e["external_event_id"]: e for e in gcal_data["synced_events"]}
     assert set(events_by_ext) == {"gcal-own-1", "gcal-unconfirmed-3", "gcal-ext-2"}
 
@@ -1927,8 +1927,8 @@ def test_oidc_dex_pkce_exchange_and_per_user_isolation(client, database, monkeyp
 
     kollege_token, _ = issue_user_session_token(
         sub="sub-kollege",
-        email="kollege@mayflower.de",
-        name="Kollege Mayflower",
+        email="kollege@acme.example.org",
+        name="Kollege Beispiel",
         exp=int(time.time()) + 3600,
     )
     kollege_headers = {"Authorization": f"Bearer {kollege_token}"}
@@ -1943,7 +1943,7 @@ def test_oidc_dex_pkce_exchange_and_per_user_isolation(client, database, monkeyp
     monkeypatch.setattr(
         cal_oauth_mod.httpx,
         "post",
-        lambda url, **kw: _FakeCalTokenResp("kollege@mayflower.de"),
+        lambda url, **kw: _FakeCalTokenResp("kollege@acme.example.org"),
     )
     kollege_ex = client.post(
         "/v1/calendar/oauth/exchange",
@@ -1952,7 +1952,7 @@ def test_oidc_dex_pkce_exchange_and_per_user_isolation(client, database, monkeyp
             "provider": "google",
             "code": "gcal-kollege-code",
             "code_verifier": "k" * 44,
-            "redirect_uri": "https://wortlaut.data.mayflower.tech/auth/callback",
+            "redirect_uri": "https://wortlaut.example.org/auth/callback",
         },
     )
     assert kollege_ex.status_code == 200, kollege_ex.text
@@ -1973,9 +1973,9 @@ def test_oidc_dex_pkce_exchange_and_per_user_isolation(client, database, monkeyp
         cal_oauth_mod.httpx,
         "post",
         lambda url, **kw: _FakeCalTokenResp(
-            "mara.lindner@mayflower.de"
+            "mara.lindner@acme.example.org"
             if "googleapis.com" in url
-            else "thomas.berg@mayflower.de"
+            else "thomas.berg@acme.example.org"
         ),
     )
 
@@ -2029,7 +2029,7 @@ def test_oidc_dex_pkce_exchange_and_per_user_isolation(client, database, monkeyp
             "provider": "microsoft",
             "code": "m365-auth-code",
             "code_verifier": "m" * 44,
-            "redirect_uri": "https://wortlaut.data.mayflower.tech/auth/callback",
+            "redirect_uri": "https://wortlaut.example.org/auth/callback",
         },
     )
     assert m365_ex.status_code == 200, m365_ex.text
@@ -2069,7 +2069,7 @@ def test_calendar_protocol_block_injection_and_writeback(monkeypatch):
         _inject_protocol_block_plain,
     )
 
-    url1 = "https://wortlaut.data.mayflower.tech/ui#view=meetings&id=111&token=wortlaut-read-111.abc"
+    url1 = "https://wortlaut.example.org/ui#view=meetings&id=111&token=wortlaut-read-111.abc"
     plain1 = _inject_protocol_block_plain("Agenda:\n- Punkt 1", url1)
     assert plain1.startswith("Agenda:\n- Punkt 1\n\n" + PROTOCOL_MARKER_START)
     assert url1 in plain1
@@ -2140,11 +2140,11 @@ def test_in_call_pause_windows_end_to_end(client, database):
         assert rec_row is not None
         intro_de = build_chat_intro(
             "wortlaut",
-            "johann.hartmann@mayflower.de",
+            "alex.weber@acme.example.org",
             rec_row,
             SimpleNamespace(
                 enable_chat_intro=True,
-                api_url="https://wortlaut.data.mayflower.tech",
+                api_url="https://wortlaut.example.org",
                 privacy_url="",
                 enable_keyframes=True,
                 default_locale="de",
@@ -2152,11 +2152,11 @@ def test_in_call_pause_windows_end_to_end(client, database):
         )
         intro_en = build_chat_intro(
             "wortlaut",
-            "johann.hartmann@mayflower.de",
+            "alex.weber@acme.example.org",
             rec_row,
             SimpleNamespace(
                 enable_chat_intro=True,
-                api_url="https://wortlaut.data.mayflower.tech",
+                api_url="https://wortlaut.example.org",
                 privacy_url="",
                 enable_keyframes=True,
                 default_locale="en",

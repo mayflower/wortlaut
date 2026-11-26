@@ -308,7 +308,7 @@ test('video tile trust gating & localization across Google Meet, Microsoft Teams
       );
       const update = await installVideoTile(page, localeCase.provider, localeCase.url, {
         locale: localeCase.locale,
-        invitedBy: 'Johann',
+        invitedBy: 'Alex',
         meetingTitle: 'Sprint Sync',
       });
       await page.goto(localeCase.url);
@@ -849,8 +849,8 @@ test('all 4 provider drivers display live transcript video to remote receivers w
         deadline: new Date(Date.now() + 60000).toISOString(),
         lobby_timeout_seconds: 30,
         enable_keyframes: true,
-        invited_by: 'johann@example.org',
-        invited_by_name: 'Johann Zoom',
+        invited_by: 'alex@example.org',
+        invited_by_name: 'Alex Zoom',
         meeting_title: 'Zoom Video Review',
         default_locale: 'de-DE',
         zoom: {display_name: 'wortlaut', locale: 'de-DE', auth_mode: 'guest'},
@@ -954,19 +954,19 @@ test('video tile immediately scrubs opted-out speaker text, active speaker, and 
         participation: 'capturing',
         segments: [
           {speaker: 'Alice', text: 'Bleibt sichtbar.', start: 1},
-          {speaker: 'Florian Eibeck', text: 'Muss sofort weg.', start: 3},
+          {speaker: 'Bob Example', text: 'Muss sofort weg.', start: 3},
         ],
       });
-      window.wortlautVideoTile?.reportAudioActivity(0.8, 'Florian Eibeck');
+      window.wortlautVideoTile?.reportAudioActivity(0.8, 'Bob Example');
     });
 
     const before = await page.evaluate(() => window.wortlautVideoTile?.getSnapshot());
     assert.equal(before?.segmentCount, 2);
-    assert.equal(before?.activeSpeaker, 'Florian Eibeck');
-    assert.ok(before?.lastRenderedText.includes('Florian Eibeck'));
+    assert.equal(before?.activeSpeaker, 'Bob Example');
+    assert.ok(before?.lastRenderedText.includes('Bob Example'));
 
     await page.evaluate(() => {
-      window.wortlautVideoTile?.update({optedOut: ['Florian Eibeck']});
+      window.wortlautVideoTile?.update({optedOut: ['Bob Example']});
     });
 
     const afterScrub = await page.evaluate(() => window.wortlautVideoTile?.getSnapshot());
@@ -978,11 +978,11 @@ test('video tile immediately scrubs opted-out speaker text, active speaker, and 
 
     // Speaking again via opted-out receiver or stale heartbeat segments shows "Opt-out", NEVER last speaker or opted-out name
     await page.evaluate(() => {
-      window.wortlautVideoTile?.reportAudioActivity(0.95, 'Florian Eibeck');
+      window.wortlautVideoTile?.reportAudioActivity(0.95, 'Bob Example');
       window.wortlautVideoTile?.update({
         segments: [
           {speaker: 'Alice', text: 'Bleibt sichtbar.', start: 1},
-          {speaker: 'Florian Eibeck', text: 'Stale segment.', start: 4},
+          {speaker: 'Bob Example', text: 'Stale segment.', start: 4},
         ],
       });
     });

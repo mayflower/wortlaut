@@ -403,14 +403,14 @@ def test_hybrid_tsvector_punctuation_rrf_noise_floor_diversity_and_scan_cap(
         rec_id = _seed_completed_recording(
             db,
             owner_email="alice@example.org",
-            title="S/4HANA & MAIS-270 Migration",
+            title="S/4HANA & PROJ-270 Migration",
             segments=[
                 {
                     "speaker": "Dr. Weber",
                     "start": 0.0,
                     "end": 4.0,
                     "text": (
-                        "Im Projekt Phoenix ersetzen wir Ragas fuer Ticket MAIS-270 "
+                        "Im Projekt Phoenix ersetzen wir Ragas fuer Ticket PROJ-270 "
                         "ohne Re-Deploy auf S/4HANA."
                     ),
                 },
@@ -440,7 +440,7 @@ def test_hybrid_tsvector_punctuation_rrf_noise_floor_diversity_and_scan_cap(
                     "action_items": [
                         {
                             "owner": "Clara",
-                            "task": "Ticket MAIS-270 abschliessen",
+                            "task": "Ticket PROJ-270 abschliessen",
                             "due": "Freitag",
                         }
                     ],
@@ -452,31 +452,31 @@ def test_hybrid_tsvector_punctuation_rrf_noise_floor_diversity_and_scan_cap(
         _seed_completed_recording(
             db,
             owner_email="bob@example.org",
-            title="Bobs MAIS-270 Geheimnis",
-            segments=[{"speaker": "Bob", "start": 0.0, "end": 3.0, "text": "MAIS-270 geheim."}],
+            title="Bobs PROJ-270 Geheimnis",
+            segments=[{"speaker": "Bob", "start": 0.0, "end": 3.0, "text": "PROJ-270 geheim."}],
         )
 
     assert rag.rag_index_batch(database) == 2
     assert rag.rag_index_pass(database) is False
 
-    # Punctuated IDs (`MAIS-270`, `S/4HANA`) + partial-match query work without tsquery errors
+    # Punctuated IDs (`PROJ-270`, `S/4HANA`) + partial-match query work without tsquery errors
     with Session(database) as db:
         res_id = rag.search_protocol_chunks(
             db,
             alice,
-            query="MAIS-270 Rollout ohne Neustart S/4HANA",
+            query="PROJ-270 Rollout ohne Neustart S/4HANA",
             limit=10,
         )
         assert res_id.hits
         assert all(h.recording_id == rec_id for h in res_id.hits)
-        assert any("MAIS-270" in h.content for h in res_id.hits)
+        assert any("PROJ-270" in h.content for h in res_id.hits)
 
         # `empty_for_principal` RBAC guard returns empty instead of scanning all tenants
-        res_empty = rag.search_protocol_chunks(db, nobody, query="MAIS-270")
+        res_empty = rag.search_protocol_chunks(db, nobody, query="PROJ-270")
         assert res_empty.hits == []
 
         # Bob only sees his own recording
-        res_bob = rag.search_protocol_chunks(db, bob, query="MAIS-270")
+        res_bob = rag.search_protocol_chunks(db, bob, query="PROJ-270")
         assert len(res_bob.hits) == 1
         assert res_bob.hits[0].recording_id != rec_id
 
@@ -533,13 +533,13 @@ def test_hybrid_tsvector_punctuation_rrf_noise_floor_diversity_and_scan_cap(
         rec_b = _seed_completed_recording(
             db,
             owner_email="alice@example.org",
-            title="Zweites MAIS-270 Meeting",
+            title="Zweites PROJ-270 Meeting",
             segments=[
                 {
                     "speaker": "Alice",
                     "start": 0.0,
                     "end": 3.0,
-                    "text": "Zweiter Hinweis zu MAIS-270 Migration.",
+                    "text": "Zweiter Hinweis zu PROJ-270 Migration.",
                 }
             ],
         )
@@ -547,7 +547,7 @@ def test_hybrid_tsvector_punctuation_rrf_noise_floor_diversity_and_scan_cap(
 
     monkeypatch.setattr(rag, "MAX_VECTOR_SCAN_CHUNKS", 3)
     with Session(database) as db:
-        capped = rag.search_protocol_chunks(db, alice, query="MAIS-270 Migration", limit=4)
+        capped = rag.search_protocol_chunks(db, alice, query="PROJ-270 Migration", limit=4)
         assert capped.scanned_capped is True
         counts: dict[uuid.UUID, int] = {}
         for h in capped.hits:
@@ -559,7 +559,7 @@ def test_hybrid_tsvector_punctuation_rrf_noise_floor_diversity_and_scan_cap(
 
         # Escaped SQL LIKE wildcards in speaker filter do not act as catch-all wildcards
         wildcard_spk = rag.search_protocol_chunks(
-            db, alice, query="MAIS-270", speaker="%", limit=5
+            db, alice, query="PROJ-270", speaker="%", limit=5
         )
         assert wildcard_spk.hits == []
 
@@ -568,7 +568,7 @@ def test_hybrid_tsvector_punctuation_rrf_noise_floor_diversity_and_scan_cap(
     monkeypatch.setenv("WORTLAUT_EMBEDDING_MODEL_DIR", "/nonexistent/model/dir")
     get_settings.cache_clear()
     with Session(database) as db:
-        lex_only = rag.search_protocol_chunks(db, alice, query="MAIS-270", limit=5)
+        lex_only = rag.search_protocol_chunks(db, alice, query="PROJ-270", limit=5)
         assert lex_only.lexical_only is True
         assert lex_only.scanned_capped is False
         assert lex_only.hits
@@ -593,9 +593,9 @@ def test_glossary_tenancy_and_openai_query_expansion_guards(database, monkeypatc
             [
                 GlossaryEntry(
                     owner_email="",
-                    term_key="maistack",
-                    term="mAIstack",
-                    aliases=["MyStack"],
+                    term_key="acmestack",
+                    term="AcmeStack",
+                    aliases=["MyAcme"],
                     disabled=False,
                 ),
                 GlossaryEntry(
@@ -630,7 +630,7 @@ def test_glossary_tenancy_and_openai_query_expansion_guards(database, monkeypatc
                     "speaker": "Alice",
                     "start": 0.0,
                     "end": 4.0,
-                    "text": "mAIstack und Projekt Phoenix sind produktiv mit Geheimtext XYZ999.",
+                    "text": "AcmeStack und Projekt Phoenix sind produktiv mit Geheimtext XYZ999.",
                 }
             ],
         )
@@ -640,12 +640,12 @@ def test_glossary_tenancy_and_openai_query_expansion_guards(database, monkeypatc
 
     with Session(database) as db:
         terms, alias_map = resolve_principal_search_glossary(db, alice)
-        assert "mAIstack" in terms
+        assert "AcmeStack" in terms
         assert "Projekt Phoenix" in terms
         assert "SecretBobProject" not in terms
         assert "DisabledTerm" not in terms
-        local_exp = expand_query_with_local_glossary("Status zu MyStack", terms, alias_map)
-        assert "mAIstack" in local_exp
+        local_exp = expand_query_with_local_glossary("Status zu MyAcme", terms, alias_map)
+        assert "AcmeStack" in local_exp
 
     # External OpenAI query-only expansion: verifies zero transcript egress, follow_redirects=False,
     # reasoning-model max_completion_tokens, DB transaction closed before HTTP, and 503 fallback.
@@ -675,7 +675,7 @@ def test_glossary_tenancy_and_openai_query_expansion_guards(database, monkeypatc
             def json(self):
                 return {
                     "choices": [
-                        {"message": {"content": '{"terms": ["Projekt Phoenix", "mAIstack"]}'}}
+                        {"message": {"content": '{"terms": ["Projekt Phoenix", "AcmeStack"]}'}}
                     ]
                 }
 
@@ -683,7 +683,7 @@ def test_glossary_tenancy_and_openai_query_expansion_guards(database, monkeypatc
 
     monkeypatch.setattr(llm_module.httpx, "post", fake_openai_post)
     with Session(database) as db:
-        res = rag.search_protocol_chunks(db, alice, query="MyStack Status")
+        res = rag.search_protocol_chunks(db, alice, query="MyAcme Status")
         assert len(seen_calls) == 1
         assert seen_calls[0]["url"] == "https://openai.example.test/v1/chat/completions"
         assert res.hits
@@ -694,14 +694,14 @@ def test_glossary_tenancy_and_openai_query_expansion_guards(database, monkeypatc
 
     monkeypatch.setattr(llm_module.httpx, "post", failing_post)
     with Session(database) as db:
-        res_fallback = rag.search_protocol_chunks(db, alice, query="MyStack")
+        res_fallback = rag.search_protocol_chunks(db, alice, query="MyAcme")
         assert res_fallback.hits
 
     # Saturated concurrency semaphore skips outbound HTTP cleanly
     acquired = [llm_module._EXPANSION_SEMAPHORE.acquire(blocking=False) for _ in range(4)]
     try:
         assert all(acquired)
-        assert llm_module.expand_search_query("MyStack", ["mAIstack"]) == []
+        assert llm_module.expand_search_query("MyAcme", ["AcmeStack"]) == []
     finally:
         for _ in acquired:
             llm_module._EXPANSION_SEMAPHORE.release()
@@ -879,7 +879,7 @@ def test_pause_exclusion_slide_chunking_and_empty_completed_recordings(database)
                 "keyframe_context": {
                     str(kf_visible): {
                         "view": "Architektur-Diagramm",
-                        "items": ["MAIS-270: DeepEval"],
+                        "items": ["PROJ-270: DeepEval"],
                         "terms": ["DeepEval"],
                     },
                     str(kf_paused): {
