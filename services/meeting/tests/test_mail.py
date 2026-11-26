@@ -396,3 +396,26 @@ def test_failed_join_without_audio_sends_notification_mail(
     assert "Zeitüberschreitung im Wartebereich" in body
     assert "Grund: lobby_timeout" in body
     assert "/ui" in body
+
+
+def test_meeting_ended_is_normal_completion_and_removed_label_is_neutral():
+    from wortlaut.mail import FAILURE_REASONS, NORMAL_COMPLETED_REASONS
+    from wortlaut.mcp_server import _NON_FAILURE_END_REASONS, _human_status_label
+
+    assert "meeting_ended" in NORMAL_COMPLETED_REASONS
+    assert "meeting_ended" in _NON_FAILURE_END_REASONS
+    assert "Bot wurde aus der Besprechung entfernt" not in FAILURE_REASONS["removed"]
+    assert "Anruf für alle beendet" in FAILURE_REASONS["removed"]
+
+    rec = Recording(
+        idempotency_key="meeting-ended-status-check",
+        request_digest="0" * 64,
+        meeting_url="https://meet.google.com/end-chk-tst",
+        provider="google_meet",
+        starts_at=datetime.now(UTC) - timedelta(minutes=30),
+        ends_at=datetime.now(UTC),
+        participation="ended",
+        processing="completed",
+        participation_reason="meeting_ended",
+    )
+    assert _human_status_label(rec) == "completed"

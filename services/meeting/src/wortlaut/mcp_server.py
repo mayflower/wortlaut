@@ -584,7 +584,7 @@ def _format_citation_tag(item: dict[str, Any]) -> str:
     return ""
 
 
-_NON_FAILURE_END_REASONS = ("normal", "room_empty", "cancelled")
+_NON_FAILURE_END_REASONS = ("normal", "room_empty", "meeting_ended", "cancelled")
 
 
 def _human_status_label(rec: Recording) -> str:

@@ -512,6 +512,7 @@ export function MeetingDetailView({
     !reason ||
     reason === 'normal' ||
     reason === 'room_empty' ||
+    reason === 'meeting_ended' ||
     reason === 'source_binding_unverified' ||
     ((reason === 'cancelled' || reason === 'deadline') &&
       (sampleSec > 0 || timelineDurationSec > 0));

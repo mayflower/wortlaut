@@ -349,6 +349,7 @@ export function App() {
           !reason ||
           reason === 'normal' ||
           reason === 'room_empty' ||
+          reason === 'meeting_ended' ||
           reason === 'source_binding_unverified' ||
           ((reason === 'cancelled' || reason === 'deadline') && samples > 0);
         return (

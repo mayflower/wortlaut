@@ -5,8 +5,8 @@ import {test} from 'node:test';
 import {fileURLToPath} from 'node:url';
 import {chromium} from 'playwright';
 import {build} from 'vite';
-import {readSystemScreenText, visibleSystemText} from '../runtime/browser';
-import {installMeetCapture} from '../runtime/meet';
+import {readSystemScreenText, visibleSystemText, visibleSystemTextMatch} from '../runtime/browser';
+import {installMeetCapture, MeetBrowser} from '../runtime/meet';
 import {installVideoTile} from '../runtime/video-tile';
 
 function maxAbsPcmSample(buf: Buffer): number {
@@ -728,7 +728,65 @@ test('chat-injection DoS strings in chat, captions, notifications, and tiles are
       document.body.append(endScreen);
     });
     assert.equal(await visibleSystemText(page, /This meeting has ended\./i), true);
+    assert.equal(await visibleSystemTextMatch(page, /This meeting has ended\./i), 'This meeting has ended.');
     assert.match(await readSystemScreenText(page), /This meeting has ended\./);
+  } finally {
+    await browser.close();
+  }
+});
+
+test('MeetBrowser classifies host-ended meetings as meeting_ended before removed', async () => {
+  const browser = await chromium.launch({headless: true, chromiumSandbox: true});
+  try {
+    const cases: Array<{html: string; expected: 'meeting_ended' | 'removed'}> = [
+      {
+        html: '<h1>Der Organisator hat den Videoanruf für alle beendet</h1>',
+        expected: 'meeting_ended',
+      },
+      {
+        html: '<h1>Your host ended the meeting for everyone</h1>',
+        expected: 'meeting_ended',
+      },
+      {
+        html: '<h1>Der Organisator hat den Videoanruf für alle beendet</h1><p>Alle Teilnehmer wurden aus der Besprechung entfernt.</p>',
+        expected: 'meeting_ended',
+      },
+      {
+        html: '<h1>Jemand hat Sie aus der Besprechung entfernt</h1>',
+        expected: 'removed',
+      },
+    ];
+    for (const tc of cases) {
+      const ctx = await browser.newContext();
+      const page = await ctx.newPage();
+      const url = 'https://meet.google.com/end-vs-rem';
+      await page.route(url, (route) =>
+        route.fulfill({status: 200, contentType: 'text/html; charset=utf-8', body: `<!doctype html><html><body>${tc.html}</body></html>`}),
+      );
+      await page.goto(url);
+      const meet = new MeetBrowser(
+        page,
+        {
+          provider: 'google_meet',
+          meeting_id: randomUUID(),
+          attempt_id: randomUUID(),
+          meeting_url: url,
+          deadline: new Date(Date.now() + 60_000).toISOString(),
+          lobby_timeout_seconds: 60,
+          invited_by: null,
+          invited_by_name: null,
+          meeting_title: 'End vs Removed',
+          default_locale: 'de',
+          meet: {display_name: 'wortlaut', locale: 'de-DE', auth_mode: 'guest'},
+        },
+        'http://127.0.0.1:1',
+        'unused-token',
+        'worker-test',
+      );
+      const state = await meet.inspect();
+      assert.equal(state.reason, tc.expected, `Expected ${tc.expected} for ${tc.html}`);
+      await ctx.close();
+    }
   } finally {
     await browser.close();
   }

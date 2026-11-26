@@ -55,7 +55,10 @@ FAILURE_REASONS = {
     "guest_name_input_failed": "Gastname konnte nicht eingegeben werden",
     "meeting_not_found": "Besprechung wurde beim Provider nicht gefunden",
     "missed": "Terminzeitfenster war vor dem Start bereits abgelaufen",
-    "removed": "Bot wurde aus der Besprechung entfernt",
+    "removed": (
+        "Teilnahme wurde von der Konferenz beendet "
+        "(Anruf für alle beendet oder Bot entfernt)"
+    ),
     "room_empty": (
         "Meeting-Raum war für 5 Minuten leer oder ohne Audioaktivität (automatisch verlassen)"
     ),
@@ -88,7 +91,9 @@ def delivery_json(delivery):
     }
 
 
-NORMAL_COMPLETED_REASONS = frozenset({"normal", "room_empty", "cancelled", "deadline"})
+NORMAL_COMPLETED_REASONS = frozenset(
+    {"normal", "room_empty", "meeting_ended", "cancelled", "deadline"}
+)
 
 _EMAIL_HEAD_STYLE = (
     "<meta charset='utf-8'>"

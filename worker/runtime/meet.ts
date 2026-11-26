@@ -4,7 +4,7 @@ import type {CaptureSink} from '../src/capture.js';
 import type {Chunk} from '../src/chunks.js';
 import type {KeyframeDiagnostics} from '../src/keyframes.js';
 import type {MeetBridgeMessage, MeetCaptureConfig} from '../src/meet-page.js';
-import {visibleSystemText, type MeetInput} from './browser.js';
+import {visibleSystemText, visibleSystemTextMatch, type MeetInput} from './browser.js';
 import {KeyframeTransport, type KeyframeUploadMetadata} from './keyframe-transport.js';
 import {AudioTransport} from '../src/transport.js';
 import {isTeamsOrigin, teamsOrigins} from '../src/teams-url.js';
@@ -568,8 +568,8 @@ const knockJoin = /^(?:Ask to join|Teilnahme erbitten|Um Teilnahme bitten)$/i;
 const emptyPrejoin = /Andere Anrufteilnehmer werden gesucht|Looking for others|Außer (?:Ihnen|dir) ist niemand (?:da|hier)|Noch ist niemand (?:sonst )?(?:da|hier)|Niemand sonst ist (?:da|hier)|No one else is here|You[’']re the first one here/i;
 const waiting = /Please wait until a meeting host brings you into the call|Asking to be let in|You[’']ll join the call when someone lets you|Someone in the call (?:will|can) let you in|Waiting (?:for the host|to be let in)|Host hasn[’']t joined yet|Um Teilnahme (?:gebeten|bitten)|Teilnahme wird angefragt|Anfrage.*Teilnahme|(?:Sie|Du)\s+(?:können|kannst|nehmen|nimmst)\s+teil(?:nehmen)?,\s*sobald|Jemand.*(?:(?:lässt|lassen)\s+(?:Sie|dich).*(?:ein|teilnehmen)|kann\s+(?:Sie|dich).*einlassen)|Bitte warten(?:\s+Sie)?,\s*bis.*(?:einlässt|eingeladen)|Warten.*(?:Zulassung|Gastgeber|Host|Organisator|einlässt|eingelassen|eingeladen)|Sobald.*(?:zugelassen|teilnehmen|einlässt)|noch nicht eingelassen/i;
 const denied = /You (?:can[’']t|cannot) join this video call|denied your request|request to join was denied|not allowed to join|weren[’']t allowed|Anfrage.*abgelehnt|Teilnahme.*(?:abgelehnt|nicht gestattet)|Sie können nicht an diesem Videoanruf teilnehmen/i;
-const removed = /removed from (?:the )?(?:call|meeting)|aus.*(?:Besprechung|Anruf).*entfernt/i;
-const ended = /^(?:This )?(?:meeting|call) (?:has )?ended\.?$|Besprechung.*beendet|Anruf.*beendet/i;
+const removed = /removed from (?:the )?(?:call|meeting)|aus (?:der Besprechung|dem (?:Video)?anruf) entfernt/i;
+const ended = /^(?:This )?(?:meeting|call) (?:has )?ended\.?$|host(?: has)? ended (?:the )?(?:call|meeting)|(?:meeting|call) (?:has )?ended for everyone|you (?:left|have left) the (?:call|meeting)|(?:Besprechung|Anruf|Videoanruf).*(?:für alle )?beendet|für alle beendet|(?:Sie haben|Du hast) (?:die Besprechung|den (?:Video)?anruf) verlassen/i;
 const consentPrompt = /take notes for me|taking notes|Notizen.*(?:zustimmen|Einwilligung)/i;
 
 // Meet can replace the accessible name with a device-state description.
@@ -618,6 +618,7 @@ export class MeetBrowser {
   private fullVideoAttempts = 0;
   private rosterOpened = false;
   private chatRestored = false;
+  private exitLogged = false;
   private initialize?: () => Promise<void>;
   private pushVideoTile?: (patch: VideoTilePatch) => Promise<void>;
 
@@ -908,13 +909,16 @@ export class MeetBrowser {
     if (!this.stopping) {
       const hasLeave = await visible(leaveButton(this.page)).catch(() => false);
       const inActiveCallToolbar = this.participation === 'capturing' && hasLeave;
-      if (!inActiveCallToolbar && await visibleSystemText(this.page, denied)) {
+      let matchedExitText: string | null = null;
+      if (!inActiveCallToolbar && (matchedExitText = await visibleSystemTextMatch(this.page, denied))) {
         this.reason = this.joinSent ? 'admission_denied' : 'prejoin_denied';
-      }
-      else if (!inActiveCallToolbar && await visibleSystemText(this.page, removed)) this.reason = 'removed';
-      else if (!inActiveCallToolbar && await visibleSystemText(this.page, ended)) this.reason = 'meeting_ended';
-      else if (await humanVerificationVisible(this.page)) this.reason = 'human_verification_required';
-      else if (await visible(this.page.getByRole('dialog').filter({hasText: consentPrompt}))) {
+      } else if (!inActiveCallToolbar && (matchedExitText = await visibleSystemTextMatch(this.page, ended))) {
+        this.reason = 'meeting_ended';
+      } else if (!inActiveCallToolbar && (matchedExitText = await visibleSystemTextMatch(this.page, removed))) {
+        this.reason = 'removed';
+      } else if (await humanVerificationVisible(this.page)) {
+        this.reason = 'human_verification_required';
+      } else if (await visible(this.page.getByRole('dialog').filter({hasText: consentPrompt}))) {
         this.reason = 'consent_required';
       } else {
         if (this.joinSent) {
@@ -999,6 +1003,10 @@ export class MeetBrowser {
             this.participation = 'waiting_admission';
           }
         }
+      }
+      if (matchedExitText && !this.exitLogged) {
+        this.exitLogged = true;
+        console.log('[wortlaut-exit] ' + JSON.stringify({reason: this.reason, matched: matchedExitText}));
       }
     }
     return {capability: 'unverified', participation: this.stopping ? 'ended' : this.participation,

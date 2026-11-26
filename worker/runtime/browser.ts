@@ -183,18 +183,25 @@ export async function readSystemScreenText(target: Page | Frame | undefined): Pr
     .catch(() => '');
 }
 
-export async function visibleSystemText(page: Page, pattern: RegExp): Promise<boolean> {
+export async function visibleSystemTextMatch(page: Page, pattern: RegExp): Promise<string | null> {
   const candidates = page.getByText(pattern);
   const count = await candidates.count().catch(() => 0);
   for (let i = 0; i < Math.min(count, 16); i++) {
     const item = candidates.nth(i);
     if (!await item.isVisible().catch(() => false)) continue;
-    const isUntrusted = await item
-      .evaluate((el, sel) => Boolean(el.closest(sel)), UNTRUSTED_USER_TEXT_SELECTOR)
-      .catch(() => true);
-    if (!isUntrusted) return true;
+    const matched = await item
+      .evaluate((el, sel) => {
+        if (el.closest(sel)) return null;
+        return (el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 160);
+      }, UNTRUSTED_USER_TEXT_SELECTOR)
+      .catch(() => null);
+    if (matched !== null) return matched;
   }
-  return false;
+  return null;
+}
+
+export async function visibleSystemText(page: Page, pattern: RegExp): Promise<boolean> {
+  return (await visibleSystemTextMatch(page, pattern)) !== null;
 }
 
 export async function launchBrowser(provider: 'google_meet' | 'webex' | 'teams' | 'zoom', locale = 'en-US', webexBrowser = false) {
