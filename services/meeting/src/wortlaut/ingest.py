@@ -401,6 +401,17 @@ def accept_chunk(
     if len(pcm) != body.sample_count * 2:
         raise HTTPException(400, "PCM byte count is incorrect")
     identifier = f"{attempt.id}/{body.stream_id}/{body.epoch}/{body.sequence}"
+    from wortlaut.processing import collect_opted_out_speakers, is_speaker_opted_out
+
+    _, opted_out_norm = collect_opted_out_speakers(recording, [attempt])
+    if opted_out_norm and is_speaker_opted_out(
+        opted_out_norm,
+        participant_id=body.participant_id,
+        speaker_id=body.speaker_id,
+        participant_name=body.participant_name,
+        provider_source_id=body.provider_source_id,
+    ):
+        pcm = b"\x00" * len(pcm)
     checksum = hashlib.sha256(pcm).hexdigest()
     old = db.get(AudioChunk, identifier)
     if old:

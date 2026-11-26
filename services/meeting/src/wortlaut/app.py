@@ -141,7 +141,10 @@ from wortlaut.oidc import (
 )
 from wortlaut.processing import (
     RATE,
+    collect_opted_out_speakers,
     is_keyframe_opted_out,
+    is_speaker_opted_out,
+    purge_opted_out_audio_chunks,
     purge_opted_out_keyframes,
     purge_opted_out_transcript_segments,
     segmentation_pass,
@@ -464,6 +467,11 @@ class PauseWindowEvidence(BaseModel):
         return data
 
 
+class OptedOutWindowEvidence(BaseModel):
+    started_at: AwareDatetime
+    ended_at: AwareDatetime | None = None
+
+
 class ParticipantEvidence(BaseModel):
     available: bool = False
     total: int = Field(default=0, ge=0)
@@ -475,6 +483,7 @@ class ParticipantEvidence(BaseModel):
     )
     paused: bool = False
     pause_windows: list[PauseWindowEvidence] = Field(default_factory=list, max_length=64)
+    opted_out_windows: list[OptedOutWindowEvidence] = Field(default_factory=list, max_length=128)
 
     @model_serializer(mode="wrap")
     def _serialize(self, handler):
@@ -487,6 +496,8 @@ class ParticipantEvidence(BaseModel):
             data.pop("paused", None)
         if not data.get("pause_windows"):
             data.pop("pause_windows", None)
+        if not data.get("opted_out_windows"):
+            data.pop("opted_out_windows", None)
         return data
 
 
@@ -1566,9 +1577,17 @@ def get_recording(
     receivers = diag.get("receiver_sources", [])
     part_sources = diag.get("participant_sources", {})
     is_paused = bool(part_sources.get("paused"))
+    _, opted_out_norm = collect_opted_out_speakers(recording, attempts)
     max_audio_level = 0.0
     active_speakers: list[str] = []
     for r in receivers:
+        if opted_out_norm and is_speaker_opted_out(
+            opted_out_norm,
+            participant_id=r.get("signaled_participant_id"),
+            participant_name=r.get("participant_name"),
+            provider_source_id=r.get("provider_source_id"),
+        ):
+            continue
         lvl = (r.get("rtp_stats") or {}).get("audio_level")
         if isinstance(lvl, (int, float)) and lvl > max_audio_level:
             max_audio_level = float(lvl)
@@ -2036,6 +2055,7 @@ def update_recording_protocol(
     if body.opted_out_speakers:
         purge_opted_out_transcript_segments(db, recording)
         purge_opted_out_keyframes(db, recording)
+        purge_opted_out_audio_chunks(db, recording)
     db.commit()
     return export_data(db, recording)
 
@@ -2624,6 +2644,7 @@ def worker_status(
             recording.protocol_meta = meta
         purge_opted_out_transcript_segments(db, recording, [attempt])
         purge_opted_out_keyframes(db, recording, [attempt])
+        purge_opted_out_audio_chunks(db, recording, [attempt])
         cur_meta = recording.protocol_meta if isinstance(recording.protocol_meta, dict) else {}
         had_rag_marker = "rag_indexed_model" in cur_meta
         if had_rag_marker:
@@ -2750,6 +2771,11 @@ def worker_status(
                     )
                     last_spk_key = cur_key
             live_transcript = live_transcript[-8:]
+    opted_out_speakers = (
+        list((recording.protocol_meta or {}).get("opted_out_speakers") or [])
+        if isinstance(recording.protocol_meta, dict)
+        else []
+    )
     return {
         "accepted": True,
         "stop_requested": stop_requested,
@@ -2757,6 +2783,7 @@ def worker_status(
         "deadline": effective_deadline,
         "asr_language": current_asr_lang,
         "live_transcript": live_transcript,
+        "opted_out_speakers": opted_out_speakers,
     }
 
 

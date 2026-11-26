@@ -1125,6 +1125,14 @@ test('Web-UI fixes glossary tab/count mismatch (#15), merged multi-ID speaker fi
           ],
           keyframes: [],
           pause_windows: [],
+          opted_out_windows: [
+            {
+              started_at: '2026-11-19T09:00:36Z',
+              ended_at: '2026-11-19T09:00:39Z',
+              offset_seconds: 36,
+              end_offset_seconds: 39,
+            },
+          ],
         }),
       );
       return;
@@ -1149,6 +1157,10 @@ test('Web-UI fixes glossary tab/count mismatch (#15), merged multi-ID speaker fi
     await page.getByText('· 57m').waitFor({state: 'visible', timeout: 5000});
     assert.equal(await page.getByText('171m').count(), 0);
     await page.getByText('Audiospuren zugeordnet: 3/3').waitFor({state: 'visible', timeout: 5000});
+    await page.locator('[data-testid="opted-out-comment-row"]').getByText('(OPTED OUT COMMENT)').waitFor({
+      state: 'visible',
+      timeout: 5000,
+    });
 
     // #16: Clicking merged multi-ID speaker chip "Person A" keeps turns from BOTH participant IDs visible
     await page.locator('.wl-speaker-chip', {hasText: 'Person A'}).click();

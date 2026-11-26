@@ -7,6 +7,7 @@ import {
   Edit3,
   FileText,
   Maximize2,
+  MicOff,
   MonitorUp,
   Pause,
   Play,
@@ -46,6 +47,7 @@ import {
 import { KEYFRAME_STRINGS, localizeAttributionStatus, useI18n } from '../i18n';
 import { extractGlossarySuggestions } from '../glossaryLearning';
 import type {
+  OptedOutWindow,
   ParticipationState,
   PauseWindow,
   ProcessingState,
@@ -99,6 +101,7 @@ export interface TranscriptTabProps {
   focusKeyframeId?: string | null;
   focusTimestampSeconds?: number | null;
   pauseWindows?: PauseWindow[];
+  optedOutWindows?: OptedOutWindow[];
   sources: SourceSummary[];
   selectedSourceFilter: string;
   onSelectedSourceFilterChange: (sourceId: string) => void;
@@ -131,7 +134,8 @@ interface GroupedTurn {
 type TimelineItem =
   | { kind: 'turn'; offset: number; turn: GroupedTurn }
   | { kind: 'keyframe'; offset: number; keyframe: RecordingKeyframe }
-  | { kind: 'pause'; offset: number; pause: PauseWindow; index: number };
+  | { kind: 'pause'; offset: number; pause: PauseWindow; index: number }
+  | { kind: 'opted_out'; offset: number; window: OptedOutWindow; index: number };
 
 interface KeyframeTimelineCardProps {
   keyframe: RecordingKeyframe;
@@ -294,6 +298,7 @@ export function TranscriptTab({
   focusKeyframeId = null,
   focusTimestampSeconds = null,
   pauseWindows = [],
+  optedOutWindows = [],
   sources,
   selectedSourceFilter,
   onSelectedSourceFilterChange,
@@ -763,6 +768,14 @@ export function TranscriptTab({
     });
   }, [pauseWindows, selectedSourceFilter, searchQuery]);
 
+  const filteredOptedOutWindows = useMemo(() => {
+    if (selectedSourceFilter && selectedSourceFilter !== 'all') return [];
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return optedOutWindows;
+    const hay = 'opt out opt-out opted out comment ausgenommen beitrag';
+    return hay.includes(q) ? optedOutWindows : [];
+  }, [optedOutWindows, selectedSourceFilter, searchQuery]);
+
   const timelineItems = useMemo<TimelineItem[]>(() => {
     const items: TimelineItem[] = [
       ...groupedTurns.map(
@@ -783,11 +796,20 @@ export function TranscriptTab({
           index,
         })
       ),
+      ...filteredOptedOutWindows.map(
+        (window, index): TimelineItem => ({
+          kind: 'opted_out',
+          offset: window.offset_seconds,
+          window,
+          index,
+        })
+      ),
     ];
     const kindRank: Record<TimelineItem['kind'], number> = {
       pause: 0,
       keyframe: 1,
-      turn: 2,
+      opted_out: 2,
+      turn: 3,
     };
     items.sort((a, b) => {
       if (a.offset !== b.offset) return a.offset - b.offset;
@@ -798,6 +820,7 @@ export function TranscriptTab({
     groupedTurns,
     filteredKeyframes,
     filteredPauseWindows,
+    filteredOptedOutWindows,
   ]);
 
   const handleCopyTurn = async (turn: GroupedTurn) => {
@@ -2040,7 +2063,8 @@ export function TranscriptTab({
             title={
               segments.length === 0 &&
               keyframes.length === 0 &&
-              pauseWindows.length === 0
+              pauseWindows.length === 0 &&
+              optedOutWindows.length === 0
                 ? participation === 'capturing'
                   ? tr(
                       'Hört zu — warte auf erste gesprochene Sätze…',
@@ -2063,7 +2087,8 @@ export function TranscriptTab({
             description={
               segments.length === 0 &&
               keyframes.length === 0 &&
-              pauseWindows.length === 0
+              pauseWindows.length === 0 &&
+              optedOutWindows.length === 0
                 ? tr(
                     'Sobald im Gespräch gesprochen wird, erscheinen die Wortbeiträge hier automatisch nach Sprechern getrennt.',
                     'As soon as participants speak, statements appear here automatically separated by speaker.'
@@ -2136,6 +2161,52 @@ export function TranscriptTab({
                           {tr(
                             'Aufnahme im Konferenz-Chat pausiert — weder Audio noch Bildschirmfreigaben wurden in diesem Zeitraum erfasst.',
                             'Recording paused via meeting chat — neither audio nor screen-share slides were captured during this interval.'
+                          )}
+                        </Text>
+                      </div>
+                    </HStack>
+                  </div>
+                );
+              }
+              if (item.kind === 'opted_out') {
+                const ow = item.window;
+                const startLbl = formatWallClockTime(
+                  ow.offset_seconds,
+                  timeOriginUtc
+                );
+                const endLbl =
+                  ow.end_offset_seconds != null
+                    ? formatWallClockTime(ow.end_offset_seconds, timeOriginUtc)
+                    : tr('laufend', 'ongoing');
+                return (
+                  <div
+                    key={`optout-${item.index}-${ow.started_at}`}
+                    data-testid="opted-out-comment-row"
+                    className="wl-turn-row"
+                  >
+                    <HStack gap={3} vAlign="start">
+                      <span className="mt-0.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full wl-warn-badge">
+                        <MicOff className="h-3.5 w-3.5" />
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <HStack gap={2} vAlign="center" wrap="wrap">
+                          <Token
+                            size="sm"
+                            color="orange"
+                            label="(OPTED OUT COMMENT)"
+                          />
+                          <Text
+                            type="supporting"
+                            color="secondary"
+                            hasTabularNumbers
+                          >
+                            {startLbl} – {endLbl}
+                          </Text>
+                        </HStack>
+                        <Text type="supporting" color="secondary">
+                          {tr(
+                            'Beitrag aufgrund von Opt-out nicht aufgezeichnet.',
+                            'Contribution omitted due to opt-out.'
                           )}
                         </Text>
                       </div>

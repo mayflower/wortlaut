@@ -30,9 +30,11 @@ declare global {
       remoteDescriptions?: string[];
       frameConnections?: Set<RTCPeerConnection>;
       onRemoteDescription?: (sdp: string) => void;
-      observe?: (receiver: RTCRtpReceiver, pc: RTCPeerConnection) => void};
+      observe?: (receiver: RTCRtpReceiver, pc: RTCPeerConnection) => void;
+      isReceiverOptedOut?: (receiver: RTCRtpReceiver) => boolean};
     wortlautMeet: {stop: () => Promise<boolean>; inspect: () => MeetCaptureState & {audio_clock: AudioClock};
-      haltKeyframes?: () => void};
+      haltKeyframes?: () => void;
+      syncOptedOut?: (items: string[]) => boolean};
   }
 }
 
@@ -40,6 +42,11 @@ type PauseWindowState = {
   started_at: string;
   ended_at: string | null;
   by?: string | null;
+};
+
+type OptedOutWindowState = {
+  started_at: string;
+  ended_at: string | null;
 };
 
 type ParticipantSourcesState = {
@@ -50,6 +57,7 @@ type ParticipantSourcesState = {
   opted_out?: string[];
   paused?: boolean;
   pause_windows?: PauseWindowState[];
+  opted_out_windows?: OptedOutWindowState[];
   sources: {participant_id: string; participant_name?: string | null; audio_csis: number[]; share_audio_csis: number[]}[];
 };
 
@@ -233,6 +241,9 @@ function install(config: MeetCaptureConfig) {
   const optedOutParticipants = new Set<string>();
   let capturePaused = false;
   const pauseWindows: PauseWindowState[] = [];
+  const optedOutWindows: OptedOutWindowState[] = [];
+  let lastOptOutSpeechPerf = -Infinity;
+  let lastOptOutSpeechIso: string | null = null;
   const seenDomChatElements = new WeakMap<Element, string>();
   let liveDomCount = 0;
   let everSawDomParticipants = false;
@@ -340,6 +351,7 @@ function install(config: MeetCaptureConfig) {
   function syncVideoTileFromChat() {
     window.wortlautVideoTile?.update({
       paused: capturePaused,
+      ...(optedOutParticipants.size > 0 ? {optedOut: [...optedOutParticipants].slice(0, 64)} : {}),
     });
   }
 
@@ -449,6 +461,7 @@ function install(config: MeetCaptureConfig) {
     }
     if (syncOptOutCrossLinks()) added = true;
     if (purgeOptedOutChatArtifacts()) added = true;
+    if (added) syncVideoTileFromChat();
     return added;
   }
 
@@ -2636,7 +2649,13 @@ function install(config: MeetCaptureConfig) {
           void inspectReceivers();
         }
       }
-      if (capturePaused || isParticipantOptedOut(participant_id ?? speaker_id, participant_name)) {
+      if (capturePaused) {
+        return;
+      }
+      if (isParticipantOptedOut(participant_id ?? speaker_id, participant_name)) {
+        if (level >= 0.02) {
+          window.wortlautVideoTile?.reportOptOutActivity?.(level);
+        }
         return;
       }
       window.wortlautVideoTile?.reportAudioActivity?.(level, participant_name ?? null);
@@ -3575,7 +3594,58 @@ function install(config: MeetCaptureConfig) {
   window.wortlautMeetReceivers.onRemoteDescription = onRemoteDescription;
   for (const queued of window.wortlautMeetReceivers.dataMessages?.splice(0) ?? []) onDataMessage(queued);
   window.wortlautMeetReceivers.onDataMessage = onDataMessage;
+  function sampleOptedOutSpeechWindow() {
+    const nowPerf = performance.now();
+    let optedOutVoiced = false;
+    if (!capturePaused && optedOutParticipants.size > 0) {
+      for (const receiver of sources.keys()) {
+        if (receiver.track?.kind !== 'audio' || receiver.track.readyState !== 'live' || receiver.track.muted) {
+          continue;
+        }
+        const match = resolveReceiver(receiver);
+        if (!isParticipantOptedOut(match.signaled_participant_id, match.participant_name)) {
+          continue;
+        }
+        for (const item of [
+          ...receiver.getSynchronizationSources(),
+          ...receiver.getContributingSources(),
+        ]) {
+          if (
+            typeof item.timestamp === 'number' &&
+            nowPerf - item.timestamp <= 500 &&
+            typeof item.audioLevel === 'number' &&
+            Number.isFinite(item.audioLevel) &&
+            item.audioLevel >= 0.02
+          ) {
+            optedOutVoiced = true;
+            break;
+          }
+        }
+        if (optedOutVoiced) break;
+      }
+    }
+    const lastWin = optedOutWindows[optedOutWindows.length - 1];
+    if (optedOutVoiced) {
+      const nowIso = capture.nowUtc();
+      lastOptOutSpeechPerf = nowPerf;
+      lastOptOutSpeechIso = nowIso;
+      if (!lastWin) {
+        optedOutWindows.push({started_at: nowIso, ended_at: null});
+      } else if (lastWin.ended_at !== null) {
+        const gapMs = Date.parse(nowIso) - Date.parse(lastWin.ended_at);
+        if (Number.isFinite(gapMs) && gapMs >= 0 && gapMs <= 2500) {
+          lastWin.ended_at = null;
+        } else if (optedOutWindows.length < 128) {
+          optedOutWindows.push({started_at: nowIso, ended_at: null});
+        }
+      }
+    } else if (lastWin && lastWin.ended_at === null && nowPerf - lastOptOutSpeechPerf >= 2000) {
+      lastWin.ended_at = lastOptOutSpeechIso ?? capture.nowUtc();
+    }
+  }
+
   const interval = setInterval(() => {
+    sampleOptedOutSpeechWindow();
     void inspectReceivers();
   }, 250);
   const keyframeInterval = keyframesEnabled
@@ -3587,6 +3657,16 @@ function install(config: MeetCaptureConfig) {
     const source = (item: RTCRtpContributingSource) => ({source: item.source,
       timestamp: item.timestamp, rtp_timestamp: item.rtpTimestamp});
     const match = resolveReceiver(receiver);
+    const optedOutReceiver = isParticipantOptedOut(
+      match.signaled_participant_id,
+      match.participant_name,
+    );
+    const rawStats = receiverStats.get(receiver);
+    const safeStats = rawStats
+      ? optedOutReceiver
+        ? {...rawStats, audio_level: 0}
+        : rawStats
+      : undefined;
     return {provider_source_id: id, source_kind: match.source_kind,
       capture_path: 'rtc_receiver',
       track_id: receiver.track.id, csi: match.csi, signaled_participant_id: match.signaled_participant_id,
@@ -3595,13 +3675,33 @@ function install(config: MeetCaptureConfig) {
       encoded_transform: observations.get(receiver)?.evidence,
       ssrc: receiver.getSynchronizationSources().slice(0, 64).map(source),
       csrc: receiver.getContributingSources().slice(0, 64).map(source),
-      ...(receiverStats.has(receiver) ? {rtp_stats: receiverStats.get(receiver)} : {})};
+      ...(safeStats ? {rtp_stats: safeStats} : {})};
+  };
+  window.wortlautMeetReceivers.isReceiverOptedOut = (receiver: RTCRtpReceiver): boolean => {
+    const match = resolveReceiver(receiver);
+    return isParticipantOptedOut(match.signaled_participant_id, match.participant_name);
   };
   window.wortlautMeet = {
     haltKeyframes: () => {
       sampler.halt();
       teardownProbeVideo();
       state.keyframes.active_share = false;
+    },
+    syncOptedOut: (items: string[]): boolean => {
+      if (!Array.isArray(items) || items.length === 0) return false;
+      let added = false;
+      for (const raw of items) {
+        if (typeof raw !== 'string') continue;
+        const clean = raw.trim().slice(0, 200);
+        if (clean && !optedOutParticipants.has(clean) && optedOutParticipants.size < 256) {
+          optedOutParticipants.add(clean);
+          added = true;
+        }
+      }
+      if (syncOptOutCrossLinks()) added = true;
+      if (purgeOptedOutChatArtifacts()) added = true;
+      if (added) syncVideoTileFromChat();
+      return added;
     },
     inspect: () => {
       scanDomParticipants();
@@ -3617,6 +3717,7 @@ function install(config: MeetCaptureConfig) {
         ...(optedOutParticipants.size > 0 ? {opted_out: [...optedOutParticipants].slice(0, 64)} : {}),
         ...(capturePaused ? {paused: true} : {}),
         ...(pauseWindows.length > 0 ? {pause_windows: pauseWindows.slice(0, 64).map((w) => ({...w}))} : {}),
+        ...(optedOutWindows.length > 0 ? {opted_out_windows: optedOutWindows.slice(0, 128).map((w) => ({...w}))} : {}),
         sources: [...participants.values()].slice(0, 256).map((p) => ({
           participant_id: p.participant_id,
           ...(p.participant_name ? {participant_name: p.participant_name} : {}),
@@ -3661,6 +3762,10 @@ function install(config: MeetCaptureConfig) {
           }
         }
         capturePaused = false;
+      }
+      const openOptOut = optedOutWindows[optedOutWindows.length - 1];
+      if (openOptOut && openOptOut.ended_at === null) {
+        openOptOut.ended_at = lastOptOutSpeechIso ?? capture.nowUtc();
       }
       teardownProbeVideo();
       state.keyframes.active_share = false;

@@ -220,6 +220,13 @@ export interface PauseWindow {
   by?: string | null;
 }
 
+export interface OptedOutWindow {
+  started_at: string;
+  ended_at: string | null;
+  offset_seconds: number;
+  end_offset_seconds: number | null;
+}
+
 export interface TranscriptExport {
   recording_id: string;
   provider: Provider;
@@ -258,6 +265,7 @@ export interface TranscriptExport {
   segments: TranscriptSegment[];
   keyframes?: RecordingKeyframe[];
   pause_windows?: PauseWindow[];
+  opted_out_windows?: OptedOutWindow[];
 }
 
 export interface CalendarEvent {

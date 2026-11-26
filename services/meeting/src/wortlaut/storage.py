@@ -84,6 +84,23 @@ class AudioStorage:
                 ) from None
         return checksum
 
+    def replace_pcm(self, key: str, pcm: bytes, contract: dict) -> str:
+        """Overwrite an existing framed audio object (used to zero opted-out speaker audio)."""
+        identity = canonical(contract).encode()
+        if len(identity) > 16384:
+            raise ValueError("Immutable audio metadata exceeds object limit")
+        payload = b"WORTLAUT1" + struct.pack(">I", len(identity)) + identity + pcm
+        identity_hash = hashlib.sha256(identity).hexdigest()
+        checksum = hashlib.sha256(pcm).hexdigest()
+        self.client.put_object(
+            Bucket=self.bucket,
+            Key=key,
+            Body=payload,
+            ContentType="application/octet-stream",
+            Metadata={"contract_sha256": identity_hash, "sha256": checksum},
+        )
+        return checksum
+
     def read(self, key: str) -> bytes:
         response = self.client.get_object(Bucket=self.bucket, Key=key)
         try:

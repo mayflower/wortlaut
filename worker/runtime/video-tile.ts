@@ -12,6 +12,7 @@ export type VideoTilePatch = {
   paused?: boolean;
   asrLanguage?: string;
   segments?: VideoTileSegment[];
+  optedOut?: string[];
 };
 
 export type VideoTileMetadata = {
@@ -36,11 +37,13 @@ declare global {
     wortlautVideoTile?: {
       update: (patch: VideoTilePatch) => void;
       reportAudioActivity: (level: number, speakerName?: string | null) => void;
+      reportOptOutActivity?: (level: number) => void;
       stop: () => void;
       getSnapshot: () => {
         frameCount: number;
         participation: string;
         paused: boolean;
+        optOutActive: boolean;
         asrLanguage: string;
         audioActive: boolean;
         audioLevel: number;
@@ -111,18 +114,36 @@ export async function installVideoTile(
     let lastRenderedText = '';
     let liveAudioLevel = 0;
     let lastVoiceAt = -Infinity;
+    let lastOptOutVoiceAt = -Infinity;
     let activeSpeaker: string | null = null;
     let activeSpeakerUntil = -Infinity;
+    const optedOutNorm = new Set<string>();
     const liveTracks = new Set<MediaStreamTrack>();
 
-    const sampleRtpAudioLevel = (): {level: number; speaker: string | null} => {
+    const isSpeakerOptedOut = (name?: string | null): boolean => {
+      if (!optedOutNorm.size || !name) return false;
+      const clean = name.trim().toLowerCase();
+      return Boolean(clean && optedOutNorm.has(clean));
+    };
+
+    const sampleRtpAudioLevel = (): {
+      level: number;
+      speaker: string | null;
+      optedOutSpeaking: boolean;
+    } => {
       let maxLevel = 0;
+      let optedOutSpeaking = false;
       const nowPerf = performance.now();
-      const conns = (
+      const meetReceivers = (
         window as unknown as {
-          wortlautMeetReceivers?: {connections?: Set<RTCPeerConnection>};
+          wortlautMeetReceivers?: {
+            connections?: Set<RTCPeerConnection>;
+            isReceiverOptedOut?: (recv: RTCRtpReceiver) => boolean;
+          };
         }
-      ).wortlautMeetReceivers?.connections;
+      ).wortlautMeetReceivers;
+      const conns = meetReceivers?.connections;
+      const isRecvOptedOut = meetReceivers?.isReceiverOptedOut;
       if (conns) {
         for (const pc of conns) {
           if (pc.connectionState === 'closed') continue;
@@ -130,6 +151,7 @@ export async function installVideoTile(
             if (recv.track?.kind !== 'audio' || recv.track.readyState !== 'live' || recv.track.muted) {
               continue;
             }
+            const recvOptedOut = Boolean(isRecvOptedOut?.(recv));
             for (const src of [
               ...recv.getSynchronizationSources(),
               ...recv.getContributingSources(),
@@ -141,13 +163,17 @@ export async function installVideoTile(
                 Number.isFinite(src.audioLevel)
               ) {
                 const boosted = Math.min(1, src.audioLevel * 3.2);
-                if (boosted > maxLevel) maxLevel = boosted;
+                if (recvOptedOut) {
+                  if (boosted >= 0.02) optedOutSpeaking = true;
+                } else if (boosted > maxLevel) {
+                  maxLevel = boosted;
+                }
               }
             }
           }
         }
       }
-      return {level: maxLevel, speaker: null};
+      return {level: maxLevel, speaker: null, optedOutSpeaking};
     };
 
     const roundRect = (
@@ -254,6 +280,11 @@ export async function installVideoTile(
         !isPausedActive &&
         !isPendingEntry &&
         (liveAudioLevel >= 0.02 || nowPerf - lastVoiceAt <= 650);
+      const isOptOutSpeakingActive =
+        !isPausedActive &&
+        !isPendingEntry &&
+        !voiceActive &&
+        nowPerf - lastOptOutVoiceAt <= 1200;
       const shownLevel = voiceActive ? Math.max(0.22, liveAudioLevel) : 0;
       const currentSpeaker =
         voiceActive && nowPerf <= activeSpeakerUntil && activeSpeaker ? activeSpeaker : null;
@@ -262,7 +293,7 @@ export async function installVideoTile(
       const logoX = padX;
       const logoY = 44;
       const logoSize = 48;
-      const isAmberState = isPendingEntry || isPausedActive;
+      const isAmberState = isPendingEntry || isPausedActive || isOptOutSpeakingActive;
       roundRect(ctx, logoX, logoY, logoSize, logoSize, 12);
       ctx.fillStyle = isAmberState ? 'rgba(245, 158, 11, 0.15)' : 'rgba(16, 185, 129, 0.15)';
       ctx.fill();
@@ -293,7 +324,9 @@ export async function installVideoTile(
           ? (isEn ? 'Joining meeting…' : 'Tritt Konferenz bei…')
           : isPausedActive
             ? 'Off the Record'
-            : (isEn ? 'Recording active' : 'Aufzeichnung aktiv');
+            : isOptOutSpeakingActive
+              ? 'Opt-out'
+              : (isEn ? 'Recording active' : 'Aufzeichnung aktiv');
       ctx.font = `700 21px ${FONT_SANS}`;
       const statusTextW = ctx.measureText(statusText).width;
       const pillW = statusTextW + 52;
@@ -516,6 +549,22 @@ export async function installVideoTile(
             sublineY,
           );
           lastRenderedText = lobbyTitle;
+        } else if (isOptOutSpeakingActive) {
+          const optOutTitle = 'Opt-out';
+          ctx.font = `700 48px ${FONT_SANS}`;
+          ctx.fillStyle = '#fef3c7';
+          ctx.fillText(optOutTitle, centerX, headlineY);
+
+          ctx.font = `500 18.5px ${FONT_SANS}`;
+          ctx.fillStyle = '#fbbf24';
+          ctx.fillText(
+            isEn
+              ? 'Voice excluded · Not recorded or transcribed'
+              : 'Stimme ausgenommen · Wird nicht aufgezeichnet oder transkribiert',
+            centerX,
+            sublineY,
+          );
+          lastRenderedText = optOutTitle;
         } else if (voiceActive) {
           const spkHeadline =
             prominentSpeaker ||
@@ -582,11 +631,12 @@ export async function installVideoTile(
         const waveHeights = [12, 20, 32, 46, 56, 62, 56, 46, 32, 20, 12];
         const barSpacing = 13;
         const clusterHalfW = ((waveHeights.length - 1) * barSpacing) / 2 + 24;
-        const ruleColor = isPendingEntry
-          ? 'rgba(251, 191, 36, 0.28)'
-          : voiceActive
-            ? 'rgba(52, 211, 153, 0.40)'
-            : 'rgba(52, 211, 153, 0.20)';
+        const ruleColor =
+          isPendingEntry || isOptOutSpeakingActive
+            ? 'rgba(251, 191, 36, 0.28)'
+            : voiceActive
+              ? 'rgba(52, 211, 153, 0.40)'
+              : 'rgba(52, 211, 153, 0.20)';
 
         ctx.strokeStyle = ruleColor;
         ctx.lineWidth = 1;
@@ -606,6 +656,9 @@ export async function installVideoTile(
             const harmonic = 0.62 + 0.38 * Math.sin(frameCount * 1.45 + i * 0.75);
             bh = Math.max(8, Math.min(62, waveHeights[i] * shownLevel * harmonic));
             ctx.strokeStyle = '#34d399';
+          } else if (isOptOutSpeakingActive) {
+            bh = 6;
+            ctx.strokeStyle = 'rgba(251, 191, 36, 0.42)';
           } else if (isPendingEntry) {
             bh = Math.max(6, waveHeights[i] * 0.26 * (0.7 + 0.3 * Math.sin(frameCount * 0.6 + i * 0.8)));
             ctx.strokeStyle = 'rgba(251, 191, 36, 0.52)';
@@ -619,8 +672,8 @@ export async function installVideoTile(
           ctx.stroke();
         }
 
-        // Subordinate Latest-Statement Proof Strip (y: 494..584 — rendered ONLY when speech segments exist!)
-        if (latest) {
+        // Subordinate Latest-Statement Proof Strip (y: 494..584 — rendered ONLY when speech segments exist and not in Opt-out state!)
+        if (latest && !isOptOutSpeakingActive) {
           const quoteRuleY = 486;
           ctx.strokeStyle = 'rgba(255, 255, 255, 0.07)';
           ctx.lineWidth = 1;
@@ -698,6 +751,7 @@ export async function installVideoTile(
     renderFrame();
     let lastIdleEmitAt = performance.now();
     let wasVoiceActiveOnTile = false;
+    let wasOptOutActiveOnTile = false;
     const intervalId = window.setInterval(() => {
       const nowPerf = performance.now();
       const rtp = sampleRtpAudioLevel();
@@ -709,6 +763,8 @@ export async function installVideoTile(
       }
       if (liveAudioLevel >= 0.02) {
         lastVoiceAt = nowPerf;
+      } else if (rtp.optedOutSpeaking && !paused) {
+        lastOptOutVoiceAt = nowPerf;
       }
       const voiceNow =
         !paused &&
@@ -716,8 +772,22 @@ export async function installVideoTile(
         participation !== 'preparing' &&
         participation !== 'waiting_admission' &&
         (liveAudioLevel >= 0.02 || nowPerf - lastVoiceAt <= 650);
-      if (voiceNow || wasVoiceActiveOnTile || nowPerf - lastIdleEmitAt >= 1000) {
+      const optOutNow =
+        !paused &&
+        !voiceNow &&
+        participation !== 'joining' &&
+        participation !== 'preparing' &&
+        participation !== 'waiting_admission' &&
+        nowPerf - lastOptOutVoiceAt <= 1200;
+      if (
+        voiceNow ||
+        wasVoiceActiveOnTile ||
+        optOutNow ||
+        wasOptOutActiveOnTile ||
+        nowPerf - lastIdleEmitAt >= 1000
+      ) {
         wasVoiceActiveOnTile = voiceNow;
+        wasOptOutActiveOnTile = optOutNow;
         lastIdleEmitAt = nowPerf;
         emitFrame();
       }
@@ -841,37 +911,104 @@ export async function installVideoTile(
         if (typeof patch.asrLanguage === 'string' && patch.asrLanguage.trim()) {
           asrLanguage = patch.asrLanguage.trim().slice(0, 120);
         }
+        let scrubbedSpeaker = false;
+        if (Array.isArray(patch.optedOut)) {
+          let addedOptOut = false;
+          for (const raw of patch.optedOut) {
+            if (typeof raw !== 'string') continue;
+            const norm = raw.trim().toLowerCase();
+            if (norm && !optedOutNorm.has(norm) && optedOutNorm.size < 256) {
+              optedOutNorm.add(norm);
+              addedOptOut = true;
+            }
+          }
+          if (addedOptOut) {
+            lastOptOutVoiceAt = performance.now();
+            scrubbedSpeaker = true;
+            const meetApi = (
+              window as unknown as {
+                wortlautMeet?: {syncOptedOut?: (items: string[]) => boolean};
+              }
+            ).wortlautMeet;
+            meetApi?.syncOptedOut?.(patch.optedOut);
+          }
+          if (optedOutNorm.size > 0) {
+            const beforeLen = segments.length;
+            segments = segments.filter((s) => !isSpeakerOptedOut(s.speaker));
+            if (segments.length !== beforeLen) scrubbedSpeaker = true;
+            if (isSpeakerOptedOut(activeSpeaker)) {
+              activeSpeaker = null;
+              activeSpeakerUntil = -Infinity;
+              liveAudioLevel = 0;
+              lastVoiceAt = -Infinity;
+              wasVoiceActiveOnTile = false;
+              scrubbedSpeaker = true;
+            }
+          }
+        }
         if (Array.isArray(patch.segments)) {
-          segments = patch.segments.slice(-8).map((s) => ({
-            speaker: String(s?.speaker ?? '').slice(0, 80),
-            text: String(s?.text ?? '').slice(0, 420),
-            start: typeof s?.start === 'number' && Number.isFinite(s.start) ? s.start : 0,
-          }));
+          segments = patch.segments
+            .slice(-8)
+            .map((s) => ({
+              speaker: String(s?.speaker ?? '').slice(0, 80),
+              text: String(s?.text ?? '').slice(0, 420),
+              start: typeof s?.start === 'number' && Number.isFinite(s.start) ? s.start : 0,
+            }))
+            .filter((s) => !isSpeakerOptedOut(s.speaker));
         }
         const sig = `${participation}::${paused ? '1' : '0'}::${asrLanguage}::${JSON.stringify(segments)}`;
-        if (sig !== lastSignature) {
+        if (sig !== lastSignature || scrubbedSpeaker) {
           lastSignature = sig;
           flushFrameBurst();
         }
       },
       reportAudioActivity(level: number, speakerName?: string | null) {
-        if (typeof level !== 'number' || !Number.isFinite(level) || paused) return;
+        if (typeof level !== 'number' || !Number.isFinite(level) || paused) {
+          return;
+        }
         const clamped = Math.max(0, Math.min(1, level));
         const nowPerf = performance.now();
+        if (isSpeakerOptedOut(speakerName)) {
+          if (clamped >= 0.02) {
+            lastOptOutVoiceAt = nowPerf;
+            const voiceNow = liveAudioLevel >= 0.02 || nowPerf - lastVoiceAt <= 650;
+            if (!voiceNow && !wasOptOutActiveOnTile) {
+              wasOptOutActiveOnTile = true;
+              lastIdleEmitAt = nowPerf;
+              emitFrame();
+            }
+          }
+          return;
+        }
         if (clamped > liveAudioLevel) {
           liveAudioLevel = clamped;
         }
         if (clamped >= 0.02) {
           lastVoiceAt = nowPerf;
+          lastOptOutVoiceAt = -Infinity;
           if (speakerName && speakerName.trim()) {
             activeSpeaker = speakerName.trim().slice(0, 80);
             activeSpeakerUntil = nowPerf + 1400;
           }
-          if (!wasVoiceActiveOnTile) {
+          if (!wasVoiceActiveOnTile || wasOptOutActiveOnTile) {
             wasVoiceActiveOnTile = true;
+            wasOptOutActiveOnTile = false;
             lastIdleEmitAt = nowPerf;
             emitFrame();
           }
+        }
+      },
+      reportOptOutActivity(level: number) {
+        if (typeof level !== 'number' || !Number.isFinite(level) || paused) return;
+        const clamped = Math.max(0, Math.min(1, level));
+        if (clamped < 0.02) return;
+        const nowPerf = performance.now();
+        lastOptOutVoiceAt = nowPerf;
+        const voiceNow = liveAudioLevel >= 0.02 || nowPerf - lastVoiceAt <= 650;
+        if (!voiceNow && !wasOptOutActiveOnTile) {
+          wasOptOutActiveOnTile = true;
+          lastIdleEmitAt = nowPerf;
+          emitFrame();
         }
       },
       stop() {
@@ -895,10 +1032,18 @@ export async function installVideoTile(
           participation !== 'preparing' &&
           participation !== 'waiting_admission' &&
           (liveAudioLevel >= 0.02 || nowPerf - lastVoiceAt <= 650);
+        const optOutActive =
+          !paused &&
+          !audioActive &&
+          participation !== 'joining' &&
+          participation !== 'preparing' &&
+          participation !== 'waiting_admission' &&
+          nowPerf - lastOptOutVoiceAt <= 1200;
         return {
           frameCount,
           participation,
           paused,
+          optOutActive,
           asrLanguage,
           audioActive,
           audioLevel: Math.round(liveAudioLevel * 1000) / 1000,

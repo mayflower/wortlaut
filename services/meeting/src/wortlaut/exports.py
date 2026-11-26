@@ -543,6 +543,112 @@ def _format_pause_windows(
     return pause_windows
 
 
+def _collect_opted_out_windows(
+    db: Session,
+    attempts: list[Attempt],
+    streams: list[AudioStream],
+    origin_utc_dt: datetime,
+    participant_names: dict[str, str],
+    opted_out_norm: set[str],
+) -> list[dict]:
+    """Build anonymous chronological time windows for opted-out utterances (no PII, no text)."""
+    if not opted_out_norm:
+        return []
+    raw_spans: list[tuple[float, float | None]] = []
+    for attempt in attempts:
+        ps = (attempt.diagnostics or {}).get("participant_sources")
+        if not isinstance(ps, dict):
+            continue
+        for item in ps.get("opted_out_windows") or []:
+            if not isinstance(item, dict):
+                continue
+            start_dt = _parse_iso_utc(item.get("started_at"))
+            if start_dt is None:
+                continue
+            end_dt = _parse_iso_utc(item.get("ended_at"))
+            start_off = max(0.0, (start_dt - origin_utc_dt).total_seconds())
+            end_off = (
+                max(start_off, (end_dt - origin_utc_dt).total_seconds())
+                if end_dt is not None
+                else None
+            )
+            raw_spans.append((start_off, end_off))
+
+    if streams:
+        stream_by_id = {s.id: s for s in streams}
+        jobs = list(
+            db.scalars(
+                select(AsrJob).where(AsrJob.stream_id.in_(list(stream_by_id.keys())))
+            ).all()
+        )
+        for job in jobs:
+            binding = job.binding if isinstance(job.binding, dict) else {}
+            pid = binding.get("participant_id") or binding.get("speaker_id")
+            pname = binding.get("participant_name") or (
+                participant_names.get(str(pid)) if pid else None
+            )
+            if not is_speaker_opted_out(
+                opted_out_norm,
+                participant_id=str(pid) if pid else None,
+                speaker_id=str(binding.get("speaker_id")) if binding.get("speaker_id") else None,
+                participant_name=str(pname) if pname else None,
+                provider_source_id=(
+                    str(binding.get("provider_source_id"))
+                    if binding.get("provider_source_id")
+                    else None
+                ),
+            ):
+                continue
+            stream = stream_by_id.get(job.stream_id)
+            if stream is None or not isinstance(stream.contract, dict):
+                continue
+            try:
+                base_off = (
+                    float(stream.contract["monotonic_origin_ms"])
+                    - float(stream.contract["session_monotonic_origin_ms"])
+                ) / 1000.0
+                s_off = max(0.0, base_off + job.core_start / RATE)
+                e_off = max(s_off, base_off + job.core_end / RATE)
+            except (KeyError, TypeError, ValueError):
+                continue
+            if e_off - s_off >= 0.3:
+                raw_spans.append((s_off, e_off))
+
+    if not raw_spans:
+        return []
+    raw_spans.sort(key=lambda pair: (pair[0], float("inf") if pair[1] is None else pair[1]))
+    merged: list[tuple[float, float | None]] = []
+    for s_off, e_off in raw_spans:
+        if not merged:
+            merged.append((s_off, e_off))
+            continue
+        prev_s, prev_e = merged[-1]
+        if prev_e is None:
+            continue
+        if s_off <= prev_e + 2.5:
+            merged[-1] = (prev_s, None if e_off is None else max(prev_e, e_off))
+        else:
+            merged.append((s_off, e_off))
+
+    out: list[dict] = []
+    for s_off, e_off in merged[:128]:
+        r_start = round(s_off, 3)
+        r_end = round(e_off, 3) if e_off is not None else None
+        out.append(
+            {
+                "started_at": (origin_utc_dt + timedelta(seconds=r_start)).isoformat(),
+                "ended_at": (
+                    (origin_utc_dt + timedelta(seconds=r_end)).isoformat()
+                    if r_end is not None
+                    else None
+                ),
+                "offset_seconds": r_start,
+                "end_offset_seconds": r_end,
+            }
+        )
+    return out
+
+
 def export_data(
     db: Session,
     recording: Recording,
@@ -993,6 +1099,14 @@ def export_data(
             "segments": segments,
             "opted_out_speakers": opted_out_list,
         }
+    opted_out_windows = _collect_opted_out_windows(
+        db,
+        attempts,
+        streams,
+        origin_utc_dt,
+        participant_names,
+        opted_out_norm,
+    )
     raw_kf_ctx_map = meta.get("keyframe_context")
     kf_ctx_map = raw_kf_ctx_map if isinstance(raw_kf_ctx_map, dict) else {}
     origin_utc_iso = origin_utc_dt.isoformat()
@@ -1226,6 +1340,7 @@ def export_data(
                 and not keyframes
                 and not opted_out_list
                 and not pause_windows
+                and not opted_out_windows
                 and recording.participation_reason
                 not in ("lobby_timeout", "admission_denied", "prejoin_denied")
                 and any(
@@ -1275,6 +1390,7 @@ def export_data(
         "segments": segments,
         "keyframes": keyframes,
         "pause_windows": pause_windows,
+        "opted_out_windows": opted_out_windows,
     }
 
 
@@ -1946,10 +2062,12 @@ def render_export(data, format):
             lines.append("")
         lines.extend(["## Transkript", ""])
         keyframes_list = data.get("keyframes") or []
+        opted_out_windows_list = data.get("opted_out_windows") or []
         if (
             not data["segments"]
             and not keyframes_list
             and not pause_windows_list
+            and not opted_out_windows_list
         ):
             lines.append("_Keine Transkriptsegmente vorhanden._")
         else:
@@ -1962,6 +2080,10 @@ def render_export(data, format):
             for idx, pw in enumerate(pause_windows_list):
                 timeline_items.append(
                     (float(pw.get("offset_seconds") or 0.0), 1, idx, "pause", pw)
+                )
+            for idx, ow in enumerate(opted_out_windows_list):
+                timeline_items.append(
+                    (float(ow.get("offset_seconds") or 0.0), 1, idx, "opted_out", ow)
                 )
             for idx, segment in enumerate(data["segments"]):
                 timeline_items.append(
@@ -1993,6 +2115,19 @@ def render_export(data, format):
                     lines.append(
                         f"> **[{span_label}] Off-the-Record-Pause:** "
                         f"_Audio- und Bildschirmerfassung vorübergehend pausiert._"
+                    )
+                    lines.append("")
+                elif kind == "opted_out":
+                    ts_start = short_timestamp(float(item.get("offset_seconds") or 0.0))
+                    end_off = item.get("end_offset_seconds")
+                    span_label = (
+                        f"{ts_start} – {short_timestamp(float(end_off))}"
+                        if isinstance(end_off, (int, float))
+                        else f"ab {ts_start}"
+                    )
+                    lines.append(
+                        f"> **[{span_label}] (OPTED OUT COMMENT):** "
+                        f"_Beitrag aufgrund von Opt-out nicht aufgezeichnet._"
                     )
                     lines.append("")
                 else:
@@ -2060,12 +2195,26 @@ def render_export(data, format):
             lines.append("")
         if notes_text:
             lines.extend(["NOTIZEN", "-" * 72, notes_text, ""])
-        for segment in data["segments"]:
+        txt_entries: list[tuple[float, int, str]] = []
+        for idx, ow in enumerate(data.get("opted_out_windows") or []):
+            s_off = float(ow.get("offset_seconds") or 0.0)
+            e_off = ow.get("end_offset_seconds")
+            span = (
+                f"{timestamp(s_off)} – {timestamp(float(e_off))}"
+                if isinstance(e_off, (int, float))
+                else timestamp(s_off)
+            )
+            txt_entries.append((s_off, idx, f"[{span}] (OPTED OUT COMMENT)"))
+        for idx, segment in enumerate(data["segments"]):
             text = " ".join(segment["text"].split())
             label = " ".join(segment["speaker_label"].split())
-            lines.append(
-                f"[{timestamp(segment['start'])} – {timestamp(segment['end'])}] {label}: {text}"
+            seg_span = f"{timestamp(segment['start'])} – {timestamp(segment['end'])}"
+            txt_entries.append(
+                (float(segment["start"]), 10000 + idx, f"[{seg_span}] {label}: {text}")
             )
+        txt_entries.sort(key=lambda item: (item[0], item[1]))
+        for _, _, line in txt_entries:
+            lines.append(line)
         lines.extend(["", "-" * 72, header.rstrip()])
         return "\n".join(lines) + "\n", "text/plain; charset=utf-8"
     lines = ["WEBVTT", "", "NOTE " + status, ""]
@@ -2343,11 +2492,11 @@ def generate_protocol_summary(db: Session, recording_id: uuid.UUID) -> dict:
 
     segments = data.get("segments") or []
     origin_utc = data.get("time_origin_utc")
-    transcript_lines: list[str] = []
+    timed_lines: list[tuple[float, int, str]] = []
     known_speakers: list[str] = []
     seen_speakers: set[str] = set()
     total_speech_seconds = 0.0
-    for seg in segments:
+    for idx, seg in enumerate(segments):
         txt = _single_line(seg.get("text"))
         if not txt:
             continue
@@ -2365,7 +2514,14 @@ def generate_protocol_summary(db: Session, recording_id: uuid.UUID) -> dict:
         ):
             seen_speakers.add(spk.lower())
             known_speakers.append(spk)
-        transcript_lines.append(f"[{t0}] {spk}: {txt}")
+        timed_lines.append((seg_start, idx, f"[{t0}] {spk}: {txt}"))
+    if timed_lines:
+        for idx, ow in enumerate(data.get("opted_out_windows") or []):
+            ow_start = float(ow.get("offset_seconds") or 0.0)
+            t0 = wall_clock_time_de(origin_utc, ow_start)
+            timed_lines.append((ow_start, 100000 + idx, f"[{t0}] (OPTED OUT COMMENT)"))
+        timed_lines.sort(key=lambda item: (item[0], item[1]))
+    transcript_lines: list[str] = [line for _, _, line in timed_lines]
     for src in data.get("sources_summary") or []:
         if src.get("opted_out"):
             continue

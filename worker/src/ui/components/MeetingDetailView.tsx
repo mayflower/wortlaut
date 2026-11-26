@@ -306,7 +306,13 @@ export function MeetingDetailView({
       const segs = transcript.segments || [];
       const kfs = transcript.keyframes || [];
       const pauses = transcript.pause_windows || [];
-      if (segs.length === 0 && kfs.length === 0 && pauses.length === 0) {
+      const optOuts = transcript.opted_out_windows || [];
+      if (
+        segs.length === 0 &&
+        kfs.length === 0 &&
+        pauses.length === 0 &&
+        optOuts.length === 0
+      ) {
         mdLines.push(
           tr(
             '_Noch keine transkribierten Segmente vorhanden._',
@@ -329,6 +335,21 @@ export function MeetingDetailView({
               offset: pw.offset_seconds,
               rank: 0,
               line: `> **[${startLbl} – ${endLbl}] ${tr('Off-the-Record-Pause', 'Off-the-Record Pause')}${bySuffix}:** ${tr('Aufnahme im Chat pausiert.', 'Recording paused via chat.')}`,
+            };
+          }),
+          ...optOuts.map((ow) => {
+            const startLbl = formatWallClockTime(
+              ow.offset_seconds,
+              timeOriginUtc
+            );
+            const endLbl =
+              ow.end_offset_seconds != null
+                ? formatWallClockTime(ow.end_offset_seconds, timeOriginUtc)
+                : tr('laufend', 'ongoing');
+            return {
+              offset: ow.offset_seconds,
+              rank: 1,
+              line: `> **[${startLbl} – ${endLbl}] (OPTED OUT COMMENT):** ${tr('Beitrag aufgrund von Opt-out nicht aufgezeichnet.', 'Contribution omitted due to opt-out.')}`,
             };
           }),
           ...kfs.map((kf, idx) => {
@@ -1117,6 +1138,7 @@ export function MeetingDetailView({
                     focusKeyframeId={focusKeyframeId}
                     focusTimestampSeconds={focusTimestampSeconds}
                     pauseWindows={transcript.pause_windows ?? []}
+                    optedOutWindows={transcript.opted_out_windows ?? []}
                     sources={transcript.sources_summary || []}
                     selectedSourceFilter={selectedSourceFilter}
                     onSelectedSourceFilterChange={setSelectedSourceFilter}

@@ -1272,3 +1272,273 @@ def test_group_calendar_writeback_and_oauth_reconnect_backfill(
     assert tx2["calendar_link_error"] is None
     assert tx2["calendar_link_provider"] is None
     assert conn_id is not None
+
+
+def test_immediate_opt_out_hides_live_speaker_zeros_s3_chunks_and_syncs_worker(
+    client, database, storage
+):
+    """Opt-out hides live active_speakers, zeros prior/in-flight S3 PCM, and syncs worker."""
+    import hashlib
+
+    from wortlaut.ingest import accept_chunk, accept_control
+    from wortlaut.models import Attempt, AudioChunk, Recording
+    from wortlaut.storage import get_storage
+
+    now = datetime.now(UTC)
+    create = client.post(
+        "/v1/recordings",
+        headers={**API, "Idempotency-Key": f"optout-immediate-{uuid.uuid4()}"},
+        json={
+            "provider": "google_meet",
+            "meeting_url": "https://meet.google.com/opt-outt-est",
+            "title": "Immediate Opt-Out Audit",
+            "starts_at": (now - timedelta(minutes=2)).isoformat(),
+            "ends_at": (now + timedelta(minutes=30)).isoformat(),
+        },
+    )
+    assert create.status_code == 200, create.text
+    rec_id = uuid.UUID(create.json()["id"])
+
+    attempt_id = uuid.uuid4()
+    stream_uuid = uuid.uuid4()
+    epoch_uuid = uuid.uuid4()
+    worker_secret = "worker-optout-secret-token-1234567890"
+    secret_hash = hashlib.sha256(worker_secret.encode()).hexdigest()
+
+    with Session(database) as db:
+        rec = db.get(Recording, rec_id)
+        assert rec is not None
+        rec.participation = "capturing"
+        rec.processing = "processing"
+        rec.active_attempt_id = attempt_id
+        att = Attempt(
+            id=attempt_id,
+            recording_id=rec_id,
+            credential_hash=secret_hash,
+            credential_expires_at=now + timedelta(hours=1),
+            worker_id="worker-optout-1",
+            diagnostics={
+                "streams": 1,
+                "active_audio_samples": 32000,
+                "participant_sources": {
+                    "available": True,
+                    "total": 2,
+                    "sources": [
+                        {
+                            "participant_id": "spaces/s/devices/1",
+                            "participant_name": "Alice",
+                        },
+                        {
+                            "participant_id": "spaces/s/devices/562",
+                            "participant_name": "Florian Eibeck",
+                        },
+                    ],
+                },
+                "receiver_sources": [
+                    {
+                        "provider_source_id": f"google_meet:{rec_id}:receiver:0",
+                        "signaled_participant_id": "spaces/s/devices/562",
+                        "participant_name": "Florian Eibeck",
+                        "rtp_stats": {"audio_level": 0.42},
+                    },
+                    {
+                        "provider_source_id": f"google_meet:{rec_id}:receiver:1",
+                        "signaled_participant_id": "spaces/s/devices/1",
+                        "participant_name": "Alice",
+                        "rtp_stats": {"audio_level": 0.0},
+                    },
+                ],
+            },
+        )
+        db.add(att)
+        db.commit()
+
+    base_meta = {
+        "attempt_id": str(attempt_id),
+        "meeting_id": str(rec_id),
+        "stream_id": str(stream_uuid),
+        "epoch": str(epoch_uuid),
+        "provider_source_id": f"google_meet:{rec_id}:receiver:0",
+        "source_kind": "speaker",
+        "attribution_unknown": False,
+        "sample_rate": 16000,
+        "channels": 1,
+        "encoding": "pcm_s16le",
+        "monotonic_origin_ms": 1000.0,
+        "session_monotonic_origin_ms": 0.0,
+        "session_utc_origin": now.isoformat(),
+    }
+    alice_pcm = b"\x20\x05" * 16000
+    florian_pcm = b"\x30\x08" * 16000
+
+    with Session(database) as db:
+        att = db.get(Attempt, attempt_id)
+        rec = db.get(Recording, rec_id)
+        accept_control(
+            db,
+            att,
+            rec,
+            {
+                **base_meta,
+                "type": "begin",
+                "id": f"{attempt_id}/{stream_uuid}/{epoch_uuid}/begin",
+                "participant_id": "spaces/s/devices/1",
+                "speaker_id": "spaces/s/devices/1",
+                "participant_name": "Alice",
+            },
+        )
+        ch0_id = accept_chunk(
+            db,
+            att,
+            rec,
+            {
+                **base_meta,
+                "sequence": 0,
+                "start_sample": 0,
+                "sample_count": 16000,
+                "participant_id": "spaces/s/devices/1",
+                "speaker_id": "spaces/s/devices/1",
+                "participant_name": "Alice",
+            },
+            alice_pcm,
+        )
+        accept_control(
+            db,
+            att,
+            rec,
+            {
+                "type": "bind",
+                "id": f"{attempt_id}/{stream_uuid}/{epoch_uuid}/16000/bind",
+                "stream_id": str(stream_uuid),
+                "epoch": str(epoch_uuid),
+                "start_sample": 16000,
+                "provider_source_id": f"google_meet:{rec_id}:receiver:0",
+                "source_kind": "speaker",
+                "attribution_unknown": False,
+                "participant_id": "spaces/s/devices/562",
+                "speaker_id": "spaces/s/devices/562",
+                "participant_name": "Florian Eibeck",
+            },
+        )
+        ch1_id = accept_chunk(
+            db,
+            att,
+            rec,
+            {
+                **base_meta,
+                "sequence": 1,
+                "start_sample": 16000,
+                "sample_count": 16000,
+                "participant_id": "spaces/s/devices/562",
+                "speaker_id": "spaces/s/devices/562",
+                "participant_name": "Florian Eibeck",
+            },
+            florian_pcm,
+        )
+
+    # Before opt-out, live_status shows Florian as active speaker
+    before = client.get(f"/v1/recordings/{rec_id}", headers=API).json()
+    assert before["live_status"]["active_speakers"] == ["Florian Eibeck"]
+    assert before["live_status"]["max_audio_level"] == 0.42
+
+    # Trigger opt-out via PATCH /v1/recordings/{id}
+    patch = client.patch(
+        f"/v1/recordings/{rec_id}",
+        headers=API,
+        json={"opted_out_speakers": ["Florian Eibeck"]},
+    )
+    assert patch.status_code == 200, patch.text
+
+    # 1. Live banner stops showing Florian as active speaker & suppresses his audio_level
+    after = client.get(f"/v1/recordings/{rec_id}", headers=API).json()
+    assert after["live_status"]["active_speakers"] == []
+    assert after["live_status"]["max_audio_level"] == 0.0
+
+    # 2. Prior S3 PCM chunk for Florian is immediately zeroed while Alice's chunk stays intact
+    s3 = get_storage()
+    with Session(database) as db:
+        ch0 = db.get(AudioChunk, ch0_id)
+        ch1 = db.get(AudioChunk, ch1_id)
+        assert ch0 is not None and ch1 is not None
+        assert s3.read(ch0.object_key) == alice_pcm
+        assert s3.read(ch1.object_key) == b"\x00" * len(florian_pcm)
+        assert ch1.checksum == hashlib.sha256(b"\x00" * len(florian_pcm)).hexdigest()
+
+    # 3. In-flight chunk arriving after opt-out for Florian's device ID is stored as all-zero PCM
+    with Session(database) as db:
+        att = db.get(Attempt, attempt_id)
+        rec = db.get(Recording, rec_id)
+        ch2_id = accept_chunk(
+            db,
+            att,
+            rec,
+            {
+                **base_meta,
+                "sequence": 2,
+                "start_sample": 32000,
+                "sample_count": 16000,
+                "participant_id": "spaces/s/devices/562",
+                "speaker_id": "spaces/s/devices/562",
+                "participant_name": "Florian Eibeck",
+            },
+            florian_pcm,
+        )
+        ch2 = db.get(AudioChunk, ch2_id)
+        assert ch2 is not None
+        assert s3.read(ch2.object_key) == b"\x00" * len(florian_pcm)
+
+    # 4. Transcript export still keeps audio_available=True for Alice
+    tx = client.get(f"/v1/recordings/{rec_id}/transcript", headers=API).json()
+    assert tx["audio_available"] is True
+
+    # 5. Worker status heartbeat sends opted_out_windows and receives opted_out_speakers back
+    hb = client.post(
+        f"/v1/attempts/{attempt_id}/status",
+        headers={
+            "Authorization": f"Bearer {worker_secret}",
+            "X-Worker-Id": "worker-optout-1",
+        },
+        json={
+            "participation": "capturing",
+            "streams": 1,
+            "audio_samples": 48000,
+            "active_audio_samples": 32000,
+            "participant_sources": {
+                "available": True,
+                "total": 2,
+                "opted_out": ["Florian Eibeck"],
+                "opted_out_windows": [
+                    {
+                        "started_at": (now + timedelta(seconds=12)).isoformat(),
+                        "ended_at": (now + timedelta(seconds=18)).isoformat(),
+                    }
+                ],
+                "sources": [],
+            },
+        },
+    )
+    assert hb.status_code == 200, hb.text
+    assert hb.json()["opted_out_speakers"] == ["Florian Eibeck"]
+
+    # 6. Protocol JSON, Markdown, and Plaintext exports show anonymous (OPTED OUT COMMENT) marker
+    tx_after = client.get(f"/v1/recordings/{rec_id}/transcript", headers=API).json()
+    assert len(tx_after["opted_out_windows"]) == 1
+    assert tx_after["opted_out_windows"][0]["offset_seconds"] == 12.0
+    assert tx_after["opted_out_windows"][0]["end_offset_seconds"] == 18.0
+    assert "Florian" not in str(tx_after["opted_out_windows"])
+
+    with Session(database) as db:
+        rec = db.get(Recording, rec_id)
+        assert rec is not None
+        rec.processing = "completed"
+        db.commit()
+
+    md_resp = client.get(f"/v1/recordings/{rec_id}/exports/md", headers=API)
+    assert md_resp.status_code == 200, md_resp.text
+    assert "(OPTED OUT COMMENT)" in md_resp.text
+    assert "Florian Eibeck" not in md_resp.text
+
+    txt_resp = client.get(f"/v1/recordings/{rec_id}/exports/txt", headers=API)
+    assert txt_resp.status_code == 200, txt_resp.text
+    assert "(OPTED OUT COMMENT)" in txt_resp.text
+    assert "Florian Eibeck" not in txt_resp.text

@@ -914,3 +914,97 @@ test('all 4 provider drivers display live transcript video to remote receivers w
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });
+
+test('video tile immediately scrubs opted-out speaker text, active speaker, and RTP waveform', async () => {
+  const browser = await chromium.launch({
+    headless: true,
+    args: ['--use-fake-ui-for-media-stream', '--autoplay-policy=no-user-gesture-required'],
+  });
+  try {
+    const ctx = await browser.newContext();
+    const page = await ctx.newPage();
+    await installVideoTile(page, 'google_meet', 'https://meet.google.com/opt-tile-tst', {
+      locale: 'de',
+      invitedBy: 'Alice',
+      meetingTitle: 'Opt-Out Tile Test',
+      asrLanguage: 'German',
+    });
+    await page.route('https://meet.google.com/**', (route) =>
+      route.fulfill({contentType: 'text/html', body: '<!doctype html><html><body></body></html>'}),
+    );
+    await page.goto('https://meet.google.com/opt-tile-tst');
+    await page.evaluate(`(() => {
+      const fakeRecvOptOut = {
+        track: {kind: 'audio', readyState: 'live', muted: false},
+        getSynchronizationSources() { return [{timestamp: performance.now(), audioLevel: 0.75}]; },
+        getContributingSources() { return []; },
+      };
+      const fakePc = {
+        connectionState: 'connected',
+        getReceivers() { return [fakeRecvOptOut]; },
+      };
+      window.wortlautMeetReceivers = {
+        connections: new Set([fakePc]),
+        isReceiverOptedOut(recv) { return recv === fakeRecvOptOut; },
+      };
+    })()`);
+
+    await page.evaluate(() => {
+      window.wortlautVideoTile?.update({
+        participation: 'capturing',
+        segments: [
+          {speaker: 'Alice', text: 'Bleibt sichtbar.', start: 1},
+          {speaker: 'Florian Eibeck', text: 'Muss sofort weg.', start: 3},
+        ],
+      });
+      window.wortlautVideoTile?.reportAudioActivity(0.8, 'Florian Eibeck');
+    });
+
+    const before = await page.evaluate(() => window.wortlautVideoTile?.getSnapshot());
+    assert.equal(before?.segmentCount, 2);
+    assert.equal(before?.activeSpeaker, 'Florian Eibeck');
+    assert.ok(before?.lastRenderedText.includes('Florian Eibeck'));
+
+    await page.evaluate(() => {
+      window.wortlautVideoTile?.update({optedOut: ['Florian Eibeck']});
+    });
+
+    const afterScrub = await page.evaluate(() => window.wortlautVideoTile?.getSnapshot());
+    assert.equal(afterScrub?.segmentCount, 1);
+    assert.equal(afterScrub?.activeSpeaker, null);
+    assert.equal(afterScrub?.audioLevel, 0);
+    assert.equal(afterScrub?.optOutActive, true);
+    assert.equal(afterScrub?.lastRenderedText, 'Opt-out');
+
+    // Speaking again via opted-out receiver or stale heartbeat segments shows "Opt-out", NEVER last speaker or opted-out name
+    await page.evaluate(() => {
+      window.wortlautVideoTile?.reportAudioActivity(0.95, 'Florian Eibeck');
+      window.wortlautVideoTile?.update({
+        segments: [
+          {speaker: 'Alice', text: 'Bleibt sichtbar.', start: 1},
+          {speaker: 'Florian Eibeck', text: 'Stale segment.', start: 4},
+        ],
+      });
+    });
+    await page.waitForTimeout(350);
+    const afterSpeech = await page.evaluate(() => window.wortlautVideoTile?.getSnapshot());
+    assert.equal(afterSpeech?.segmentCount, 1);
+    assert.equal(afterSpeech?.activeSpeaker, null);
+    assert.equal(afterSpeech?.audioLevel, 0);
+    assert.equal(afterSpeech?.optOutActive, true);
+    assert.equal(afterSpeech?.lastRenderedText, 'Opt-out');
+
+    // Once a non-opted-out speaker (Alice) talks, tile immediately leaves Opt-out state
+    await page.evaluate(() => {
+      window.wortlautVideoTile?.reportAudioActivity(0.7, 'Alice');
+    });
+    const afterAlice = await page.evaluate(() => window.wortlautVideoTile?.getSnapshot());
+    assert.equal(afterAlice?.optOutActive, false);
+    assert.equal(afterAlice?.activeSpeaker, 'Alice');
+    assert.equal(afterAlice?.audioActive, true);
+
+    await ctx.close();
+  } finally {
+    await browser.close();
+  }
+});

@@ -858,6 +858,169 @@ def purge_opted_out_transcript_segments(
     return deleted
 
 
+def purge_opted_out_audio_chunks(
+    db: Session,
+    recording: Recording,
+    attempts: list[Attempt] | None = None,
+) -> int:
+    """Zero S3 PCM payloads for already-stored audio chunks belonging to opted-out speakers.
+
+    Overwrites matching framed S3 objects with all-zero PCM (preserving the immutable
+    contract header and stream timeline for other speakers on shared SFU receivers) and
+    updates `AudioChunk.checksum` so already-zeroed chunks are skipped in O(0) S3 calls.
+    """
+    if attempts is None:
+        attempts = list(
+            db.scalars(select(Attempt).where(Attempt.recording_id == recording.id)).all()
+        )
+    if not attempts:
+        return 0
+    streams = list(
+        db.scalars(
+            select(AudioStream).where(AudioStream.attempt_id.in_([a.id for a in attempts]))
+        ).all()
+    )
+    if not streams:
+        return 0
+    participant_names, bind_controls = collect_stream_participant_names(
+        db, streams, attempts=attempts, order_binds=True
+    )
+    _, opted_out_norm = collect_opted_out_speakers(recording, attempts, participant_names)
+    if not opted_out_norm:
+        return 0
+
+    stream_ids = [s.id for s in streams]
+    onset_windows_by_stream: dict[int, list[tuple[int, int, str, str | None]]] = {}
+    unambiguous_by_stream_id: dict[object, tuple[str, str | None]] = {}
+    for s in streams:
+        observed: set[tuple[str, str | None]] = set()
+        s_binds = [c for c in bind_controls if c.stream_id == s.id]
+        intervals: list[tuple[int, int | None, dict]] = []
+        first_s = (
+            (
+                int(s_binds[0].start_sample)
+                if s_binds[0].start_sample is not None
+                else int((s_binds[0].contract or {}).get("start_sample") or 0)
+            )
+            if s_binds
+            else None
+        )
+        if first_s is None or first_s > 0:
+            intervals.append((0, first_s, s.contract))
+        for idx, ctrl in enumerate(s_binds):
+            cur_s = (
+                int(ctrl.start_sample)
+                if ctrl.start_sample is not None
+                else int((ctrl.contract or {}).get("start_sample") or 0)
+            )
+            nxt_s = (
+                (
+                    int(s_binds[idx + 1].start_sample)
+                    if s_binds[idx + 1].start_sample is not None
+                    else int((s_binds[idx + 1].contract or {}).get("start_sample") or 0)
+                )
+                if idx + 1 < len(s_binds)
+                else None
+            )
+            intervals.append((cur_s, nxt_s, ctrl.contract))
+        onsets: list[tuple[int, int, str, str | None]] = []
+        for idx in range(len(intervals) - 1):
+            iv_start, iv_end, cdict = intervals[idx]
+            _, _, nxt_cdict = intervals[idx + 1]
+            if (
+                iv_end is not None
+                and cdict.get("attribution_unknown")
+                and not nxt_cdict.get("attribution_unknown")
+                and 0 < (iv_end - iv_start) <= ONSET_BIND_MAX_SAMPLES
+            ):
+                npid = nxt_cdict.get("participant_id") or nxt_cdict.get("speaker_id")
+                if npid:
+                    npname = nxt_cdict.get("participant_name") or participant_names.get(str(npid))
+                    onsets.append((iv_start, iv_end, str(npid), npname))
+        if onsets and s.id is not None:
+            onset_windows_by_stream[s.id] = onsets
+        if not s.contract.get("attribution_unknown"):
+            pid = s.contract.get("participant_id") or s.contract.get("speaker_id")
+            if pid:
+                pname_s = s.contract.get("participant_name") or participant_names.get(str(pid))
+                observed.add((str(pid), pname_s))
+        for ctrl in s_binds:
+            if not ctrl.contract.get("attribution_unknown"):
+                pid = ctrl.contract.get("participant_id") or ctrl.contract.get("speaker_id")
+                if pid:
+                    pname_c = ctrl.contract.get("participant_name") or participant_names.get(
+                        str(pid)
+                    )
+                    observed.add((str(pid), pname_c))
+        if len(observed) == 1:
+            unambiguous_by_stream_id[s.id] = next(iter(observed))
+
+    chunks = list(
+        db.scalars(
+            select(AudioChunk).where(
+                AudioChunk.stream_id.in_(stream_ids),
+                AudioChunk.deleted_at.is_(None),
+            )
+        ).all()
+    )
+    if not chunks:
+        return 0
+
+    zero_cache: dict[int, tuple[bytes, str]] = {}
+    storage = None
+    zeroed = 0
+    for chunk in chunks:
+        cdict = chunk.contract if isinstance(chunk.contract, dict) else {}
+        pid = cdict.get("participant_id") or cdict.get("speaker_id")
+        pname = cdict.get("participant_name") or (participant_names.get(str(pid)) if pid else None)
+        if not pid and chunk.stream_id in unambiguous_by_stream_id:
+            pid, pname = unambiguous_by_stream_id[chunk.stream_id]
+        if not pid and chunk.stream_id in onset_windows_by_stream:
+            ch_end = chunk.start_sample + chunk.sample_count
+            matched_onset = next(
+                (
+                    w
+                    for w in onset_windows_by_stream[chunk.stream_id]
+                    if chunk.start_sample >= w[0] - 800 and ch_end <= w[1] + 800
+                ),
+                None,
+            )
+            if matched_onset is not None:
+                pid, pname = matched_onset[2], matched_onset[3]
+        if not is_speaker_opted_out(
+            opted_out_norm,
+            participant_id=str(pid) if pid else None,
+            speaker_id=str(cdict.get("speaker_id")) if cdict.get("speaker_id") else None,
+            participant_name=str(pname) if pname else None,
+            provider_source_id=(
+                str(cdict.get("provider_source_id")) if cdict.get("provider_source_id") else None
+            ),
+        ):
+            continue
+        byte_len = chunk.sample_count * 2
+        cached = zero_cache.get(byte_len)
+        if cached is None:
+            zbytes = b"\x00" * byte_len
+            cached = (zbytes, hashlib.sha256(zbytes).hexdigest())
+            zero_cache[byte_len] = cached
+        zbytes, zsum = cached
+        if chunk.checksum == zsum:
+            continue
+        if chunk.object_key:
+            try:
+                if storage is None:
+                    storage = get_storage()
+                storage.replace_pcm(chunk.object_key, zbytes, cdict)
+            except (BotoCoreError, ClientError, RuntimeError):
+                logging.getLogger(__name__).warning(
+                    "Failed to zero opted-out audio chunk %s in S3", chunk.id
+                )
+                continue
+        chunk.checksum = zsum
+        zeroed += 1
+    return zeroed
+
+
 def purge_opted_out_keyframes(
     db: Session,
     recording: Recording,

@@ -233,10 +233,14 @@ async function run(api: string, credential: string) {
           deadlineTimer = setTimeout(() => { void stop('deadline'); }, Math.max(0, deadline - Date.now()));
         }
       }
-      if (Array.isArray(reported.live_transcript)) {
+      const serverOptedOut = Array.isArray(reported.opted_out_speakers)
+        ? reported.opted_out_speakers.filter((item: unknown): item is string => typeof item === 'string' && item.trim().length > 0)
+        : [];
+      if (Array.isArray(reported.live_transcript) || serverOptedOut.length > 0) {
         await meet?.updateVideoTile({
           participation: state.participation,
-          segments: reported.live_transcript,
+          ...(Array.isArray(reported.live_transcript) ? {segments: reported.live_transcript} : {}),
+          ...(serverOptedOut.length > 0 ? {optedOut: serverOptedOut} : {}),
           ...(typeof reported.asr_language === 'string' && reported.asr_language
             ? {asrLanguage: reported.asr_language}
             : {}),

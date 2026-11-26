@@ -1037,6 +1037,7 @@ def _execute_tool_sync(
         all_segments: list[dict[str, Any]] = list(exp.get("segments") or [])
         all_keyframes: list[dict[str, Any]] = list(exp.get("keyframes") or [])
         all_pauses: list[dict[str, Any]] = list(exp.get("pause_windows") or [])
+        all_opt_outs: list[dict[str, Any]] = list(exp.get("opted_out_windows") or [])
 
         speaker_filter = str(arguments.get("speaker") or "").strip().lower()
         query_filter = str(arguments.get("query") or "").strip().lower()
@@ -1100,6 +1101,17 @@ def _execute_tool_sync(
                 continue
             out_pauses.append(pw)
 
+        out_opt_outs = []
+        for ow in all_opt_outs:
+            if speaker_filter or query_filter:
+                continue
+            ow_offset = float(ow.get("offset_seconds") or 0.0)
+            if start_sec is not None and ow_offset < float(start_sec):
+                continue
+            if end_sec is not None and ow_offset > float(end_sec):
+                continue
+            out_opt_outs.append(ow)
+
         total_matching = len(filtered)
         page = filtered[offset : offset + limit]
         next_hint = (
@@ -1122,7 +1134,19 @@ def _execute_tool_sync(
                 f"No segments matched speaker={arguments.get('speaker')!r}. "
                 f"Available speakers: {', '.join(known_speakers)}."
             )
-        for seg in page:
+        page_start = float(page[0].get("start") or 0.0) if page else 0.0
+        page_end = float(page[-1].get("end") or page_start) if page else float("inf")
+        in_page_opt_outs = [
+            ow
+            for ow in out_opt_outs
+            if (offset == 0 or float(ow.get("offset_seconds") or 0.0) >= page_start)
+            and (
+                (offset + len(page)) >= total_matching
+                or float(ow.get("offset_seconds") or 0.0) <= page_end
+            )
+        ]
+        timeline_md: list[tuple[float, int, str]] = []
+        for idx, seg in enumerate(page):
             s_start = float(seg.get("start") or 0.0)
             speaker_label = str(
                 seg.get("speaker_label")
@@ -1132,10 +1156,31 @@ def _execute_tool_sync(
             clock_label = (
                 wall_clock_time_de(origin_utc, s_start) if origin_utc else short_timestamp(s_start)
             )
-            md_lines.append(
-                f"[{clock_label} / +{int(round(s_start))}s] **{speaker_label}**: "
-                f"{seg.get('text') or ''}"
+            timeline_md.append(
+                (
+                    s_start,
+                    idx,
+                    f"[{clock_label} / +{int(round(s_start))}s] **{speaker_label}**: "
+                    f"{seg.get('text') or ''}",
+                )
             )
+        for idx, ow in enumerate(in_page_opt_outs):
+            ow_start = float(ow.get("offset_seconds") or 0.0)
+            clock_label = (
+                wall_clock_time_de(origin_utc, ow_start)
+                if origin_utc
+                else short_timestamp(ow_start)
+            )
+            timeline_md.append(
+                (
+                    ow_start,
+                    100000 + idx,
+                    f"[{clock_label} / +{int(round(ow_start))}s] **(OPTED OUT COMMENT)**",
+                )
+            )
+        timeline_md.sort(key=lambda item: (item[0], item[1]))
+        for _, _, line in timeline_md:
+            md_lines.append(line)
 
         if out_pauses:
             md_lines.append("\nOff-the-record pause windows:")
