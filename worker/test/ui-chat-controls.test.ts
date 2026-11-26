@@ -787,6 +787,16 @@ test('Web-UI fixes glossary tab/count mismatch (#15), merged multi-ID speaker fi
 </body>
 </html>`;
 
+  const personalGlossaryEntries: Array<{
+    term_key: string;
+    term: string;
+    aliases: string[];
+    source: string;
+    editable: boolean;
+  }> = [];
+  const glossaryUpsertPayloads: Array<Record<string, unknown>> = [];
+  let editedSegA1Text = 'Erster Beitrag am Mikrofon.';
+
   const server = createServer(async (req, res) => {
     const u = new URL(req.url ?? '/', 'http://127.0.0.1');
     if (u.pathname === '/ui') {
@@ -851,7 +861,7 @@ test('Web-UI fixes glossary tab/count mismatch (#15), merged multi-ID speaker fi
       res.end(JSON.stringify({events: [], connections: [], synced_events: []}));
       return;
     }
-    if (u.pathname === '/v1/glossary') {
+    if (u.pathname === '/v1/glossary' && req.method === 'GET') {
       res.writeHead(200, {'Content-Type': 'application/json'});
       res.end(
         JSON.stringify({
@@ -862,11 +872,55 @@ test('Web-UI fixes glossary tab/count mismatch (#15), merged multi-ID speaker fi
             {term_key: 'wortlaut', term: 'wortlaut', aliases: [], source: 'team', editable: false},
             {term_key: 'maistack', term: 'mAIstack', aliases: ['MyStack'], source: 'team', editable: false},
           ],
-          personal_entries: [],
+          personal_entries: personalGlossaryEntries,
           suppressed_env_terms: [],
-          effective_count: 2,
+          effective_count: 2 + personalGlossaryEntries.length,
         }),
       );
+      return;
+    }
+    if (u.pathname === '/v1/glossary/entries' && req.method === 'POST') {
+      let body = '';
+      for await (const chunk of req) body += chunk;
+      const parsed = JSON.parse(body || '{}') as {term?: string; aliases?: string[]};
+      glossaryUpsertPayloads.push(parsed);
+      const term = String(parsed.term || '').trim();
+      if (term) {
+        personalGlossaryEntries.push({
+          term_key: term.toLowerCase(),
+          term,
+          aliases: Array.isArray(parsed.aliases) ? parsed.aliases : [],
+          source: 'custom',
+          editable: true,
+        });
+      }
+      res.writeHead(200, {'Content-Type': 'application/json'});
+      res.end(
+        JSON.stringify({
+          scope: 'personal',
+          can_edit_global: false,
+          has_personal_scope: true,
+          default_scope: 'personal',
+          global_entries: [
+            {term_key: 'wortlaut', term: 'wortlaut', aliases: [], source: 'team', editable: false},
+            {term_key: 'maistack', term: 'mAIstack', aliases: ['MyStack'], source: 'team', editable: false},
+          ],
+          personal_entries: personalGlossaryEntries,
+          suppressed_env_terms: [],
+          effective_count: 2 + personalGlossaryEntries.length,
+        }),
+      );
+      return;
+    }
+    if (u.pathname === `/v1/recordings/${recordingId}` && req.method === 'PATCH') {
+      let body = '';
+      for await (const chunk of req) body += chunk;
+      const parsed = JSON.parse(body || '{}') as {segment_edits?: Record<string, string>};
+      if (parsed.segment_edits?.['seg-a1']) {
+        editedSegA1Text = parsed.segment_edits['seg-a1'];
+      }
+      res.writeHead(200, {'Content-Type': 'application/json'});
+      res.end(JSON.stringify({recording_id: recordingId}));
       return;
     }
     if (u.pathname === '/v1/recordings' && req.method === 'GET') {
@@ -1049,7 +1103,7 @@ test('Web-UI fixes glossary tab/count mismatch (#15), merged multi-ID speaker fi
               end: 35,
               start_sample: 80000,
               end_sample: 560000,
-              text: 'Erster Beitrag am Mikrofon.',
+              text: editedSegA1Text,
             },
             {
               segment_id: 'seg-a2',
@@ -1117,6 +1171,20 @@ test('Web-UI fixes glossary tab/count mismatch (#15), merged multi-ID speaker fi
       });
     await page.getByRole('button', {name: 'Team-Glossar anzeigen (2)'}).click();
     await page.getByText('mAIstack').waitFor({state: 'visible', timeout: 5000});
+
+    // Active learning: inline turn edit proposes 1-click Glossary entry and refreshes sidebar count
+    await page.goto(`${baseUrl}/ui#view=meetings&id=${recordingId}&token=user-session-token`);
+    await page.getByText('Erster Beitrag am Mikrofon.').waitFor({state: 'visible', timeout: 5000});
+    await page.locator('#seg-seg-a1').getByRole('button', {name: 'Sprecher oder Text korrigieren'}).click();
+    await page.locator('#seg-seg-a1 textarea').fill('Erster Beitrag am FireHOL.');
+    await page.locator('#seg-seg-a1').getByRole('button', {name: 'Speichern'}).click();
+    const learnBar = page.locator('[data-testid="glossary-learn-bar"]');
+    await learnBar.waitFor({state: 'visible', timeout: 5000});
+    await learnBar.getByRole('button', {name: /Mikrofon.*FireHOL/}).click();
+    await page.locator('span[title="1 persönlich · 2 Team"]').waitFor({state: 'visible', timeout: 5000});
+    assert.deepEqual(glossaryUpsertPayloads, [
+      {scope: 'auto', term: 'FireHOL', aliases: ['Mikrofon']},
+    ]);
 
     await context.close();
   } finally {

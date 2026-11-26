@@ -923,6 +923,9 @@ export function App() {
               setFocusTimestampSeconds(null);
               setActiveNav('glossary');
             }}
+            onGlossaryUpdated={() => {
+              queryClient.invalidateQueries({ queryKey: ['glossary'] });
+            }}
             onDeleted={() => {
               setSelectedId(null);
               setFocusKeyframeId(null);

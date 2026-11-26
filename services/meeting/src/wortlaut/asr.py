@@ -495,28 +495,42 @@ def build_asr_context_prompt(
         and settings.default_locale == "de"
     )
     parts: list[str] = []
+    clean_title = ""
     if recording is not None and recording.title:
         clean_title = " ".join(recording.title.split())[:120]
         if clean_title:
             parts.append(f"{'Thema' if use_de_labels else 'Topic'}: {clean_title}")
+    if recording is not None and isinstance(recording.protocol_meta, dict):
+        raw_agenda = recording.protocol_meta.get("calendar_agenda")
+        clean_agenda = " ".join(str(raw_agenda or "").split())[:140]
+        if clean_agenda and clean_agenda.lower() != clean_title.lower():
+            parts.append(f"Agenda: {clean_agenda}")
     if participant_list:
         parts.append(
             f"{'Teilnehmende' if use_de_labels else 'Participants'}: "
             f"{', '.join(participant_list)}"
         )
+    prior_part = (
+        f"{'Vorheriger Kontext' if use_de_labels else 'Prior context'}: {prior_text}"
+        if prior_text
+        else ""
+    )
     if glossary_terms:
+        prefix_len = sum(len(p) + 3 for p in parts)
+        prior_reserve = (len(prior_part) + 3) if prior_part else 0
+        glossary_label = f"{'Glossar' if use_de_labels else 'Glossary'}: "
+        available = 600 - prefix_len - prior_reserve - len(glossary_label)
+        glossary_budget = min(250, available) if available >= 20 else 0
         glossary_line = ""
         for term in glossary_terms:
             next_val = f"{glossary_line}, {term}" if glossary_line else term
-            if len(next_val) > 250:
+            if len(next_val) > glossary_budget:
                 break
             glossary_line = next_val
         if glossary_line:
-            parts.append(f"{'Glossar' if use_de_labels else 'Glossary'}: {glossary_line}")
-    if prior_text:
-        parts.append(
-            f"{'Vorheriger Kontext' if use_de_labels else 'Prior context'}: {prior_text}"
-        )
+            parts.append(f"{glossary_label}{glossary_line}")
+    if prior_part:
+        parts.append(prior_part)
     if not parts:
         return None
     return " | ".join(parts)[:600]

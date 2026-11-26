@@ -4,6 +4,44 @@ import {once} from 'node:events';
 import {createServer} from 'node:http';
 import {test} from 'node:test';
 import {isTeamsMeeting, sanitizeTeamsDisplayName} from '../src/teams-url.js';
+import {extractGlossarySuggestions} from '../src/ui/glossaryLearning.js';
+
+test('extractGlossarySuggestions detects localized term fixes and ignores noise', () => {
+  assert.deepEqual(
+    extractGlossarySuggestions(
+      'Wir deployen auf Kubernetis mit Meistack.',
+      'Wir deployen auf Kubernetes mit mAIstack.',
+    ),
+    [
+      {from: 'Kubernetis', to: 'Kubernetes'},
+      {from: 'Meistack', to: 'mAIstack'},
+    ],
+  );
+  assert.deepEqual(
+    extractGlossarySuggestions(
+      'Die Firewall ist Fire Hall im Cluster.',
+      'Die Firewall ist FireHOL im Cluster.',
+    ),
+    [{from: 'Fire Hall', to: 'FireHOL'}],
+  );
+  assert.deepEqual(
+    extractGlossarySuggestions('Wort laut', 'wortlaut'),
+    [{from: 'Wort laut', to: 'wortlaut'}],
+  );
+  // Punctuation-only changes produce no suggestion
+  assert.deepEqual(
+    extractGlossarySuggestions('Das ist gut.', 'Das ist gut!'),
+    [],
+  );
+  // Complete unrelated sentence rewrites without shared anchors are ignored
+  assert.deepEqual(
+    extractGlossarySuggestions(
+      'Eins zwei drei vier fuenf sechs',
+      'Alpha Beta Gamma Delta Epsilon Zeta',
+    ),
+    [],
+  );
+});
 
 test('teams URL validation and display name sanitization handle calendar invites', () => {
   assert.equal(

@@ -1422,3 +1422,195 @@ def test_resolve_primary_language_falls_back_to_recording_majority(database):
 
         resolved = _resolve_primary_language(db, job_b, stream_b, "auto", get_settings())
         assert resolved == "German"
+
+
+def test_calendar_agenda_extraction_and_asr_prompt_injection(database):
+    from wortlaut.asr import build_asr_context_prompt
+    from wortlaut.calendar_oauth import (
+        _parse_google_items,
+        _parse_microsoft_items,
+        apply_synced_events,
+        snapshot_connection,
+    )
+    from wortlaut.models import Attempt, CalendarConnection, Recording
+    from wortlaut.validation import extract_calendar_agenda
+
+    # 1. Google Calendar HTML description strips Meet boilerplate, URLs, and PINs
+    google_desc = (
+        "<p>Agenda:</p><ul><li>Migration von FireHOL auf nftables</li>"
+        "<li>mAIstack Release 2.4 &amp; Keycloak SSO</li></ul>"
+        "-::~:~::~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~:~::~:~::-\n"
+        "Join with Google Meet: https://meet.google.com/abc-defg-hij\n"
+        "PIN: 987 654#\n"
+    )
+    cleaned_google = extract_calendar_agenda(google_desc)
+    assert cleaned_google == (
+        "Migration von FireHOL auf nftables · mAIstack Release 2.4 & Keycloak SSO"
+    )
+    assert "987 654" not in cleaned_google
+    assert "meet.google.com" not in cleaned_google
+
+    # 2. Microsoft Teams Outlook HTML strips <style>, separator, Meeting ID, and passcode
+    ms_html = (
+        "<html><head><style>.a { color: red; }</style></head><body>"
+        "<div>Review Kubernetes Ingress &amp; ArgoCD Sync für Acme GmbH</div>"
+        "<div>________________________________________________________________________________</div>"
+        "<div>Microsoft Teams Benötigen Sie Hilfe?</div>"
+        "<div>Besprechungs-ID: 384 700 317 795</div>"
+        "<div>Kennung: SecretPass123</div></body></html>"
+    )
+    cleaned_ms = extract_calendar_agenda(ms_html)
+    assert cleaned_ms == "Review Kubernetes Ingress & ArgoCD Sync für Acme GmbH"
+    assert "SecretPass123" not in cleaned_ms
+    assert "color: red" not in cleaned_ms
+
+    # 3. Pure Teams boilerplate without human agenda returns None
+    pure_boilerplate = (
+        "________________________________________________________________________________\n"
+        "Microsoft Teams\nJetzt an der Besprechung teilnehmen\n"
+        "Besprechungs-ID: 384 700 317 795\nKennung: AbC123\n"
+    )
+    assert extract_calendar_agenda(pure_boilerplate) is None
+
+    # 4. Real PostgreSQL round-trip: calendar sync persists agenda and ASR prompt injects it
+    now = datetime.now(UTC)
+    start_iso = (now + timedelta(minutes=20)).isoformat()
+    end_iso = (now + timedelta(minutes=80)).isoformat()
+    with Session(database) as db:
+        conn = CalendarConnection(
+            owner_sub="sub-agenda",
+            owner_email="alice@example.com",
+            provider="google",
+            account_email="alice@example.com",
+            encrypted_refresh_token="fixture-encrypted-refresh",
+        )
+        db.add(conn)
+        db.flush()
+        snap = snapshot_connection(conn)
+        raw_google = _parse_google_items(
+            snap,
+            [
+                {
+                    "id": "evt-agenda-google",
+                    "iCalUID": "uid-agenda-google",
+                    "status": "confirmed",
+                    "summary": "Architektur-Sync",
+                    "description": google_desc,
+                    "start": {"dateTime": start_iso},
+                    "end": {"dateTime": end_iso},
+                    "hangoutLink": "https://meet.google.com/abc-defg-hij",
+                    "organizer": {"email": "alice@example.com", "displayName": "Alice"},
+                    "attendees": [
+                        {
+                            "email": "bob@example.com",
+                            "displayName": "Bob",
+                            "responseStatus": "accepted",
+                        }
+                    ],
+                }
+            ],
+        )
+        assert raw_google[0]["agenda"] == cleaned_google
+        synced = apply_synced_events(db, conn, raw_google, snap, None, now)
+        db.flush()
+        rec = db.get(Recording, synced[0].recording_id)
+        assert rec is not None
+        assert rec.protocol_meta.get("calendar_agenda") == cleaned_google
+
+        # Also verify Microsoft parser extracts cleaned agenda from HTML body
+        ms_snap = snapshot_connection(
+            CalendarConnection(
+                owner_sub="sub-agenda",
+                owner_email="alice@example.com",
+                provider="microsoft",
+                account_email="alice@example.com",
+                encrypted_refresh_token="fixture-encrypted-refresh",
+            )
+        )
+        raw_ms = _parse_microsoft_items(
+            ms_snap,
+            [
+                {
+                    "id": "evt-agenda-ms",
+                    "iCalUId": "uid-agenda-ms",
+                    "isCancelled": False,
+                    "subject": "Infra Sync",
+                    "body": {"contentType": "html", "content": ms_html},
+                    "onlineMeeting": {
+                        "joinUrl": (
+                            "https://teams.microsoft.com/meet/3847003177954612"
+                            "?p=T8DtDg8zWTJkU6QRZP"
+                        )
+                    },
+                    "start": {"dateTime": start_iso.replace("+00:00", ""), "timeZone": "UTC"},
+                    "end": {"dateTime": end_iso.replace("+00:00", ""), "timeZone": "UTC"},
+                    "organizer": {
+                        "emailAddress": {"address": "alice@example.com", "name": "Alice"}
+                    },
+                    "attendees": [
+                        {
+                            "emailAddress": {"address": "bob@example.com", "name": "Bob"},
+                            "status": {"response": "accepted"},
+                        }
+                    ],
+                }
+            ],
+        )
+        assert raw_ms[0]["agenda"] == cleaned_ms
+
+        # Build ASR context prompt and verify Agenda + Prior context fit cleanly within 600 chars
+        att = Attempt(
+            recording_id=rec.id,
+            credential_hash="h" * 64,
+            credential_expires_at=now + timedelta(hours=1),
+        )
+        db.add(att)
+        db.flush()
+        stream = AudioStream(
+            attempt_id=att.id,
+            stream_id=uuid.uuid4(),
+            epoch=uuid.uuid4(),
+            contract={"provider_source_id": "meet-rcv-1", "participant_name": "Alice"},
+        )
+        db.add(stream)
+        db.flush()
+        prev_job = AsrJob(
+            id=str(uuid.uuid4()),
+            stream_id=stream.id,
+            start_sample=0,
+            end_sample=32000,
+            core_start=0,
+            core_end=32000,
+            status="completed",
+            binding=dict(stream.contract),
+        )
+        cur_job = AsrJob(
+            id=str(uuid.uuid4()),
+            stream_id=stream.id,
+            start_sample=32000,
+            end_sample=64000,
+            core_start=32000,
+            core_end=64000,
+            status="processing",
+            binding=dict(stream.contract),
+        )
+        db.add_all([prev_job, cur_job])
+        db.flush()
+        db.add(
+            TranscriptSegment(
+                id=prev_job.id,
+                result={
+                    "id": prev_job.id,
+                    "confidence": 0.91,
+                    "text": "Wir schauen zuerst auf die Firewall-Regeln.",
+                },
+            )
+        )
+        db.commit()
+
+        prompt = build_asr_context_prompt(db, cur_job, stream, get_settings())
+        assert prompt is not None
+        assert len(prompt) <= 600
+        assert "Thema: Architektur-Sync" in prompt
+        assert "Agenda: Migration von FireHOL auf nftables" in prompt
+        assert "Vorheriger Kontext: Wir schauen zuerst auf die Firewall-Regeln." in prompt

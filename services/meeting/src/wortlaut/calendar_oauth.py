@@ -34,7 +34,11 @@ from wortlaut.models import (
 )
 from wortlaut.oidc import Principal
 from wortlaut.settings import derive_subkey, get_settings
-from wortlaut.validation import normalize_meeting_url, unwrap_conference_redirect
+from wortlaut.validation import (
+    extract_calendar_agenda,
+    normalize_meeting_url,
+    unwrap_conference_redirect,
+)
 
 CalendarOAuthProvider = Literal["google", "microsoft"]
 
@@ -683,11 +687,15 @@ def _parse_google_items(
             }
         )
         title = " ".join(str(item.get("summary") or "").split())[:200] or None
+        agenda = extract_calendar_agenda(
+            item.get("description") if isinstance(item.get("description"), str) else None
+        )
         parsed.append(
             {
                 "external_event_id": ext_id[:512],
                 "ical_uid": str(item.get("iCalUID") or "")[:512] or None,
                 "title": title,
+                "agenda": agenda,
                 "starts_at": starts_at,
                 "ends_at": ends_at,
                 "organizer_email": org_email,
@@ -794,11 +802,22 @@ def _parse_microsoft_items(
             }
         )
         title = " ".join(str(item.get("subject") or "").split())[:200] or None
+        raw_ms_desc = (
+            body.get("content")
+            if isinstance(body.get("content"), str) and body.get("content").strip()
+            else (
+                item.get("bodyPreview")
+                if isinstance(item.get("bodyPreview"), str)
+                else None
+            )
+        )
+        agenda = extract_calendar_agenda(raw_ms_desc)
         parsed.append(
             {
                 "external_event_id": ext_id[:512],
                 "ical_uid": str(item.get("iCalUId") or "")[:512] or None,
                 "title": title,
+                "agenda": agenda,
                 "starts_at": starts_at,
                 "ends_at": ends_at,
                 "organizer_email": org_email,
@@ -818,6 +837,7 @@ def _merge_recording_attendees(
     recording: Recording,
     emails: list[str] | set[str],
     names: list[str] | set[str] | None = None,
+    agenda: str | None = None,
 ) -> None:
     clean = {str(e).strip().lower() for e in emails if e and "@" in str(e)}
     clean_names = {
@@ -825,7 +845,12 @@ def _merge_recording_attendees(
         for n in (names or ())
         if isinstance(n, str) and (cn := " ".join(n.split())[:80]) and "@" not in cn
     }
-    if not clean and not clean_names:
+    clean_agenda = (
+        " ".join(agenda.split())[:240]
+        if isinstance(agenda, str) and agenda.strip()
+        else ""
+    )
+    if not clean and not clean_names and not clean_agenda:
         return
     meta = dict(recording.protocol_meta or {})
     changed = False
@@ -856,6 +881,9 @@ def _merge_recording_attendees(
         if merged_names != meta.get("attendee_names"):
             meta["attendee_names"] = merged_names
             changed = True
+    if clean_agenda and meta.get("calendar_agenda") != clean_agenda:
+        meta["calendar_agenda"] = clean_agenda
+        changed = True
     if changed:
         recording.protocol_meta = meta
 
@@ -892,6 +920,7 @@ def _reconcile_synced_event_recording(
     now: datetime,
     attendee_emails: list[str] | None = None,
     attendee_names: list[str] | None = None,
+    agenda: str | None = None,
 ) -> Recording | None:
     recording = db.get(Recording, ev.recording_id) if ev.recording_id else None
     if recording is not None and recording.metadata_deleted_at is not None:
@@ -925,7 +954,7 @@ def _reconcile_synced_event_recording(
 
     if ev.ends_at <= now:
         if recording is not None:
-            _merge_recording_attendees(recording, all_emails, all_names)
+            _merge_recording_attendees(recording, all_emails, all_names, agenda=agenda)
         return recording
 
     canonical = _find_canonical_meeting_recording(db, ev)
@@ -939,7 +968,10 @@ def _reconcile_synced_event_recording(
     ):
         prev_emails = list((recording.protocol_meta or {}).get("attendee_emails") or [])
         prev_names = list((recording.protocol_meta or {}).get("attendee_names") or [])
-        _merge_recording_attendees(canonical, prev_emails, prev_names)
+        prev_agenda = (recording.protocol_meta or {}).get("calendar_agenda")
+        _merge_recording_attendees(
+            canonical, prev_emails, prev_names, agenda=agenda or prev_agenda
+        )
         ev.recording_id = canonical.id
         other_refs = db.scalar(
             select(CalendarSyncedEvent.id)
@@ -977,6 +1009,8 @@ def _reconcile_synced_event_recording(
                     init_meta["attendee_emails"] = sorted(all_emails)
                 if all_names:
                     init_meta["attendee_names"] = sorted(all_names)[:32]
+                if agenda:
+                    init_meta["calendar_agenda"] = agenda[:240]
                 recording = Recording(
                     idempotency_key=idemp_key,
                     request_digest=idemp_hash,
@@ -993,7 +1027,7 @@ def _reconcile_synced_event_recording(
                 db.flush()
         ev.recording_id = recording.id
 
-    _merge_recording_attendees(recording, all_emails, all_names)
+    _merge_recording_attendees(recording, all_emails, all_names, agenda=agenda)
 
     if (
         (
@@ -1110,14 +1144,16 @@ def apply_synced_events(
             ev.updated_at = now
         event_attendees = item.get("attendee_emails") or []
         event_attendee_names = item.get("attendee_names") or []
+        event_agenda = item.get("agenda")
         _reconcile_synced_event_recording(
             db,
             ev,
             now,
             attendee_emails=event_attendees,
             attendee_names=event_attendee_names,
+            agenda=event_agenda,
         )
-        if event_attendees or event_attendee_names:
+        if event_attendees or event_attendee_names or event_agenda:
             matching_recs = db.scalars(
                 select(Recording)
                 .where(
@@ -1130,7 +1166,9 @@ def apply_synced_events(
                 .with_for_update(key_share=True)
             ).all()
             for mrec in matching_recs:
-                _merge_recording_attendees(mrec, event_attendees, event_attendee_names)
+                _merge_recording_attendees(
+                    mrec, event_attendees, event_attendee_names, agenda=event_agenda
+                )
         synced.append(ev)
 
     # Mark previously synced future events in this window that disappeared as cancelled

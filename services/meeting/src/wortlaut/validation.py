@@ -1,3 +1,4 @@
+import html
 import re
 from typing import Literal
 from urllib.parse import parse_qs, unquote, urlencode, urlsplit, urlunsplit
@@ -133,3 +134,99 @@ def validate_webex_url(url):
     if len(url) > 2048:
         raise ValueError("Meeting URL is too long")
     return url
+
+
+MAX_CALENDAR_AGENDA_LEN = 240
+
+_HTML_SKIP_BLOCK_RE = re.compile(r"<(?:style|script)\b[^>]*>.*?</(?:style|script)>", re.I | re.S)
+_HTML_BREAK_TAG_RE = re.compile(r"</?(?:br|p|div|li|tr|h[1-6]|section|article|hr)\b[^>]*>", re.I)
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+_AGENDA_SECTION_CUT_RE = re.compile(
+    r"(?:"
+    r"-::~:~::"
+    r"|_{10,}"
+    r"|\bmicrosoft\s+teams\b"
+    r"|\bjoin\s+the\s+meeting\s+now\b"
+    r"|\bjetzt\s+an\s+der\s+besprechung\s+teilnehmen\b"
+    r"|\bjoin\s+with\s+google\s+meet\b"
+    r"|\bmit\s+google\s+meet\s+teilnehmen\b"
+    r"|\bjoin\s+zoom\s+meeting\b"
+    r"|\bzoom-?meeting\s+beitreten\b"
+    r"|\bjoin\s+webex\b"
+    r"|\bwebex-?meeting\s+beitreten\b"
+    r"|\bplease\s+do\s+not\s+edit\s+this\s+section\b"
+    r"|\bbitte\s+bearbeiten\s+sie\s+diesen\s+abschnitt\s+nicht\b"
+    r"|---\s*wortlaut\b"
+    r"|\bwortlaut-?protokoll\b"
+    r"|\bwortlaut\s+protocol\b"
+    r")",
+    re.I,
+)
+_AGENDA_CREDENTIAL_LINE_RE = re.compile(
+    r"(?:"
+    r"\b(?:passcode|passwort|password|kenncode|kennung|access\s+code|zugangscode)\b"
+    r"|\b(?:meeting[\s-]?id|besprechungs-?id|meeting\s+number|meeting-?nummer)\b"
+    r"|\b(?:pin|einwahl|dial[\s-]?in|one\s+tap\s+mobile|schnelleinwahl)\s*:?"
+    r"|\b(?:benötigen\s+sie\s+hilfe|need\s+help|besprechungsoptionen|meeting\s+options)\b"
+    r"|\b(?:für\s+organisatoren|for\s+organizers|more\s+phone\s+numbers|weitere\s+telefonnummern)\b"
+    r"|\b(?:per\s+telefon\s+teilnehmen|join\s+by\s+phone|telefonisch\s+einwählen)\b"
+    r")",
+    re.I,
+)
+_AGENDA_URL_RE = re.compile(r"(?:https?://|www\.|mailto:|tel:)\S+", re.I)
+_AGENDA_EMAIL_RE = re.compile(r"\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b")
+_AGENDA_PHONE_RE = re.compile(r"(?<!\w)(?:\+\d{1,3}[\s().-]*)?(?:\d[\s().-]*){7,}\d(?!\w)")
+_AGENDA_LEADING_NOISE_RE = re.compile(r"^[\s\-*•·=_~|>#:]+")
+
+
+def extract_calendar_agenda(
+    raw_text: str | None, *, max_chars: int = MAX_CALENDAR_AGENDA_LEN
+) -> str | None:
+    """Extract clean agenda context from a calendar description without URLs or credentials."""
+    if not raw_text or not isinstance(raw_text, str):
+        return None
+    text = _HTML_SKIP_BLOCK_RE.sub(" ", raw_text)
+    text = _HTML_BREAK_TAG_RE.sub("\n", text)
+    text = _HTML_TAG_RE.sub(" ", text)
+    text = html.unescape(text).replace("\r\n", "\n").replace("\r", "\n")
+
+    kept: list[str] = []
+    seen: set[str] = set()
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if _AGENDA_SECTION_CUT_RE.search(line):
+            break
+        if _AGENDA_CREDENTIAL_LINE_RE.search(line):
+            continue
+        line = _AGENDA_URL_RE.sub(" ", line)
+        line = _AGENDA_EMAIL_RE.sub(" ", line)
+        line = _AGENDA_PHONE_RE.sub(" ", line)
+        line = _AGENDA_LEADING_NOISE_RE.sub("", line)
+        line = " ".join(line.split()).strip(" |·;-")
+        if len(line) < 3 or not any(ch.isalpha() for ch in line):
+            continue
+        if line.rstrip(":").strip().lower() in (
+            "agenda",
+            "tagesordnung",
+            "themen",
+            "topics",
+            "beschreibung",
+            "description",
+        ):
+            continue
+        low = line.lower()
+        if low in seen:
+            continue
+        seen.add(low)
+        kept.append(line)
+        if sum(len(item) + 3 for item in kept) >= max_chars + 40:
+            break
+    if not kept:
+        return None
+    joined = " · ".join(kept)
+    if len(joined) > max_chars:
+        cut = joined[:max_chars].rsplit(" ", 1)[0].rstrip(" ·,;:-")
+        joined = cut if len(cut) >= max_chars // 2 else joined[:max_chars].rstrip(" ·,;:-")
+    return joined or None

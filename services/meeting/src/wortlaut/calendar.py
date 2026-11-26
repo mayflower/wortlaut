@@ -21,7 +21,11 @@ from sqlalchemy.orm import Session
 from wortlaut.controller import request_cancellation
 from wortlaut.models import CalendarEntry, MailCursor, MailImport, Recording
 from wortlaut.settings import get_settings
-from wortlaut.validation import normalize_meeting_url, unwrap_conference_redirect
+from wortlaut.validation import (
+    extract_calendar_agenda,
+    normalize_meeting_url,
+    unwrap_conference_redirect,
+)
 
 MAIL_LOCK = 749836125
 
@@ -356,6 +360,10 @@ def import_event(
     provider, link = normalize_meeting_url(link)
     title = " ".join(str(event.get("SUMMARY", "")).split())[:200] or subject or None
     attendee_emails = event_attendee_emails(event)
+    raw_desc = event.get("DESCRIPTION")
+    agenda = extract_calendar_agenda(
+        str(raw_desc) if raw_desc is not None and str(raw_desc).strip() else mail_text
+    )
     entry.status = "accepted"
     db.flush()
     if recording:
@@ -386,14 +394,21 @@ def import_event(
             recording.provider = provider
             recording.title = title
             recording.owner_email = recording.owner_email or organizer
-            if attendee_emails:
+            if attendee_emails or agenda:
                 meta = dict(recording.protocol_meta or {})
-                merged = set(meta.get("attendee_emails") or []) | set(attendee_emails)
-                meta["attendee_emails"] = sorted(merged)
+                if attendee_emails:
+                    merged = set(meta.get("attendee_emails") or []) | set(attendee_emails)
+                    meta["attendee_emails"] = sorted(merged)
+                if agenda:
+                    meta["calendar_agenda"] = agenda
                 recording.protocol_meta = meta
             recording.calendar_conflict = False
     else:
-        meta = {"attendee_emails": attendee_emails} if attendee_emails else {}
+        meta = {}
+        if attendee_emails:
+            meta["attendee_emails"] = attendee_emails
+        if agenda:
+            meta["calendar_agenda"] = agenda
         recording = Recording(
             calendar_entry_id=entry.id,
             recurrence_key="",

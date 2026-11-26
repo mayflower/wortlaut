@@ -902,3 +902,68 @@ def test_all_30_qwen_asr_languages_and_per_request_language_switching(monkeypatc
     assert res_auto_de.json()["language"] == "German"
     assert observed["jp_token_allowed"] is False
     assert observed["greek_token_allowed"] is False
+
+
+def test_normalize_audio_rms_levels_quiet_speech_without_boosting_silence_or_clipping(monkeypatch):
+    service = load_service("rms_normalize_fixture")
+    monkeypatch.setitem(sys.modules, "torch", SimpleNamespace(inference_mode=nullcontext))
+    t = np.linspace(0, 1.0, 16000, endpoint=False, dtype=np.float32)
+
+    # 1. Pure silence and ultra-low digital floor stay untouched (no noise boost)
+    zeros = np.zeros(16000, dtype=np.float32)
+    assert np.array_equal(service.normalize_audio_rms(zeros), zeros)
+    floor_noise = np.sin(2 * np.pi * 200 * t).astype(np.float32) * 0.001
+    assert np.allclose(service.normalize_audio_rms(floor_noise), floor_noise)
+
+    # 2. Quiet speech (-32 dBFS, ~0.025 RMS) is lifted cleanly to ~0.1 RMS (-20 dBFS)
+    quiet = np.sin(2 * np.pi * 440 * t).astype(np.float32) * (0.025 * np.sqrt(2))
+    leveled_quiet = service.normalize_audio_rms(quiet)
+    rms_quiet = float(np.sqrt(np.mean(leveled_quiet * leveled_quiet)))
+    assert abs(rms_quiet - service.TARGET_RMS) < 0.005
+    assert float(np.max(np.abs(leveled_quiet))) <= service.PEAK_CEILING + 1e-5
+
+    # 3. Very quiet speech (-46 dBFS, ~0.005 RMS) is capped at MAX_NORMALIZE_GAIN (+15 dB)
+    very_quiet = np.sin(2 * np.pi * 440 * t).astype(np.float32) * (0.005 * np.sqrt(2))
+    leveled_vq = service.normalize_audio_rms(very_quiet)
+    effective_gain = float(np.max(np.abs(leveled_vq)) / np.max(np.abs(very_quiet)))
+    assert abs(effective_gain - service.MAX_NORMALIZE_GAIN) < 0.05
+
+    # 4. Quiet speech with a loud transient spike respects PEAK_CEILING (-1 dBFS)
+    spiky = quiet.copy()
+    spiky[100] = 0.5
+    leveled_spiky = service.normalize_audio_rms(spiky)
+    assert float(np.max(np.abs(leveled_spiky))) <= service.PEAK_CEILING + 1e-5
+
+    # 5. Well-leveled speech (0.18 RMS, peak < PEAK_CEILING) stays untouched
+    normal = np.sin(2 * np.pi * 440 * t).astype(np.float32) * (0.18 * np.sqrt(2))
+    assert np.allclose(service.normalize_audio_rms(normal), normal)
+
+    # 6. Long segment with 75% silence + 25% quiet speech uses active-sample RMS
+    padded_speech = np.concatenate(
+        [np.zeros(24000, dtype=np.float32), quiet, np.zeros(24000, dtype=np.float32)]
+    )
+    leveled_sparse = service.normalize_audio_rms(padded_speech)
+    speech_slice = leveled_sparse[24000:40000]
+    sparse_rms = float(np.sqrt(np.mean(speech_slice * speech_slice)))
+    assert abs(sparse_rms - service.TARGET_RMS) < 0.005
+    assert np.all(leveled_sparse[:24000] == 0.0)
+
+    # 7. QwenASR.transcribe normalizes quiet audio before adding exact-zero boundary padding
+    captured: list[np.ndarray] = []
+    tokens = ["language", "ĠGerman", "<asr_text>", "Hallo", "<|im_end|>"]
+    asr, _ = fixture_asr(service, tokens, [1.0] * 5, "Hallo", "German")
+    orig_req = asr.processor.apply_transcription_request
+
+    def spy_req(audio):
+        captured.append(np.asarray(audio, dtype=np.float32))
+        return orig_req(audio)
+
+    asr.processor.apply_transcription_request = spy_req
+    asr.transcribe(quiet)
+    assert len(captured) == 1
+    sent = captured[0]
+    assert len(sent) == len(quiet) + 2 * service.PAD_SAMPLES
+    assert np.all(sent[: service.PAD_SAMPLES] == 0.0)
+    assert np.all(sent[-service.PAD_SAMPLES :] == 0.0)
+    inner = sent[service.PAD_SAMPLES : -service.PAD_SAMPLES]
+    assert abs(float(np.sqrt(np.mean(inner * inner))) - service.TARGET_RMS) < 0.005

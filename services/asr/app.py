@@ -53,6 +53,10 @@ MODEL_REPO = os.environ.get("WORTLAUT_ASR_MODEL_REPO", "").strip() or DEFAULT_MO
 MODEL_REVISION = os.environ.get("WORTLAUT_ASR_MODEL_REVISION", "").strip() or DEFAULT_MODEL_REVISION
 RATE = 16000
 PAD_SAMPLES = int(0.3 * RATE)
+TARGET_RMS = 0.1  # -20 dBFS target speech level for quiet microphones
+MIN_ACTIVE_RMS = 0.002  # -54 dBFS floor; never amplify silence or digital comfort noise
+MAX_NORMALIZE_GAIN = 5.623413251903491  # +15 dB gain ceiling
+PEAK_CEILING = 0.8912509381337456  # -1 dBFS peak limit to prevent clipping
 MIN_SPEECH_LANG_PROB = 0.02
 SHORT_CLIP_MAX_SECONDS = 2.5
 SHORT_CLIP_PRIMARY_PRIOR_NATS = 1.5
@@ -116,6 +120,40 @@ def parse_allowed_languages(raw: str | None) -> tuple[str, ...] | None:
         if canon not in resolved:
             resolved.append(canon)
     return tuple(resolved) or None
+
+
+def normalize_audio_rms(audio):
+    """Lift quiet speech toward -20 dBFS RMS with +15 dB gain cap and -1 dBFS ceiling.
+
+    Uses active-sample RMS (excluding silence below MIN_ACTIVE_RMS) so pauses inside
+    longer segments do not over-amplify speech, and leaves silence or well-leveled
+    speech untouched.
+    """
+    import numpy as np
+
+    if len(audio) == 0:
+        return audio
+    arr = np.asarray(audio, dtype=np.float32)
+    abs_audio = np.abs(arr)
+    peak = float(np.max(abs_audio))
+    if not math.isfinite(peak) or peak < MIN_ACTIVE_RMS:
+        return arr
+    active = arr[abs_audio >= MIN_ACTIVE_RMS]
+    if len(active) >= max(1, len(arr) // 100):
+        rms = float(np.sqrt(np.mean(active * active, dtype=np.float64)))
+    else:
+        rms = float(np.sqrt(np.mean(arr * arr, dtype=np.float64)))
+    if not math.isfinite(rms) or rms < MIN_ACTIVE_RMS:
+        return arr
+    if rms < TARGET_RMS:
+        gain = min(TARGET_RMS / rms, MAX_NORMALIZE_GAIN, PEAK_CEILING / peak)
+    elif peak > PEAK_CEILING:
+        gain = PEAK_CEILING / peak
+    else:
+        return arr
+    if abs(gain - 1.0) < 0.02:
+        return arr
+    return np.clip(arr * gain, -1.0, 1.0).astype(np.float32, copy=False)
 
 
 def apply_language_step_gate(
@@ -377,9 +415,12 @@ class QwenASR:
         budget = PREFIX_TOKENS + math.ceil(duration * TOKENS_PER_SECOND)
         clean_prompt = " ".join((context_prompt or "").split())[:600] or None
         allowed_ids, kin_ids, forbidden_ids = self._resolve_gate_params(allowed_languages)
+        # Gently normalize quiet microphone segments before boundary padding so
+        # synthetic silence stays exact zero and never skews active-speech RMS.
+        leveled = normalize_audio_rms(audio)
         # 0.3 s of silence on each boundary prevents Qwen3-ASR's Conv2d audio
         # frontend from clipping segment-initial or segment-final words.
-        padded = np.pad(audio, (PAD_SAMPLES, PAD_SAMPLES)) if len(audio) else audio
+        padded = np.pad(leveled, (PAD_SAMPLES, PAD_SAMPLES)) if len(leveled) else leveled
         if hasattr(self.processor, "apply_chat_template") and callable(self.processor):
             messages = []
             if clean_prompt is not None:

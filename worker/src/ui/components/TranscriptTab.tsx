@@ -44,6 +44,7 @@ import {
   upsertGlossaryEntries,
 } from '../api';
 import { KEYFRAME_STRINGS, localizeAttributionStatus, useI18n } from '../i18n';
+import { extractGlossarySuggestions } from '../glossaryLearning';
 import type {
   ParticipationState,
   PauseWindow,
@@ -103,6 +104,7 @@ export interface TranscriptTabProps {
   onSelectedSourceFilterChange: (sourceId: string) => void;
   onProtocolUpdated?: () => void;
   onOpenGlossary?: () => void;
+  onGlossaryUpdated?: () => void;
 }
 
 interface TurnParagraph {
@@ -297,6 +299,7 @@ export function TranscriptTab({
   onSelectedSourceFilterChange,
   onProtocolUpdated,
   onOpenGlossary,
+  onGlossaryUpdated,
 }: TranscriptTabProps) {
   const { lang, tr } = useI18n();
   const kStr = KEYFRAME_STRINGS[lang];
@@ -354,6 +357,12 @@ export function TranscriptTab({
   const [termSavedNotice, setTermSavedNotice] = useState<string | null>(null);
   const [savingTerm, setSavingTerm] = useState(false);
   const savingTermRef = useRef(false);
+  const [learnedSuggestions, setLearnedSuggestions] = useState<
+    Array<{ from: string; to: string; status: 'pending' | 'saving' | 'saved' }>
+  >([]);
+  const [learnedAnchorTurnId, setLearnedAnchorTurnId] = useState<string | null>(
+    null
+  );
 
   // Screen-share keyframe blob URLs, preview modal & operator deletion state
   const [keyframeBlobUrls, setKeyframeBlobUrls] = useState<
@@ -377,6 +386,8 @@ export function TranscriptTab({
     setEditingSummary(false);
     setSummaryError(null);
     setTermSavedNotice(null);
+    setLearnedSuggestions([]);
+    setLearnedAnchorTurnId(null);
     setEditingTurnId(null);
     setPreviewKeyframe(null);
     setConfirmDeleteKeyframe(null);
@@ -981,13 +992,26 @@ export function TranscriptTab({
         };
       }
       const joinedOriginal = turn.paragraphs.map((p) => p.text).join(' ');
-      if (editTurnText.trim() && editTurnText.trim() !== joinedOriginal) {
+      const trimmedEdit = editTurnText.trim();
+      if (trimmedEdit && trimmedEdit !== joinedOriginal) {
         payload.segment_edits = {
-          [turn.id]: editTurnText.trim(),
+          [turn.id]: trimmedEdit,
         };
       }
       if (payload.speaker_overrides || payload.segment_edits) {
         await updateRecordingProtocol(token, recordingId, payload);
+        if (payload.segment_edits) {
+          const detected = extractGlossarySuggestions(
+            joinedOriginal,
+            trimmedEdit
+          ).filter((s) => termReplacements[s.from] !== s.to);
+          if (detected.length > 0) {
+            setLearnedSuggestions(
+              detected.map((s) => ({ ...s, status: 'pending' as const }))
+            );
+            setLearnedAnchorTurnId(turn.id);
+          }
+        }
         onProtocolUpdated?.();
       }
       setEditingTurnId(null);
@@ -1020,6 +1044,7 @@ export function TranscriptTab({
             `Saved “${cleanFrom} → ${cleanTo}” permanently to Glossary.`
           )
         );
+        onGlossaryUpdated?.();
       } else {
         await updateRecordingProtocol(token, recordingId, {
           term_replacements: {
@@ -1029,6 +1054,84 @@ export function TranscriptTab({
       }
       setTermFrom('');
       setTermTo('');
+      onProtocolUpdated?.();
+    } catch (err) {
+      setSummaryError(err instanceof Error ? err.message : String(err));
+    } finally {
+      savingTermRef.current = false;
+      setSavingTerm(false);
+    }
+  };
+
+  const handleAcceptLearnedSuggestion = async (
+    fromTerm: string,
+    toTerm: string
+  ) => {
+    if (!token) return;
+    setSummaryError(null);
+    setLearnedSuggestions((prev) =>
+      prev.map((item) =>
+        item.from === fromTerm && item.to === toTerm
+          ? { ...item, status: 'saving' }
+          : item
+      )
+    );
+    try {
+      await upsertGlossaryEntries(token, {
+        scope: 'auto',
+        term: toTerm,
+        aliases: [fromTerm],
+      });
+      setLearnedSuggestions((prev) =>
+        prev.map((item) =>
+          item.from === fromTerm && item.to === toTerm
+            ? { ...item, status: 'saved' }
+            : item
+        )
+      );
+      onGlossaryUpdated?.();
+      onProtocolUpdated?.();
+    } catch (err) {
+      setLearnedSuggestions((prev) =>
+        prev.map((item) =>
+          item.from === fromTerm && item.to === toTerm
+            ? { ...item, status: 'pending' }
+            : item
+        )
+      );
+      setSummaryError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const handlePromoteTermReplacement = async (
+    fromTerm: string,
+    toTerm: string
+  ) => {
+    if (
+      !token ||
+      savingTermRef.current ||
+      fromTerm.length < 2 ||
+      fromTerm === toTerm
+    ) {
+      return;
+    }
+    savingTermRef.current = true;
+    setSummaryError(null);
+    setTermSavedNotice(null);
+    setSavingTerm(true);
+    try {
+      await upsertGlossaryEntries(token, {
+        scope: 'auto',
+        term: toTerm,
+        aliases: [fromTerm],
+      });
+      setTermSavedNotice(
+        tr(
+          `„${fromTerm} → ${toTerm}“ dauerhaft im Glossar gespeichert.`,
+          `Saved “${fromTerm} → ${toTerm}” permanently to Glossary.`
+        )
+      );
+      onGlossaryUpdated?.();
       onProtocolUpdated?.();
     } catch (err) {
       setSummaryError(err instanceof Error ? err.message : String(err));
@@ -1066,6 +1169,69 @@ export function TranscriptTab({
   const activeTermEntries = Object.entries(termReplacements);
   const instance = getInstanceInfo();
   const llmSummaryEnabled = Boolean(instance.llmSummaryEnabled);
+  const hasVisibleLearnedAnchor = Boolean(
+    learnedAnchorTurnId &&
+      groupedTurns.some((turn) => turn.id === learnedAnchorTurnId)
+  );
+
+  const renderGlossaryLearnBar = (className = '') => (
+    <div
+      data-testid="glossary-learn-bar"
+      className={`rounded-lg border border-[var(--color-border)] bg-[var(--color-background-surface)] px-3 py-2 ${className}`.trim()}
+    >
+      <HStack justify="between" vAlign="center" gap={2} wrap="wrap">
+        <HStack gap={2} vAlign="center" wrap="wrap">
+          <BookOpen className="h-3.5 w-3.5 shrink-0 wl-text-accent" />
+          <Text type="supporting" color="secondary">
+            {tr(
+              'Für künftige Meetings ins Glossar übernehmen?',
+              'Save correction to Glossary for future meetings?'
+            )}
+          </Text>
+          {learnedSuggestions.map((item) => {
+            const isSaved = item.status === 'saved';
+            const isSaving = item.status === 'saving';
+            return (
+              <button
+                key={`${item.from}::${item.to}`}
+                type="button"
+                disabled={isSaved || isSaving}
+                onClick={() =>
+                  handleAcceptLearnedSuggestion(item.from, item.to)
+                }
+                className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[12px] transition-colors ${
+                  isSaved
+                    ? 'border-[var(--color-border)] bg-[var(--color-background-muted)] text-[var(--color-text-secondary)] cursor-default'
+                    : 'border-[var(--color-border)] bg-[var(--color-background-muted)] text-[var(--color-text-primary)] hover:border-[var(--wl-accent)] cursor-pointer'
+                }`}
+              >
+                {isSaved ? (
+                  <Check className="h-3 w-3 wl-text-accent" />
+                ) : (
+                  <Plus className="h-3 w-3 wl-text-accent" />
+                )}
+                <span className="line-through text-[var(--color-text-secondary)]">
+                  {item.from}
+                </span>
+                <span className="text-[var(--color-text-secondary)]">→</span>
+                <strong className="font-semibold">{item.to}</strong>
+              </button>
+            );
+          })}
+        </HStack>
+        <IconButton
+          variant="ghost"
+          size="sm"
+          label={tr('Vorschlag schließen', 'Dismiss suggestion')}
+          icon={<X className="h-3.5 w-3.5" />}
+          onClick={() => {
+            setLearnedSuggestions([]);
+            setLearnedAnchorTurnId(null);
+          }}
+        />
+      </HStack>
+    </div>
+  );
 
   return (
     <VStack gap={4}>
@@ -1812,6 +1978,26 @@ export function TranscriptTab({
                       <strong className="font-semibold text-[var(--color-text-primary)]">
                         {toTerm}
                       </strong>
+                      {fromTerm.length >= 2 && fromTerm !== toTerm && (
+                        <button
+                          type="button"
+                          disabled={savingTerm}
+                          onClick={() =>
+                            handlePromoteTermReplacement(fromTerm, toTerm)
+                          }
+                          className="ml-0.5 text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] cursor-pointer disabled:opacity-50"
+                          aria-label={tr(
+                            `${fromTerm} → ${toTerm} dauerhaft ins Glossar übernehmen`,
+                            `Save ${fromTerm} → ${toTerm} permanently to Glossary`
+                          )}
+                          title={tr(
+                            'Dauerhaft ins Glossar übernehmen',
+                            'Save permanently to Glossary'
+                          )}
+                        >
+                          <BookOpen className="h-3 w-3" />
+                        </button>
+                      )}
                       <button
                         type="button"
                         onClick={() => handleRemoveTermReplacement(fromTerm)}
@@ -1831,6 +2017,12 @@ export function TranscriptTab({
             </VStack>
           </div>
         )}
+
+        {/* Fallback Glossary Learning Bar when anchored turn is hidden by filters */}
+        {isOperator &&
+          learnedSuggestions.length > 0 &&
+          !hasVisibleLearnedAnchor &&
+          renderGlossaryLearnBar()}
       </VStack>
 
       {/* Editorial Transcript Stream */}
@@ -2199,6 +2391,12 @@ export function TranscriptTab({
                           ))}
                         </VStack>
                       )}
+
+                      {isOperator &&
+                        !isEditing &&
+                        learnedSuggestions.length > 0 &&
+                        learnedAnchorTurnId === turn.id &&
+                        renderGlossaryLearnBar('mt-2.5')}
                     </div>
                   </HStack>
                 </div>
