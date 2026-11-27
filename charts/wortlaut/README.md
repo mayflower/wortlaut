@@ -11,7 +11,8 @@ helm upgrade --install wortlaut ./charts/wortlaut \
   --namespace wortlaut --create-namespace \
   --set host=wortlaut.example.org \
   --set bundled.enabled=true \
-  --set asr.allowCpu=true
+  --set asr.backend=parakeet \
+  --set asr.device=cpu
 ```
 
 Retrieve the generated operator Bearer token to sign in at `https://wortlaut.example.org/ui`:
@@ -66,9 +67,13 @@ helm upgrade --install wortlaut ./charts/wortlaut \
 | `providers.enableZoom` | `true` | Enable Zoom Web Client capture |
 | `providers.enableWebexBrowser` | `true` | Enable Cisco Webex browser capture (or Guest Issuer when `WORTLAUT_WEBEX_SERVICE_TOKEN` is supplied) |
 | `keyframes.enabled` | `true` | Capture settled screen-share slide snapshots (`<= 1280×720` PNG; participant cameras never recorded) |
-| `asr.modelRepo` | `Qwen/Qwen3-ASR-1.7B-hf` | Hugging Face model ID loaded by `wortlaut-asr` |
-| `asr.languages` | `"*"` | Default ASR languages (`*` = all 30 languages, or e.g. `German,English`; switchable per recording) |
-| `asr.glossary` | `""` | Optional comma-separated domain vocabulary / acronyms passed to Qwen3-ASR |
+| `asr.backend` | `qwen3` | ASR backend: `qwen3` (Qwen3-ASR 1.7B, 30 languages) or `parakeet` (Parakeet TDT 0.6B v3 ONNX, 25 EU languages) |
+| `asr.device` | `auto` | Execution device: `auto` (GPU when available), `cuda`, `cpu`, or `mps` (when `parakeet` + `cpu`, automatically uses `images.asrCpu` and omits GPU limits) |
+| `asr.quantization` | `auto` | Precision/quantization: `auto` (`int8` for Parakeet/CPU, `fp32` for Parakeet/CUDA, `bfloat16` for Qwen3/CUDA, `float32` for Qwen3/CPU), `int8`, `fp32`, `bfloat16`, `float16`, `float32` |
+| `asr.modelRepo` | `""` | Optional Hugging Face model repo override (empty uses the backend's pinned default) |
+| `asr.modelRevision` | `""` | Optional Hugging Face commit/revision override (empty uses the backend's pinned default) |
+| `asr.languages` | `"*"` | Default ASR languages (`*` = all supported languages, or e.g. `German,English`; switchable per recording) |
+| `asr.glossary` | `""` | Optional comma-separated domain vocabulary / acronyms passed to Qwen3-ASR and RAG search |
 | `llmSummary.enabled` | `false` | Enable optional LLM executive summaries, decisions, action items & RAG query expansion (Ollama or OpenAI-compatible API) |
 | `llmSummary.openaiBaseUrl` | `""` | Optional OpenAI-compatible API base URL (e.g. `https://api.openai.com/v1` or local vLLM/LiteLLM); takes precedence over Ollama when set |
 | `llmSummary.openaiModel` | `gpt-4o-mini` | Model ID for the OpenAI-compatible chat completions API |

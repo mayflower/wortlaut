@@ -102,7 +102,7 @@ helm upgrade --install wortlaut oci://ghcr.io/mayflower/charts/wortlaut \
   --namespace wortlaut --create-namespace \
   --set host=wortlaut.local \
   --set bundled.enabled=true \
-  --set asr.gpuCount=0 --set asr.allowCpu=true
+  --set asr.backend=parakeet --set asr.device=cpu
 ```
 
 **Production cluster install** with external PostgreSQL, S3, GPU node scheduling, and OIDC SSO (full guide in [charts/wortlaut/README.md](charts/wortlaut/README.md) and [docs/configuration.md](docs/configuration.md)):
@@ -122,11 +122,16 @@ helm upgrade --install wortlaut oci://ghcr.io/mayflower/charts/wortlaut \
 
 ---
 
-## Speech-to-Text Model (Qwen3-ASR, 30 Languages)
+## Speech-to-Text Models (`Qwen3-ASR` & `Parakeet TDT v3`)
 
-The `wortlaut-asr` service ([services/asr/app.py](services/asr/app.py)) loads [`Qwen/Qwen3-ASR-1.7B-hf`](https://huggingface.co/Qwen/Qwen3-ASR-1.7B-hf) at a pinned revision through Hugging Face Transformers (`WORTLAUT_ASR_MODEL_REPO` and `WORTLAUT_ASR_MODEL_REVISION` override both). All **30 Qwen3-ASR languages** are enabled out of the box (`WORTLAUT_ASR_LANGUAGES=*`: Chinese, English, Cantonese, Arabic, German, French, Spanish, Portuguese, Indonesian, Italian, Korean, Russian, Thai, Vietnamese, Japanese, Turkish, Hindi, Malay, Dutch, Swedish, Danish, Finnish, Polish, Czech, Filipino, Persian, Greek, Hungarian, Macedonian, Romanian) and can be selected or switched per recording in the Web-UI, via `POST`/`PATCH /v1/recordings`, or via MCP. Operators can optionally set `WORTLAUT_ASR_LANGUAGES` (e.g. `German,English`) to define a narrower default for new recordings.
+The `wortlaut-asr` service ([services/asr/app.py](services/asr/app.py)) supports two switchable local ASR backends via `WORTLAUT_ASR_BACKEND` (`qwen3` or `parakeet`), `WORTLAUT_ASR_DEVICE` (`auto`, `cuda`, `cpu`, `mps`), and `WORTLAUT_ASR_QUANTIZATION` (`auto`, `int8`, `fp32`, `bfloat16`, `float16`, `float32`), each with a pinned Hugging Face revision (`WORTLAUT_ASR_MODEL_REPO` and `WORTLAUT_ASR_MODEL_REVISION` override both):
 
-The model returns no word timestamps, so each ASR job receives only its own disjoint audio span and transcript segments carry segment-level times. Word confidence is the mean probability of the generated tokens. Silence and noise produce an empty transcript; output that reaches the generation budget without an end marker is discarded as a decoder loop. Set `WORTLAUT_ASR_GLOSSARY="TermA, TermB"` (comma-separated or JSON array) on the meeting service to bias `Qwen3-ASR` system context prompts alongside meeting titles and confirmed participant names. Active meetings that run past their scheduled `ends_at` automatically extend in 15-minute increments up to `WORTLAUT_MAX_OVERTIME_SECONDS` (default `3600` = 60 minutes).
+| Backend (`WORTLAUT_ASR_BACKEND`) | Default Checkpoint | Languages | Best For |
+| :--- | :--- | :--- | :--- |
+| **`qwen3`** (Helm default, GPU image) | [`Qwen/Qwen3-ASR-1.7B-hf`](https://huggingface.co/Qwen/Qwen3-ASR-1.7B-hf) | **30 languages** (`*`, switchable per recording) | NVIDIA GPU clusters, glossary/context prompt biasing (`WORTLAUT_ASR_GLOSSARY`), non-European languages |
+| **`parakeet`** (Compose CPU default, GPU & slim multi-arch `wortlaut-asr-cpu` image) | [`istupakov/parakeet-tdt-0.6b-v3-onnx`](https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx) | **25 European languages** (auto-detected) | Fast CPU (`int8`, ~650 MB, amd64 & arm64) or ultra-fast GPU (`fp32`) inference with native word-level timestamps & log-prob confidence |
+
+`Qwen3-ASR` supports all **30 languages** (`WORTLAUT_ASR_LANGUAGES=*`: Chinese, English, Cantonese, Arabic, German, French, Spanish, Portuguese, Indonesian, Italian, Korean, Russian, Thai, Vietnamese, Japanese, Turkish, Hindi, Malay, Dutch, Swedish, Danish, Finnish, Polish, Czech, Filipino, Persian, Greek, Hungarian, Macedonian, Romanian) and system context prompts from `WORTLAUT_ASR_GLOSSARY="TermA, TermB"`, meeting titles, and confirmed participant names. `Parakeet TDT 0.6B v3` runs via ONNX Runtime (`onnx-asr`), produces native word timestamps and token confidences without PyTorch in the slim `wortlaut-asr-cpu` image, and automatically omits `nvidia.com/gpu` requests in the Helm chart when `asr.backend=parakeet` and `asr.device=cpu` (or `asr.allowCpu=true`). Active meetings that run past their scheduled `ends_at` automatically extend in 15-minute increments up to `WORTLAUT_MAX_OVERTIME_SECONDS` (default `3600` = 60 minutes).
 
 Set `WORTLAUT_DEFAULT_LOCALE=en` (already enabled in [`.env.example`](.env.example) and [`docker-compose.yml`](docker-compose.yml)) to default the Web-UI, `/privacy` page, and in-call chat announcements to English.
 
@@ -195,7 +200,7 @@ WORTLAUT_SMTP_FROM=bot@example.org
 
 * **Meeting Service** ([services/meeting](services/meeting), [app.py](services/meeting/src/wortlaut/app.py), [settings.py](services/meeting/src/wortlaut/settings.py)) — Multi-arch (`linux/amd64`, `linux/arm64`) Python/FastAPI service hosting the REST API, embedded Web-UI ([ui.py](services/meeting/src/wortlaut/ui.py)), OIDC PKCE auth ([oidc.py](services/meeting/src/wortlaut/oidc.py)), Google/M365 Calendar OAuth2 sync ([calendar_oauth.py](services/meeting/src/wortlaut/calendar_oauth.py)), scheduler, Kubernetes/Docker worker controller ([controller.py](services/meeting/src/wortlaut/controller.py)), audio ingest, exports ([exports.py](services/meeting/src/wortlaut/exports.py)), and IMAP/SMTP mail ([mail.py](services/meeting/src/wortlaut/mail.py)).
 * **Browser Worker** ([worker](worker)) — Ephemeral TypeScript + Playwright + sandboxed Chromium job/container spawned per meeting to capture isolated pre-mix WebRTC receiver tracks.
-* **ASR Service** ([services/asr](services/asr), [services/asr/app.py](services/asr/app.py)) — Shared local **Qwen3-ASR** speech recognition service (`WORTLAUT_ASR_MODEL_REPO`, `WORTLAUT_ASR_MODEL_REVISION`, `WORTLAUT_ASR_ALLOW_CPU`).
+* **ASR Service** ([services/asr](services/asr), [services/asr/app.py](services/asr/app.py)) — Shared local **Qwen3-ASR** or **Parakeet TDT v3 (ONNX)** speech recognition service (`WORTLAUT_ASR_BACKEND`, `WORTLAUT_ASR_DEVICE`, `WORTLAUT_ASR_QUANTIZATION`, `WORTLAUT_ASR_MODEL_REPO`, `WORTLAUT_ASR_MODEL_REVISION`, `WORTLAUT_ASR_ALLOW_CPU`).
 
 ### Key REST Endpoints (Interactive OpenAPI Docs at `/docs`)
 

@@ -965,3 +965,384 @@ def test_normalize_audio_rms_levels_quiet_speech_without_boosting_silence_or_cli
     assert np.all(sent[-service.PAD_SAMPLES :] == 0.0)
     inner = sent[service.PAD_SAMPLES : -service.PAD_SAMPLES]
     assert abs(float(np.sqrt(np.mean(inner * inner))) - service.TARGET_RMS) < 0.005
+
+
+def test_asr_backend_device_and_quantization_resolution(monkeypatch):
+    service = load_service("backend_config_fixture")
+
+    monkeypatch.delenv("WORTLAUT_ASR_BACKEND", raising=False)
+    monkeypatch.delenv("WORTLAUT_ASR_DEVICE", raising=False)
+    monkeypatch.delenv("WORTLAUT_ASR_QUANTIZATION", raising=False)
+    assert service.resolve_asr_backend() == "qwen3"
+    assert service._resolve_device_setting() == "auto"
+    assert service._resolve_quantization_setting("qwen3", "cuda") == "bfloat16"
+    assert service._resolve_quantization_setting("qwen3", "mps") == "float16"
+    assert service._resolve_quantization_setting("qwen3", "cpu") == "float32"
+    assert service._resolve_quantization_setting("parakeet", "cpu") == "int8"
+    assert service._resolve_quantization_setting("parakeet", "cuda") == "fp32"
+
+    for alias in ("parakeet", "Parakeet-TDT", "parakeet-onnx"):
+        monkeypatch.setenv("WORTLAUT_ASR_BACKEND", alias)
+        assert service.resolve_asr_backend() == "parakeet"
+
+    monkeypatch.setenv("WORTLAUT_ASR_BACKEND", "whisper-v99")
+    try:
+        service.resolve_asr_backend()
+        raise AssertionError("Unsupported backend must fail fast")
+    except ValueError as error:
+        assert "Unsupported ASR backend" in str(error)
+
+    monkeypatch.setenv("WORTLAUT_ASR_DEVICE", "gpu")
+    assert service._resolve_device_setting() == "cuda"
+    monkeypatch.setenv("WORTLAUT_ASR_DEVICE", "mps")
+    assert service._resolve_device_setting() == "mps"
+    monkeypatch.setenv("WORTLAUT_ASR_DEVICE", "tpu")
+    try:
+        service._resolve_device_setting()
+        raise AssertionError("Unsupported device must fail fast")
+    except ValueError as error:
+        assert "Unsupported ASR device" in str(error)
+
+    monkeypatch.setenv("WORTLAUT_ASR_QUANTIZATION", "float32")
+    assert service._resolve_quantization_setting("parakeet", "cpu") == "fp32"
+    monkeypatch.setenv("WORTLAUT_ASR_QUANTIZATION", "bfloat16")
+    try:
+        service._resolve_quantization_setting("parakeet", "cpu")
+        raise AssertionError("bfloat16 is unsupported for Parakeet ONNX")
+    except ValueError as error:
+        assert "Unsupported Parakeet quantization" in str(error)
+
+
+def test_assemble_parakeet_words_groups_sentencepiece_timestamps_and_confidence():
+    service = load_service("parakeet_words_fixture")
+    tokens = ["▁Hall", "o", "▁Welt", "!"]
+    # Pad was 0.30s; first token at 0.35s -> 0.05s unpadded, second word at 0.80s -> 0.50s.
+    timestamps = [0.35, 0.48, 0.80, 0.92]
+    logprobs = [float(np.log(0.9)), float(np.log(0.8)), float(np.log(0.95)), float(np.log(0.85))]
+    words = service.assemble_parakeet_words(
+        tokens,
+        timestamps,
+        logprobs,
+        text="Hallo Welt!",
+        duration=1.2,
+        pad_seconds=0.3,
+    )
+    assert words == [
+        {"word": "Hallo", "start": 0.05, "end": 0.26, "confidence": 0.85},
+        {"word": "Welt!", "start": 0.5, "end": 0.7, "confidence": 0.9},
+    ]
+    assert service.assemble_parakeet_words([], [], [], text="", duration=1.0) == []
+    assert service.assemble_parakeet_words(None, None, None, text="Hallo Welt", duration=1.0) == [
+        {"word": "Hallo"},
+        {"word": "Welt"},
+    ]
+    # Clamped leading timestamp (0.22 < 0.30 pad) still yields positive non-overlapping duration
+    # and handles tuple/ndarray sequences.
+    clamped = service.assemble_parakeet_words(
+        ["▁Der", "▁zweite"],
+        np.array([0.22, 0.48]),
+        (-0.01, -0.02),
+        text="Der zweite",
+        duration=1.0,
+        pad_seconds=0.3,
+    )
+    assert clamped[0]["start"] == 0.0
+    assert clamped[0]["end"] == 0.08
+    assert clamped[1]["start"] == 0.18
+    assert clamped[1]["end"] == 0.26
+
+
+def test_parakeet_loader_dispatches_cpu_int8_and_gpu_fp32_checkpoints(monkeypatch):
+    service = load_service("parakeet_loader_fixture")
+    calls: list[dict] = []
+
+    class FakeLoaded:
+        def __init__(self, kwargs):
+            self.kwargs = kwargs
+            self.timestamped = False
+
+        def with_timestamps(self):
+            self.timestamped = True
+            return self
+
+    def fake_snapshot_download(*, repo_id, revision, allow_patterns):
+        calls.append(
+            {"op": "snapshot", "repo": repo_id, "revision": revision, "patterns": allow_patterns}
+        )
+        return "/tmp/fake-parakeet-cache"
+
+    def fake_load_model(name, *, path, quantization, providers):
+        entry = {
+            "op": "load",
+            "name": name,
+            "path": path,
+            "quantization": quantization,
+            "providers": providers,
+        }
+        calls.append(entry)
+        return FakeLoaded(entry)
+
+    providers_state = {"available": ["CPUExecutionProvider"]}
+    monkeypatch.setitem(
+        sys.modules,
+        "onnxruntime",
+        SimpleNamespace(get_available_providers=lambda: list(providers_state["available"])),
+    )
+    monkeypatch.setitem(sys.modules, "onnx_asr", SimpleNamespace(load_model=fake_load_model))
+    monkeypatch.setitem(
+        sys.modules,
+        "huggingface_hub",
+        SimpleNamespace(snapshot_download=fake_snapshot_download),
+    )
+    monkeypatch.setenv("WORTLAUT_ASR_BACKEND", "parakeet")
+    monkeypatch.delenv("WORTLAUT_ASR_DEVICE", raising=False)
+    monkeypatch.delenv("WORTLAUT_ASR_ALLOW_CPU", raising=False)
+    monkeypatch.delenv("WORTLAUT_ASR_QUANTIZATION", raising=False)
+    monkeypatch.delenv("WORTLAUT_ASR_MODEL_REPO", raising=False)
+    monkeypatch.delenv("WORTLAUT_ASR_MODEL_REVISION", raising=False)
+
+    # 1. Without GPU or CPU opt-in, Parakeet fails closed.
+    try:
+        service.load_model()
+        raise AssertionError("Parakeet CPU inference must be opt-in when device=auto")
+    except RuntimeError as error:
+        assert "WORTLAUT_ASR_DEVICE=cpu" in str(error)
+
+    # 2. Explicit CPU mode downloads only INT8 ONNX files and uses CPUExecutionProvider.
+    monkeypatch.setenv("WORTLAUT_ASR_DEVICE", "cpu")
+    cpu_model = service.load_model()
+    assert isinstance(cpu_model, service.ParakeetASR)
+    assert cpu_model.device == "cpu"
+    assert cpu_model.quantization == "int8"
+    assert cpu_model.adapter.timestamped is True
+    assert calls[0] == {
+        "op": "snapshot",
+        "repo": service.DEFAULT_PARAKEET_MODEL_REPO,
+        "revision": service.DEFAULT_PARAKEET_MODEL_REVISION,
+        "patterns": [
+            "config.json",
+            "vocab.txt",
+            "nemo128.onnx",
+            "encoder-model.int8.onnx",
+            "decoder_joint-model.int8.onnx",
+        ],
+    }
+    assert calls[1] == {
+        "op": "load",
+        "name": "nemo-parakeet-tdt-0.6b-v3",
+        "path": "/tmp/fake-parakeet-cache",
+        "quantization": "int8",
+        "providers": ["CPUExecutionProvider"],
+    }
+
+    # 3. GPU provider registered at compile time but no physical CUDA device at runtime:
+    #    device=auto with allowCpu=true falls back truthfully to CPU/int8 instead of fake CUDA,
+    #    and device=cuda fails closed.
+    calls.clear()
+    providers_state["available"] = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    monkeypatch.setattr(service, "_cuda_device_present", lambda: False)
+    monkeypatch.setenv("WORTLAUT_ASR_DEVICE", "auto")
+    monkeypatch.setenv("WORTLAUT_ASR_ALLOW_CPU", "true")
+    fallback_cpu = service.load_model()
+    assert fallback_cpu.device == "cpu"
+    assert fallback_cpu.quantization == "int8"
+    assert calls[1]["providers"] == ["CPUExecutionProvider"]
+
+    monkeypatch.setenv("WORTLAUT_ASR_DEVICE", "cuda")
+    try:
+        service.load_model()
+        raise AssertionError("device=cuda must fail closed when no physical GPU is present")
+    except RuntimeError as error:
+        assert "CUDAExecutionProvider" in str(error)
+
+    # 4. GPU mode (auto when CUDAExecutionProvider AND a real GPU are present) downloads FP32 files.
+    calls.clear()
+    monkeypatch.setattr(service, "_cuda_device_present", lambda: True)
+    monkeypatch.setenv("WORTLAUT_ASR_DEVICE", "auto")
+    monkeypatch.delenv("WORTLAUT_ASR_ALLOW_CPU", raising=False)
+    gpu_model = service.load_model()
+    assert isinstance(gpu_model, service.ParakeetASR)
+    assert gpu_model.device == "cuda"
+    assert gpu_model.quantization == "fp32"
+    assert "encoder-model.onnx.data" in calls[0]["patterns"]
+    assert calls[1]["quantization"] is None
+    assert calls[1]["providers"] == ["CUDAExecutionProvider", "CPUExecutionProvider"]
+
+
+def test_parakeet_http_transcribe_runs_without_torch_and_feeds_segment_result(monkeypatch):
+    from wortlaut.asr import segment_result
+
+    service = load_service("parakeet_http_fixture")
+    monkeypatch.delitem(sys.modules, "torch", raising=False)
+    monkeypatch.setenv("WORTLAUT_ASR_TOKEN", "parakeet-token")
+
+    seen_calls: list[tuple[int, int]] = []
+
+    class FakeAdapter:
+        def recognize(self, audio, *, sample_rate):
+            seen_calls.append((len(audio), sample_rate))
+            return SimpleNamespace(
+                text="Guten Morgen zusammen.",
+                tokens=["▁Guten", "▁Morgen", "▁zu", "sammen", "."],
+                timestamps=[0.40, 0.72, 1.05, 1.20, 1.38],
+                logprobs=[-0.05, -0.08, -0.04, -0.06, -0.02],
+            )
+
+    service.model = service.ParakeetASR(FakeAdapter(), device="cpu", quantization="int8")
+    client = TestClient(service.app)
+
+    ready = client.get("/health/ready")
+    assert ready.status_code == 200
+    ready_body = ready.json()
+    assert ready_body["backend"] == "parakeet"
+    assert ready_body["device"] == "cpu"
+    assert ready_body["quantization"] == "int8"
+    assert ready_body["supports_context_prompt"] is False
+    assert len(ready_body["supported_languages"]) == 25
+
+    pcm = np.zeros(24000, dtype="<i2").tobytes()  # 1.5s @ 16kHz
+    resp = client.post(
+        "/v1/transcribe",
+        content=pcm,
+        headers={"Authorization": "Bearer parakeet-token", "X-Job-ID": "e" * 64},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert seen_calls == [(24000 + 2 * service.PAD_SAMPLES, 16000)]
+    assert body["text"] == "Guten Morgen zusammen."
+    assert body["language"] is None
+    assert body["truncated"] is False
+    assert [w["word"] for w in body["words"]] == ["Guten", "Morgen", "zusammen."]
+    assert all("start" in w and "end" in w and "confidence" in w for w in body["words"])
+
+    # Verify seamless compatibility with Meeting service segment_result()
+    job = SimpleNamespace(
+        id="job-1",
+        start_sample=0,
+        end_sample=24000,
+        core_start=0,
+        core_end=24000,
+        binding={"participant_id": "p-1", "display_name": "Ada"},
+    )
+    stream = SimpleNamespace(
+        stream_id="stream-1",
+        epoch=1,
+        contract={
+            "monotonic_origin_ms": 10_000,
+            "session_monotonic_origin_ms": 0,
+            "session_utc_origin": "2026-11-27T10:00:00Z",
+        },
+    )
+    seg = segment_result(job, stream, body)
+    assert seg["text"] == "Guten Morgen zusammen."
+    assert seg["start"] == 10.1
+    assert seg["end"] == 11.16
+    assert seg["confidence"] is not None
+    assert len(seg["words"]) == 3
+
+
+def test_qwen3_loader_supports_mps_auto_detection(monkeypatch):
+    service = load_service("qwen_mps_fixture")
+    loaded = {}
+
+    class Network:
+        def to(self, device):
+            loaded["device"] = device
+            return self
+
+        def eval(self):
+            return self
+
+    monkeypatch.setitem(
+        sys.modules,
+        "transformers",
+        SimpleNamespace(
+            AutoProcessor=SimpleNamespace(
+                from_pretrained=lambda repo, revision: SimpleNamespace(tokenizer=object())
+            ),
+            AutoModelForMultimodalLM=SimpleNamespace(
+                from_pretrained=lambda repo, revision, dtype: (
+                    loaded.setdefault("dtype", dtype),
+                    Network(),
+                )[1]
+            ),
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "torch",
+        SimpleNamespace(
+            cuda=SimpleNamespace(is_available=lambda: False),
+            backends=SimpleNamespace(mps=SimpleNamespace(is_available=lambda: True)),
+            float16="fp16",
+            float32="f32",
+            bfloat16="bf16",
+        ),
+    )
+    monkeypatch.setenv("WORTLAUT_ASR_BACKEND", "qwen3")
+    monkeypatch.delenv("WORTLAUT_ASR_DEVICE", raising=False)
+    monkeypatch.delenv("WORTLAUT_ASR_ALLOW_CPU", raising=False)
+    asr = service.load_model()
+    assert isinstance(asr, service.QwenASR)
+    assert asr.device == "mps"
+    assert asr.quantization == "float16"
+    assert loaded == {"dtype": "fp16", "device": "mps"}
+
+
+def test_onnx_gpu_errors_model_loading_guard_and_backend_language_validation(monkeypatch):
+    service = load_service("onnx_gpu_errors_fixture")
+    monkeypatch.delitem(sys.modules, "torch", raising=False)
+    monkeypatch.setenv("WORTLAUT_ASR_TOKEN", "onnx-err-token")
+    headers = {"Authorization": "Bearer onnx-err-token", "X-Job-ID": "9" * 64}
+    pcm = np.zeros(8000, dtype="<i2").tobytes()
+
+    # 1. Request while model is still None returns HTTP 503 ("Model loading"), not 500.
+    service.model = None
+    client = TestClient(service.app)
+    loading = client.post("/v1/transcribe", content=pcm, headers=headers)
+    assert loading.status_code == 503
+    assert loading.json() == {"detail": "Model loading"}
+
+    # 2. Qwen3 rejects Parakeet-only languages (Ukrainian) with HTTP 400; Parakeet accepts
+    #    Qwen3-only languages (Japanese) without permanent failure during backend migration.
+    service.model = SimpleNamespace(backend="qwen3", transcribe=lambda audio, **_: result())
+    qwen_bad = client.post(
+        "/v1/transcribe", content=pcm, headers={**headers, "X-ASR-Languages": "Ukrainian"}
+    )
+    assert qwen_bad.status_code == 400
+    service.model = SimpleNamespace(backend="parakeet", transcribe=lambda audio, **_: result())
+    parakeet_ok = client.post(
+        "/v1/transcribe", content=pcm, headers={**headers, "X-ASR-Languages": "Japanese"}
+    )
+    assert parakeet_ok.status_code == 200
+
+    # 3. ONNX Runtime CUDA OOM returns retryable 503 + Retry-After: 30 and keeps pod healthy.
+    OnnxRuntimeException = type(
+        "RuntimeException",
+        (Exception,),
+        {"__module__": "onnxruntime.capi.onnxruntime_pybind11_state"},
+    )
+    service.model = SimpleNamespace(
+        backend="parakeet",
+        transcribe=lambda audio, **_: (_ for _ in ()).throw(
+            OnnxRuntimeException("BFCArena failed to allocate memory (CUDA out of memory)")
+        ),
+    )
+    oom = client.post("/v1/transcribe", content=pcm, headers=headers)
+    assert oom.status_code == 503
+    assert oom.headers["retry-after"] == "30"
+    assert client.get("/health/ready").status_code == 200
+    assert client.get("/health/live").status_code == 200
+
+    # 4. Fatal ONNX Runtime CUDA failure returns 503 and marks process unhealthy.
+    service.model = SimpleNamespace(
+        backend="parakeet",
+        transcribe=lambda audio, **_: (_ for _ in ()).throw(
+            OnnxRuntimeException("CUDA failure 700: an illegal memory access was encountered")
+        ),
+    )
+    fatal = client.post("/v1/transcribe", content=pcm, headers=headers)
+    assert fatal.status_code == 503
+    assert fatal.json() == {"detail": "GPU unavailable"}
+    assert client.get("/health/ready").status_code == 503
+    assert client.get("/health/live").status_code == 503

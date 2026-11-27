@@ -127,6 +127,11 @@ spec:
                   number: 8000
 {{- end }}
 {{- if .Values.asr.enabled }}
+{{- $asrBackend := .Values.asr.backend | default "qwen3" }}
+{{- $asrDevice := .Values.asr.device | default "auto" }}
+{{- $asrQuantization := .Values.asr.quantization | default "auto" }}
+{{- $asrCpuOnly := or (eq $asrDevice "cpu") .Values.asr.allowCpu (eq (int .Values.asr.gpuCount) 0) }}
+{{- $asrUseCpuImage := and (eq $asrBackend "parakeet") $asrCpuOnly }}
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -167,15 +172,27 @@ spec:
         fsGroup: 10001
       containers:
         - name: asr
-          image: {{ .Values.images.asr }}
+          image: {{ if $asrUseCpuImage }}{{ .Values.images.asrCpu }}{{ else }}{{ .Values.images.asr }}{{ end }}
           imagePullPolicy: {{ .Values.images.pullPolicy }}
           ports:
             - containerPort: 8000
           env:
+            - name: WORTLAUT_ASR_BACKEND
+              value: {{ $asrBackend | quote }}
+            - name: WORTLAUT_ASR_DEVICE
+              value: {{ $asrDevice | quote }}
+            - name: WORTLAUT_ASR_QUANTIZATION
+              value: {{ $asrQuantization | quote }}
             - name: WORTLAUT_ASR_ALLOW_CPU
-              value: {{ .Values.asr.allowCpu | ternary "true" "false" | quote }}
+              value: {{ $asrCpuOnly | ternary "true" "false" | quote }}
+            {{- if .Values.asr.modelRepo }}
             - name: WORTLAUT_ASR_MODEL_REPO
               value: {{ .Values.asr.modelRepo | quote }}
+            {{- end }}
+            {{- if .Values.asr.modelRevision }}
+            - name: WORTLAUT_ASR_MODEL_REVISION
+              value: {{ .Values.asr.modelRevision | quote }}
+            {{- end }}
             - name: WORTLAUT_ASR_LANGUAGES
               value: {{ .Values.asr.languages | quote }}
           envFrom:
@@ -188,14 +205,14 @@ spec:
           resources:
             requests:
               cpu: "1"
-              memory: 4Gi
-              {{- if not .Values.asr.allowCpu }}
+              memory: {{ if $asrUseCpuImage }}2Gi{{ else }}4Gi{{ end }}
+              {{- if not $asrCpuOnly }}
               nvidia.com/gpu: {{ .Values.asr.gpuCount | toString | quote }}
               {{- end }}
             limits:
               cpu: "4"
-              memory: 12Gi
-              {{- if not .Values.asr.allowCpu }}
+              memory: {{ if $asrUseCpuImage }}4Gi{{ else }}12Gi{{ end }}
+              {{- if not $asrCpuOnly }}
               nvidia.com/gpu: {{ .Values.asr.gpuCount | toString | quote }}
               {{- end }}
           volumeMounts:

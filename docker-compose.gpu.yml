@@ -1,8 +1,16 @@
-# NVIDIA GPU override for Docker Compose:
+# NVIDIA GPU override for Docker Compose (defaults to Qwen3-ASR 1.7B on CUDA;
+# set WORTLAUT_ASR_BACKEND=parakeet for Parakeet TDT 0.6B v3 on GPU):
 #   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
 services:
   asr:
+    image: ${WORTLAUT_ASR_IMAGE:-ghcr.io/mayflower/wortlaut-asr:${WORTLAUT_IMAGE_TAG:-latest}}
+    build:
+      context: .
+      dockerfile: ${WORTLAUT_ASR_DOCKERFILE:-services/asr/Dockerfile}
     environment:
+      WORTLAUT_ASR_BACKEND: ${WORTLAUT_ASR_BACKEND:-qwen3}
+      WORTLAUT_ASR_DEVICE: ${WORTLAUT_ASR_DEVICE:-cuda}
+      WORTLAUT_ASR_QUANTIZATION: ${WORTLAUT_ASR_QUANTIZATION:-auto}
       WORTLAUT_ASR_ALLOW_CPU: "false"
     deploy:
       resources:

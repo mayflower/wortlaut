@@ -168,9 +168,13 @@ Participants can control `wortlaut` directly from the conference chat without op
 
 ```dotenv
 # --- wortlaut-asr & wortlaut-meeting services ---
-WORTLAUT_ASR_MODEL_REPO=Qwen/Qwen3-ASR-1.7B-hf
-WORTLAUT_ASR_LANGUAGES=*                # "*" = auto-detect all 30 languages (or e.g. "German,English"); switchable per recording
-WORTLAUT_ASR_ALLOW_CPU=false            # Set true when running without an NVIDIA GPU
+WORTLAUT_ASR_BACKEND=qwen3              # "qwen3" (Qwen3-ASR 1.7B, 30 languages) or "parakeet" (Parakeet TDT 0.6B v3 ONNX, 25 EU languages, fast on CPU/GPU)
+WORTLAUT_ASR_DEVICE=auto                # "auto", "cuda", "cpu", or "mps"
+WORTLAUT_ASR_QUANTIZATION=auto          # "auto" (int8 for Parakeet/CPU, fp32 for Parakeet/CUDA, bfloat16 for Qwen3/CUDA, float32 for Qwen3/CPU)
+WORTLAUT_ASR_MODEL_REPO=                # Optional HF repo override (empty = backend's pinned default)
+WORTLAUT_ASR_MODEL_REVISION=            # Optional HF revision override (empty = backend's pinned default)
+WORTLAUT_ASR_LANGUAGES=*                # "*" = auto-detect all supported languages (or e.g. "German,English"); switchable per recording
+WORTLAUT_ASR_ALLOW_CPU=false            # Backward-compatible CPU opt-in when WORTLAUT_ASR_DEVICE=auto
 
 # --- wortlaut-meeting service ---
 WORTLAUT_ASR_GLOSSARY=                  # Optional comma-separated or JSON list of domain terms/acronyms

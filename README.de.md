@@ -102,7 +102,7 @@ helm upgrade --install wortlaut oci://ghcr.io/mayflower/charts/wortlaut \
   --namespace wortlaut --create-namespace \
   --set host=wortlaut.local \
   --set bundled.enabled=true \
-  --set asr.gpuCount=0 --set asr.allowCpu=true
+  --set asr.backend=parakeet --set asr.device=cpu
 ```
 
 **Produktiver Cluster-Betrieb** mit externem PostgreSQL, S3, GPU-Node und OIDC-SSO (vollständige Anleitung in [charts/wortlaut/README.md](charts/wortlaut/README.md) und [docs/configuration.md](docs/configuration.md)):
@@ -122,11 +122,16 @@ helm upgrade --install wortlaut oci://ghcr.io/mayflower/charts/wortlaut \
 
 ---
 
-## Spracherkennungsmodell (Qwen3-ASR, 30 Sprachen)
+## Spracherkennungsmodelle (`Qwen3-ASR` & `Parakeet TDT v3`)
 
-Der `wortlaut-asr`-Dienst ([services/asr/app.py](services/asr/app.py)) lädt [`Qwen/Qwen3-ASR-1.7B-hf`](https://huggingface.co/Qwen/Qwen3-ASR-1.7B-hf) in einer festen Revision über Hugging Face Transformers (`WORTLAUT_ASR_MODEL_REPO` und `WORTLAUT_ASR_MODEL_REVISION` überschreiben beides). Standardmäßig sind **alle 30 Qwen3-ASR-Sprachen** aktiv (`WORTLAUT_ASR_LANGUAGES=*`: Chinesisch, Englisch, Kantonesisch, Arabisch, Deutsch, Französisch, Spanisch, Portugiesisch, Indonesisch, Italienisch, Koreanisch, Russisch, Thai, Vietnamesisch, Japanisch, Türkisch, Hindi, Malaiisch, Niederländisch, Schwedisch, Dänisch, Finnisch, Polnisch, Tschechisch, Filipino, Persisch, Griechisch, Ungarisch, Mazedonisch, Rumänisch) und können pro Besprechung in der Web-UI, per REST-API (`POST`/`PATCH /v1/recordings`) oder per MCP ausgewählt bzw. umgeschaltet werden. Optional kann `WORTLAUT_ASR_LANGUAGES` (z. B. `German,English`) als Instanz-Standard für neue Aufnahmen gesetzt werden.
+Der `wortlaut-asr`-Dienst ([services/asr/app.py](services/asr/app.py)) unterstützt zwei per Flag umschaltbare lokale ASR-Backends über `WORTLAUT_ASR_BACKEND` (`qwen3` oder `parakeet`), `WORTLAUT_ASR_DEVICE` (`auto`, `cuda`, `cpu`, `mps`) und `WORTLAUT_ASR_QUANTIZATION` (`auto`, `int8`, `fp32`, `bfloat16`, `float16`, `float32`) – jeweils mit gepinnter Hugging-Face-Revision (`WORTLAUT_ASR_MODEL_REPO` und `WORTLAUT_ASR_MODEL_REVISION` überschreiben beides):
 
-Das Modell liefert keine Wort-Zeitstempel. Jeder ASR-Job bekommt deshalb nur seinen eigenen, überlappungsfreien Audioabschnitt, und Transkriptsegmente tragen Zeiten auf Segmentebene. Die Wortkonfidenz ist die mittlere Wahrscheinlichkeit der erzeugten Tokens. Stille und Rauschen ergeben ein leeres Transkript; eine Ausgabe, die das Generierungsbudget ohne Endmarker erreicht, wird als Decoder-Schleife verworfen. Über `WORTLAUT_ASR_GLOSSARY="BegriffA, BegriffB"` (kommagetrennt oder JSON-Array) lassen sich eigene Fachbegriffe und Produktnamen neben Meeting-Titel und bestätigten Teilnehmernamen in den System-Kontext von `Qwen3-ASR` einbinden. Überzieht eine aktive Besprechung ihre geplante Endzeit (`ends_at`), verlängert `wortlaut` das Aufnahmefenster automatisch in 15-Minuten-Schritten bis maximal `WORTLAUT_MAX_OVERTIME_SECONDS` (Standard `3600` = 60 Minuten).
+| Backend (`WORTLAUT_ASR_BACKEND`) | Standard-Checkpoint | Sprachen | Ideal für |
+| :--- | :--- | :--- | :--- |
+| **`qwen3`** (Helm-Standard, GPU-Image) | [`Qwen/Qwen3-ASR-1.7B-hf`](https://huggingface.co/Qwen/Qwen3-ASR-1.7B-hf) | **30 Sprachen** (`*`, pro Aufnahme umschaltbar) | NVIDIA-GPU-Cluster, Glossar-/Kontext-Prompts (`WORTLAUT_ASR_GLOSSARY`), außereuropäische Sprachen |
+| **`parakeet`** (Compose-CPU-Standard, GPU- & schlankes Multi-Arch-Image `wortlaut-asr-cpu`) | [`istupakov/parakeet-tdt-0.6b-v3-onnx`](https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx) | **25 europäische Sprachen** (automatisch erkannt) | Schnelle CPU- (`int8`, ~650 MB, amd64 & arm64) oder sehr schnelle GPU-Inferenz (`fp32`) mit nativen Wort-Zeitstempeln & Log-Prob-Konfidenz |
+
+`Qwen3-ASR` unterstützt alle **30 Sprachen** (`WORTLAUT_ASR_LANGUAGES=*`: Chinesisch, Englisch, Kantonesisch, Arabisch, Deutsch, Französisch, Spanisch, Portugiesisch, Indonesisch, Italienisch, Koreanisch, Russisch, Thai, Vietnamesisch, Japanisch, Türkisch, Hindi, Malaiisch, Niederländisch, Schwedisch, Dänisch, Finnisch, Polnisch, Tschechisch, Filipino, Persisch, Griechisch, Ungarisch, Mazedonisch, Rumänisch) sowie Kontext-Prompts über `WORTLAUT_ASR_GLOSSARY="BegriffA, BegriffB"`, Meeting-Titel und bestätigte Teilnehmernamen. `Parakeet TDT 0.6B v3` läuft über ONNX Runtime (`onnx-asr`), liefert native Wort-Zeitstempel und Token-Konfidenzen ohne PyTorch im schlanken `wortlaut-asr-cpu`-Image und verzichtet im Helm-Chart bei `asr.backend=parakeet` und `asr.device=cpu` (oder `asr.allowCpu=true`) automatisch auf `nvidia.com/gpu`-Ressourcen. Überzieht eine aktive Besprechung ihre geplante Endzeit (`ends_at`), verlängert `wortlaut` das Aufnahmefenster automatisch in 15-Minuten-Schritten bis maximal `WORTLAUT_MAX_OVERTIME_SECONDS` (Standard `3600` = 60 Minuten).
 
 Für eine komplett englischsprachige Standard-Oberfläche samt englischem Bot-Chathinweis genügt zusätzlich `WORTLAUT_DEFAULT_LOCALE=en`.
 
@@ -190,7 +195,7 @@ WORTLAUT_SMTP_FROM=bot@example.org
 
 * **Meeting-Dienst** ([services/meeting](services/meeting), [app.py](services/meeting/src/wortlaut/app.py), [settings.py](services/meeting/src/wortlaut/settings.py)) — Python/FastAPI (`linux/amd64` & `linux/arm64`), integrierte Web-UI ([ui.py](services/meeting/src/wortlaut/ui.py)), OIDC-PKCE ([oidc.py](services/meeting/src/wortlaut/oidc.py)), Kalender- & OAuth2-Sync ([calendar.py](services/meeting/src/wortlaut/calendar.py), [calendar_oauth.py](services/meeting/src/wortlaut/calendar_oauth.py)), Scheduler, Worker-Reconciliation ([controller.py](services/meeting/src/wortlaut/controller.py)), Audio-Ingest, Exporte ([exports.py](services/meeting/src/wortlaut/exports.py)) und Mail ([mail.py](services/meeting/src/wortlaut/mail.py)).
 * **Browser-Worker** ([worker](worker)) — TypeScript, Playwright und gesandboxtes Chromium; ein kurzlebiger Job/Container pro Besprechung.
-* **ASR-Dienst** ([services/asr](services/asr), [services/asr/app.py](services/asr/app.py)) — Gemeinsam genutztes lokales **Qwen3-ASR**-Spracherkennungsmodell (`WORTLAUT_ASR_MODEL_REPO`, `WORTLAUT_ASR_MODEL_REVISION`, `WORTLAUT_ASR_ALLOW_CPU`).
+* **ASR-Dienst** ([services/asr](services/asr), [services/asr/app.py](services/asr/app.py)) — Gemeinsam genutztes lokales **Qwen3-ASR**- oder **Parakeet-TDT-v3-ONNX**-Spracherkennungsmodell (`WORTLAUT_ASR_BACKEND`, `WORTLAUT_ASR_DEVICE`, `WORTLAUT_ASR_QUANTIZATION`, `WORTLAUT_ASR_MODEL_REPO`, `WORTLAUT_ASR_MODEL_REVISION`, `WORTLAUT_ASR_ALLOW_CPU`).
 
 ### Zentrale REST- & MCP-Endpunkte (Interaktive OpenAPI-Dokumentation unter `/docs`)
 

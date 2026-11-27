@@ -42,6 +42,10 @@ jobs:
             dockerfile: services/asr/Dockerfile
             platforms: linux/amd64
             free_disk: true
+          - component: asr-cpu
+            dockerfile: services/asr/Dockerfile.cpu
+            platforms: linux/amd64,linux/arm64
+            free_disk: false
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

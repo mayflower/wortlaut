@@ -41,16 +41,20 @@ services:
       - rustfs-data:/data
 
   asr:
-    image: ghcr.io/mayflower/wortlaut-asr:${WORTLAUT_IMAGE_TAG:-latest}
+    image: ${WORTLAUT_ASR_IMAGE:-ghcr.io/mayflower/wortlaut-asr-cpu:${WORTLAUT_IMAGE_TAG:-latest}}
     build:
       context: .
-      dockerfile: services/asr/Dockerfile
+      dockerfile: ${WORTLAUT_ASR_DOCKERFILE:-services/asr/Dockerfile.cpu}
     restart: unless-stopped
     networks: [wortlaut]
     environment:
       WORTLAUT_ASR_TOKEN: ${WORTLAUT_ASR_TOKEN:-wortlaut-local-asr-token}
+      WORTLAUT_ASR_BACKEND: ${WORTLAUT_ASR_BACKEND:-parakeet}
+      WORTLAUT_ASR_DEVICE: ${WORTLAUT_ASR_DEVICE:-cpu}
+      WORTLAUT_ASR_QUANTIZATION: ${WORTLAUT_ASR_QUANTIZATION:-auto}
       WORTLAUT_ASR_ALLOW_CPU: ${WORTLAUT_ASR_ALLOW_CPU:-true}
-      WORTLAUT_ASR_MODEL_REPO: ${WORTLAUT_ASR_MODEL_REPO:-Qwen/Qwen3-ASR-1.7B-hf}
+      WORTLAUT_ASR_MODEL_REPO: ${WORTLAUT_ASR_MODEL_REPO:-}
+      WORTLAUT_ASR_MODEL_REVISION: ${WORTLAUT_ASR_MODEL_REVISION:-}
       WORTLAUT_ASR_LANGUAGES: ${WORTLAUT_ASR_LANGUAGES:-*}
     volumes:
       - model-cache:/model-cache

@@ -5,6 +5,7 @@ images:
   meeting: ghcr.io/mayflower/wortlaut-meeting:latest
   worker: ghcr.io/mayflower/wortlaut-worker:latest
   asr: ghcr.io/mayflower/wortlaut-asr:latest
+  asrCpu: ghcr.io/mayflower/wortlaut-asr-cpu:latest
   pullPolicy: IfNotPresent
 
 providers:
@@ -54,10 +55,19 @@ capacity:
 
 asr:
   enabled: true
+  # Speech-to-text backend: "qwen3" (Qwen3-ASR 1.7B, 30 languages, GPU recommended)
+  # or "parakeet" (Parakeet TDT 0.6B v3 ONNX, 25 European languages, fast on CPU or GPU).
+  backend: qwen3
+  # Execution device: "auto" (GPU when available), "cuda", "cpu", or "mps".
+  device: auto
+  # Precision/quantization: "auto" (int8 for Parakeet/CPU, fp32 for Parakeet/CUDA,
+  # bfloat16 for Qwen3/CUDA, float32 for Qwen3/CPU), "int8", "fp32", "bfloat16", "float16", "float32".
+  quantization: auto
   allowCpu: false
   gpuCount: 1
-  # Qwen3-ASR 1.7B (Transformers), all 30 languages enabled by default (`*`, or comma-separated subset).
-  modelRepo: Qwen/Qwen3-ASR-1.7B-hf
+  # Optional Hugging Face repo/revision override (empty uses the backend's pinned default).
+  modelRepo: ""
+  modelRevision: ""
   languages: "*"
   glossary: ""
   storageClassName: ""

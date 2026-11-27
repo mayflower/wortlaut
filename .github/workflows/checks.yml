@@ -44,7 +44,7 @@ jobs:
           shellcheck scripts/*.sh
           docker run --rm -v "${PWD}:/work:ro" -w /work \
             ghcr.io/hadolint/hadolint:v2.15.1@sha256:32dac94127fd60b7b7e3fbfc65e1383b9b5e25c9bfd7b8536de7a539fe68a12d \
-            hadolint services/asr/Dockerfile services/meeting/Dockerfile services/worker/Dockerfile
+            hadolint services/asr/Dockerfile services/asr/Dockerfile.cpu services/meeting/Dockerfile services/worker/Dockerfile
       - name: Lint Python & TypeScript
         run: |
           make lint
@@ -54,10 +54,14 @@ jobs:
         run: |
           helm lint charts/wortlaut
           helm lint charts/wortlaut --set bundled.enabled=true
+          helm lint charts/wortlaut --set asr.backend=parakeet --set asr.device=cpu
           helm template wortlaut charts/wortlaut --namespace wortlaut | \
             docker run --rm -i ghcr.io/yannh/kubeconform:v0.8.0@sha256:faffaf43f95aa6425306e1ab8d6fcad72acb9049158f38e574c085ea1ec0f64e \
               -strict -summary
           helm template wortlaut charts/wortlaut --namespace wortlaut --set bundled.enabled=true | \
+            docker run --rm -i ghcr.io/yannh/kubeconform:v0.8.0@sha256:faffaf43f95aa6425306e1ab8d6fcad72acb9049158f38e574c085ea1ec0f64e \
+              -strict -summary
+          helm template wortlaut charts/wortlaut --namespace wortlaut --set asr.backend=parakeet --set asr.device=cpu | \
             docker run --rm -i ghcr.io/yannh/kubeconform:v0.8.0@sha256:faffaf43f95aa6425306e1ab8d6fcad72acb9049158f38e574c085ea1ec0f64e \
               -strict -summary
           kubectl kustomize deploy/dev | \

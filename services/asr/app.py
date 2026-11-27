@@ -1,4 +1,4 @@
-"""One loaded Qwen3-ASR model and one non-cancellable inference at a time."""
+"""Shared local ASR HTTP service supporting Qwen3-ASR (Transformers) and Parakeet TDT (ONNX)."""
 
 import base64
 import binascii
@@ -7,14 +7,18 @@ import math
 import os
 import re
 import secrets
+import sys
 import threading
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Header, HTTPException, Request
 from starlette.concurrency import run_in_threadpool
 
+DEFAULT_BACKEND = "qwen3"
 DEFAULT_MODEL_REPO = "Qwen/Qwen3-ASR-1.7B-hf"
 DEFAULT_MODEL_REVISION = "bcd2b5b7f32b480ab5790554cfa8347f246a14f3"
+DEFAULT_PARAKEET_MODEL_REPO = "istupakov/parakeet-tdt-0.6b-v3-onnx"
+DEFAULT_PARAKEET_MODEL_REVISION = "8f23f0c03c8761650bdb5b40aaf3e40d2c15f1ce"
 DEFAULT_ASR_LANGUAGES = "*"
 QWEN_ASR_LANGUAGES: tuple[str, ...] = (
     "Chinese",
@@ -48,9 +52,40 @@ QWEN_ASR_LANGUAGES: tuple[str, ...] = (
     "Macedonian",
     "Romanian",
 )
-_CANONICAL_LANG_BY_LOWER = {lang.lower(): lang for lang in QWEN_ASR_LANGUAGES}
+PARAKEET_ASR_LANGUAGES: tuple[str, ...] = (
+    "Bulgarian",
+    "Croatian",
+    "Czech",
+    "Danish",
+    "Dutch",
+    "English",
+    "Estonian",
+    "Finnish",
+    "French",
+    "German",
+    "Greek",
+    "Hungarian",
+    "Italian",
+    "Latvian",
+    "Lithuanian",
+    "Maltese",
+    "Polish",
+    "Portuguese",
+    "Romanian",
+    "Russian",
+    "Slovak",
+    "Slovenian",
+    "Spanish",
+    "Swedish",
+    "Ukrainian",
+)
+ALL_KNOWN_ASR_LANGUAGES: tuple[str, ...] = tuple(
+    dict.fromkeys((*QWEN_ASR_LANGUAGES, *PARAKEET_ASR_LANGUAGES))
+)
+_CANONICAL_LANG_BY_LOWER = {lang.lower(): lang for lang in ALL_KNOWN_ASR_LANGUAGES}
 MODEL_REPO = os.environ.get("WORTLAUT_ASR_MODEL_REPO", "").strip() or DEFAULT_MODEL_REPO
 MODEL_REVISION = os.environ.get("WORTLAUT_ASR_MODEL_REVISION", "").strip() or DEFAULT_MODEL_REVISION
+SENTENCEPIECE_SPACE = "\u2581"
 RATE = 16000
 PAD_SAMPLES = int(0.3 * RATE)
 TARGET_RMS = 0.1  # -20 dBFS target speech level for quiet microphones
@@ -103,10 +138,17 @@ model = None
 accelerator_failed = threading.Event()
 
 
-def parse_allowed_languages(raw: str | None) -> tuple[str, ...] | None:
+def parse_allowed_languages(
+    raw: str | None, *, supported: tuple[str, ...] = ALL_KNOWN_ASR_LANGUAGES
+) -> tuple[str, ...] | None:
     value = DEFAULT_ASR_LANGUAGES if raw is None else raw.strip()
     if not value or value.lower() in ("*", "all", "auto"):
         return None
+    allowed_lookup = (
+        _CANONICAL_LANG_BY_LOWER
+        if supported is ALL_KNOWN_ASR_LANGUAGES
+        else {lang.lower(): lang for lang in supported}
+    )
     resolved: list[str] = []
     for part in value.split(","):
         cleaned = part.strip()
@@ -114,7 +156,7 @@ def parse_allowed_languages(raw: str | None) -> tuple[str, ...] | None:
             continue
         if cleaned.lower() in ("*", "all", "auto"):
             return None
-        canon = _CANONICAL_LANG_BY_LOWER.get(cleaned.lower())
+        canon = allowed_lookup.get(cleaned.lower())
         if canon is None:
             raise ValueError(f"Unsupported ASR language: {cleaned}")
         if canon not in resolved:
@@ -263,16 +305,34 @@ def assemble_words(tokens: list[str], probs: list[float], to_text) -> list[dict]
 
 
 class QwenASR:
-    def __init__(self, processor, network, allowed_languages=...):
+    backend = "qwen3"
+    supports_context_prompt = True
+    supported_languages = QWEN_ASR_LANGUAGES
+
+    def __init__(
+        self,
+        processor,
+        network,
+        allowed_languages=...,
+        *,
+        device: str = "cuda",
+        quantization: str = "bfloat16",
+        model_repo: str = DEFAULT_MODEL_REPO,
+        model_revision: str = DEFAULT_MODEL_REVISION,
+    ):
         self.processor = processor
         self.network = network
+        self.device = device
+        self.quantization = quantization
+        self.model_repo = model_repo
+        self.model_revision = model_revision
         self.tokenizer = processor.tokenizer
         raw_langs = (
             os.environ.get("WORTLAUT_ASR_LANGUAGES")
             if allowed_languages is ...
             else allowed_languages
         )
-        self.allowed_languages = parse_allowed_languages(raw_langs)
+        self.allowed_languages = parse_allowed_languages(raw_langs, supported=QWEN_ASR_LANGUAGES)
         self.language_token_id = self._language_marker_token_id()
         self.none_token_id = self._first_lang_token_id("None")
         self.all_lang_ids = {
@@ -352,7 +412,7 @@ class QwenASR:
         if allowed_languages is ...:
             req_langs = self.allowed_languages
         else:
-            req_langs = parse_allowed_languages(allowed_languages)
+            req_langs = parse_allowed_languages(allowed_languages, supported=QWEN_ASR_LANGUAGES)
         if req_langs is None:
             if len(self.all_lang_ids) == len(QWEN_ASR_LANGUAGES):
                 return self.all_lang_ids, (), []
@@ -564,24 +624,343 @@ class QwenASR:
         }
 
 
-def load_model():
+def assemble_parakeet_words(
+    tokens: list[str] | None,
+    timestamps: list[float] | None,
+    logprobs: list[float] | None,
+    *,
+    text: str,
+    duration: float,
+    pad_seconds: float = 0.0,
+) -> list[dict]:
+    """Group Parakeet SentencePiece tokens into timed words with calibrated confidence."""
+    clean_text = " ".join((text or "").split())
+    if not clean_text:
+        return []
+    if not tokens:
+        return [{"word": w} for w in clean_text.split()]
+
+    has_ts = timestamps is not None and len(timestamps) == len(tokens)
+    has_lp = logprobs is not None and len(logprobs) == len(tokens)
+
+    groups: list[dict] = []
+    for idx, raw_tok in enumerate(tokens):
+        tok = str(raw_tok or "")
+        if not tok:
+            continue
+        starts_word = tok.startswith((SENTENCEPIECE_SPACE, " "))
+        piece = tok.lstrip(SENTENCEPIECE_SPACE + " ")
+        if not piece:
+            continue
+        ts_val = float(timestamps[idx]) if has_ts and timestamps is not None else None
+        prob_val: float | None = None
+        if has_lp and logprobs is not None:
+            try:
+                raw_lp = float(logprobs[idx])
+                if math.isfinite(raw_lp):
+                    prob_val = _clamp_confidence(math.exp(min(0.0, raw_lp)))
+            except TypeError, ValueError, OverflowError:
+                prob_val = None
+        if not groups or starts_word:
+            groups.append({"pieces": [piece], "timestamps": [], "probs": []})
+        else:
+            groups[-1]["pieces"].append(piece)
+        if ts_val is not None and math.isfinite(ts_val):
+            groups[-1]["timestamps"].append(ts_val)
+        if prob_val is not None:
+            groups[-1]["probs"].append(prob_val)
+
+    words: list[dict] = []
+    safe_dur = max(0.0, float(duration))
+    for g_idx, grp in enumerate(groups):
+        word_str = "".join(grp["pieces"]).strip()
+        if not word_str:
+            continue
+        item: dict = {"word": word_str}
+        if has_ts and grp["timestamps"]:
+            raw_start = grp["timestamps"][0] - pad_seconds
+            start_s = max(0.0, min(safe_dur, raw_start))
+            next_start: float | None = None
+            for nxt in groups[g_idx + 1 :]:
+                if nxt["timestamps"]:
+                    next_start = max(start_s, min(safe_dur, nxt["timestamps"][0] - pad_seconds))
+                    break
+            raw_last = min(
+                safe_dur,
+                max(start_s + 0.08, grp["timestamps"][-1] - pad_seconds + 0.08),
+            )
+            end_s = min(raw_last, next_start) if next_start is not None else raw_last
+            end_s = max(start_s, min(safe_dur, end_s))
+            item["start"] = round(start_s, 3)
+            item["end"] = round(end_s, 3)
+        if grp["probs"]:
+            item["confidence"] = round(sum(grp["probs"]) / len(grp["probs"]), 4)
+        words.append(item)
+
+    if not words:
+        return [{"word": w} for w in clean_text.split()]
+    if has_ts and any("start" not in w or "end" not in w for w in words):
+        # segment_result requires either every word timed or none.
+        for w in words:
+            w.pop("start", None)
+            w.pop("end", None)
+    return words
+
+
+class ParakeetASR:
+    backend = "parakeet"
+    supports_context_prompt = False
+    supported_languages = PARAKEET_ASR_LANGUAGES
+
+    def __init__(
+        self,
+        adapter,
+        *,
+        device: str = "cpu",
+        quantization: str = "int8",
+        model_repo: str = DEFAULT_PARAKEET_MODEL_REPO,
+        model_revision: str = DEFAULT_PARAKEET_MODEL_REVISION,
+    ):
+        self.adapter = adapter
+        self.device = device
+        self.quantization = quantization
+        self.model_repo = model_repo
+        self.model_revision = model_revision
+
+    def transcribe(
+        self,
+        audio,
+        *,
+        context_prompt: str | None = None,
+        primary_language: str | None = None,
+        allowed_languages=...,
+    ) -> dict:
+        import numpy as np
+
+        _ = (context_prompt, primary_language, allowed_languages)
+        duration = len(audio) / RATE
+        leveled = normalize_audio_rms(audio)
+        pad_samples = PAD_SAMPLES if len(leveled) else 0
+        padded = np.pad(leveled, (pad_samples, pad_samples)) if pad_samples else leveled
+        raw = self.adapter.recognize(padded, sample_rate=RATE)
+        text = " ".join(str(getattr(raw, "text", raw) or "").split())
+        tokens = getattr(raw, "tokens", None)
+        timestamps = getattr(raw, "timestamps", None)
+        logprobs = getattr(raw, "logprobs", None)
+        words = assemble_parakeet_words(
+            tokens,
+            timestamps,
+            logprobs,
+            text=text,
+            duration=duration,
+            pad_seconds=pad_samples / RATE,
+        )
+        return {
+            "text": text,
+            "language": None,
+            "words": words,
+            "truncated": False,
+        }
+
+
+def resolve_asr_backend() -> str:
+    raw = os.environ.get("WORTLAUT_ASR_BACKEND", DEFAULT_BACKEND).strip().lower()
+    if raw in ("", "qwen3", "qwen3-asr", "qwen"):
+        return "qwen3"
+    if raw in ("parakeet", "parakeet-tdt", "parakeet-onnx"):
+        return "parakeet"
+    raise ValueError(f"Unsupported ASR backend '{raw}'. Supported: qwen3, parakeet")
+
+
+def _resolve_allow_cpu() -> bool:
+    return os.environ.get("WORTLAUT_ASR_ALLOW_CPU", "").strip().lower() in ("1", "true", "yes")
+
+
+def _resolve_device_setting() -> str:
+    raw = os.environ.get("WORTLAUT_ASR_DEVICE", "auto").strip().lower()
+    if raw in ("", "auto"):
+        return "auto"
+    if raw in ("cuda", "gpu"):
+        return "cuda"
+    if raw in ("cpu", "mps"):
+        return raw
+    raise ValueError(f"Unsupported ASR device '{raw}'. Supported: auto, cuda, cpu, mps")
+
+
+def _resolve_quantization_setting(backend: str, device: str) -> str:
+    raw = os.environ.get("WORTLAUT_ASR_QUANTIZATION", "auto").strip().lower()
+    if raw in ("", "auto"):
+        if backend == "parakeet":
+            return "int8" if device == "cpu" else "fp32"
+        if device == "cuda":
+            return "bfloat16"
+        if device == "mps":
+            return "float16"
+        return "float32"
+    if backend == "parakeet":
+        if raw in ("int8", "fp32", "float32"):
+            return "fp32" if raw == "float32" else raw
+        raise ValueError(f"Unsupported Parakeet quantization '{raw}'. Supported: auto, int8, fp32")
+    if raw in ("bfloat16", "bf16"):
+        return "bfloat16"
+    if raw in ("float16", "fp16"):
+        return "float16"
+    if raw in ("float32", "fp32"):
+        return "float32"
+    raise ValueError(
+        f"Unsupported Qwen3 quantization '{raw}'. Supported: auto, bfloat16, float16, float32"
+    )
+
+
+def _load_qwen3_model() -> QwenASR:
     import torch
     from transformers import AutoModelForMultimodalLM, AutoProcessor
 
-    allow_cpu = os.environ.get("WORTLAUT_ASR_ALLOW_CPU", "").lower() in ("1", "true", "yes")
-    if torch.cuda.is_available():
-        device, dtype = "cuda", torch.bfloat16
+    requested_device = _resolve_device_setting()
+    allow_cpu = _resolve_allow_cpu()
+    cuda_available = bool(torch.cuda.is_available())
+    mps_backend = getattr(getattr(torch, "backends", None), "mps", None)
+    mps_available = bool(mps_backend and mps_backend.is_available())
+
+    if requested_device == "cuda":
+        if not cuda_available:
+            raise RuntimeError("Qwen3-ASR service requires an NVIDIA GPU")
+        device = "cuda"
+    elif requested_device == "mps":
+        if not mps_available:
+            raise RuntimeError("Qwen3-ASR MPS device is unavailable")
+        device = "mps"
+    elif requested_device == "cpu":
+        device = "cpu"
+    elif cuda_available:
+        device = "cuda"
+    elif mps_available:
+        device = "mps"
     elif allow_cpu:
-        device, dtype = "cpu", torch.float32
+        device = "cpu"
     else:
         raise RuntimeError("Qwen3-ASR service requires an NVIDIA GPU")
-    processor = AutoProcessor.from_pretrained(MODEL_REPO, revision=MODEL_REVISION)
-    network = AutoModelForMultimodalLM.from_pretrained(
-        MODEL_REPO, revision=MODEL_REVISION, dtype=dtype
-    )
+
+    quant = _resolve_quantization_setting("qwen3", device)
+    dtype_map = {
+        "bfloat16": torch.bfloat16,
+        "float16": getattr(torch, "float16", torch.float32),
+        "float32": torch.float32,
+    }
+    dtype = dtype_map[quant]
+
+    repo = os.environ.get("WORTLAUT_ASR_MODEL_REPO", "").strip() or MODEL_REPO
+    revision = os.environ.get("WORTLAUT_ASR_MODEL_REVISION", "").strip() or MODEL_REVISION
+    processor = AutoProcessor.from_pretrained(repo, revision=revision)
+    network = AutoModelForMultimodalLM.from_pretrained(repo, revision=revision, dtype=dtype)
     network.to(device)
     network.eval()
-    return QwenASR(processor, network)
+    return QwenASR(
+        processor,
+        network,
+        device=device,
+        quantization=quant,
+        model_repo=repo,
+        model_revision=revision,
+    )
+
+
+def _parakeet_snapshot_patterns(quantization: str) -> list[str]:
+    base = ["config.json", "vocab.txt", "nemo128.onnx"]
+    if quantization == "int8":
+        return [*base, "encoder-model.int8.onnx", "decoder_joint-model.int8.onnx"]
+    return [*base, "encoder-model.onnx", "encoder-model.onnx.data", "decoder_joint-model.onnx"]
+
+
+def _cuda_device_present() -> bool:
+    """Verify at runtime that at least one NVIDIA CUDA device is actually accessible."""
+    torch_mod = sys.modules.get("torch")
+    if torch_mod is not None:
+        cuda_mod = getattr(torch_mod, "cuda", None)
+        if cuda_mod is not None and callable(getattr(cuda_mod, "is_available", None)):
+            return bool(cuda_mod.is_available())
+    try:
+        import ctypes
+
+        libcuda = ctypes.CDLL("libcuda.so.1")
+        if libcuda.cuInit(0) != 0:
+            return False
+        count = ctypes.c_int(0)
+        if libcuda.cuDeviceGetCount(ctypes.byref(count)) != 0:
+            return False
+        return count.value > 0
+    except OSError, AttributeError:
+        return False
+
+
+def _parakeet_cuda_available(ort) -> bool:
+    return "CUDAExecutionProvider" in ort.get_available_providers() and _cuda_device_present()
+
+
+def _load_parakeet_model() -> ParakeetASR:
+    import onnx_asr
+    import onnxruntime as ort
+    from huggingface_hub import snapshot_download
+
+    requested_device = _resolve_device_setting()
+    allow_cpu = _resolve_allow_cpu()
+    cuda_available = _parakeet_cuda_available(ort)
+
+    if requested_device == "cuda":
+        if not cuda_available:
+            raise RuntimeError("Parakeet GPU inference requires CUDAExecutionProvider")
+        device = "cuda"
+        providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    elif requested_device == "cpu":
+        device = "cpu"
+        providers = ["CPUExecutionProvider"]
+    elif requested_device == "mps":
+        # ONNX Runtime on macOS runs Parakeet TDT most reliably on CPU (INT8).
+        device = "cpu"
+        providers = ["CPUExecutionProvider"]
+    elif cuda_available:
+        device = "cuda"
+        providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    elif allow_cpu:
+        device = "cpu"
+        providers = ["CPUExecutionProvider"]
+    else:
+        raise RuntimeError(
+            "Parakeet ASR requires an NVIDIA GPU unless WORTLAUT_ASR_DEVICE=cpu "
+            "or WORTLAUT_ASR_ALLOW_CPU=true"
+        )
+
+    quant = _resolve_quantization_setting("parakeet", device)
+    repo = os.environ.get("WORTLAUT_ASR_MODEL_REPO", "").strip() or DEFAULT_PARAKEET_MODEL_REPO
+    revision = (
+        os.environ.get("WORTLAUT_ASR_MODEL_REVISION", "").strip() or DEFAULT_PARAKEET_MODEL_REVISION
+    )
+    local_dir = snapshot_download(
+        repo_id=repo,
+        revision=revision,
+        allow_patterns=_parakeet_snapshot_patterns(quant),
+    )
+    loaded = onnx_asr.load_model(
+        "nemo-parakeet-tdt-0.6b-v3",
+        path=local_dir,
+        quantization="int8" if quant == "int8" else None,
+        providers=providers,
+    )
+    adapter = loaded.with_timestamps() if hasattr(loaded, "with_timestamps") else loaded
+    return ParakeetASR(
+        adapter,
+        device=device,
+        quantization=quant,
+        model_repo=repo,
+        model_revision=revision,
+    )
+
+
+def load_model():
+    backend = resolve_asr_backend()
+    if backend == "parakeet":
+        return _load_parakeet_model()
+    return _load_qwen3_model()
 
 
 @asynccontextmanager
@@ -593,7 +972,7 @@ async def lifespan(app):
     yield
 
 
-app = FastAPI(title="wortlaut Qwen3-ASR", lifespan=lifespan)
+app = FastAPI(title="wortlaut ASR", lifespan=lifespan)
 
 
 @app.get("/health/ready")
@@ -602,11 +981,16 @@ def ready():
         raise HTTPException(503, "GPU unavailable; process restart required")
     if model is None:
         raise HTTPException(503, "Model loading")
+    supported_langs = getattr(model, "supported_languages", QWEN_ASR_LANGUAGES)
     return {
         "status": "ready",
-        "model": MODEL_REPO,
-        "model_revision": MODEL_REVISION,
-        "supported_languages": list(QWEN_ASR_LANGUAGES),
+        "backend": getattr(model, "backend", DEFAULT_BACKEND),
+        "device": getattr(model, "device", "unknown"),
+        "quantization": getattr(model, "quantization", "unknown"),
+        "model": getattr(model, "model_repo", MODEL_REPO),
+        "model_revision": getattr(model, "model_revision", MODEL_REVISION),
+        "supports_context_prompt": bool(getattr(model, "supports_context_prompt", True)),
+        "supported_languages": list(supported_langs),
         "default_languages": os.environ.get("WORTLAUT_ASR_LANGUAGES", DEFAULT_ASR_LANGUAGES),
     }
 
@@ -618,6 +1002,50 @@ def live():
     return {"status": "alive"}
 
 
+def _torch_error_types():
+    torch_mod = sys.modules.get("torch")
+    if torch_mod is None:
+        return (), (), None
+    accel = getattr(torch_mod, "AcceleratorError", None)
+    oom = getattr(torch_mod, "OutOfMemoryError", None)
+    return (
+        (accel,) if isinstance(accel, type) and issubclass(accel, BaseException) else (),
+        (oom,) if isinstance(oom, type) and issubclass(oom, BaseException) else (),
+        torch_mod,
+    )
+
+
+def _classify_onnx_gpu_error(exc: Exception) -> str | None:
+    mod_name = type(exc).__module__ or ""
+    if not mod_name.startswith("onnxruntime"):
+        return None
+    msg = str(exc).lower()
+    if any(
+        needle in msg
+        for needle in (
+            "out of memory",
+            "failed to allocate memory",
+            "cudamalloc",
+            "bfcarena",
+            "bfc_arena",
+        )
+    ):
+        return "oom"
+    if any(
+        needle in msg
+        for needle in (
+            "cudaerror",
+            "cuda failure",
+            "cuda runtime",
+            "cudnn",
+            "cublas",
+            "cuda execution provider",
+        )
+    ):
+        return "fatal"
+    return None
+
+
 def infer(
     pcm,
     identifier,
@@ -626,15 +1054,19 @@ def infer(
     allowed_languages=...,
 ):
     import numpy as np
-    import torch
 
     if accelerator_failed.is_set():
         raise HTTPException(503, "GPU unavailable")
+    if model is None:
+        raise HTTPException(503, "Model loading")
     if not lock.acquire(blocking=False):
         raise HTTPException(429, "Inference busy", headers={"Retry-After": "5"})
+    accel_errors, oom_errors, torch_mod = _torch_error_types()
     try:
         if accelerator_failed.is_set():
             raise HTTPException(503, "GPU unavailable")
+        if model is None:
+            raise HTTPException(503, "Model loading")
         # The lock belongs to the synchronous inference thread. Disconnecting
         # the HTTP client never releases it while CUDA is still working.
         audio = np.frombuffer(pcm, dtype="<i2").astype(np.float32) / 32768.0
@@ -646,16 +1078,23 @@ def infer(
             **extra,
         )
         return {"job_id": identifier, "pcm_sha256": hashlib.sha256(pcm).hexdigest(), **result}
-    except torch.AcceleratorError:
-        # An unusable CUDA/MPS client must stop receiving more jobs. The
-        # liveness probe replaces only this process, not shared GPU services.
-        accelerator_failed.set()
-        raise HTTPException(503, "GPU unavailable") from None
-    except torch.OutOfMemoryError:
-        # The GPU is shared; a transient allocation failure leaves this CUDA
-        # client usable. Release cached blocks and let the job retry later.
-        torch.cuda.empty_cache()
-        raise HTTPException(503, "GPU memory exhausted", headers={"Retry-After": "30"}) from None
+    except Exception as exc:
+        onnx_gpu_err = _classify_onnx_gpu_error(exc)
+        if (accel_errors and isinstance(exc, accel_errors)) or onnx_gpu_err == "fatal":
+            # An unusable CUDA/MPS client must stop receiving more jobs. The
+            # liveness probe replaces only this process, not shared GPU services.
+            accelerator_failed.set()
+            raise HTTPException(503, "GPU unavailable") from None
+        if (oom_errors and isinstance(exc, oom_errors)) or onnx_gpu_err == "oom":
+            # The GPU is shared; a transient allocation failure leaves this CUDA
+            # client usable. Release cached blocks and let the job retry later.
+            cuda_mod = getattr(torch_mod, "cuda", None)
+            if cuda_mod is not None and hasattr(cuda_mod, "empty_cache"):
+                cuda_mod.empty_cache()
+            raise HTTPException(
+                503, "GPU memory exhausted", headers={"Retry-After": "30"}
+            ) from None
+        raise
     finally:
         lock.release()
 
@@ -691,8 +1130,13 @@ async def transcribe(
     primary_lang = (x_primary_language or "").strip()[:64] or None
     req_languages = ...
     if x_asr_languages is not None and x_asr_languages.strip():
+        supported_langs = (
+            QWEN_ASR_LANGUAGES
+            if getattr(model, "backend", None) == "qwen3"
+            else ALL_KNOWN_ASR_LANGUAGES
+        )
         try:
-            parse_allowed_languages(x_asr_languages)
+            parse_allowed_languages(x_asr_languages, supported=supported_langs)
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from None
         req_languages = x_asr_languages.strip()
