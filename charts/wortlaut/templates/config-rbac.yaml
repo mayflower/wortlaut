@@ -47,6 +47,21 @@ data:
 {{- if .Values.oidc.issuer }}
   WORTLAUT_OIDC_ISSUER: {{ .Values.oidc.issuer | quote }}
   WORTLAUT_OIDC_CLIENT_ID: {{ .Values.oidc.clientId | quote }}
+{{- if .Values.oidc.displayName }}
+  WORTLAUT_OIDC_DISPLAY_NAME: {{ .Values.oidc.displayName | quote }}
+{{- end }}
+{{- end }}
+{{- if .Values.oidc.googleClientId }}
+  WORTLAUT_GOOGLE_AUTH_CLIENT_ID: {{ .Values.oidc.googleClientId | quote }}
+{{- end }}
+{{- if and .Values.oidc.entraClientId .Values.oidc.entraTenantId }}
+  WORTLAUT_ENTRA_AUTH_CLIENT_ID: {{ .Values.oidc.entraClientId | quote }}
+  WORTLAUT_ENTRA_AUTH_TENANT_ID: {{ .Values.oidc.entraTenantId | quote }}
+{{- if .Values.oidc.entraAllowedTenants }}
+  WORTLAUT_ENTRA_AUTH_ALLOWED_TENANTS: {{ .Values.oidc.entraAllowedTenants | toJson | quote }}
+{{- end }}
+{{- end }}
+{{- if or .Values.oidc.issuer .Values.oidc.googleClientId (and .Values.oidc.entraClientId .Values.oidc.entraTenantId) }}
   WORTLAUT_OIDC_ALLOWED_DOMAINS: {{ .Values.oidc.allowedDomains | toJson | quote }}
   WORTLAUT_OIDC_ADMIN_EMAILS: {{ .Values.oidc.adminEmails | toJson | quote }}
 {{- end }}

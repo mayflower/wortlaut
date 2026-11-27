@@ -1,6 +1,8 @@
 import { getCurrentLang } from './i18n';
 import type {
   AuthMode,
+  AuthProviderId,
+  AuthProviderOption,
   CalendarConnectionInfo,
   CalendarEvent,
   CalendarSyncedEventInfo,
@@ -101,14 +103,38 @@ export function parseTokenAuthMode(rawToken: string): AuthMode {
   return { kind: 'operator', token: trimmed };
 }
 
-export async function startOidcLogin(): Promise<void> {
-  const instance = getInstanceInfo();
+export function getConfiguredAuthProviders(
+  instance: InstanceInfo = getInstanceInfo()
+): AuthProviderOption[] {
   const oidc = instance.oidc;
-  if (!oidc?.enabled || !oidc.issuer || !oidc.clientId) {
+  if (!oidc?.enabled) return [];
+  if (oidc.providers && oidc.providers.length > 0) {
+    return oidc.providers;
+  }
+  if (oidc.issuer && oidc.clientId) {
+    return [
+      {
+        id: 'oidc',
+        label: 'SSO (OIDC)',
+        issuer: oidc.issuer,
+        authorizationEndpoint: oidc.authorizationEndpoint,
+        clientId: oidc.clientId,
+      },
+    ];
+  }
+  return [];
+}
+
+export async function startOidcLogin(providerId?: AuthProviderId): Promise<void> {
+  const providers = getConfiguredAuthProviders();
+  let selected: AuthProviderOption | undefined = providerId
+    ? providers.find((p) => p.id === providerId)
+    : providers[0];
+  if (!selected) {
     throw new Error(
       getCurrentLang() === 'en'
-        ? 'OIDC sign-in is not configured on this instance.'
-        : 'OIDC-Anmeldung ist auf dieser Instanz nicht konfiguriert.'
+        ? 'Sign-in provider is not configured on this instance.'
+        : 'Anmeldeanbieter ist auf dieser Instanz nicht konfiguriert.'
     );
   }
   const verifier = randomBase64Url(32);
@@ -122,29 +148,57 @@ export async function startOidcLogin(): Promise<void> {
   );
   const challenge = encodeBase64Url(new Uint8Array(digest));
 
-  sessionStorage.setItem(
-    OIDC_PKCE_STORAGE_KEY,
-    JSON.stringify({ verifier, state, nonce, redirectUri })
-  );
-
-  let authorizationEndpoint = oidc.authorizationEndpoint || '';
+  let authorizationEndpoint = selected.authorizationEndpoint || '';
+  let clientId = selected.clientId;
+  let extraParams: Record<string, string> = { ...(selected.extraParams || {}) };
   try {
     const cfgRes = await fetch('/v1/auth/oidc/config', {
       signal: AbortSignal.timeout(4000),
     });
     if (cfgRes.ok) {
-      const cfg = (await cfgRes.json()) as { authorization_endpoint?: string };
-      if (cfg.authorization_endpoint) {
+      const cfg = (await cfgRes.json()) as {
+        authorization_endpoint?: string;
+        providers?: Array<{
+          id: AuthProviderId;
+          authorization_endpoint?: string;
+          client_id?: string;
+          extra_params?: Record<string, string>;
+        }>;
+      };
+      const remote = cfg.providers?.find((p) => p.id === selected!.id);
+      if (remote) {
+        if (remote.authorization_endpoint) {
+          authorizationEndpoint = remote.authorization_endpoint;
+        }
+        if (remote.client_id) {
+          clientId = remote.client_id;
+        }
+        if (remote.extra_params) {
+          extraParams = { ...extraParams, ...remote.extra_params };
+        }
+      } else if (selected.id === 'oidc' && cfg.authorization_endpoint) {
         authorizationEndpoint = cfg.authorization_endpoint;
       }
     }
   } catch {
     // Fall back to boot-configured or default authorization endpoint
   }
-  const authUrl = new URL(
-    authorizationEndpoint || `${oidc.issuer.replace(/\/$/, '')}/auth`
+
+  sessionStorage.setItem(
+    OIDC_PKCE_STORAGE_KEY,
+    JSON.stringify({
+      provider: selected.id,
+      verifier,
+      state,
+      nonce,
+      redirectUri,
+    })
   );
-  authUrl.searchParams.set('client_id', oidc.clientId);
+
+  const authUrl = new URL(
+    authorizationEndpoint || `${selected.issuer.replace(/\/$/, '')}/auth`
+  );
+  authUrl.searchParams.set('client_id', clientId);
   authUrl.searchParams.set('redirect_uri', redirectUri);
   authUrl.searchParams.set('response_type', 'code');
   authUrl.searchParams.set('scope', 'openid profile email');
@@ -152,6 +206,9 @@ export async function startOidcLogin(): Promise<void> {
   authUrl.searchParams.set('nonce', nonce);
   authUrl.searchParams.set('code_challenge', challenge);
   authUrl.searchParams.set('code_challenge_method', 'S256');
+  for (const [key, val] of Object.entries(extraParams)) {
+    if (val) authUrl.searchParams.set(key, val);
+  }
   window.location.assign(authUrl.toString());
 }
 
@@ -318,10 +375,16 @@ export async function completeOidcCallbackIfPresent(): Promise<{
     window.history.replaceState(null, '', '/ui');
   };
 
+  const isEn = getCurrentLang() === 'en';
+
   if (errParam) {
     sessionStorage.removeItem(OIDC_PKCE_STORAGE_KEY);
     clearCallbackUrl();
-    return { error: `SSO-Anmeldung fehlgeschlagen: ${errDesc || errParam}` };
+    return {
+      error: isEn
+        ? `Sign-in failed: ${errDesc || errParam}`
+        : `Anmeldung fehlgeschlagen: ${errDesc || errParam}`,
+    };
   }
 
   if (!code) {
@@ -334,12 +397,14 @@ export async function completeOidcCallbackIfPresent(): Promise<{
   if (!rawStored) {
     clearCallbackUrl();
     return {
-      error:
-        'SSO-Sitzung abgelaufen (PKCE-Status fehlt). Bitte erneut anmelden.',
+      error: isEn
+        ? 'Sign-in session expired (missing PKCE state). Please try again.'
+        : 'Anmeldesitzung abgelaufen (PKCE-Status fehlt). Bitte erneut anmelden.',
     };
   }
 
   let stored: {
+    provider?: AuthProviderId;
     verifier: string;
     state: string;
     nonce?: string;
@@ -349,12 +414,20 @@ export async function completeOidcCallbackIfPresent(): Promise<{
     stored = JSON.parse(rawStored);
   } catch {
     clearCallbackUrl();
-    return { error: 'Ungültiger lokaler PKCE-Status.' };
+    return {
+      error: isEn
+        ? 'Invalid local PKCE state.'
+        : 'Ungültiger lokaler PKCE-Status.',
+    };
   }
 
   if (!state || state !== stored.state) {
     clearCallbackUrl();
-    return { error: 'Ungültiger OAuth-State-Parameter.' };
+    return {
+      error: isEn
+        ? 'Invalid OAuth state parameter.'
+        : 'Ungültiger OAuth-State-Parameter.',
+    };
   }
 
   try {
@@ -365,6 +438,7 @@ export async function completeOidcCallbackIfPresent(): Promise<{
     }>('/v1/auth/oidc/exchange', '', {
       method: 'POST',
       body: JSON.stringify({
+        provider: stored.provider || 'oidc',
         code,
         code_verifier: stored.verifier,
         redirect_uri: stored.redirectUri,
@@ -394,8 +468,12 @@ export async function completeOidcCallbackIfPresent(): Promise<{
     return {
       error:
         err instanceof Error
-          ? `SSO-Anmeldung fehlgeschlagen: ${err.message}`
-          : 'SSO-Anmeldung fehlgeschlagen.',
+          ? isEn
+            ? `Sign-in failed: ${err.message}`
+            : `Anmeldung fehlgeschlagen: ${err.message}`
+          : isEn
+            ? 'Sign-in failed.'
+            : 'Anmeldung fehlgeschlagen.',
     };
   }
 }

@@ -12,7 +12,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from urllib.parse import urlencode, urlsplit, urlunsplit
 
-import httpx
 from fastapi import HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from sqlalchemy import delete, func, or_, select
@@ -20,13 +19,19 @@ from sqlalchemy.orm import Session
 
 from wortlaut.models import McpOAuthAuthorization, McpOAuthClient, McpOAuthGrant
 from wortlaut.oidc import (
+    AuthProviderId,
+    OidcProviderConfig,
     Principal,
     _b64url_encode,
-    get_oidc_authorization_endpoint,
-    get_oidc_token_endpoint,
+    exchange_provider_token_for_claims,
+    get_auth_provider,
+    get_configured_auth_providers,
+    get_provider_authorization_endpoint,
+    has_any_auth_provider,
     is_admin_email,
     is_allowed_user_email,
-    verify_dex_id_token,
+    provider_extra_auth_params,
+    verify_bearer_oidc_id_token,
     verify_user_session_token,
 )
 from wortlaut.settings import derive_subkey, get_settings
@@ -797,6 +802,152 @@ def _render_consent_html(
 </html>"""
 
 
+def _build_mcp_oidc_redirect(
+    *,
+    provider: OidcProviderConfig,
+    auth_row: McpOAuthAuthorization,
+    origin: str,
+) -> RedirectResponse:
+    assert auth_row.upstream_verifier and auth_row.upstream_nonce
+    state_payload = f"{provider.id}.{auth_row.id}"
+    state_sig = _hmac_tag(b"mcp-oidc-state", state_payload)
+    oidc_params = {
+        "client_id": provider.client_id,
+        "redirect_uri": f"{origin}/auth/callback",
+        "response_type": "code",
+        "scope": "openid profile email",
+        "state": f"mcp.{provider.id}.{auth_row.id}.{state_sig}",
+        "nonce": auth_row.upstream_nonce,
+        "code_challenge": _pkce_s256(auth_row.upstream_verifier),
+        "code_challenge_method": "S256",
+        **provider_extra_auth_params(provider),
+    }
+    auth_ep = get_provider_authorization_endpoint(provider)
+    sep = "&" if "?" in auth_ep else "?"
+    return RedirectResponse(
+        f"{auth_ep}{sep}{urlencode(oidc_params)}",
+        status_code=302,
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+def _render_provider_chooser_html(
+    *,
+    auth_row: McpOAuthAuthorization,
+    client: McpOAuthClient,
+    providers: list[OidcProviderConfig],
+) -> str:
+    settings = get_settings()
+    is_en = settings.default_locale == "en"
+    assistant = html.escape(settings.assistant_name)
+    client_name = html.escape(client.client_name)
+    title = f"Sign in – {assistant}" if is_en else f"Anmelden – {assistant}"
+    heading = (
+        f"Sign in to connect {client_name}"
+        if is_en
+        else f"Anmelden, um {client_name} zu verbinden"
+    )
+    subtitle = (
+        "Choose your identity provider to continue."
+        if is_en
+        else "Wählen Sie einen Anmeldeanbieter aus, um fortzufahren."
+    )
+    buttons = []
+    for idx, p in enumerate(providers):
+        href = f"/oauth/login?{urlencode({'auth_id': str(auth_row.id), 'provider': p.id})}"
+        label = (
+            f"Sign in with {p.label}" if is_en else f"Mit {p.label} anmelden"
+        )
+        cls = "btn btn-primary" if idx == 0 else "btn btn-secondary"
+        buttons.append(
+            f'<a class="{cls}" href="{html.escape(href, quote=True)}">{html.escape(label)}</a>'
+        )
+    buttons_html = "\n      ".join(buttons)
+    return f"""<!DOCTYPE html>
+<html lang="{'en' if is_en else 'de'}">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark light" />
+  <link rel="icon" href="{FAVICON_DATA_URI}" />
+  <title>{title}</title>
+  <style>
+    :root {{ color-scheme: dark light; }}
+    body {{
+      margin: 0; font-family: system-ui, -apple-system, sans-serif;
+      background: #101018; color: #f0f0f9; min-height: 100vh;
+      display: flex; align-items: center; justify-content: center; padding: 24px;
+    }}
+    @media (prefers-color-scheme: light) {{
+      body {{ background: #f0f0f7; color: #25252a; }}
+      .card {{ background: #ffffff; border-color: rgba(37,37,42,0.12); }}
+      .muted {{ color: #646472; }}
+      .btn-secondary {{ background: #f4f4f8; color: #25252a; border-color: rgba(37,37,42,0.14); }}
+    }}
+    .card {{
+      width: 100%; max-width: 420px; background: #1b1b21;
+      border: 1px solid rgba(240,240,249,0.12); border-radius: 14px; padding: 28px;
+      box-sizing: border-box;
+    }}
+    h1 {{ margin: 0 0 8px; font-size: 1.25rem; font-weight: 600; }}
+    .muted {{ margin: 0 0 20px; font-size: 0.92rem; color: #a1a1b5; line-height: 1.45; }}
+    .stack {{ display: flex; flex-direction: column; gap: 10px; }}
+    .btn {{
+      display: block; text-align: center; text-decoration: none; font-weight: 600;
+      font-size: 0.95rem; padding: 11px 16px; border-radius: 999px;
+      border: 1px solid transparent; transition: opacity .15s;
+    }}
+    .btn:hover {{ opacity: 0.9; }}
+    .btn-primary {{ background: #10b981; color: #052e16; }}
+    .btn-secondary {{
+      background: #252530; color: #f0f0f9; border-color: rgba(240,240,249,0.16);
+    }}
+  </style>
+</head>
+<body>
+  <main class="card">
+    <h1>{heading}</h1>
+    <p class="muted">{subtitle}</p>
+    <div class="stack">
+      {buttons_html}
+    </div>
+  </main>
+</body>
+</html>"""
+
+
+def select_mcp_oidc_provider(
+    request: Request,
+    db: Session,
+    *,
+    auth_id_raw: str,
+    provider_id: AuthProviderId,
+) -> Response:
+    try:
+        auth_id = uuid.UUID(auth_id_raw)
+    except ValueError:
+        raise HTTPException(400, "Invalid authorization session id") from None
+    now = datetime.now(UTC)
+    auth_row = db.scalar(
+        select(McpOAuthAuthorization).where(McpOAuthAuthorization.id == auth_id)
+    )
+    if (
+        auth_row is None
+        or auth_row.expires_at <= now
+        or auth_row.code_hash is not None
+        or not auth_row.upstream_verifier
+        or not auth_row.upstream_nonce
+        or not _verify_consent_cookie(request, auth_id)
+    ):
+        raise HTTPException(400, "MCP authorization session expired or invalid browser binding")
+    provider = get_auth_provider(provider_id)
+    return _build_mcp_oidc_redirect(
+        provider=provider,
+        auth_row=auth_row,
+        origin=public_origin(request),
+    )
+
+
 def start_oauth_authorization(
     request: Request,
     db: Session,
@@ -845,9 +996,9 @@ def start_oauth_authorization(
         return _redirect_err("invalid_scope", str(exc))
 
     now = datetime.now(UTC)
-    settings = get_settings()
-    upstream_verifier = _b64url_encode(secrets.token_bytes(32)) if settings.oidc_issuer else None
-    upstream_nonce = _b64url_encode(secrets.token_bytes(16)) if settings.oidc_issuer else None
+    auth_providers = get_configured_auth_providers()
+    upstream_verifier = _b64url_encode(secrets.token_bytes(32)) if auth_providers else None
+    upstream_nonce = _b64url_encode(secrets.token_bytes(16)) if auth_providers else None
 
     auth_row = McpOAuthAuthorization(
         id=uuid.uuid4(),
@@ -867,24 +1018,22 @@ def start_oauth_authorization(
     db.add(auth_row)
     db.commit()
 
-    if settings.oidc_issuer and upstream_verifier and upstream_nonce:
-        state_sig = _hmac_tag(b"mcp-oidc-state", str(auth_row.id))
-        oidc_params = {
-            "client_id": settings.oidc_client_id,
-            "redirect_uri": f"{origin}/auth/callback",
-            "response_type": "code",
-            "scope": "openid profile email",
-            "state": f"mcp.{auth_row.id}.{state_sig}",
-            "nonce": upstream_nonce,
-            "code_challenge": _pkce_s256(upstream_verifier),
-            "code_challenge_method": "S256",
-        }
-        auth_ep = get_oidc_authorization_endpoint()
-        sep = "&" if "?" in auth_ep else "?"
-        oidc_auth_url = f"{auth_ep}{sep}{urlencode(oidc_params)}"
-        resp: Response = RedirectResponse(
-            oidc_auth_url, status_code=302, headers={"Cache-Control": "no-store"}
+    if len(auth_providers) == 1 and upstream_verifier and upstream_nonce:
+        resp: Response = _build_mcp_oidc_redirect(
+            provider=auth_providers[0],
+            auth_row=auth_row,
+            origin=origin,
         )
+        _set_consent_cookie(resp, auth_row.id, origin)
+        return resp
+
+    if len(auth_providers) > 1 and upstream_verifier and upstream_nonce:
+        chooser_html = _render_provider_chooser_html(
+            auth_row=auth_row,
+            client=client,
+            providers=auth_providers,
+        )
+        resp = HTMLResponse(chooser_html, headers={"Cache-Control": "no-store"})
         _set_consent_cookie(resp, auth_row.id, origin)
         return resp
 
@@ -906,10 +1055,17 @@ def is_mcp_oidc_callback(request: Request) -> bool:
 def handle_mcp_oidc_callback(request: Request, db: Session) -> Response:
     raw_state = request.query_params.get("state") or ""
     parts = raw_state.split(".")
-    if len(parts) != 3 or parts[0] != "mcp":
+    provider_id: AuthProviderId
+    if len(parts) == 4 and parts[0] == "mcp" and parts[1] in ("oidc", "google", "entra"):
+        _, raw_provider, raw_id, sig = parts
+        provider_id = raw_provider  # type: ignore[assignment]
+        expected_sig = _hmac_tag(b"mcp-oidc-state", f"{provider_id}.{raw_id}")
+    elif len(parts) == 3 and parts[0] == "mcp":
+        _, raw_id, sig = parts
+        provider_id = "oidc"
+        expected_sig = _hmac_tag(b"mcp-oidc-state", raw_id)
+    else:
         raise HTTPException(400, "Invalid MCP OAuth callback state")
-    _, raw_id, sig = parts
-    expected_sig = _hmac_tag(b"mcp-oidc-state", raw_id)
     if not secrets.compare_digest(sig, expected_sig):
         raise HTTPException(400, "Invalid MCP OAuth state signature")
     try:
@@ -949,35 +1105,14 @@ def handle_mcp_oidc_callback(request: Request, db: Session) -> Response:
         raise HTTPException(400, "Missing OIDC authorization code")
 
     origin = public_origin(request)
-    settings = get_settings()
-    token_url = get_oidc_token_endpoint()
-    try:
-        res = httpx.post(
-            token_url,
-            data={
-                "grant_type": "authorization_code",
-                "client_id": settings.oidc_client_id,
-                "code": code,
-                "redirect_uri": f"{origin}/auth/callback",
-                "code_verifier": auth_row.upstream_verifier,
-            },
-            headers={"Accept": "application/json"},
-            timeout=10.0,
-        )
-    except httpx.HTTPError as exc:
-        raise HTTPException(503, "OIDC token endpoint unreachable") from exc
-    if res.status_code != 200:
-        raise HTTPException(401, "OIDC authorization code exchange failed")
-    try:
-        token_data = res.json()
-    except ValueError:
-        raise HTTPException(502, "Invalid response from OIDC token endpoint") from None
-
-    raw_id_token = token_data.get("id_token")
-    if not isinstance(raw_id_token, str) or not raw_id_token:
-        raise HTTPException(401, "OIDC response did not include an id_token")
-
-    claims = verify_dex_id_token(raw_id_token, expected_nonce=auth_row.upstream_nonce)
+    provider = get_auth_provider(provider_id)
+    claims = exchange_provider_token_for_claims(
+        provider=provider,
+        code=code,
+        code_verifier=auth_row.upstream_verifier,
+        redirect_uri=f"{origin}/auth/callback",
+        nonce=auth_row.upstream_nonce,
+    )
     clean_email = claims["email"].strip().lower()
     auth_row.user_sub = claims["sub"]
     auth_row.user_email = clean_email
@@ -1043,7 +1178,7 @@ def submit_oauth_consent(
 
     settings = get_settings()
     if not auth_row.user_email and not auth_row.is_operator:
-        if settings.oidc_issuer:
+        if has_any_auth_provider():
             raise HTTPException(401, "OIDC authentication has not completed")
         supplied = (operator_token or "").strip()
         expected_api = settings.api_token.get_secret_value()
@@ -1457,7 +1592,7 @@ def authenticate_mcp_request(
 
     if token.count(".") == 2 and not token.startswith("wortlaut-read-"):
         try:
-            claims = verify_dex_id_token(token)
+            claims = verify_bearer_oidc_id_token(token)
         except HTTPException as exc:
             raise McpAuthError(
                 401,

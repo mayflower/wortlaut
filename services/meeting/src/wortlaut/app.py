@@ -105,6 +105,7 @@ from wortlaut.mcp_oauth import (
     register_oauth_client,
     revoke_oauth_token,
     revoke_user_mcp_grant,
+    select_mcp_oidc_provider,
     start_oauth_authorization,
     submit_oauth_consent,
     verify_mcp_access_token_principal,
@@ -131,12 +132,15 @@ from wortlaut.models import (
     TranscriptSegment,
 )
 from wortlaut.oidc import (
+    AuthProviderId,
     Principal,
     can_access_recording,
     exchange_oidc_code,
-    get_oidc_authorization_endpoint,
+    get_configured_auth_providers,
+    get_provider_authorization_endpoint,
     is_admin_email,
-    verify_dex_id_token,
+    provider_extra_auth_params,
+    verify_bearer_oidc_id_token,
     verify_user_session_token,
 )
 from wortlaut.processing import (
@@ -261,7 +265,7 @@ def user_auth(authorization: Annotated[str | None, Header()] = None) -> Principa
     if session_principal is not None:
         return session_principal
     if token.count(".") == 2 and not token.startswith("wortlaut-read-"):
-        claims = verify_dex_id_token(token)
+        claims = verify_bearer_oidc_id_token(token)
         email = claims["email"].strip().lower()
         return Principal(
             kind="user",
@@ -281,6 +285,7 @@ class OidcExchangeRequest(BaseModel):
     code_verifier: str = Field(min_length=43, max_length=256)
     redirect_uri: str = Field(min_length=1, max_length=1024)
     nonce: str | None = Field(default=None, max_length=256)
+    provider: AuthProviderId = "oidc"
 
 
 class CalendarOAuthExchangeRequest(BaseModel):
@@ -722,6 +727,16 @@ def oauth_authorize_endpoint(
     )
 
 
+@app.get("/oauth/login")
+def oauth_login_provider_endpoint(
+    request: Request,
+    db: Db,
+    auth_id: str,
+    provider: AuthProviderId,
+):
+    return select_mcp_oidc_provider(request, db, auth_id_raw=auth_id, provider_id=provider)
+
+
 @app.post("/oauth/consent")
 async def oauth_consent_endpoint(request: Request, db: Db):
     try:
@@ -824,15 +839,35 @@ def privacy_page(lang: str | None = None):
 
 @app.get("/v1/auth/oidc/config")
 def oidc_config_endpoint(response: Response):
-    s = get_settings()
     response.headers["Cache-Control"] = "no-store"
-    if not s.oidc_issuer:
-        return {"enabled": False, "authorization_endpoint": "", "client_id": ""}
+    providers = get_configured_auth_providers()
+    if not providers:
+        return {
+            "enabled": False,
+            "authorization_endpoint": "",
+            "client_id": "",
+            "providers": [],
+        }
+    items = []
+    for p in providers:
+        items.append(
+            {
+                "id": p.id,
+                "label": p.label,
+                "issuer": p.issuer,
+                "authorization_endpoint": get_provider_authorization_endpoint(p),
+                "client_id": p.client_id,
+                "scope": "openid profile email",
+                "extra_params": provider_extra_auth_params(p),
+            }
+        )
+    primary = items[0]
     return {
         "enabled": True,
-        "issuer": s.oidc_issuer,
-        "authorization_endpoint": get_oidc_authorization_endpoint(),
-        "client_id": s.oidc_client_id,
+        "issuer": primary["issuer"],
+        "authorization_endpoint": primary["authorization_endpoint"],
+        "client_id": primary["client_id"],
+        "providers": items,
     }
 
 
@@ -844,6 +879,7 @@ def oidc_exchange(body: OidcExchangeRequest, response: Response):
         code_verifier=body.code_verifier,
         redirect_uri=body.redirect_uri,
         nonce=body.nonce,
+        provider_id=body.provider,
     )
 
 
@@ -1446,7 +1482,7 @@ def _authenticate_recording_access(
         if principal is None:
             principal = verify_user_session_token(token)
         if principal is None and token.count(".") == 2 and not token.startswith("wortlaut-read-"):
-            claims = verify_dex_id_token(token)
+            claims = verify_bearer_oidc_id_token(token)
             email = claims["email"].strip().lower()
             principal = Principal(
                 kind="user",

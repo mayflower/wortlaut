@@ -333,6 +333,17 @@ export type AuthMode =
   | { kind: 'operator'; token: string; user?: UserIdentity }
   | { kind: 'reader'; token: string; recordingId: string };
 
+export type AuthProviderId = 'oidc' | 'google' | 'entra';
+
+export interface AuthProviderOption {
+  id: AuthProviderId;
+  label: string;
+  issuer: string;
+  authorizationEndpoint?: string;
+  clientId: string;
+  extraParams?: Record<string, string>;
+}
+
 export interface InstanceInfo {
   assistantName: string;
   defaultLocale?: 'de' | 'en';
@@ -343,6 +354,7 @@ export interface InstanceInfo {
     authorizationEndpoint?: string;
     clientId: string;
     allowedDomains: string[];
+    providers?: AuthProviderOption[];
   };
   calendarOAuth?: {
     googleEnabled: boolean;

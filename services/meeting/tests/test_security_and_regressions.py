@@ -1525,7 +1525,7 @@ def test_immediate_opt_out_hides_live_speaker_zeros_s3_chunks_and_syncs_worker(
     assert len(tx_after["opted_out_windows"]) == 1
     assert tx_after["opted_out_windows"][0]["offset_seconds"] == 12.0
     assert tx_after["opted_out_windows"][0]["end_offset_seconds"] == 18.0
-    assert "Florian" not in str(tx_after["opted_out_windows"])
+    assert "Bob Example" not in str(tx_after["opted_out_windows"])
 
     with Session(database) as db:
         rec = db.get(Recording, rec_id)
@@ -1542,3 +1542,408 @@ def test_immediate_opt_out_hides_live_speaker_zeros_s3_chunks_and_syncs_worker(
     assert txt_resp.status_code == 200, txt_resp.text
     assert "(OPTED OUT COMMENT)" in txt_resp.text
     assert "Bob Example" not in txt_resp.text
+
+
+def test_google_and_entra_id_auth_providers_exchange_and_security(monkeypatch):
+    """Google Auth & Entra ID work standalone or side-by-side with strict JWT validation."""
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from fastapi.testclient import TestClient
+
+    import wortlaut.oidc as oidc_mod
+    from wortlaut.app import app as fastapi_app
+    from wortlaut.settings import get_settings
+
+    allowed_tid = "11111111-2222-3333-4444-555555555555"
+    other_tid = "99999999-8888-7777-6666-555555555555"
+
+    monkeypatch.setenv("WORTLAUT_DATABASE_URL", "postgresql+psycopg://u:p@127.0.0.1:5432/unused")
+    monkeypatch.setenv("WORTLAUT_API_TOKEN", "test-operator-token-for-auth-providers")
+    monkeypatch.delenv("WORTLAUT_OIDC_ISSUER", raising=False)
+    monkeypatch.setenv("WORTLAUT_OIDC_ALLOWED_DOMAINS", '["acme.example.org"]')
+    monkeypatch.setenv("WORTLAUT_OIDC_ADMIN_EMAILS", '["admin@acme.example.org"]')
+    monkeypatch.setenv(
+        "WORTLAUT_GOOGLE_AUTH_CLIENT_ID", "google-client-123.apps.googleusercontent.com"
+    )
+    monkeypatch.setenv("WORTLAUT_GOOGLE_AUTH_CLIENT_SECRET", "google-secret-xyz")
+    monkeypatch.setenv("WORTLAUT_ENTRA_AUTH_CLIENT_ID", "entra-app-client-456")
+    monkeypatch.setenv("WORTLAUT_ENTRA_AUTH_CLIENT_SECRET", "entra-secret-abc")
+    monkeypatch.setenv("WORTLAUT_ENTRA_AUTH_TENANT_ID", "common")
+    monkeypatch.setenv("WORTLAUT_ENTRA_AUTH_ALLOWED_TENANTS", json.dumps([allowed_tid]))
+    get_settings.cache_clear()
+    oidc_mod._DISCOVERY_CACHE.clear()
+    oidc_mod._JWKS_CACHE.clear()
+
+    google_priv = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    entra_priv = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    google_jwk = json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(google_priv.public_key()))
+    google_jwk.update({"kid": "g-k1", "alg": "RS256", "use": "sig"})
+    entra_jwk = json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(entra_priv.public_key()))
+    entra_jwk.update({"kid": "e-k1", "alg": "RS256", "use": "sig"})
+
+    class _Resp:
+        def __init__(self, status: int, data: dict):
+            self.status_code = status
+            self._data = data
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise RuntimeError(f"HTTP {self.status_code}")
+
+        def json(self):
+            return self._data
+
+    def fake_get(url: str, **kwargs):
+        if url == "https://accounts.google.com/.well-known/openid-configuration":
+            return _Resp(
+                200,
+                {
+                    "issuer": "https://accounts.google.com",
+                    "authorization_endpoint": "https://accounts.google.com/o/oauth2/v2/auth",
+                    "token_endpoint": "https://oauth2.googleapis.com/token",
+                    "jwks_uri": "https://www.googleapis.com/oauth2/v3/certs",
+                },
+            )
+        if url == "https://www.googleapis.com/oauth2/v3/certs":
+            return _Resp(200, {"keys": [google_jwk]})
+        if url == "https://login.microsoftonline.com/common/v2.0/.well-known/openid-configuration":
+            return _Resp(
+                200,
+                {
+                    "issuer": "https://login.microsoftonline.com/{tenantid}/v2.0",
+                    "authorization_endpoint": (
+                        "https://login.microsoftonline.com/common/oauth2/v2.0/authorize"
+                    ),
+                    "token_endpoint": "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+                    "jwks_uri": "https://login.microsoftonline.com/common/discovery/v2.0/keys",
+                },
+            )
+        if url == "https://login.microsoftonline.com/common/discovery/v2.0/keys":
+            return _Resp(200, {"keys": [entra_jwk]})
+        raise AssertionError(f"Unexpected GET {url}")
+
+    now = int(time.time())
+    posted_forms: list[tuple[str, dict]] = []
+    next_id_token: dict[str, str] = {}
+
+    def fake_post(url: str, data=None, **kwargs):
+        posted_forms.append((url, dict(data or {})))
+        return _Resp(200, {"id_token": next_id_token["jwt"]})
+
+    monkeypatch.setattr(oidc_mod.httpx, "get", fake_get)
+    monkeypatch.setattr(oidc_mod.httpx, "post", fake_post)
+
+    tc = TestClient(fastapi_app)
+
+    # 1. Config endpoint & UI boot expose both Entra ID and Google options
+    cfg = tc.get("/v1/auth/oidc/config").json()
+    assert cfg["enabled"] is True
+    by_id = {p["id"]: p for p in cfg["providers"]}
+    assert set(by_id) == {"entra", "google"}
+    assert by_id["google"]["authorization_endpoint"] == "https://accounts.google.com/o/oauth2/v2/auth"
+    assert by_id["google"]["extra_params"] == {"prompt": "select_account", "hd": "acme.example.org"}
+    assert (
+        by_id["entra"]["authorization_endpoint"]
+        == "https://login.microsoftonline.com/common/oauth2/v2.0/authorize"
+    )
+    assert by_id["entra"]["extra_params"] == {"prompt": "select_account"}
+
+    ui_html = tc.get("/ui").text
+    boot_match = re.search(
+        r"window\.__WORTLAUT_BOOT__\s*=\s*(\{.*?\});\s*</script>", ui_html, re.DOTALL
+    )
+    assert boot_match is not None
+    boot_oidc = json.loads(boot_match.group(1))["instance"]["oidc"]
+    assert boot_oidc["enabled"] is True
+    assert [p["id"] for p in boot_oidc["providers"]] == ["entra", "google"]
+
+    # 2. Google exchange sends client_secret, verifies RS256 JWKS, and namespaces sub
+    google_ok = jwt.encode(
+        {
+            "iss": "https://accounts.google.com",
+            "sub": "10987654321",
+            "aud": "google-client-123.apps.googleusercontent.com",
+            "iat": now,
+            "exp": now + 600,
+            "nonce": "nonce-g1",
+            "email": "admin@acme.example.org",
+            "email_verified": True,
+            "name": "Alice Google",
+        },
+        google_priv,
+        algorithm="RS256",
+        headers={"kid": "g-k1"},
+    )
+    next_id_token["jwt"] = google_ok
+    g_res = tc.post(
+        "/v1/auth/oidc/exchange",
+        json={
+            "provider": "google",
+            "code": "google-auth-code-1",
+            "code_verifier": "v" * 48,
+            "redirect_uri": "https://wortlaut.example.org/auth/callback",
+            "nonce": "nonce-g1",
+        },
+    )
+    assert g_res.status_code == 200, g_res.text
+    g_body = g_res.json()
+    assert g_body["user"]["sub"] == "google:10987654321"
+    assert g_body["user"]["email"] == "admin@acme.example.org"
+    assert g_body["user"]["is_admin"] is True
+    assert posted_forms[-1][0] == "https://oauth2.googleapis.com/token"
+    assert posted_forms[-1][1]["client_secret"] == "google-secret-xyz"
+
+    # Google rejects unverified email
+    next_id_token["jwt"] = jwt.encode(
+        {
+            "iss": "https://accounts.google.com",
+            "sub": "10987654321",
+            "aud": "google-client-123.apps.googleusercontent.com",
+            "iat": now,
+            "exp": now + 600,
+            "email": "alice@acme.example.org",
+            "email_verified": False,
+        },
+        google_priv,
+        algorithm="RS256",
+        headers={"kid": "g-k1"},
+    )
+    g_unverified = tc.post(
+        "/v1/auth/oidc/exchange",
+        json={
+            "provider": "google",
+            "code": "code-2",
+            "code_verifier": "v" * 48,
+            "redirect_uri": "https://wortlaut.example.org/auth/callback",
+        },
+    )
+    assert g_unverified.status_code == 403
+
+    # 3. Entra ID exchange handles tenant-stamped issuer & preferred_username without email_verified
+    entra_ok = jwt.encode(
+        {
+            "iss": f"https://login.microsoftonline.com/{allowed_tid}/v2.0",
+            "tid": allowed_tid,
+            "oid": "oid-entra-777",
+            "sub": "pairwise-sub-777",
+            "aud": "entra-app-client-456",
+            "iat": now,
+            "exp": now + 600,
+            "nonce": "nonce-e1",
+            "preferred_username": "bob@acme.example.org",
+            "name": "Bob Entra",
+        },
+        entra_priv,
+        algorithm="RS256",
+        headers={"kid": "e-k1"},
+    )
+    next_id_token["jwt"] = entra_ok
+    e_res = tc.post(
+        "/v1/auth/oidc/exchange",
+        json={
+            "provider": "entra",
+            "code": "entra-auth-code-1",
+            "code_verifier": "e" * 48,
+            "redirect_uri": "https://wortlaut.example.org/auth/callback",
+            "nonce": "nonce-e1",
+        },
+    )
+    assert e_res.status_code == 200, e_res.text
+    e_body = e_res.json()
+    assert e_body["user"]["sub"] == f"entra:{allowed_tid}:oid-entra-777"
+    assert e_body["user"]["email"] == "bob@acme.example.org"
+    assert e_body["user"]["is_admin"] is False
+    assert posted_forms[-1][0] == "https://login.microsoftonline.com/common/oauth2/v2.0/token"
+    assert posted_forms[-1][1]["client_secret"] == "entra-secret-abc"
+
+    # Entra ID rejects disallowed tenant tid
+    next_id_token["jwt"] = jwt.encode(
+        {
+            "iss": f"https://login.microsoftonline.com/{other_tid}/v2.0",
+            "tid": other_tid,
+            "oid": "oid-rogue",
+            "sub": "sub-rogue",
+            "aud": "entra-app-client-456",
+            "iat": now,
+            "exp": now + 600,
+            "preferred_username": "bob@acme.example.org",
+        },
+        entra_priv,
+        algorithm="RS256",
+        headers={"kid": "e-k1"},
+    )
+    e_bad_tid = tc.post(
+        "/v1/auth/oidc/exchange",
+        json={
+            "provider": "entra",
+            "code": "code-3",
+            "code_verifier": "e" * 48,
+            "redirect_uri": "https://wortlaut.example.org/auth/callback",
+        },
+    )
+    assert e_bad_tid.status_code == 403
+
+    # Entra ID rejects unverified guest email (xms_edov == 0)
+    next_id_token["jwt"] = jwt.encode(
+        {
+            "iss": f"https://login.microsoftonline.com/{allowed_tid}/v2.0",
+            "tid": allowed_tid,
+            "oid": "oid-guest",
+            "sub": "sub-guest",
+            "aud": "entra-app-client-456",
+            "iat": now,
+            "exp": now + 600,
+            "email": "guest@acme.example.org",
+            "xms_edov": 0,
+        },
+        entra_priv,
+        algorithm="RS256",
+        headers={"kid": "e-k1"},
+    )
+    e_unverified_guest = tc.post(
+        "/v1/auth/oidc/exchange",
+        json={
+            "provider": "entra",
+            "code": "code-4",
+            "code_verifier": "e" * 48,
+            "redirect_uri": "https://wortlaut.example.org/auth/callback",
+        },
+    )
+    assert e_unverified_guest.status_code == 403
+
+    # 4. Bearer raw JWT auto-verification routes to matching provider
+    assert oidc_mod.verify_bearer_oidc_id_token(google_ok)["sub"] == "google:10987654321"
+    assert (
+        oidc_mod.verify_bearer_oidc_id_token(entra_ok)["sub"]
+        == f"entra:{allowed_tid}:oid-entra-777"
+    )
+
+    # 5. Redirect URI defense-in-depth rejects non-callback or fragment URLs
+    bad_redir = tc.post(
+        "/v1/auth/oidc/exchange",
+        json={
+            "provider": "google",
+            "code": "code-bad-redir",
+            "code_verifier": "v" * 48,
+            "redirect_uri": "https://evil.example.org/steal#frag",
+        },
+    )
+    assert bad_redir.status_code == 400
+
+    # 6. Google Auth is NOT enabled when client_secret is missing
+    monkeypatch.delenv("WORTLAUT_GOOGLE_AUTH_CLIENT_SECRET", raising=False)
+    get_settings.cache_clear()
+    assert [p.id for p in oidc_mod.get_configured_auth_providers()] == ["entra"]
+
+    # 7. Entra ID nOAuth defense: unrestricted multi-tenant (common + empty allowlist)
+    #    rejects tokens without explicit email_verified=True or xms_edov=1
+    monkeypatch.setenv("WORTLAUT_ENTRA_AUTH_ALLOWED_TENANTS", "[]")
+    get_settings.cache_clear()
+    next_id_token["jwt"] = entra_ok  # has no xms_edov / email_verified claim
+    e_noauth_blocked = tc.post(
+        "/v1/auth/oidc/exchange",
+        json={
+            "provider": "entra",
+            "code": "code-noauth-1",
+            "code_verifier": "e" * 48,
+            "redirect_uri": "https://wortlaut.example.org/auth/callback",
+            "nonce": "nonce-e1",
+        },
+    )
+    assert e_noauth_blocked.status_code == 403
+
+    entra_verified = jwt.encode(
+        {
+            "iss": f"https://login.microsoftonline.com/{allowed_tid}/v2.0",
+            "tid": allowed_tid,
+            "oid": "oid-entra-verified",
+            "sub": "sub-entra-verified",
+            "aud": "entra-app-client-456",
+            "iat": now,
+            "exp": now + 600,
+            "preferred_username": "bob@acme.example.org",
+            "xms_edov": 1,
+        },
+        entra_priv,
+        algorithm="RS256",
+        headers={"kid": "e-k1"},
+    )
+    next_id_token["jwt"] = entra_verified
+    e_noauth_ok = tc.post(
+        "/v1/auth/oidc/exchange",
+        json={
+            "provider": "entra",
+            "code": "code-noauth-2",
+            "code_verifier": "e" * 48,
+            "redirect_uri": "https://wortlaut.example.org/auth/callback",
+        },
+    )
+    assert e_noauth_ok.status_code == 200, e_noauth_ok.text
+
+    # 8. Domain-name single-tenant Entra ID pins against resolved discovery tenant issuer
+    def fake_get_domain_tenant(url: str, **kwargs):
+        if url.endswith("contoso.onmicrosoft.com/v2.0/.well-known/openid-configuration"):
+            return _Resp(
+                200,
+                {
+                    "issuer": f"https://login.microsoftonline.com/{allowed_tid}/v2.0",
+                    "authorization_endpoint": (
+                        "https://login.microsoftonline.com/contoso.onmicrosoft.com/oauth2/v2.0/authorize"
+                    ),
+                    "token_endpoint": (
+                        "https://login.microsoftonline.com/contoso.onmicrosoft.com/oauth2/v2.0/token"
+                    ),
+                    "jwks_uri": (
+                        "https://login.microsoftonline.com/contoso.onmicrosoft.com/discovery/v2.0/keys"
+                    ),
+                },
+            )
+        if url.endswith("contoso.onmicrosoft.com/discovery/v2.0/keys"):
+            return _Resp(200, {"keys": [entra_jwk]})
+        return fake_get(url, **kwargs)
+
+    monkeypatch.setattr(oidc_mod.httpx, "get", fake_get_domain_tenant)
+    monkeypatch.setenv("WORTLAUT_ENTRA_AUTH_TENANT_ID", "contoso.onmicrosoft.com")
+    get_settings.cache_clear()
+    oidc_mod._DISCOVERY_CACHE.clear()
+    oidc_mod._JWKS_CACHE.clear()
+
+    # Token from allowed_tid passes without xms_edov because single-tenant is pinned
+    next_id_token["jwt"] = entra_ok
+    e_domain_ok = tc.post(
+        "/v1/auth/oidc/exchange",
+        json={
+            "provider": "entra",
+            "code": "code-dom-ok",
+            "code_verifier": "e" * 48,
+            "redirect_uri": "https://wortlaut.example.org/auth/callback",
+            "nonce": "nonce-e1",
+        },
+    )
+    assert e_domain_ok.status_code == 200, e_domain_ok.text
+
+    # Token from foreign tenant other_tid is rejected by domain-tenant discovery pinning
+    next_id_token["jwt"] = jwt.encode(
+        {
+            "iss": f"https://login.microsoftonline.com/{other_tid}/v2.0",
+            "tid": other_tid,
+            "oid": "oid-foreign",
+            "sub": "sub-foreign",
+            "aud": "entra-app-client-456",
+            "iat": now,
+            "exp": now + 600,
+            "preferred_username": "bob@acme.example.org",
+        },
+        entra_priv,
+        algorithm="RS256",
+        headers={"kid": "e-k1"},
+    )
+    e_domain_bad = tc.post(
+        "/v1/auth/oidc/exchange",
+        json={
+            "provider": "entra",
+            "code": "code-dom-bad",
+            "code_verifier": "e" * 48,
+            "redirect_uri": "https://wortlaut.example.org/auth/callback",
+        },
+    )
+    assert e_domain_bad.status_code == 403

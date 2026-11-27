@@ -91,7 +91,7 @@
       fmcp_b2:
         "8 focused MCP tools: list_recordings, search_protocols, get_recording, get_transcript, get_keyframe (native PNG ImageContent), schedule_recording, cancel_recording, and update_protocol.",
       fmcp_b3:
-        "Strict per-user access scoping via Dex OIDC + revocable OAuth 2.1 grants directly in the MCP workspace view.",
+        "Strict per-user access scoping via OIDC SSO, Microsoft Entra ID, or Google Auth + revocable OAuth 2.1 grants directly in the MCP workspace view.",
       rag_q_helm: '"Helm rollout & memory"',
       rag_q_otr: '"Off-the-Record policy"',
       rag_q_slides: '"Architecture slide PNG"',
@@ -231,7 +231,7 @@
       st_k_llm: "Protocol LLM",
       st_v_llm: "Local Ollama or any OpenAI-compatible API (vLLM, LiteLLM, OpenAI) with live /privacy disclosure",
       st_k_auth: "Identity & Mail",
-      st_v_auth: "Dex OIDC SSO, OAuth 2.1 PKCE MCP server, Google/M365 Calendar OAuth2, Wortlaut.Cloud Robot mail",
+      st_v_auth: "OIDC SSO, Microsoft Entra ID & Google Sign-In, OAuth 2.1 PKCE MCP server, Google/M365 Calendar OAuth2, Wortlaut.Cloud Robot mail",
       st_k_lic: "License",
       st_v_lic: "GNU AGPL-3.0 · Fully auditable, zero telemetry, zero vendor lock-in",
       sh_btn_repo: "View on GitHub",
@@ -330,7 +330,7 @@
       fmcp_b2:
         "8 fokussierte MCP-Tools: list_recordings, search_protocols, get_recording, get_transcript, get_keyframe (natives PNG-ImageContent), schedule_recording, cancel_recording und update_protocol.",
       fmcp_b3:
-        "Strikte Nutzer-Berechtigung über Dex OIDC + widerrufbare OAuth-2.1-Freigaben direkt in der MCP-Ansicht der Web-UI.",
+        "Strikte Nutzer-Berechtigung über OIDC-SSO, Microsoft Entra ID oder Google Auth + widerrufbare OAuth-2.1-Freigaben direkt in der MCP-Ansicht der Web-UI.",
       rag_q_helm: '"Helm-Rollout & Memory"',
       rag_q_otr: '"Off-the-Record-Regel"',
       rag_q_slides: '"Architektur-Folie PNG"',
@@ -470,7 +470,7 @@
       st_k_llm: "Protokoll-LLM",
       st_v_llm: "Lokales Ollama oder OpenAI-kompatible API (vLLM, LiteLLM, OpenAI) mit dynamischem /privacy",
       st_k_auth: "Identität & Mail",
-      st_v_auth: "Dex OIDC SSO, OAuth-2.1-PKCE-MCP-Server, Google/M365-Kalender-OAuth2, Wortlaut.Cloud Robot",
+      st_v_auth: "OIDC-SSO, Microsoft Entra ID & Google Auth, OAuth-2.1-PKCE-MCP-Server, Google/M365-Kalender-OAuth2, Wortlaut.Cloud Robot",
       st_k_lic: "Lizenz",
       st_v_lic: "GNU AGPL-3.0 · Vollständig auditierbar, keine Telemetrie, kein Vendor-Lock-in",
       sh_btn_repo: "Auf GitHub ansehen",

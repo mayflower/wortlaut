@@ -1205,3 +1205,212 @@ test('Web-UI fixes glossary tab/count mismatch (#15), merged multi-ID speaker fi
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });
+
+test('Web-UI renders Microsoft Entra ID and Google sign-in options and sends selected provider in PKCE exchange', async () => {
+  const workerRoot = fileURLToPath(new URL('..', import.meta.url));
+  const uiDistDir = join(workerRoot, 'dist', 'ui');
+  if (!existsSync(join(uiDistDir, 'app.js'))) {
+    await build({
+      root: workerRoot,
+      configFile: fileURLToPath(new URL('../vite.ui.config.ts', import.meta.url)),
+      logLevel: 'silent',
+    });
+  }
+  const exchangeBodies: Array<Record<string, unknown>> = [];
+
+  const bootPayload = {
+    failureReasons: {},
+    instance: {
+      assistantName: 'wortlaut',
+      defaultLocale: 'de',
+      botEmail: null,
+      providers: {google_meet: true, teams: true, webex: false, zoom: false},
+      mail: {imapEnabled: false, smtpEnabled: false, senderAuth: 'gateway', allowedDomains: []},
+      limits: {maxActiveMeetings: 15, lobbyTimeoutSeconds: 600, emptyRoomTimeoutSeconds: 300},
+      retention: {audioHours: 24, transcriptDays: 30},
+      oidc: {
+        enabled: true,
+        issuer: 'https://login.microsoftonline.com/common/v2.0',
+        authorizationEndpoint: 'https://login.microsoftonline.com/common/oauth2/v2.0/authorize',
+        clientId: 'entra-client-ui',
+        allowedDomains: ['acme.example.org'],
+        providers: [
+          {
+            id: 'entra',
+            label: 'Microsoft (Entra ID)',
+            issuer: 'https://login.microsoftonline.com/common/v2.0',
+            authorizationEndpoint: 'https://login.microsoftonline.com/common/oauth2/v2.0/authorize',
+            clientId: 'entra-client-ui',
+            extraParams: {prompt: 'select_account'},
+          },
+          {
+            id: 'google',
+            label: 'Google',
+            issuer: 'https://accounts.google.com',
+            authorizationEndpoint: 'https://accounts.google.com/o/oauth2/v2/auth',
+            clientId: 'google-client-ui',
+            extraParams: {prompt: 'select_account', hd: 'acme.example.org'},
+          },
+        ],
+      },
+      privacyUrl: '/privacy',
+    },
+  };
+
+  const server = createServer((req, res) => {
+    const url = new URL(req.url || '/', 'http://127.0.0.1');
+    if (url.pathname === '/ui' || url.pathname === '/auth/callback') {
+      res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8'});
+      res.end(`<!DOCTYPE html><html lang="de"><head><meta charset="utf-8"><link rel="stylesheet" href="/ui-assets/app.css"></head><body><div id="root"></div><script>window.__WORTLAUT_BOOT__=${JSON.stringify(bootPayload)};</script><script type="module" src="/ui-assets/app.js"></script></body></html>`);
+      return;
+    }
+    if (url.pathname.startsWith('/ui-assets/')) {
+      const rel = normalize(url.pathname.slice('/ui-assets/'.length));
+      const fullPath = join(uiDistDir, rel);
+      void readFile(fullPath).then(
+        (buf) => {
+          res.writeHead(200, {'Content-Type': MIME_BY_EXT[extname(fullPath)] || 'application/octet-stream'});
+          res.end(buf);
+        },
+        () => {
+          res.writeHead(404);
+          res.end();
+        },
+      );
+      return;
+    }
+    if (url.pathname === '/health/ready') {
+      res.writeHead(200, {'Content-Type': 'application/json'});
+      res.end(JSON.stringify({status: 'ok'}));
+      return;
+    }
+    if (url.pathname === '/v1/auth/oidc/config') {
+      res.writeHead(200, {'Content-Type': 'application/json'});
+      res.end(
+        JSON.stringify({
+          enabled: true,
+          providers: [
+            {
+              id: 'entra',
+              label: 'Microsoft (Entra ID)',
+              authorization_endpoint: 'https://login.microsoftonline.com/common/oauth2/v2.0/authorize',
+              client_id: 'entra-client-ui',
+              extra_params: {prompt: 'select_account'},
+            },
+            {
+              id: 'google',
+              label: 'Google',
+              authorization_endpoint: 'https://accounts.google.com/o/oauth2/v2/auth',
+              client_id: 'google-client-ui',
+              extra_params: {prompt: 'select_account', hd: 'acme.example.org'},
+            },
+          ],
+        }),
+      );
+      return;
+    }
+    if (url.pathname === '/v1/auth/oidc/exchange' && req.method === 'POST') {
+      const chunks: Buffer[] = [];
+      req.on('data', (c) => chunks.push(Buffer.from(c)));
+      req.on('end', () => {
+        const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>;
+        exchangeBodies.push(body);
+        res.writeHead(200, {'Content-Type': 'application/json'});
+        res.end(
+          JSON.stringify({
+            token: 'wortlaut-user-test.sig',
+            user: {
+              sub: 'google:123',
+              email: 'alice@acme.example.org',
+              name: 'Alice',
+              is_admin: false,
+            },
+          }),
+        );
+      });
+      return;
+    }
+    if (url.pathname === '/v1/auth/me') {
+      res.writeHead(200, {'Content-Type': 'application/json'});
+      res.end(
+        JSON.stringify({
+          kind: 'user',
+          sub: 'google:123',
+          email: 'alice@acme.example.org',
+          name: 'Alice',
+          is_admin: false,
+        }),
+      );
+      return;
+    }
+    if (url.pathname === '/v1/recordings') {
+      res.writeHead(200, {'Content-Type': 'application/json'});
+      res.end(JSON.stringify({items: []}));
+      return;
+    }
+    if (url.pathname === '/v1/glossary') {
+      res.writeHead(200, {'Content-Type': 'application/json'});
+      res.end(JSON.stringify({effective_count: 0, global_entries: [], personal_entries: []}));
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const addr = server.address();
+  assert.ok(addr && typeof addr === 'object');
+  const baseUrl = `http://127.0.0.1:${addr.port}`;
+
+  const browser = await chromium.launch({headless: true, chromiumSandbox: true});
+  try {
+    const context = await browser.newContext({viewport: {width: 1280, height: 800}});
+    const page = await context.newPage();
+
+    let capturedAuthUrl = '';
+    await page.route('https://accounts.google.com/**', async (route) => {
+      capturedAuthUrl = route.request().url();
+      const parsed = new URL(capturedAuthUrl);
+      const state = parsed.searchParams.get('state') || '';
+      await route.fulfill({
+        status: 200,
+        contentType: 'text/html',
+        body: `<script>window.location.replace(${JSON.stringify(`${baseUrl}/auth/callback?code=g-code-99&state=${encodeURIComponent(state)}`)});</script>`,
+      });
+    });
+
+    await page.goto(`${baseUrl}/ui`);
+    await page
+      .locator('[data-testid="auth-provider-btn-entra"]')
+      .getByRole('button', {name: 'Mit Microsoft (Entra ID) anmelden'})
+      .waitFor({state: 'visible', timeout: 5000});
+    const googleBtn = page
+      .locator('[data-testid="auth-provider-btn-google"]')
+      .getByRole('button', {name: 'Mit Google anmelden'});
+    await googleBtn.waitFor({state: 'visible', timeout: 5000});
+
+    const exchangeDone = page.waitForResponse(
+      (res) => res.url().includes('/v1/auth/oidc/exchange') && res.status() === 200,
+      {timeout: 5000},
+    );
+    await googleBtn.click();
+    await exchangeDone;
+    await page.waitForURL(`${baseUrl}/ui`, {timeout: 5000});
+
+    assert.ok(capturedAuthUrl.startsWith('https://accounts.google.com/o/oauth2/v2/auth'));
+    const authParams = new URL(capturedAuthUrl).searchParams;
+    assert.equal(authParams.get('client_id'), 'google-client-ui');
+    assert.equal(authParams.get('hd'), 'acme.example.org');
+    assert.equal(authParams.get('prompt'), 'select_account');
+    assert.equal(exchangeBodies.length, 1);
+    assert.equal(exchangeBodies[0].provider, 'google');
+    assert.equal(exchangeBodies[0].code, 'g-code-99');
+
+    await context.close();
+  } finally {
+    await browser.close();
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});

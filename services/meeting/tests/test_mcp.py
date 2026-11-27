@@ -1290,3 +1290,149 @@ def test_mcp_status_classification_for_failed_join_and_room_empty(database):
     assert _human_status_label(failed_join) == "failed (admission_timeout)"
     assert _human_status_label(empty_room) == "completed (room_empty)"
     assert _human_status_label(cancelled) == "cancelled"
+
+
+def test_mcp_oauth_multi_provider_chooser_and_google_callback(client, database, monkeypatch):
+    """MCP OAuth shows provider chooser for Entra+Google, binds cookie, and completes PKCE."""
+    import hashlib
+    import json
+    import re
+    import time
+    from urllib.parse import parse_qs, urlsplit
+
+    import jwt
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    import wortlaut.oidc as oidc_mod
+    from wortlaut.settings import get_settings
+
+    tid = "11111111-2222-3333-4444-555555555555"
+    monkeypatch.delenv("WORTLAUT_OIDC_ISSUER", raising=False)
+    monkeypatch.setenv("WORTLAUT_OIDC_ALLOWED_DOMAINS", '["acme.example.org"]')
+    monkeypatch.setenv("WORTLAUT_ENTRA_AUTH_CLIENT_ID", "entra-mcp-cid")
+    monkeypatch.setenv("WORTLAUT_ENTRA_AUTH_TENANT_ID", tid)
+    monkeypatch.setenv("WORTLAUT_GOOGLE_AUTH_CLIENT_ID", "google-mcp-cid")
+    monkeypatch.setenv("WORTLAUT_GOOGLE_AUTH_CLIENT_SECRET", "google-mcp-secret")
+    get_settings.cache_clear()
+    oidc_mod._DISCOVERY_CACHE.clear()
+    oidc_mod._JWKS_CACHE.clear()
+
+    google_priv = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    google_jwk = json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(google_priv.public_key()))
+    google_jwk.update({"kid": "mcp-g1", "alg": "RS256", "use": "sig"})
+
+    class _Resp:
+        def __init__(self, data: dict):
+            self.status_code = 200
+            self._data = data
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return self._data
+
+    def fake_get(url: str, **kwargs):
+        if "accounts.google.com/.well-known" in url:
+            return _Resp(
+                {
+                    "issuer": "https://accounts.google.com",
+                    "authorization_endpoint": "https://accounts.google.com/o/oauth2/v2/auth",
+                    "token_endpoint": "https://oauth2.googleapis.com/token",
+                    "jwks_uri": "https://www.googleapis.com/oauth2/v3/certs",
+                }
+            )
+        if "googleapis.com/oauth2/v3/certs" in url:
+            return _Resp({"keys": [google_jwk]})
+        raise AssertionError(f"Unexpected GET {url}")
+
+    posted: list[dict] = []
+    issued_nonce: dict[str, str] = {}
+
+    def fake_post(url: str, data=None, **kwargs):
+        posted.append(dict(data or {}))
+        now = int(time.time())
+        id_tok = jwt.encode(
+            {
+                "iss": "https://accounts.google.com",
+                "sub": "g-mcp-user-1",
+                "aud": "google-mcp-cid",
+                "iat": now,
+                "exp": now + 600,
+                "nonce": issued_nonce["nonce"],
+                "email": "alice@acme.example.org",
+                "email_verified": True,
+                "name": "Alice MCP",
+            },
+            google_priv,
+            algorithm="RS256",
+            headers={"kid": "mcp-g1"},
+        )
+        return _Resp({"id_token": id_tok})
+
+    monkeypatch.setattr(oidc_mod.httpx, "get", fake_get)
+    monkeypatch.setattr(oidc_mod.httpx, "post", fake_post)
+
+    # 1. Dynamic client registration
+    reg = client.post(
+        "/oauth/register",
+        json={
+            "client_name": "Test MCP Client",
+            "redirect_uris": ["http://127.0.0.1:8765/callback"],
+        },
+    )
+    assert reg.status_code == 201, reg.text
+    cid = reg.json()["client_id"]
+
+    verifier = "m" * 48
+    challenge = (
+        oidc_mod._b64url_encode(hashlib.sha256(verifier.encode("ascii")).digest())
+    )
+
+    # 2. /oauth/authorize renders provider chooser when >= 2 providers are enabled
+    authz = client.get(
+        "/oauth/authorize",
+        params={
+            "response_type": "code",
+            "client_id": cid,
+            "redirect_uri": "http://127.0.0.1:8765/callback",
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
+            "state": "client-st-1",
+            "scope": "mcp:read",
+        },
+        follow_redirects=False,
+    )
+    assert authz.status_code == 200
+    assert "Microsoft (Entra ID)" in authz.text
+    assert "Google" in authz.text
+    m = re.search(r'href="(/oauth/login\?[^"]*provider=google[^"]*)"', authz.text)
+    assert m is not None
+    login_path = m.group(1).replace("&amp;", "&")
+
+    # 3. Without consent cookie, /oauth/login is rejected (browser-binding CSRF protection)
+    saved_cookies = dict(client.cookies)
+    client.cookies.clear()
+    no_cookie = client.get(login_path, follow_redirects=False)
+    assert no_cookie.status_code == 400
+    client.cookies.update(saved_cookies)
+
+    # 4. With valid cookie, /oauth/login redirects to Google with 4-part signed state
+    redir = client.get(login_path, follow_redirects=False)
+    assert redir.status_code == 302
+    loc = urlsplit(redir.headers["location"])
+    assert loc.hostname == "accounts.google.com"
+    q = parse_qs(loc.query)
+    state_val = q["state"][0]
+    assert state_val.startswith("mcp.google.")
+    issued_nonce["nonce"] = q["nonce"][0]
+
+    # 5. /auth/callback exchanges code (with Google client_secret) and renders MCP consent HTML
+    cb = client.get(
+        "/auth/callback",
+        params={"code": "google-mcp-code", "state": state_val},
+        follow_redirects=False,
+    )
+    assert cb.status_code == 200, cb.text
+    assert "alice@acme.example.org" in cb.text
+    assert posted and posted[-1]["client_secret"] == "google-mcp-secret"

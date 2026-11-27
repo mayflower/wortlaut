@@ -51,6 +51,7 @@ import { SystemView } from './components/SystemView';
 import { WelcomeLandingView } from './components/WelcomeLandingView';
 import { UiErrorBoundary, useThemeMode } from './components/ui/primitives';
 import { useI18n } from './i18n';
+import type { AuthProviderId } from './types';
 
 interface CommandItem
   extends SearchableItem<{
@@ -222,9 +223,9 @@ export function App() {
     }
   }, [authMode, queryClient]);
 
-  const handleStartOidcLogin = () => {
+  const handleStartOidcLogin = (providerId?: AuthProviderId) => {
     setAuthError(null);
-    startOidcLogin().catch((err) => {
+    startOidcLogin(providerId).catch((err) => {
       setAuthError(err instanceof Error ? err.message : String(err));
     });
   };

@@ -9,6 +9,11 @@ from pathlib import Path
 
 from wortlaut.languages import QWEN_ASR_LANGUAGES, effective_recording_language
 from wortlaut.mail import FAILURE_REASONS
+from wortlaut.oidc import (
+    _provider_fallback_discovery,
+    get_configured_auth_providers,
+    provider_extra_auth_params,
+)
 from wortlaut.settings import get_settings
 
 
@@ -419,6 +424,32 @@ UI_HTML = """<!DOCTYPE html>
 """
 
 
+def _build_oidc_instance_info(s) -> dict:
+    providers = get_configured_auth_providers()
+    serialized = []
+    for p in providers:
+        fallback = _provider_fallback_discovery(p)
+        serialized.append(
+            {
+                "id": p.id,
+                "label": p.label,
+                "issuer": p.issuer,
+                "authorizationEndpoint": fallback["authorization_endpoint"],
+                "clientId": p.client_id,
+                "extraParams": provider_extra_auth_params(p),
+            }
+        )
+    primary = serialized[0] if serialized else None
+    return {
+        "enabled": bool(serialized),
+        "issuer": primary["issuer"] if primary else "",
+        "authorizationEndpoint": primary["authorizationEndpoint"] if primary else "",
+        "clientId": primary["clientId"] if primary else (s.oidc_client_id or "wortlaut"),
+        "allowedDomains": list(s.oidc_allowed_domains or []),
+        "providers": serialized,
+    }
+
+
 def _build_instance_info() -> dict:
     try:
         s = get_settings()
@@ -455,6 +486,7 @@ def _build_instance_info() -> dict:
                 "issuer": "",
                 "clientId": "wortlaut",
                 "allowedDomains": [],
+                "providers": [],
             },
             "calendarOAuth": {
                 "googleEnabled": False,
@@ -504,13 +536,7 @@ def _build_instance_info() -> dict:
             "audioHours": s.audio_retention_hours,
             "transcriptDays": s.transcript_retention_days,
         },
-        "oidc": {
-            "enabled": bool(s.oidc_issuer),
-            "issuer": s.oidc_issuer,
-            "authorizationEndpoint": s.oidc_authorization_endpoint or "",
-            "clientId": s.oidc_client_id,
-            "allowedDomains": list(s.oidc_allowed_domains or []),
-        },
+        "oidc": _build_oidc_instance_info(s),
         "calendarOAuth": {
             "googleEnabled": bool(
                 s.google_calendar_client_id and s.google_calendar_client_secret

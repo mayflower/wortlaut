@@ -150,7 +150,7 @@ Set `WORTLAUT_DEFAULT_LOCALE=en` (already enabled in [`.env.example`](.env.examp
 claude mcp add --transport http wortlaut https://wortlaut.example.org/mcp
 ```
 
-* **Zero static API keys:** MCP clients (`Claude Code`, `Cursor`, `VS Code`, `Antigravity`) automatically discover OAuth endpoints, sign users in via your existing OIDC provider (or local instance token), and request `mcp:read` and optional `mcp:write` scopes.
+* **Zero static API keys:** MCP clients (`Claude Code`, `Cursor`, `VS Code`, `Antigravity`) automatically discover OAuth endpoints, sign users in via your configured OIDC, Microsoft Entra ID, or Google Auth provider (or local instance token), and request `mcp:read` and optional `mcp:write` scopes.
 * **Strict per-user isolation, hybrid RAG search, & revocation:** Every tool call (`search_protocols`, `list_recordings`, `get_recording`, `get_transcript`, `get_keyframe`, `schedule_recording`, `cancel_recording`, `update_protocol`) and `wortlaut://` resource (`protocol.md` plus screen-share slide snapshots via `wortlaut://recordings/{recording_id}/keyframes/{keyframe_id}.png`) is scoped to the authenticated user. `search_protocols` runs local CPU ONNX embeddings (`multilingual-e5-small` `int8`) fused with PostgreSQL 17 `tsvector` GIN full-text search via Reciprocal Rank Fusion (no `pgvector` or external `/v1/embeddings` API required). Active client grants can be reviewed and revoked at `/ui#view=mcp` (`GET/DELETE /v1/mcp/grants`).
 
 ### AI Executive Summaries & Single OpenAI-Compatible Endpoint (Ollama or OpenAI)

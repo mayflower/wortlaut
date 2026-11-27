@@ -58,6 +58,9 @@ spec:
             - secretRef:
                 name: {{ .Values.calendarOAuth.secretName }}
                 optional: true
+            - secretRef:
+                name: {{ .Values.oidc.secretName | default "wortlaut-auth" }}
+                optional: true
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:

@@ -24,6 +24,14 @@ class Settings(BaseSettings):
     oidc_token_endpoint: str = ""
     oidc_jwks_uri: str = ""
     oidc_client_id: str = "wortlaut"
+    oidc_client_secret: SecretStr | None = None
+    oidc_display_name: str = ""
+    google_auth_client_id: str | None = None
+    google_auth_client_secret: SecretStr | None = None
+    entra_auth_client_id: str | None = None
+    entra_auth_client_secret: SecretStr | None = None
+    entra_auth_tenant_id: str = ""
+    entra_auth_allowed_tenants: list[str] = []
     oidc_allowed_domains: list[str] = []
     oidc_admin_emails: list[str] = []
     mcp_allowed_origins: list[str] = []

@@ -73,11 +73,24 @@ helm upgrade --install wortlaut ./charts/wortlaut \
 | `llmSummary.openaiBaseUrl` | `""` | Optional OpenAI-compatible API base URL (e.g. `https://api.openai.com/v1` or local vLLM/LiteLLM); takes precedence over Ollama when set |
 | `llmSummary.openaiModel` | `gpt-4o-mini` | Model ID for the OpenAI-compatible chat completions API |
 | `llmSummary.openaiTimeoutSeconds` | `120` | Timeout in seconds for OpenAI-compatible LLM requests |
+| `oidc.issuer` | `""` | Generic OIDC issuer URL (Dex, Keycloak, Authentik, etc.) |
+| `oidc.clientId` | `wortlaut` | Generic OIDC client ID |
+| `oidc.displayName` | `""` | Optional custom sign-in button label for generic OIDC |
+| `oidc.entraClientId` | `""` | Optional Microsoft Entra ID Application (Client) ID for user sign-in |
+| `oidc.entraTenantId` | `""` | Microsoft Entra Tenant UUID/domain (recommended single-tenant) or `organizations`/`common` |
+| `oidc.entraAllowedTenants` | `[]` | Optional Entra Tenant UUID allowlist when using `organizations`/`common` |
+| `oidc.googleClientId` | `""` | Optional Google OAuth 2.0 Web Client ID for user sign-in (requires `WORTLAUT_GOOGLE_AUTH_CLIENT_SECRET`) |
+| `oidc.allowedDomains` | `[]` | Shared allowed user email domains across all enabled sign-in providers |
+| `oidc.adminEmails` | `[]` | Shared admin email addresses across all enabled sign-in providers |
+| `oidc.secretName` | `wortlaut-auth` | Optional Kubernetes Secret holding `WORTLAUT_OIDC_CLIENT_SECRET`, `WORTLAUT_GOOGLE_AUTH_CLIENT_SECRET`, and/or `WORTLAUT_ENTRA_AUTH_CLIENT_SECRET` |
 
-### Optional Secret Keys (`wortlaut-runtime`)
+### Optional Secret Keys (`wortlaut-runtime` / `wortlaut-auth`)
 
 | Key | Description |
 | --- | --- |
+| `WORTLAUT_OIDC_CLIENT_SECRET` | Optional confidential client secret for generic OIDC (`wortlaut-auth`) |
+| `WORTLAUT_GOOGLE_AUTH_CLIENT_SECRET` | Google OAuth 2.0 Web Client Secret for Google Sign-In (`wortlaut-auth`) |
+| `WORTLAUT_ENTRA_AUTH_CLIENT_SECRET` | Optional confidential client secret for Microsoft Entra ID Web apps (`wortlaut-auth`) |
 | `WORTLAUT_GOOGLE_CALENDAR_CLIENT_ID` | Google OAuth2 Client ID (`calendar.events`) |
 | `WORTLAUT_GOOGLE_CALENDAR_CLIENT_SECRET` | Google OAuth2 Client Secret |
 | `WORTLAUT_MICROSOFT_CALENDAR_CLIENT_ID` | Microsoft Entra Application (Client) ID (`Calendars.ReadWrite`) |

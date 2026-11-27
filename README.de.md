@@ -136,7 +136,7 @@ Für eine komplett englischsprachige Standard-Oberfläche samt englischem Bot-Ch
 
 1. **Kurze Roh-Audio-Aufbewahrung (24 Stunden):** Aufgezeichnete Audiospuren dienen ausschließlich der Transkription und der kurzen Satz-Überprüfung und werden standardmäßig **24 Stunden nach Meeting-Ende** automatisch aus dem S3-Speicher gelöscht.
 2. **Automatische Protokoll- & Folien-Löschfrist (30 Tage):** Transkripte, Bildschirmfreigabe-Keyframes (`keyframes/{recording_id}/`) und Metadaten teilen sich die Frist `WORTLAUT_TRANSCRIPT_RETENTION_DAYS` (standardmäßig **30 Tage** in [settings.py](services/meeting/src/wortlaut/settings.py), angerechnet auf `WORTLAUT_MAX_STORED_AUDIO_BYTES`) und können jederzeit komplett (`DELETE /v1/recordings/{id}`) oder einzeln je Folie (`DELETE /v1/recordings/{id}/keyframes/{keyframe_id}`) gelöscht werden.
-3. **Mandantentrennung & Scoped Links:** Über **OIDC** ([oidc.py](services/meeting/src/wortlaut/oidc.py)) angemeldete Nutzer sehen ausschließlich ihre eigenen Aufnahmen sowie Termine, zu denen sie eingeladen waren. Geteilte Lese-Links (`wortlaut-read-<recording_id>.<hmac>`) gewähren ausschließlich Lesezugriff auf genau ein Protokoll.
+3. **Mandantentrennung & Scoped Links:** Über **OIDC** (Dex, Keycloak, Authentik), **Microsoft Entra ID** oder **Google Auth** ([oidc.py](services/meeting/src/wortlaut/oidc.py)) angemeldete Nutzer sehen ausschließlich ihre eigenen Aufnahmen sowie Termine, zu denen sie eingeladen waren. Geteilte Lese-Links (`wortlaut-read-<recording_id>.<hmac>`) gewähren ausschließlich Lesezugriff auf genau ein Protokoll.
 
 ---
 

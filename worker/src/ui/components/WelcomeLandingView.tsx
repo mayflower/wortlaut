@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Check, Copy, KeyRound, LogIn } from 'lucide-react';
+import { Check, Copy, KeyRound } from 'lucide-react';
 import { Center } from '@astryxdesign/core/Center';
 import { Card } from '@astryxdesign/core/Card';
 import { Heading } from '@astryxdesign/core/Heading';
@@ -12,15 +12,20 @@ import { Button } from '@astryxdesign/core/Button';
 import { Banner } from '@astryxdesign/core/Banner';
 import { Divider } from '@astryxdesign/core/Divider';
 import { Avatar } from '@astryxdesign/core/Avatar';
-import { getInstanceInfo } from '../api';
+import { getConfiguredAuthProviders, getInstanceInfo } from '../api';
 import { useI18n } from '../i18n';
+import type { AuthProviderId } from '../types';
+import {
+  AuthProviderIcon,
+  formatAuthProviderLabel,
+} from './AuthGateDialog';
 import { LiveWaveform, ProviderBadge } from './ui/primitives';
 
 export interface WelcomeLandingViewProps {
   healthy: boolean;
   authError: string | null;
   onConnectToken: (token: string) => void;
-  onStartOidcLogin: () => void;
+  onStartOidcLogin: (providerId?: AuthProviderId) => void;
   onOpenAuthDialog: () => void;
 }
 
@@ -82,7 +87,8 @@ export function WelcomeLandingView({
 }: WelcomeLandingViewProps) {
   const { lang, tr } = useI18n();
   const instance = getInstanceInfo();
-  const oidcEnabled = Boolean(instance.oidc?.enabled);
+  const authProviders = getConfiguredAuthProviders(instance);
+  const oidcEnabled = authProviders.length > 0;
   const [tokenInput, setTokenInput] = useState('');
   const [showTokenForm, setShowTokenForm] = useState(!oidcEnabled);
   const [copiedMail, setCopiedMail] = useState(false);
@@ -141,20 +147,26 @@ export function WelcomeLandingView({
               )}
 
               {oidcEnabled && (
-                <span id="oidc-login-btn" className="contents">
-                  <Button
-                    type="button"
-                    variant="primary"
-                    size="md"
-                    width="fill"
-                    icon={<LogIn className="h-4 w-4" />}
-                    label={tr(
-                      'Mit SSO anmelden (OIDC)',
-                      'Sign in with SSO (OIDC)'
-                    )}
-                    onClick={onStartOidcLogin}
-                  />
-                </span>
+                <VStack gap={2}>
+                  {authProviders.map((provider, idx) => (
+                    <span
+                      key={provider.id}
+                      id={idx === 0 ? 'oidc-login-btn' : undefined}
+                      data-testid={`auth-provider-btn-${provider.id}`}
+                      className="contents"
+                    >
+                      <Button
+                        type="button"
+                        variant={idx === 0 ? 'primary' : 'secondary'}
+                        size="md"
+                        width="fill"
+                        icon={<AuthProviderIcon provider={provider.id} />}
+                        label={formatAuthProviderLabel(provider, tr)}
+                        onClick={() => onStartOidcLogin(provider.id)}
+                      />
+                    </span>
+                  ))}
+                </VStack>
               )}
 
               {oidcEnabled && !showTokenForm ? (

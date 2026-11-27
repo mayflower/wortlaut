@@ -10,23 +10,52 @@ This guide walks through configuring authentication, calendar OAuth2 writeback, 
 
 When `WORTLAUT_OIDC_ISSUER` is left empty (`""`), `wortlaut` starts in single-operator mode. Open `/ui` and sign in using the `WORTLAUT_API_TOKEN` configured in your `.env` or `wortlaut-runtime` Secret.
 
-### Multi-User OIDC Mode (Dex, Keycloak, Authentik, Microsoft Entra)
+### Multi-User Sign-In (OIDC, Microsoft Entra ID, Google)
 
-`wortlaut` uses OAuth2 Authorization Code + PKCE in the browser and verifies RS256 ID tokens against `<WORTLAUT_OIDC_ISSUER>/keys` (or `.well-known/openid-configuration`).
+`wortlaut` supports three optional OAuth2 / OIDC sign-in providers — individually or side-by-side on the login screen and MCP OAuth flow. All enabled providers use Authorization Code + PKCE (`S256`), verify signed ID tokens via provider JWKS, and share the same `WORTLAUT_OIDC_ALLOWED_DOMAINS` / `WORTLAUT_OIDC_ADMIN_EMAILS` access policies.
 
-1. Register a public OIDC client in your Identity Provider:
-   - **Client ID**: `wortlaut` (or match `WORTLAUT_OIDC_CLIENT_ID`)
-   - **Redirect URI**: `https://<your-wortlaut-domain>/auth/callback`
-   - **Grant Type**: `Authorization Code` with **PKCE (`S256`)**
-   - **Scopes**: `openid profile email`
-2. Configure `wortlaut`:
+All providers share the unified Redirect URI:
+- `https://<your-wortlaut-domain>/auth/callback`
+
+#### Option A: Generic OIDC (Dex, Keycloak, Authentik, etc.)
+
+1. Register an OIDC client with Redirect URI `https://<your-wortlaut-domain>/auth/callback`, Authorization Code + PKCE (`S256`), scopes `openid profile email`.
+2. Configure:
    ```dotenv
    WORTLAUT_OIDC_ISSUER=https://auth.example.org
    WORTLAUT_OIDC_CLIENT_ID=wortlaut
+   WORTLAUT_OIDC_CLIENT_SECRET=               # Optional (for confidential OIDC clients)
+   WORTLAUT_OIDC_DISPLAY_NAME=                # Optional custom button label
    WORTLAUT_OIDC_ALLOWED_DOMAINS=["example.org"]
    WORTLAUT_OIDC_ADMIN_EMAILS=["admin@example.org"]
    ```
    *(If the backend container reaches the OIDC provider via an internal cluster DNS name while browsers use the public URL, set `WORTLAUT_OIDC_INTERNAL_ISSUER=http://dex.dex.svc.cluster.local:5556`.)*
+
+#### Option B: Microsoft Entra ID (Azure AD)
+
+1. Create an **App registration** in Microsoft Entra ID with Platform **Web** (or **Single-page application** for PKCE-only without secret) and Redirect URI `https://<your-wortlaut-domain>/auth/callback`.
+2. Grant delegated permissions `openid`, `profile`, `email`.
+3. Configure:
+   ```dotenv
+   WORTLAUT_ENTRA_AUTH_CLIENT_ID=<application-client-id>
+   WORTLAUT_ENTRA_AUTH_CLIENT_SECRET=<client-secret>   # Required for Web apps; omit for SPA/public PKCE
+   WORTLAUT_ENTRA_AUTH_TENANT_ID=<tenant-uuid>         # Recommended single-tenant UUID/domain (or "organizations"/"common")
+   WORTLAUT_ENTRA_AUTH_ALLOWED_TENANTS=[]              # Explicit tenant UUID allowlist when using "organizations"/"common"
+   WORTLAUT_OIDC_ALLOWED_DOMAINS=["example.org"]
+   WORTLAUT_OIDC_ADMIN_EMAILS=["admin@example.org"]
+   ```
+   *(Security note: `wortlaut` requires `WORTLAUT_ENTRA_AUTH_TENANT_ID` to be set explicitly. In single-tenant mode, token `iss`/`tid` are pinned to that tenant. In unrestricted multi-tenant mode without `WORTLAUT_ENTRA_AUTH_ALLOWED_TENANTS`, tokens are only accepted if Microsoft explicitly attests email verification via `xms_edov=1` or `email_verified=true` to prevent cross-tenant nOAuth email spoofing.)*
+
+#### Option C: Google Sign-In
+
+1. Create an **OAuth 2.0 Web application** credential in Google Cloud Console with Authorized redirect URI `https://<your-wortlaut-domain>/auth/callback`.
+2. Configure (both Client ID and Client Secret are required by Google's token endpoint):
+   ```dotenv
+   WORTLAUT_GOOGLE_AUTH_CLIENT_ID=<google-client-id>.apps.googleusercontent.com
+   WORTLAUT_GOOGLE_AUTH_CLIENT_SECRET=<google-client-secret>
+   WORTLAUT_OIDC_ALLOWED_DOMAINS=["example.org"]
+   WORTLAUT_OIDC_ADMIN_EMAILS=["admin@example.org"]
+   ```
 
 ---
 

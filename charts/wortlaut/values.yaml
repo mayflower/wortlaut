@@ -21,8 +21,16 @@ keyframes:
 oidc:
   issuer: ""
   clientId: wortlaut
+  displayName: ""
+  googleClientId: ""
+  entraClientId: ""
+  entraTenantId: ""
+  entraAllowedTenants: []
   allowedDomains: []
   adminEmails: []
+  # Optional Kubernetes Secret holding WORTLAUT_OIDC_CLIENT_SECRET,
+  # WORTLAUT_GOOGLE_AUTH_CLIENT_SECRET, and/or WORTLAUT_ENTRA_AUTH_CLIENT_SECRET:
+  secretName: wortlaut-auth
 
 calendarOAuth:
   googleClientId: ""
