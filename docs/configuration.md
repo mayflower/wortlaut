@@ -1,6 +1,37 @@
 # Configuration & Integration Guide
 
-This guide walks through configuring authentication, calendar OAuth2 writeback, conference provider sessions, screen-share keyframes, in-call chat controls, Model Context Protocol (MCP) clients, and speech/summary models for a self-hosted `wortlaut` instance.
+This guide walks through deployment recipes, URL/encryption basics, authentication, calendar OAuth2 writeback, conference provider sessions, screen-share keyframes, in-call chat controls, Model Context Protocol (MCP) clients, speech/summary models, and IMAP/SMTP mail for a self-hosted `wortlaut` instance.
+
+---
+
+## 0. Deployment Recipes & Core Runtime Variables
+
+### Common ASR + Infrastructure Setups
+
+| Scenario | Command / Flags | ASR Image & Model |
+| :--- | :--- | :--- |
+| **Docker Compose — CPU / Apple Silicon** (default) | `docker compose up -d` | `wortlaut-asr-cpu` (`parakeet`, `cpu`, `int8`, ~514 MB) |
+| **Docker Compose — NVIDIA GPU (Qwen3)** | `docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d` | `wortlaut-asr` (`qwen3`, `cuda`, `bfloat16`, 30 languages + glossary prompts) |
+| **Docker Compose — NVIDIA GPU (Parakeet)** | `WORTLAUT_ASR_BACKEND=parakeet docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d` | `wortlaut-asr` (`parakeet`, `cuda`, `fp32`, 25 EU languages, word timestamps) |
+| **Helm — Evaluation / CPU-only** | `helm upgrade --install wortlaut ./charts/wortlaut -n wortlaut --create-namespace --set host=wortlaut.local --set bundled.enabled=true --set asr.backend=parakeet --set asr.device=cpu` | `wortlaut-asr-cpu` (`parakeet`, `cpu`, `int8`, omits `nvidia.com/gpu`) |
+| **Helm — Production NVIDIA GPU (Qwen3)** | `helm upgrade --install wortlaut ./charts/wortlaut -n wortlaut --set host=wortlaut.example.org` | `wortlaut-asr` (`qwen3`, `cuda`, `bfloat16`, `nvidia.com/gpu: 1`) |
+| **Helm — Production NVIDIA GPU (Parakeet)** | `helm upgrade --install wortlaut ./charts/wortlaut -n wortlaut --set host=wortlaut.example.org --set asr.backend=parakeet --set asr.device=cuda` | `wortlaut-asr` (`parakeet`, `cuda`, `fp32`, `nvidia.com/gpu: 1`) |
+
+### URLs, Secrets & Encryption
+
+```dotenv
+# Internal API base URL used by ephemeral browser workers to stream audio/keyframes back:
+WORTLAUT_API_URL=http://meeting:8000/           # Or https://wortlaut.example.org/ when routed externally
+WORTLAUT_SDK_PAGE_URL=http://meeting:8000/sdk/
+
+# Public browser-facing URL behind a reverse proxy (used for OAuth callbacks, calendar links, /privacy).
+# When unset, falls back to WORTLAUT_API_URL.
+WORTLAUT_PUBLIC_URL=https://wortlaut.example.org/
+
+# Dedicated encryption key for stored OAuth/calendar refresh tokens (HKDF-SHA256).
+# Strongly recommended in production so rotating WORTLAUT_API_TOKEN never invalidates saved tokens.
+WORTLAUT_ENCRYPTION_KEY=                        # Generate e.g. `openssl rand -base64 32`
+```
 
 ---
 
@@ -8,7 +39,7 @@ This guide walks through configuring authentication, calendar OAuth2 writeback, 
 
 ### Single-User / API-Token Mode (Default)
 
-When `WORTLAUT_OIDC_ISSUER` is left empty (`""`), `wortlaut` starts in single-operator mode. Open `/ui` and sign in using the `WORTLAUT_API_TOKEN` configured in your `.env` or `wortlaut-runtime` Secret.
+When all three sign-in providers (`WORTLAUT_OIDC_ISSUER`, `WORTLAUT_ENTRA_AUTH_CLIENT_ID`, and `WORTLAUT_GOOGLE_AUTH_CLIENT_ID`) are left empty (`""`), `wortlaut` starts in single-operator mode. Open `/ui` and sign in using the `WORTLAUT_API_TOKEN` configured in your `.env` or `wortlaut-runtime` Secret.
 
 ### Multi-User Sign-In (OIDC, Microsoft Entra ID, Google)
 
@@ -116,6 +147,8 @@ By default (`WORTLAUT_ENABLE_KEYFRAMES=true`), browser workers capture static PN
 ```dotenv
 # Default: true. Set to false to disable screen-share snapshot capture instance-wide.
 WORTLAUT_ENABLE_KEYFRAMES=true
+# Default: true. Blur detected faces in captured screen-share keyframes before storage.
+WORTLAUT_REDACT_KEYFRAME_FACES=true
 ```
 
 Key operational interactions:
@@ -123,7 +156,7 @@ Key operational interactions:
 - **Provider support**: Active in browser capture modes for **Google Meet**, **Microsoft Teams**, **Cisco Webex Browser** (`WORTLAUT_ENABLE_WEBEX_BROWSER=true`), and **Zoom Web Client**; reports `capability: "unsupported"` when running in headless Webex Guest-Issuer SDK mode.
 - **Transparency (`/privacy` & `WORTLAUT_ENABLE_CHAT_INTRO`)**: When `WORTLAUT_ENABLE_KEYFRAMES=true`, both the public `/privacy` notice (`DE`/`EN`) and the in-call chat introduction (`WORTLAUT_ENABLE_CHAT_INTRO=true`) explicitly state that participant camera video is never recorded and only settled screen-share snapshots are stored. Setting `WORTLAUT_ENABLE_KEYFRAMES=false` restores audio-only wording automatically.
 - **Live Opt-Out & Single-Slide Deletion**: Typing `no` / `nein` / `opt out` in the meeting chat (or updating `opted_out_speakers`) stops further snapshots from that presenter and synchronously purges their already-uploaded keyframes from S3 and PostgreSQL. Operators and recording owners can also delete individual slides via the Web-UI or `DELETE /v1/recordings/{id}/keyframes/{keyframe_id}`.
-- **Retention & Storage Quota (`WORTLAUT_TRANSCRIPT_RETENTION_DAYS` & `WORTLAUT_MAX_STORED_AUDIO_BYTES`)**: Stored under `keyframes/{recording_id}/` in `WORTLAUT1`-framed S3 objects, slide keyframes survive the 24-hour raw-audio purge (`WORTLAUT_RAW_AUDIO_RETENTION_HOURS`) so 30-day protocols retain their visual slide context, and are automatically purged alongside transcripts when `WORTLAUT_TRANSCRIPT_RETENTION_DAYS` expires or `DELETE /v1/recordings/{id}` is called. Active keyframe bytes count toward `WORTLAUT_MAX_STORED_AUDIO_BYTES`.
+- **Retention & Storage Quota (`WORTLAUT_TRANSCRIPT_RETENTION_DAYS` & `WORTLAUT_MAX_STORED_AUDIO_BYTES`)**: Stored under `keyframes/{recording_id}/` in `WORTLAUT1`-framed S3 objects, slide keyframes survive the 24-hour raw-audio purge (`WORTLAUT_AUDIO_RETENTION_HOURS`) so 30-day protocols retain their visual slide context, and are automatically purged alongside transcripts when `WORTLAUT_TRANSCRIPT_RETENTION_DAYS` expires or `DELETE /v1/recordings/{id}` is called. Active keyframe bytes count toward `WORTLAUT_MAX_STORED_AUDIO_BYTES`.
 
 ---
 
@@ -160,6 +193,7 @@ Participants can control `wortlaut` directly from the conference chat without op
   claude mcp add --transport http wortlaut https://<your-wortlaut-domain>/mcp
   ```
   *(Headless scripts may also pass `Authorization: Bearer <WORTLAUT_API_TOKEN>` directly to `POST /mcp`.)*
+- **Origin Allowlist (`WORTLAUT_MCP_ALLOWED_ORIGINS`)**: Optional JSON list of additional allowed browser `Origin` values for `POST /mcp` (in addition to `WORTLAUT_PUBLIC_URL`; requests without an `Origin` header from CLI clients remain allowed).
 - **Revocation**: Users and operators can inspect and revoke active MCP client grants anytime at `/ui#view=mcp` (`GET /v1/mcp/grants`, `DELETE /v1/mcp/grants/{grant_id}`).
 
 ---
@@ -187,10 +221,41 @@ WORTLAUT_OPENAI_API_KEY=                # Optional Bearer secret (store in ignor
 WORTLAUT_OPENAI_MODEL=gpt-4o-mini
 WORTLAUT_OPENAI_TIMEOUT_SECONDS=120
 WORTLAUT_RAG_QUERY_EXPANSION_TIMEOUT_SECONDS=1.5
-WORTLAUT_RAW_AUDIO_RETENTION_HOURS=24   # Purge raw S3 audio chunks 24h after meeting end
+WORTLAUT_AUDIO_RETENTION_HOURS=24       # Purge raw S3 audio chunks 24h after meeting end
+WORTLAUT_FAILED_AUDIO_RETENTION_HOURS=24
 WORTLAUT_TRANSCRIPT_RETENTION_DAYS=30   # Purge transcripts, slide keyframes, and RAG chunks after 30 days
 WORTLAUT_MAX_ACTIVE_MEETINGS=15
 WORTLAUT_MAX_STORED_AUDIO_BYTES=8589934592
+WORTLAUT_LOBBY_TIMEOUT_SECONDS=600      # Stop waiting in conference lobby after 10 minutes
+WORTLAUT_EMPTY_ROOM_TIMEOUT_SECONDS=300 # Leave empty meeting after 5 minutes
+WORTLAUT_WORKER_SECCOMP_TYPE=Unconfined # "Unconfined" (default for Chromium sandbox) or "Localhost" (+ WORTLAUT_WORKER_SECCOMP_PROFILE)
+WORTLAUT_OTLP_ENDPOINT=                 # Optional OpenTelemetry OTLP exporter endpoint
+```
+
+---
+
+## 8. Email Invitations (IMAP) & Protocol Delivery (SMTP)
+
+```dotenv
+# Inbound .ics calendar invitations via IMAP
+WORTLAUT_ENABLE_IMAP=false
+WORTLAUT_IMAP_HOST=imap.example.org
+WORTLAUT_IMAP_PORT=993
+WORTLAUT_IMAP_USERNAME=bot@example.org
+WORTLAUT_IMAP_PASSWORD=                 # Store in ignored .env or Kubernetes Secret (wortlaut-mail)
+WORTLAUT_IMAP_FOLDER=INBOX
+WORTLAUT_MAIL_SENDER_AUTH=gateway       # "gateway" (requires WORTLAUT_TRUSTED_SENDER_HEADER) or "dkim"
+WORTLAUT_MAIL_ALLOWED_SENDER_DOMAINS=["example.org"]
+WORTLAUT_MAIL_REPLY_TO_SENDER=false
+
+# Outbound finished protocol emails via SMTP
+WORTLAUT_ENABLE_SMTP=false
+WORTLAUT_SMTP_HOST=smtp.example.org
+WORTLAUT_SMTP_PORT=587
+WORTLAUT_SMTP_TLS=starttls              # "starttls", "implicit", or "none"
+WORTLAUT_SMTP_USERNAME=bot@example.org
+WORTLAUT_SMTP_PASSWORD=                 # Store in ignored .env or Kubernetes Secret (wortlaut-mail)
+WORTLAUT_SMTP_FROM=bot@example.org
 ```
 
 *(See [`services/meeting/src/wortlaut/settings.py`](../services/meeting/src/wortlaut/settings.py) for the complete typed settings schema and defaults.)*

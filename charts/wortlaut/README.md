@@ -48,12 +48,40 @@ kubectl -n wortlaut create secret generic wortlaut-asr \
 
 ### 2. Install / Upgrade Chart
 
+**Production GPU (Qwen3-ASR 1.7B, default) with generic OIDC (Dex / Keycloak / Authentik):**
+
 ```bash
 helm upgrade --install wortlaut ./charts/wortlaut \
   --namespace wortlaut \
   --set host=wortlaut.example.org \
-  --set oidc.issuer=https://auth.example.org \
-  --set asr.modelRepo=Qwen/Qwen3-ASR-1.7B-hf
+  --set oidc.issuer=https://auth.example.org
+```
+
+**Production GPU with Parakeet TDT v3 ONNX (25 EU languages, word timestamps):**
+
+```bash
+helm upgrade --install wortlaut ./charts/wortlaut \
+  --namespace wortlaut \
+  --set host=wortlaut.example.org \
+  --set asr.backend=parakeet \
+  --set asr.device=cuda
+```
+
+**Optional: Multi-User Sign-In with Microsoft Entra ID and/or Google Sign-In:**
+
+```bash
+kubectl -n wortlaut create secret generic wortlaut-auth \
+  --from-literal=WORTLAUT_ENTRA_AUTH_CLIENT_SECRET='REPLACE_PRIVATELY' \
+  --from-literal=WORTLAUT_GOOGLE_AUTH_CLIENT_SECRET='REPLACE_PRIVATELY'
+
+helm upgrade --install wortlaut ./charts/wortlaut \
+  --namespace wortlaut \
+  --set host=wortlaut.example.org \
+  --set oidc.entraClientId='<entra-app-client-id>' \
+  --set oidc.entraTenantId='<entra-tenant-uuid>' \
+  --set oidc.googleClientId='<google-client-id>.apps.googleusercontent.com' \
+  --set 'oidc.allowedDomains={example.org}' \
+  --set 'oidc.adminEmails={admin@example.org}'
 ```
 
 ### Key Chart Values (`values.yaml`)
@@ -62,6 +90,10 @@ helm upgrade --install wortlaut ./charts/wortlaut \
 | --- | --- | --- |
 | `host` | `wortlaut.example.org` | Public HTTPS hostname for `/ui`, `/privacy`, `/docs`, `/mcp`, and OAuth2 callbacks |
 | `defaultLocale` | `de` | Default language (`de` or `en`) for Web-UI, `/privacy`, live video tile, and chat intro |
+| `bundled.enabled` | `false` | Provision embedded PostgreSQL 17, RustFS S3, and persistent random Secrets in-namespace |
+| `ingress.enabled` | `true` | Create a Kubernetes Ingress; when `false`, workers call `http://wortlaut-meeting:8000/` in-cluster |
+| `images.asr` | `ghcr.io/mayflower/wortlaut-asr:latest` | GPU ASR image (Python 3.14, Qwen3-ASR + Parakeet CUDA 13) |
+| `images.asrCpu` | `ghcr.io/mayflower/wortlaut-asr-cpu:latest` | Slim multi-arch (`amd64`/`arm64`) CPU image selected automatically for `parakeet` + CPU |
 | `providers.enableGoogleMeet` | `true` | Enable Google Meet browser capture |
 | `providers.enableTeams` | `true` | Enable Microsoft Teams browser capture |
 | `providers.enableZoom` | `true` | Enable Zoom Web Client capture |
@@ -70,10 +102,13 @@ helm upgrade --install wortlaut ./charts/wortlaut \
 | `asr.backend` | `qwen3` | ASR backend: `qwen3` (Qwen3-ASR 1.7B, 30 languages) or `parakeet` (Parakeet TDT 0.6B v3 ONNX, 25 EU languages) |
 | `asr.device` | `auto` | Execution device: `auto` (GPU when available), `cuda`, `cpu`, or `mps` (when `parakeet` + `cpu`, automatically uses `images.asrCpu` and omits GPU limits) |
 | `asr.quantization` | `auto` | Precision/quantization: `auto` (`int8` for Parakeet/CPU, `fp32` for Parakeet/CUDA, `bfloat16` for Qwen3/CUDA, `float32` for Qwen3/CPU), `int8`, `fp32`, `bfloat16`, `float16`, `float32` |
+| `asr.allowCpu` | `false` | Backward-compatible CPU opt-in when `asr.device=auto` (omits `nvidia.com/gpu`) |
+| `asr.gpuCount` | `1` | Number of `nvidia.com/gpu` devices requested (setting `0` also switches to CPU mode) |
 | `asr.modelRepo` | `""` | Optional Hugging Face model repo override (empty uses the backend's pinned default) |
 | `asr.modelRevision` | `""` | Optional Hugging Face commit/revision override (empty uses the backend's pinned default) |
 | `asr.languages` | `"*"` | Default ASR languages (`*` = all supported languages, or e.g. `German,English`; switchable per recording) |
 | `asr.glossary` | `""` | Optional comma-separated domain vocabulary / acronyms passed to Qwen3-ASR and RAG search |
+| `otlpEndpoint` | `""` | Optional OpenTelemetry OTLP endpoint for tracing/metrics |
 | `llmSummary.enabled` | `false` | Enable optional LLM executive summaries, decisions, action items & RAG query expansion (Ollama or OpenAI-compatible API) |
 | `llmSummary.openaiBaseUrl` | `""` | Optional OpenAI-compatible API base URL (e.g. `https://api.openai.com/v1` or local vLLM/LiteLLM); takes precedence over Ollama when set |
 | `llmSummary.openaiModel` | `gpt-4o-mini` | Model ID for the OpenAI-compatible chat completions API |

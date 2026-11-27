@@ -45,6 +45,31 @@ To start `wortlaut` locally in subprocess mode (`WORTLAUT_CONTROLLER_BACKEND=loc
 ./scripts/run-local.sh
 ```
 
+## Kubernetes Dev Loop (`kind` or Remote Cluster)
+
+`make setup` and `make dev` use an isolated, git-ignored `.dev/kubeconfig` (never modifying `~/.kube/config`) and render [`charts/wortlaut`](charts/wortlaut) directly via Tilt. By default, `make setup` provisions a local `kind` cluster (`kind-wortlaut-dev`) with bundled PostgreSQL + RustFS, Parakeet ONNX CPU (`wortlaut-asr-cpu`), and `uvicorn --reload` live updates.
+
+Optional overrides can be placed in ignored `.dev/dev.env` or passed via environment variables:
+
+| Variable | Default | Purpose |
+| :--- | :--- | :--- |
+| `WORTLAUT_KUBE_CONTEXT` | `kind-wortlaut-dev` | Target Kubernetes context (`kind-*` uses local `docker build` + `kind load`; any other context uses remote BuildKit) |
+| `WORTLAUT_SOURCE_KUBECONFIG` | `~/.kube/config` | Source kubeconfig when extracting a non-`kind` context into `.dev/kubeconfig` |
+| `WORTLAUT_DEV_REGISTRY` | `localhost:5000` | Container registry host for remote-cluster BuildKit pushes |
+| `WORTLAUT_DEV_DOMAIN` | `wortlaut.local` | Base Ingress domain (`<namespace>.<domain>`) for remote clusters |
+| `WORTLAUT_DEV_INGRESS` | `false` (`kind`) / `true` (remote) | Toggle Kubernetes Ingress creation in Tilt |
+| `WORTLAUT_DEV_BUNDLED` | `true` | Provision bundled PostgreSQL 17 and RustFS S3 in the dev namespace |
+| `WORTLAUT_BUILD_PLATFORM` | `linux/amd64` | Target platform for remote Kubernetes BuildKit builds |
+| `WORTLAUT_ASR_BACKEND` / `WORTLAUT_ASR_DEVICE` | `parakeet`/`cpu` (`kind`), `qwen3`/`auto` (remote) | Select ASR backend and device in Tilt or `make test-e2e-kind` |
+
+To run an isolated end-to-end verification in `kind` (and optionally live conference calls via headless Playwright):
+
+```bash
+make test-e2e-kind                                        # In-cluster Helm + Parakeet CPU smoke
+PROVIDER=google_meet,teams,webex,zoom make test-e2e-kind  # + real live provider calls
+KEEP_CLUSTER=false make test-e2e-kind                     # Tear down kind cluster afterwards
+```
+
 ## Pull Request Checklist
 
 - [ ] Follow [Conventional Commits](https://www.conventionalcommits.org/) (e.g., `feat(calendar): ...`, `fix(worker): ...`, `docs: ...` — enforced automatically by the `commit-msg` hook installed via `make hooks` / `make setup-local`).
