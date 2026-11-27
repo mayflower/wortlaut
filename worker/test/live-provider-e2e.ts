@@ -435,7 +435,10 @@ async function installSenderGate(context: BrowserContext, wavPath?: string): Pro
     g.__wortlautMicGateOpen = true;
     const isTeams = () =>
       typeof location !== 'undefined' &&
-      (location.hostname.includes('teams.microsoft.com') || location.hostname.includes('live.com'));
+      (location.hostname === 'teams.microsoft.com' ||
+        location.hostname.endsWith('.teams.microsoft.com') ||
+        location.hostname === 'live.com' ||
+        location.hostname.endsWith('.live.com'));
     const isWebex = () => typeof location !== 'undefined' && location.hostname === 'web.webex.com';
     const isZoom = () =>
       typeof location !== 'undefined' &&

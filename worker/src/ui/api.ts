@@ -839,14 +839,27 @@ export function validateMeetingUrlClient(rawUrl: string): string | null {
 }
 
 export function detectProviderFromUrl(url: string): Provider | null {
-  const trimmed = url.trim().toLowerCase();
+  const trimmed = url.trim();
   if (!trimmed) return null;
-  if (trimmed.includes('meet.google.com/')) return 'google_meet';
-  if (trimmed.includes('teams.microsoft.com/') || trimmed.includes('teams.live.com/')) {
+  let parsed: URL;
+  try {
+    parsed = new URL(/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(trimmed) ? trimmed : `https://${trimmed}`);
+  } catch {
+    return null;
+  }
+  const host = parsed.hostname.toLowerCase();
+  const path = parsed.pathname.toLowerCase();
+  if (host === 'meet.google.com' && path.length > 1) return 'google_meet';
+  if (host === 'teams.microsoft.com' || host === 'teams.live.com') {
     return 'teams';
   }
-  if (trimmed.includes('.webex.com/')) return 'webex';
-  if (trimmed.includes('zoom.us/j/') || trimmed.includes('zoom.us/wc/')) return 'zoom';
+  if (host === 'webex.com' || host.endsWith('.webex.com')) return 'webex';
+  if (
+    (host === 'zoom.us' || host.endsWith('.zoom.us')) &&
+    (path.startsWith('/j/') || path.startsWith('/wc/'))
+  ) {
+    return 'zoom';
+  }
   return null;
 }
 

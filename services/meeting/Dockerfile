@@ -34,7 +34,9 @@ COPY --from=ghcr.io/astral-sh/uv:0.13.9 /uv /usr/local/bin/uv
 COPY services/meeting/pyproject.toml services/meeting/uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project --no-cache
 COPY services/meeting/ ./
-RUN uv sync --frozen --no-dev --no-cache && rm -f /usr/local/bin/uv && useradd --uid 10001 --create-home wortlaut
+RUN uv sync --frozen --no-dev --no-cache \
+    && rm -rf /usr/local/bin/uv /usr/local/bin/pip* /usr/local/lib/python3.14/ensurepip /usr/local/lib/python3.14/site-packages/pip* \
+    && useradd --uid 10001 --create-home wortlaut
 COPY --from=sdk /worker/dist ./sdk
 COPY site ./site
 ENV PATH="/app/.venv/bin:$PATH" PYTHONDONTWRITEBYTECODE=1

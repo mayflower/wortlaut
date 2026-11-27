@@ -1021,6 +1021,38 @@ def _reconcile_synced_event_recording(
     return recording
 
 
+_SAFE_CALENDAR_ERROR_CODES: dict[str, str] = {
+    "stored_oauth_token_invalid": "stored_oauth_token_invalid",
+    "google_calendar_oauth_not_configured": "google_calendar_oauth_not_configured",
+    "microsoft_calendar_oauth_not_configured": "microsoft_calendar_oauth_not_configured",
+    "oauth_token_refresh_failed": "oauth_token_refresh_failed",
+    "oauth_token_refresh_missing_access_token": "oauth_token_refresh_missing_access_token",
+    "insufficient_calendar_write_scope": "insufficient_calendar_write_scope",
+    "calendar_event_not_editable_by_guest": "calendar_event_not_editable_by_guest",
+}
+
+
+def _classify_calendar_error(exc: Exception, default: str) -> str:
+    if isinstance(exc, ValueError):
+        raw = str(exc)
+        exact = _SAFE_CALENDAR_ERROR_CODES.get(raw)
+        if exact is not None:
+            return exact
+        if raw.startswith("google_calendar_http_"):
+            return "google_calendar_http_error"
+        if raw.startswith("microsoft_calendar_http_"):
+            return "microsoft_calendar_http_error"
+        if raw.startswith(("google_event_get_http_", "google_event_patch_http_")):
+            return "google_event_update_http_error"
+        if raw.startswith(("microsoft_event_get_http_", "microsoft_event_patch_http_")):
+            return "microsoft_event_update_http_error"
+        if raw.startswith("calendar_network_"):
+            return "calendar_network_error"
+    if isinstance(exc, httpx.HTTPError):
+        return "calendar_network_error"
+    return default
+
+
 def fetch_connection_events_unlocked(
     snap: ConnectionSnapshot, now: datetime
 ) -> tuple[list[dict] | None, ConnectionSnapshot, str | None]:
@@ -1032,7 +1064,13 @@ def fetch_connection_events_unlocked(
         raw_events = _fetch_provider_events(snap, access_token, window_start, window_end)
         return raw_events, snap, None
     except Exception as exc:
-        err = str(exc)[:128] or type(exc).__name__
+        err = _classify_calendar_error(exc, "calendar_sync_failed")
+        logging.getLogger("wortlaut.calendar_oauth").warning(
+            "calendar_sync_fetch_failed connection=%s error=%s type=%s",
+            snap.id,
+            err,
+            type(exc).__name__,
+        )
         return None, snap, err
 
 
@@ -1593,14 +1631,15 @@ def publish_protocol_link_to_calendar_events(
             if shared_updated or ev.is_self_organized:
                 organizer_patched = True
         except Exception as exc:
-            err_code = str(exc)[:120] if isinstance(exc, ValueError) else type(exc).__name__
+            err_code = _classify_calendar_error(exc, "calendar_update_failed")
             last_error = err_code
             last_error_provider = snap.provider
             logging.getLogger("wortlaut").warning(
-                "calendar_protocol_link_failed recording=%s event=%s error=%s",
+                "calendar_protocol_link_failed recording=%s event=%s error=%s type=%s",
                 rec_id,
                 ev.id,
                 err_code,
+                type(exc).__name__,
             )
 
     # Lock in canonical order: CalendarConnection -> CalendarSyncedEvent -> Recording

@@ -1,5 +1,6 @@
 import html
 import re
+from html.parser import HTMLParser
 from typing import Literal
 from urllib.parse import parse_qs, unquote, urlencode, urlsplit, urlunsplit
 
@@ -134,9 +135,43 @@ def validate_webex_url(url):
 
 MAX_CALENDAR_AGENDA_LEN = 240
 
-_HTML_SKIP_BLOCK_RE = re.compile(r"<(?:style|script)\b[^>]*>.*?</(?:style|script)>", re.I | re.S)
-_HTML_BREAK_TAG_RE = re.compile(r"</?(?:br|p|div|li|tr|h[1-6]|section|article|hr)\b[^>]*>", re.I)
-_HTML_TAG_RE = re.compile(r"<[^>]+>")
+_HTML_BLOCK_TAGS = frozenset(
+    {"br", "p", "div", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6", "section", "article", "hr"}
+)
+_HTML_SKIP_TAGS = frozenset({"style", "script"})
+
+
+class _AgendaHtmlExtractor(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._skip_depth = 0
+        self._parts: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        low = tag.lower()
+        if low in _HTML_SKIP_TAGS:
+            self._skip_depth += 1
+            return
+        if self._skip_depth == 0:
+            self._parts.append("\n" if low in _HTML_BLOCK_TAGS else " ")
+
+    def handle_endtag(self, tag: str) -> None:
+        low = tag.lower()
+        if low in _HTML_SKIP_TAGS:
+            if self._skip_depth > 0:
+                self._skip_depth -= 1
+            return
+        if self._skip_depth == 0 and low in _HTML_BLOCK_TAGS:
+            self._parts.append("\n")
+
+    def handle_data(self, data: str) -> None:
+        if self._skip_depth == 0:
+            self._parts.append(data)
+
+    def text(self) -> str:
+        return "".join(self._parts)
+
+
 _AGENDA_SECTION_CUT_RE = re.compile(
     r"(?:"
     r"-::~:~::"
@@ -181,10 +216,14 @@ def extract_calendar_agenda(
     """Extract clean agenda context from a calendar description without URLs or credentials."""
     if not raw_text or not isinstance(raw_text, str):
         return None
-    text = _HTML_SKIP_BLOCK_RE.sub(" ", raw_text)
-    text = _HTML_BREAK_TAG_RE.sub("\n", text)
-    text = _HTML_TAG_RE.sub(" ", text)
-    text = html.unescape(text).replace("\r\n", "\n").replace("\r", "\n")
+    if "<" in raw_text and ">" in raw_text:
+        parser = _AgendaHtmlExtractor()
+        parser.feed(raw_text)
+        parser.close()
+        text = parser.text()
+    else:
+        text = html.unescape(raw_text)
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
 
     kept: list[str] = []
     seen: set[str] = set()

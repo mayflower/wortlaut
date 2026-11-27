@@ -324,8 +324,11 @@ def register_oauth_client(
     for item in raw_uris:
         try:
             uri = validate_redirect_uri(item)
-        except ValueError as exc:
-            return 400, {"error": "invalid_redirect_uri", "error_description": str(exc)}
+        except ValueError:
+            return 400, {
+                "error": "invalid_redirect_uri",
+                "error_description": "Invalid redirect_uri",
+            }
         if uri not in validated_uris:
             validated_uris.append(uri)
 
@@ -979,13 +982,13 @@ def start_oauth_authorization(
     origin = public_origin(request)
     try:
         validated_resource = _validate_resource_indicator(resource, origin)
-    except ValueError as exc:
-        return _redirect_err("invalid_target", str(exc))
+    except ValueError:
+        return _redirect_err("invalid_target", "Invalid resource indicator")
 
     try:
         requested_scopes = _normalize_requested_scopes(scope)
-    except ValueError as exc:
-        return _redirect_err("invalid_scope", str(exc))
+    except ValueError:
+        return _redirect_err("invalid_scope", "Invalid OAuth scope")
 
     now = datetime.now(UTC)
     auth_providers = get_configured_auth_providers()
@@ -1276,8 +1279,8 @@ def exchange_oauth_token(
     origin = public_origin(request)
     try:
         requested_resource = _validate_resource_indicator(params.get("resource"), origin)
-    except ValueError as exc:
-        return oauth_error_json("invalid_target", str(exc), status_code=400)
+    except ValueError:
+        return oauth_error_json("invalid_target", "Invalid resource indicator", status_code=400)
 
     now = datetime.now(UTC)
 

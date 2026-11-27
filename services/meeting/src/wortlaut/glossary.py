@@ -21,7 +21,7 @@ MAX_GLOSSARY_TERM_LEN = 80
 MAX_ALIASES_PER_TERM = 12
 MAX_ENTRIES_PER_SCOPE = 250
 
-_ARROW_SPLIT_RE = re.compile(r"\s*(?:->|=>|→)\s*")
+_ARROW_SPLIT_RE = re.compile(r"->|=>|→")
 _ITEM_SPLIT_RE = re.compile(r"[,;\n]+")
 _ALIAS_PIPE_SPLIT_RE = re.compile(r"[,;|\n]+")
 

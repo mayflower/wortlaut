@@ -2,6 +2,7 @@ import hashlib
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
+from urllib.parse import urlsplit
 
 import pytest
 from sqlalchemy import select
@@ -1798,7 +1799,7 @@ def test_oidc_dex_pkce_exchange_and_per_user_isolation(client, database, monkeyp
         "post",
         lambda url, **kw: _FakeCalTokenResp(
             "mara.lindner@acme.example.org"
-            if "googleapis.com" in url
+            if (urlsplit(url).hostname or "").endswith(".googleapis.com")
             else "thomas.berg@acme.example.org"
         ),
     )
@@ -1812,7 +1813,7 @@ def test_oidc_dex_pkce_exchange_and_per_user_isolation(client, database, monkeyp
             return self._payload
 
     def _fake_cal_get(url, **kw):
-        if "googleapis.com" in url:
+        if (urlsplit(url).hostname or "").endswith(".googleapis.com"):
             return _FakeCalGetResp(
                 {
                     "items": [
@@ -1973,7 +1974,7 @@ def test_oidc_dex_pkce_exchange_and_per_user_isolation(client, database, monkeyp
         "post",
         lambda url, **kw: _FakeCalTokenResp(
             "mara.lindner@acme.example.org"
-            if "googleapis.com" in url
+            if (urlsplit(url).hostname or "").endswith(".googleapis.com")
             else "thomas.berg@acme.example.org"
         ),
     )

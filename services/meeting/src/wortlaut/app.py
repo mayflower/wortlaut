@@ -2169,7 +2169,7 @@ def link_recording_in_calendar(
                 "Dieser Kalendereintrag lässt das Bearbeiten der Beschreibung "
                 "durch Gäste nicht zu.",
             )
-        raise HTTPException(502, f"Kalendereintrag konnte nicht aktualisiert werden ({err}).")
+        raise HTTPException(502, "Kalendereintrag konnte nicht aktualisiert werden.")
     return res
 
 
