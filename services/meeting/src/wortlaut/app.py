@@ -96,6 +96,7 @@ from wortlaut.mcp_oauth import (
     authorization_server_metadata,
     cors_oauth_headers,
     exchange_oauth_token,
+    extract_client_ip,
     handle_mcp_oidc_callback,
     is_mcp_oidc_callback,
     list_user_mcp_grants,
@@ -188,6 +189,15 @@ async def processing_loop(stop: asyncio.Event, operation, interval=2):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    settings = get_settings()
+    if settings.encryption_key is None and (
+        settings.google_calendar_client_id or settings.microsoft_calendar_client_id
+    ):
+        logging.getLogger("wortlaut").warning(
+            "encryption_key_fallback calendar_oauth_enabled=true "
+            "hint='Set dedicated WORTLAUT_ENCRYPTION_KEY to decouple OAuth token encryption "
+            "from WORTLAUT_API_TOKEN rotation'"
+        )
     stop = asyncio.Event()
     tasks = (
         [
@@ -696,7 +706,7 @@ async def oauth_register_endpoint(request: Request, db: Db):
         return oauth_error_json("invalid_client_metadata", "Invalid JSON body")
     if not isinstance(payload, dict):
         return oauth_error_json("invalid_client_metadata", "JSON object required")
-    client_ip = request.client.host if request.client else None
+    client_ip = extract_client_ip(request)
     status_code, data = await run_in_threadpool(
         register_oauth_client, db, payload, client_ip=client_ip
     )

@@ -1,0 +1,139 @@
+{{- if .Values.networkPolicies.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: wortlaut-worker-isolation
+  namespace: {{ .Release.Namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app: wortlaut-worker
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress: []
+  egress:
+    # DNS resolution (CoreDNS / kube-dns)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Bootstrap + audio/keyframe ingest to wortlaut-meeting only
+    - to:
+        - podSelector:
+            matchLabels:
+              app: wortlaut-meeting
+      ports:
+        - protocol: TCP
+          port: 8000
+    # Public conference endpoints (HTTPS + WebRTC), blocking cluster-internal RFC1918 & cloud metadata
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 169.254.0.0/16
+              - 127.0.0.0/8
+{{- range .Values.networkPolicies.allowPrivateWorkerEgressCidrs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+{{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: wortlaut-meeting-ingress
+  namespace: {{ .Release.Namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app: wortlaut-meeting
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: wortlaut-worker
+{{- if .Values.networkPolicies.ingressControllerNamespaceLabels }}
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicies.ingressControllerNamespaceLabels | nindent 14 }}
+{{- else }}
+        - namespaceSelector: {}
+{{- end }}
+      ports:
+        - protocol: TCP
+          port: 8000
+{{- if .Values.asr.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: wortlaut-asr-ingress
+  namespace: {{ .Release.Namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app: wortlaut-asr
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: wortlaut-meeting
+      ports:
+        - protocol: TCP
+          port: 8000
+{{- end }}
+{{- if .Values.bundled.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: wortlaut-bundled-postgres-ingress
+  namespace: {{ .Release.Namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app: wortlaut-postgres
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: wortlaut-meeting
+      ports:
+        - protocol: TCP
+          port: 5432
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: wortlaut-bundled-rustfs-ingress
+  namespace: {{ .Release.Namespace }}
+spec:
+  podSelector:
+    matchLabels:
+      app: wortlaut-rustfs
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: wortlaut-meeting
+      ports:
+        - protocol: TCP
+          port: 9000
+{{- end }}
+{{- end }}

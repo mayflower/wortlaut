@@ -41,11 +41,29 @@ calendarOAuth:
 
 llmSummary:
   enabled: false
+  # Set to false to disable external OpenAI query-term expansion in MCP search_protocols
+  # even when openaiBaseUrl is configured.
+  enableQueryExpansion: true
   ollamaUrl: ""
   ollamaModel: qwen3.8:latest
   openaiBaseUrl: ""
   openaiModel: gpt-4o-mini
   openaiTimeoutSeconds: 120
+
+worker:
+  # Chromium seccomp mode: "Unconfined" (default) or "Localhost" with a node-installed
+  # profile such as charts/wortlaut/examples/worker-seccomp-chromium.json.
+  seccompType: Unconfined
+  seccompProfile: ""
+
+networkPolicies:
+  # Enable Kubernetes NetworkPolicies isolating worker pods from PostgreSQL, RustFS, ASR,
+  # and cloud metadata (169.254.169.254) on clusters whose CNI enforces NetworkPolicy.
+  enabled: false
+  # Optional extra CIDRs reachable by browser workers (e.g. corporate conference proxies):
+  allowPrivateWorkerEgressCidrs: []
+  # Optional namespace labels for the cluster Ingress controller targeting wortlaut-meeting:8000:
+  ingressControllerNamespaceLabels: {}
 
 capacity:
   maxActiveMeetings: 15
@@ -78,6 +96,7 @@ asr:
 bundled:
   enabled: false
   apiToken: ""
+  encryptionKey: ""
   storageClassName: ""
   postgresSize: 10Gi
   rustfsSize: 10Gi

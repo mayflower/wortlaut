@@ -1116,3 +1116,34 @@ def test_calendar_toggle_concurrent_with_sync_no_postgres_deadlock(database, mon
         assert refreshed.recording_id is not None
         conn_after = db.get(CalendarConnection, conn_id)
         assert conn_after is not None and conn_after.last_synced_at is not None
+
+
+def test_calendar_writeback_sanitizes_injected_urls_and_controls():
+    from wortlaut.calendar_oauth import (
+        _inject_protocol_block_html,
+        _inject_protocol_block_plain,
+    )
+
+    protocol_url = "https://wortlaut.example.org/r/wortlaut-read-abc123"
+    injected_summary = (
+        "Team agreed on Q4 roadmap.\x00\x07 "
+        "Click https://evil.example.test/login or www.phish.example/reset "
+        "or mailto:attacker@evil.test or javascript:alert(1) immediately. " + ("A" * 600)
+    )
+
+    plain = _inject_protocol_block_plain("Agenda", protocol_url, injected_summary)
+    assert protocol_url in plain
+    assert "evil.example.test" not in plain
+    assert "phish.example" not in plain
+    assert "attacker@evil.test" not in plain
+    assert "javascript:alert" not in plain
+    assert "[link removed]" in plain
+    assert "\x00" not in plain
+    assert "…" in plain
+
+    html_out = _inject_protocol_block_html("<p>Agenda</p>", protocol_url, injected_summary)
+    assert f'href="{protocol_url}"' in html_out
+    assert "evil.example.test" not in html_out
+    assert "phish.example" not in html_out
+    assert "javascript:alert" not in html_out
+    assert "[link removed]" in html_out

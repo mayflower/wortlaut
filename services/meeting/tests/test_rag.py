@@ -700,6 +700,21 @@ def test_glossary_tenancy_and_openai_query_expansion_guards(database, monkeypatc
         for _ in acquired:
             llm_module._EXPANSION_SEMAPHORE.release()
 
+    # Explicit opt-out WORTLAUT_ENABLE_RAG_QUERY_EXPANSION=false skips outbound HTTP
+    monkeypatch.setenv("WORTLAUT_ENABLE_RAG_QUERY_EXPANSION", "false")
+    get_settings.cache_clear()
+    called_when_disabled = []
+
+    def fail_if_called(url, **kwargs):
+        called_when_disabled.append(url)
+        raise AssertionError("expand_search_query must not call OpenAI when opted out")
+
+    monkeypatch.setattr(llm_module.httpx, "post", fail_if_called)
+    assert llm_module.expand_search_query("MyAcme", ["AcmeStack"]) == []
+    assert called_when_disabled == []
+    monkeypatch.setenv("WORTLAUT_ENABLE_RAG_QUERY_EXPANSION", "true")
+    get_settings.cache_clear()
+
 
 # ---------------------------------------------------------------------------
 # 4. WORTLAUT_ENABLE_LLM_SUMMARY privacy gate + dynamic /privacy disclosure
@@ -751,6 +766,21 @@ def test_openai_summary_privacy_gate_and_dynamic_privacy_page(client, database, 
     assert "Query-Only Search AI" in en2
     assert "100 % Self-Hosted" not in de2
     assert "nein" not in de2.lower()
+
+    # State 2b: opting out of query expansion restores 100% self-hosted notice + Parakeet label
+    monkeypatch.setenv("WORTLAUT_ENABLE_RAG_QUERY_EXPANSION", "false")
+    monkeypatch.setenv("WORTLAUT_ASR_BACKEND", "parakeet")
+    get_settings.cache_clear()
+    de2b = client.get("/privacy?lang=de").text
+    en2b = client.get("/privacy?lang=en").text
+    assert "100 % Self-Hosted" in de2b
+    assert "Parakeet TDT v3 ONNX" in de2b
+    assert "Parakeet TDT v3 ONNX" in en2b
+    assert "Qwen3-ASR" not in de2b
+    assert "Qwen3-ASR" not in en2b
+    monkeypatch.setenv("WORTLAUT_ENABLE_RAG_QUERY_EXPANSION", "true")
+    monkeypatch.setenv("WORTLAUT_ASR_BACKEND", "")
+    get_settings.cache_clear()
 
     # State 3: WORTLAUT_ENABLE_LLM_SUMMARY=true activates OpenAI summary + transparent notice
     monkeypatch.setenv("WORTLAUT_ENABLE_LLM_SUMMARY", "true")

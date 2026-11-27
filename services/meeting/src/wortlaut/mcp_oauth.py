@@ -4,8 +4,10 @@ import base64
 import hashlib
 import hmac
 import html
+import ipaddress
 import re
 import secrets
+import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -38,7 +40,7 @@ from wortlaut.settings import derive_subkey, get_settings
 from wortlaut.ui import FAVICON_DATA_URI
 
 MCP_SCOPES: tuple[str, ...] = ("mcp:read", "mcp:write")
-DEFAULT_SCOPE_STRING = "mcp:read mcp:write"
+DEFAULT_SCOPE_STRING = "mcp:read"
 ACCESS_TOKEN_PREFIX = "wortlaut-mcp-at-"  # noqa: S105
 REFRESH_TOKEN_PREFIX = "wortlaut-mcp-rt-"  # noqa: S105
 CLIENT_ID_PREFIX = "wortlaut-mcp-client-"
@@ -87,11 +89,53 @@ def _pkce_s256(verifier: str) -> str:
     return _b64url_encode(digest)
 
 
+_REGISTER_RATE_LOCK = threading.Lock()
 _REGISTER_RATE_BUCKETS: dict[str, list[float]] = {}
 _REGISTER_RATE_WINDOW_SEC = 60.0
 _REGISTER_RATE_MAX_PER_IP = 40
 _MAX_OAUTH_CLIENTS = 512
 _SAFE_HOST_RE = re.compile(r"^[a-z0-9.-]+(?::\d{1,5})?$")
+
+
+def _ip_in_trusted_proxies(raw_ip: str, trusted_entries: list[str]) -> bool:
+    if not raw_ip or not trusted_entries:
+        return False
+    try:
+        addr = ipaddress.ip_address(raw_ip.strip())
+    except ValueError:
+        return False
+    for entry in trusted_entries:
+        cleaned = (entry or "").strip()
+        if not cleaned:
+            continue
+        try:
+            if addr in ipaddress.ip_network(cleaned, strict=False):
+                return True
+        except ValueError:
+            continue
+    return False
+
+
+def extract_client_ip(request: Request) -> str | None:
+    """Resolve client IP, trusting X-Forwarded-For only from configured proxy IPs/CIDRs."""
+    peer = request.client.host if request.client else None
+    if not peer:
+        return None
+    trusted = get_settings().trusted_proxy_ips
+    if not trusted or not _ip_in_trusted_proxies(peer, trusted):
+        return peer
+    xff = request.headers.get("x-forwarded-for") or ""
+    if not xff.strip():
+        return peer
+    hops = [part.strip() for part in xff.split(",") if part.strip()]
+    for hop in reversed(hops):
+        try:
+            ipaddress.ip_address(hop)
+        except ValueError:
+            continue
+        if not _ip_in_trusted_proxies(hop, trusted):
+            return hop
+    return hops[0] if hops else peer
 
 
 def _hmac_tag(purpose: bytes, value: str) -> str:
@@ -261,14 +305,14 @@ def _validate_resource_indicator(resource: str | None, origin: str) -> str | Non
 
 def _normalize_requested_scopes(raw_scope: str | None) -> list[str]:
     if not raw_scope or not raw_scope.strip():
-        return list(MCP_SCOPES)
+        return ["mcp:read"]
     tokens = [tok.strip() for tok in raw_scope.split() if tok.strip()]
     recognized = [tok for tok in tokens if tok in MCP_SCOPES]
     ignored_oidc = {"openid", "profile", "email", "offline_access"}
     unknown = [tok for tok in tokens if tok not in MCP_SCOPES and tok not in ignored_oidc]
     if unknown:
         raise ValueError(f"Unsupported scope: {unknown[0]}")
-    return recognized or list(MCP_SCOPES)
+    return recognized or ["mcp:read"]
 
 
 def _redirect_with_params(redirect_uri: str, params: dict[str, str]) -> RedirectResponse:
@@ -298,21 +342,36 @@ def register_oauth_client(
 ) -> tuple[int, dict]:
     if client_ip:
         now_mono = time.monotonic()
-        bucket = [
-            ts
-            for ts in _REGISTER_RATE_BUCKETS.get(client_ip, [])
-            if now_mono - ts < _REGISTER_RATE_WINDOW_SEC
-        ]
-        if len(bucket) >= _REGISTER_RATE_MAX_PER_IP:
+        with _REGISTER_RATE_LOCK:
+            bucket = [
+                ts
+                for ts in _REGISTER_RATE_BUCKETS.get(client_ip, [])
+                if now_mono - ts < _REGISTER_RATE_WINDOW_SEC
+            ]
+            if len(bucket) >= _REGISTER_RATE_MAX_PER_IP:
+                _REGISTER_RATE_BUCKETS[client_ip] = bucket
+                return 429, {
+                    "error": "slow_down",
+                    "error_description": "Too many dynamic client registrations from this IP",
+                }
+            bucket.append(now_mono)
             _REGISTER_RATE_BUCKETS[client_ip] = bucket
-            return 429, {
-                "error": "slow_down",
-                "error_description": "Too many dynamic client registrations from this IP",
-            }
-        bucket.append(now_mono)
-        if len(_REGISTER_RATE_BUCKETS) > 1024:
-            _REGISTER_RATE_BUCKETS.clear()
-        _REGISTER_RATE_BUCKETS[client_ip] = bucket
+            if len(_REGISTER_RATE_BUCKETS) > 1024:
+                stale_keys = [
+                    key
+                    for key, stamps in _REGISTER_RATE_BUCKETS.items()
+                    if not stamps or (now_mono - stamps[-1]) >= _REGISTER_RATE_WINDOW_SEC
+                ]
+                for key in stale_keys:
+                    _REGISTER_RATE_BUCKETS.pop(key, None)
+                if len(_REGISTER_RATE_BUCKETS) > 1024:
+                    excess = len(_REGISTER_RATE_BUCKETS) - 1024
+                    oldest_keys = sorted(
+                        _REGISTER_RATE_BUCKETS,
+                        key=lambda key: _REGISTER_RATE_BUCKETS[key][-1],
+                    )[:excess]
+                    for key in oldest_keys:
+                        _REGISTER_RATE_BUCKETS.pop(key, None)
 
     raw_uris = payload.get("redirect_uris")
     if not isinstance(raw_uris, list) or not raw_uris or len(raw_uris) > 16:
@@ -527,7 +586,7 @@ def _render_consent_html(
     write_scope_block = (
         f"""
       <label class="scope-item">
-        <input type="checkbox" name="scopes" value="mcp:write" checked>
+        <input type="checkbox" name="scopes" value="mcp:write">
         <span>
           <span class="scope-title">{write_title}</span>
           <span class="scope-desc">{write_desc}</span>

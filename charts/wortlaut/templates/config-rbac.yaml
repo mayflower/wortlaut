@@ -17,8 +17,16 @@ data:
   WORTLAUT_ZOOM_LOCALE: {{ .Values.providers.zoomLocale | quote }}
   WORTLAUT_ENABLE_WEBEX_BROWSER: {{ .Values.providers.enableWebexBrowser | ternary "true" "false" | quote }}
   WORTLAUT_ENABLE_KEYFRAMES: {{ .Values.keyframes.enabled | ternary "true" "false" | quote }}
+  WORTLAUT_ASR_BACKEND: {{ .Values.asr.backend | default "qwen3" | quote }}
   WORTLAUT_ASR_LANGUAGES: {{ .Values.asr.languages | quote }}
   WORTLAUT_ENABLE_LLM_SUMMARY: {{ .Values.llmSummary.enabled | ternary "true" "false" | quote }}
+  WORTLAUT_ENABLE_RAG_QUERY_EXPANSION: {{ if eq (.Values.llmSummary.enableQueryExpansion | toString) "false" }}"false"{{ else }}"true"{{ end }}
+{{- if .Values.worker.seccompType }}
+  WORTLAUT_WORKER_SECCOMP_TYPE: {{ .Values.worker.seccompType | quote }}
+{{- end }}
+{{- if .Values.worker.seccompProfile }}
+  WORTLAUT_WORKER_SECCOMP_PROFILE: {{ .Values.worker.seccompProfile | quote }}
+{{- end }}
 {{- if .Values.llmSummary.ollamaUrl }}
   WORTLAUT_OLLAMA_URL: {{ .Values.llmSummary.ollamaUrl | quote }}
 {{- end }}

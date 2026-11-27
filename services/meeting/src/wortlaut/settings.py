@@ -36,6 +36,8 @@ class Settings(BaseSettings):
     oidc_allowed_domains: list[str] = []
     oidc_admin_emails: list[str] = []
     mcp_allowed_origins: list[str] = []
+    mcp_write_rate_limit_per_minute: int = Field(default=30, ge=1, le=600)
+    trusted_proxy_ips: list[str] = []
     webex_service_token: SecretStr | None = None
     enable_webex_browser: bool = True
     enable_webex_refresh: bool = False
@@ -136,6 +138,7 @@ class Settings(BaseSettings):
     transcript_retention_days: int = Field(default=30, ge=1)
     enable_processing: bool = True
     asr_url: str = "http://wortlaut-asr:8000"
+    asr_backend: str = ""
     asr_token: SecretStr | None = None
     asr_languages: str = "*"
     asr_glossary: Annotated[list[str], NoDecode] = []
@@ -143,6 +146,7 @@ class Settings(BaseSettings):
     asr_lease_seconds: int = 180
     asr_max_permanent_failures: int = 3
     enable_llm_summary: bool = False
+    enable_rag_query_expansion: bool = True
     ollama_url: str = "http://ollama.ollama.svc.cluster.local:11434"
     ollama_model: str = "qwen3.8:latest"
     ollama_timeout_seconds: int = 180
@@ -155,6 +159,9 @@ class Settings(BaseSettings):
 
     def openai_chat_configured(self) -> bool:
         return bool((self.openai_base_url or "").strip())
+
+    def rag_query_expansion_configured(self) -> bool:
+        return bool(self.enable_rag_query_expansion and self.openai_chat_configured())
 
     def llm_summary_configured(self) -> bool:
         return bool(

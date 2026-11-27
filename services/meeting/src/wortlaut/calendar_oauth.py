@@ -1292,6 +1292,29 @@ PROTOCOL_MARKER_END = "--- Ende wortlaut Wortprotokoll ---"
 HTML_MARKER_START = "<!-- wortlaut-protocol-start -->"
 HTML_MARKER_END = "<!-- wortlaut-protocol-end -->"
 
+_CALENDAR_SUMMARY_URL_RE = re.compile(
+    r"(?:(?:https?|ftp|javascript|data|vbscript):[^\s<>\"')]+|mailto:[^\s<>\"')]+|www\.[^\s<>\"')]+)",
+    re.IGNORECASE,
+)
+_CALENDAR_SUMMARY_MAX_CHARS = 500
+
+
+def _sanitize_calendar_summary_text(summary_text: str | None) -> str | None:
+    """Sanitize LLM-generated summary text before writing to external calendar invites."""
+    if not summary_text:
+        return None
+    cleaned = "".join(ch if ch >= " " or ch in ("\n", "\t") else " " for ch in str(summary_text))
+    cleaned = " ".join(cleaned.split())
+    if not cleaned:
+        return None
+    # Strip external URLs/links so spoken/slide prompt injections cannot plant phishing links
+    # into calendar descriptions shared with external attendees.
+    cleaned = _CALENDAR_SUMMARY_URL_RE.sub("[link removed]", cleaned)
+    cleaned = " ".join(cleaned.split())
+    if len(cleaned) > _CALENDAR_SUMMARY_MAX_CHARS:
+        cleaned = cleaned[: _CALENDAR_SUMMARY_MAX_CHARS - 1].rstrip() + "…"
+    return cleaned or None
+
 
 def _inject_protocol_block_plain(
     existing: str, protocol_url: str, summary_text: str | None = None
@@ -1301,8 +1324,9 @@ def _inject_protocol_block_plain(
         "📝 wortlaut Wortprotokoll",
         f"Protokoll & Audio-Prüfung: {protocol_url}",
     ]
-    if summary_text and summary_text.strip():
-        lines.append(f"Zusammenfassung: {' '.join(summary_text.split())}")
+    safe_summary = _sanitize_calendar_summary_text(summary_text)
+    if safe_summary:
+        lines.append(f"Zusammenfassung: {safe_summary}")
     lines.append(PROTOCOL_MARKER_END)
     block = "\n".join(lines)
 
@@ -1330,8 +1354,9 @@ def _inject_protocol_block_html(
 ) -> str:
     safe_url = escape(protocol_url, quote=True)
     summary_html = ""
-    if summary_text and summary_text.strip():
-        safe_sum = escape(" ".join(summary_text.split()))
+    safe_summary = _sanitize_calendar_summary_text(summary_text)
+    if safe_summary:
+        safe_sum = escape(safe_summary)
         summary_html = f"<br><span><strong>Zusammenfassung:</strong> {safe_sum}</span>"
     block = (
         f"{HTML_MARKER_START}"

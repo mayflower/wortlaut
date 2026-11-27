@@ -219,7 +219,7 @@ def expand_search_query(
     """Expand a short search query via OpenAI `/chat/completions` without transcript egress."""
     settings = settings or get_settings()
     q_clean = " ".join((query or "").split())[:300]
-    if not q_clean or not settings.openai_chat_configured():
+    if not q_clean or not settings.rag_query_expansion_configured():
         return []
     if not _EXPANSION_SEMAPHORE.acquire(blocking=False):
         return []

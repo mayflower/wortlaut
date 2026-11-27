@@ -193,7 +193,8 @@ Participants can control `wortlaut` directly from the conference chat without op
   claude mcp add --transport http wortlaut https://<your-wortlaut-domain>/mcp
   ```
   *(Headless scripts may also pass `Authorization: Bearer <WORTLAUT_API_TOKEN>` directly to `POST /mcp`.)*
-- **Origin Allowlist (`WORTLAUT_MCP_ALLOWED_ORIGINS`)**: Optional JSON list of additional allowed browser `Origin` values for `POST /mcp` (in addition to `WORTLAUT_PUBLIC_URL`; requests without an `Origin` header from CLI clients remain allowed).
+- **Origin Allowlist (`WORTLAUT_MCP_ALLOWED_ORIGINS`)**: Optional JSON list of additional allowed browser `Origin` values for `POST /mcp` (in addition to `WORTLAUT_PUBLIC_URL`; loopback `http://localhost` origins are implicitly allowed only when the server itself runs on loopback, while native CLI clients without an `Origin` header remain allowed).
+- **Least Agency, Rate Limits & Audit Logging**: OAuth discovery defaults to `mcp:read` and the consent screen leaves `mcp:write` unchecked by default. Write tool calls (`schedule_recording`, `cancel_recording`, `update_protocol`) are rate-limited per principal/grant via `WORTLAUT_MCP_WRITE_RATE_LIMIT_PER_MINUTE` (default `30`) and emit structured `wortlaut.audit` log lines (`audit_event=mcp.tool.write`). Behind a reverse proxy/Ingress, set `WORTLAUT_TRUSTED_PROXY_IPS` (JSON list of proxy IPs/CIDRs) so `/oauth/register` rate limits apply per client IP.
 - **Revocation**: Users and operators can inspect and revoke active MCP client grants anytime at `/ui#view=mcp` (`GET /v1/mcp/grants`, `DELETE /v1/mcp/grants/{grant_id}`).
 
 ---
@@ -214,6 +215,7 @@ WORTLAUT_ASR_ALLOW_CPU=false            # Backward-compatible CPU opt-in when WO
 WORTLAUT_ASR_GLOSSARY=                  # Optional comma-separated or JSON list of domain terms/acronyms
 WORTLAUT_MAX_OVERTIME_SECONDS=3600      # Auto-extend active meetings past ends_at (15m steps, up to 60m)
 WORTLAUT_ENABLE_LLM_SUMMARY=false       # Mandatory explicit opt-in for post-call summaries & slide text extraction
+WORTLAUT_ENABLE_RAG_QUERY_EXPANSION=true # Set false to keep MCP search queries & glossary 100% local even when WORTLAUT_OPENAI_BASE_URL is set
 WORTLAUT_OLLAMA_URL=http://ollama:11434
 WORTLAUT_OLLAMA_MODEL=qwen3.8:latest
 WORTLAUT_OPENAI_BASE_URL=               # Optional external OpenAI-compatible /v1 base URL (query-only RAG expansion; summaries only when WORTLAUT_ENABLE_LLM_SUMMARY=true)
@@ -228,7 +230,9 @@ WORTLAUT_MAX_ACTIVE_MEETINGS=15
 WORTLAUT_MAX_STORED_AUDIO_BYTES=8589934592
 WORTLAUT_LOBBY_TIMEOUT_SECONDS=600      # Stop waiting in conference lobby after 10 minutes
 WORTLAUT_EMPTY_ROOM_TIMEOUT_SECONDS=300 # Leave empty meeting after 5 minutes
-WORTLAUT_WORKER_SECCOMP_TYPE=Unconfined # "Unconfined" (default for Chromium sandbox) or "Localhost" (+ WORTLAUT_WORKER_SECCOMP_PROFILE)
+WORTLAUT_WORKER_SECCOMP_TYPE=Unconfined # "Unconfined" (default for Chromium sandbox) or "Localhost" (+ WORTLAUT_WORKER_SECCOMP_PROFILE; see charts/wortlaut/examples/worker-seccomp-chromium.json)
+WORTLAUT_MCP_WRITE_RATE_LIMIT_PER_MINUTE=30
+WORTLAUT_TRUSTED_PROXY_IPS=[]           # Optional JSON list of reverse-proxy / Ingress IPs or CIDRs trusted for X-Forwarded-For on /oauth/register
 WORTLAUT_OTLP_ENDPOINT=                 # Optional OpenTelemetry OTLP exporter endpoint
 ```
 

@@ -11,6 +11,10 @@
 {{- if and (not .Values.bundled.apiToken) $existingRuntime (hasKey $existingRuntime.data "WORTLAUT_API_TOKEN") -}}
   {{- $apiToken = b64dec (index $existingRuntime.data "WORTLAUT_API_TOKEN") -}}
 {{- end -}}
+{{- $encryptionKey := default (randAlphaNum 32) .Values.bundled.encryptionKey -}}
+{{- if and (not .Values.bundled.encryptionKey) $existingRuntime (hasKey $existingRuntime.data "WORTLAUT_ENCRYPTION_KEY") -}}
+  {{- $encryptionKey = b64dec (index $existingRuntime.data "WORTLAUT_ENCRYPTION_KEY") -}}
+{{- end -}}
 {{- $s3Secret := randAlphaNum 32 -}}
 {{- if and $existingStorage (hasKey $existingStorage.data "WORTLAUT_S3_SECRET_KEY") -}}
   {{- $s3Secret = b64dec (index $existingStorage.data "WORTLAUT_S3_SECRET_KEY") -}}
@@ -39,6 +43,7 @@ type: Opaque
 stringData:
   WORTLAUT_DATABASE_URL: {{ printf "postgresql+psycopg://wortlaut:%s@wortlaut-postgres:5432/wortlaut" $pgPass | quote }}
   WORTLAUT_API_TOKEN: {{ $apiToken | quote }}
+  WORTLAUT_ENCRYPTION_KEY: {{ $encryptionKey | quote }}
 ---
 apiVersion: v1
 kind: Secret
