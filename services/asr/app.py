@@ -812,6 +812,21 @@ def _resolve_quantization_setting(backend: str, device: str) -> str:
     )
 
 
+def _move_network_to_device(network, device: str) -> None:
+    if device == "cuda" and hasattr(network, "parameters") and hasattr(network, "buffers"):
+        # Safetensors mmaps weight files; copying directly from file-backed
+        # mmap pages into CUDA can stall dramatically on unified memory and
+        # container filesystems. Cloning each unique CPU tensor first avoids
+        # file-backed page faults inside cudaMemcpy.
+        for param in network.parameters():
+            if getattr(getattr(param, "device", None), "type", None) == "cpu":
+                param.data = param.data.clone().to(device)
+        for buf in network.buffers():
+            if getattr(getattr(buf, "device", None), "type", None) == "cpu":
+                buf.data = buf.data.clone().to(device)
+    network.to(device)
+
+
 def _load_qwen3_model() -> QwenASR:
     import torch
     from transformers import AutoModelForMultimodalLM, AutoProcessor
@@ -853,7 +868,7 @@ def _load_qwen3_model() -> QwenASR:
     revision = os.environ.get("WORTLAUT_ASR_MODEL_REVISION", "").strip() or MODEL_REVISION
     processor = AutoProcessor.from_pretrained(repo, revision=revision)
     network = AutoModelForMultimodalLM.from_pretrained(repo, revision=revision, dtype=dtype)
-    network.to(device)
+    _move_network_to_device(network, device)
     network.eval()
     return QwenASR(
         processor,
@@ -897,6 +912,23 @@ def _parakeet_cuda_available(ort) -> bool:
     return "CUDAExecutionProvider" in ort.get_available_providers() and _cuda_device_present()
 
 
+def _parakeet_local_dir(repo: str, revision: str) -> str:
+    """Return a symlink-free cache directory for Parakeet ONNX external data files.
+
+    ONNX Runtime >= 1.20 rejects external `.onnx.data` files when Hugging Face's
+    default blob cache resolves the model and its external data symlinks into
+    different `blobs/<prefix>/` directories.
+    """
+    cache_root = (
+        os.environ.get("HF_HOME", "").strip()
+        or os.environ.get("XDG_CACHE_HOME", "").strip()
+        or "/tmp"  # noqa: S108
+    )
+    safe_repo = re.sub(r"[^A-Za-z0-9._-]+", "_", repo).strip("_") or "parakeet"
+    safe_rev = re.sub(r"[^A-Za-z0-9._-]+", "_", revision).strip("_") or "default"
+    return os.path.join(cache_root, "parakeet-onnx", safe_repo, safe_rev)
+
+
 def _load_parakeet_model() -> ParakeetASR:
     import onnx_asr
     import onnxruntime as ort
@@ -935,11 +967,15 @@ def _load_parakeet_model() -> ParakeetASR:
     revision = (
         os.environ.get("WORTLAUT_ASR_MODEL_REVISION", "").strip() or DEFAULT_PARAKEET_MODEL_REVISION
     )
+    target_dir = _parakeet_local_dir(repo, revision)
     local_dir = snapshot_download(
         repo_id=repo,
         revision=revision,
         allow_patterns=_parakeet_snapshot_patterns(quant),
+        local_dir=target_dir,
     )
+    if device == "cuda" and hasattr(ort, "preload_dlls"):
+        ort.preload_dlls(cuda=True, cudnn=True)
     loaded = onnx_asr.load_model(
         "nemo-parakeet-tdt-0.6b-v3",
         path=local_dir,

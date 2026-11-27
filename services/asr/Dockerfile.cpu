@@ -18,6 +18,7 @@ RUN uv venv /app/.venv \
     && mkdir /model-cache \
     && chown 10001:10001 /model-cache
 COPY services/asr/app.py /app/app.py
+RUN /app/.venv/bin/python -m py_compile /app/app.py
 ENV PATH="/app/.venv/bin:$PATH" \
     HF_HOME=/model-cache \
     PYTHONUNBUFFERED=1 \

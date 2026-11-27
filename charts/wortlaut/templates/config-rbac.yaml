@@ -6,8 +6,8 @@ metadata:
 data:
   WORTLAUT_NAMESPACE: {{ .Release.Namespace | quote }}
   WORTLAUT_DEFAULT_LOCALE: {{ .Values.defaultLocale | quote }}
-  WORTLAUT_API_URL: {{ printf "https://%s/" .Values.host | quote }}
-  WORTLAUT_SDK_PAGE_URL: {{ printf "https://%s/sdk/" .Values.host | quote }}
+  WORTLAUT_API_URL: {{ if .Values.ingress.enabled }}{{ printf "https://%s/" .Values.host | quote }}{{ else }}"http://wortlaut-meeting:8000/"{{ end }}
+  WORTLAUT_SDK_PAGE_URL: {{ if .Values.ingress.enabled }}{{ printf "https://%s/sdk/" .Values.host | quote }}{{ else }}"http://wortlaut-meeting:8000/sdk/"{{ end }}
   WORTLAUT_ENABLE_CONTROLLER: "true"
   WORTLAUT_CONTROLLER_BACKEND: "kubernetes"
   WORTLAUT_S3_CREATE_BUCKET: "true"
@@ -28,7 +28,7 @@ data:
 {{- if .Values.llmSummary.openaiBaseUrl }}
   WORTLAUT_OPENAI_BASE_URL: {{ .Values.llmSummary.openaiBaseUrl | quote }}
   WORTLAUT_OPENAI_MODEL: {{ .Values.llmSummary.openaiModel | default "gpt-4o-mini" | quote }}
-  WORTLAUT_OPENAI_TIMEOUT_SECONDS: {{ .Values.llmSummary.openaiTimeoutSeconds | default 120 | toString | quote }}
+  WORTLAUT_OPENAI_TIMEOUT_SECONDS: {{ .Values.llmSummary.openaiTimeoutSeconds | default 120 | int64 | toString | quote }}
 {{- end }}
 {{- if .Values.calendarOAuth.googleClientId }}
   WORTLAUT_GOOGLE_CALENDAR_CLIENT_ID: {{ .Values.calendarOAuth.googleClientId | quote }}
@@ -40,10 +40,10 @@ data:
 {{- if .Values.asr.glossary }}
   WORTLAUT_ASR_GLOSSARY: {{ .Values.asr.glossary | quote }}
 {{- end }}
-  WORTLAUT_MAX_ACTIVE_MEETINGS: {{ .Values.capacity.maxActiveMeetings | toString | quote }}
-  WORTLAUT_MAX_PENDING_SAMPLES_TOTAL: {{ .Values.capacity.maxPendingSamplesTotal | toString | quote }}
-  WORTLAUT_MAX_STORED_AUDIO_BYTES: {{ .Values.capacity.maxStoredAudioBytes | toString | quote }}
-  WORTLAUT_MAX_OPEN_ASR_JOBS: {{ .Values.capacity.maxOpenAsrJobs | toString | quote }}
+  WORTLAUT_MAX_ACTIVE_MEETINGS: {{ .Values.capacity.maxActiveMeetings | int64 | toString | quote }}
+  WORTLAUT_MAX_PENDING_SAMPLES_TOTAL: {{ .Values.capacity.maxPendingSamplesTotal | int64 | toString | quote }}
+  WORTLAUT_MAX_STORED_AUDIO_BYTES: {{ .Values.capacity.maxStoredAudioBytes | int64 | toString | quote }}
+  WORTLAUT_MAX_OPEN_ASR_JOBS: {{ .Values.capacity.maxOpenAsrJobs | int64 | toString | quote }}
 {{- if .Values.oidc.issuer }}
   WORTLAUT_OIDC_ISSUER: {{ .Values.oidc.issuer | quote }}
   WORTLAUT_OIDC_CLIENT_ID: {{ .Values.oidc.clientId | quote }}

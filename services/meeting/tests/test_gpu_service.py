@@ -1065,9 +1065,15 @@ def test_parakeet_loader_dispatches_cpu_int8_and_gpu_fp32_checkpoints(monkeypatc
             self.timestamped = True
             return self
 
-    def fake_snapshot_download(*, repo_id, revision, allow_patterns):
+    def fake_snapshot_download(*, repo_id, revision, allow_patterns, local_dir=None):
         calls.append(
-            {"op": "snapshot", "repo": repo_id, "revision": revision, "patterns": allow_patterns}
+            {
+                "op": "snapshot",
+                "repo": repo_id,
+                "revision": revision,
+                "patterns": allow_patterns,
+                "local_dir": local_dir,
+            }
         )
         return "/tmp/fake-parakeet-cache"
 
@@ -1115,18 +1121,19 @@ def test_parakeet_loader_dispatches_cpu_int8_and_gpu_fp32_checkpoints(monkeypatc
     assert cpu_model.device == "cpu"
     assert cpu_model.quantization == "int8"
     assert cpu_model.adapter.timestamped is True
-    assert calls[0] == {
-        "op": "snapshot",
-        "repo": service.DEFAULT_PARAKEET_MODEL_REPO,
-        "revision": service.DEFAULT_PARAKEET_MODEL_REVISION,
-        "patterns": [
-            "config.json",
-            "vocab.txt",
-            "nemo128.onnx",
-            "encoder-model.int8.onnx",
-            "decoder_joint-model.int8.onnx",
-        ],
-    }
+    assert calls[0]["op"] == "snapshot"
+    assert calls[0]["repo"] == service.DEFAULT_PARAKEET_MODEL_REPO
+    assert calls[0]["revision"] == service.DEFAULT_PARAKEET_MODEL_REVISION
+    assert calls[0]["local_dir"].endswith(
+        f"parakeet-onnx/istupakov_parakeet-tdt-0.6b-v3-onnx/{service.DEFAULT_PARAKEET_MODEL_REVISION}"
+    )
+    assert calls[0]["patterns"] == [
+        "config.json",
+        "vocab.txt",
+        "nemo128.onnx",
+        "encoder-model.int8.onnx",
+        "decoder_joint-model.int8.onnx",
+    ]
     assert calls[1] == {
         "op": "load",
         "name": "nemo-parakeet-tdt-0.6b-v3",
