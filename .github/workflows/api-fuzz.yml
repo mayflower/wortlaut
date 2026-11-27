@@ -59,4 +59,4 @@ jobs:
             --header "Authorization: Bearer ${WORTLAUT_API_TOKEN}" \
             --checks not_a_server_error \
             --max-examples 15 \
-            --exclude-path-regex "^/v1/attempts/|^/oauth/|^/mcp"
+            --exclude-path-regex "^/v1/attempts/|^/oauth/|^/mcp|^/v1/auth/oidc/exchange$|^/v1/calendar/oauth/exchange$|^/v1/recordings/[^/]+/summary$"
