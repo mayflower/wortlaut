@@ -69,7 +69,10 @@ def check_window_capacity(db: Session, stream: AudioStream, start_sample: int):
             AudioControl.start_sample < right,
         ),
     ).limit(MAX_WINDOW_RECORDS)
-    if db.scalar(select(func.count()).select_from(records.subquery())) >= MAX_WINDOW_RECORDS:
+    if (
+        int(db.scalar(select(func.count()).select_from(records.subquery())) or 0)
+        >= MAX_WINDOW_RECORDS
+    ):
         raise HTTPException(409, "audio_metadata_capacity_limit")
 
 
@@ -177,7 +180,8 @@ def verify_owner(
     )
     db.refresh(attempt)
     if (
-        recording.active_attempt_id != attempt.id
+        recording is None
+        or recording.active_attempt_id != attempt.id
         or attempt.worker_id != worker_id
         or attempt.ended_at is not None
         or recording.participation == "ended"
@@ -231,8 +235,13 @@ def capacity_reached(db: Session, incoming_samples=0, incoming_bytes=0):
         )
     )
     stored = (stored_audio or 0) + (stored_keyframes or 0)
-    open_jobs = db.scalar(
-        select(func.count()).select_from(AsrJob).where(AsrJob.status.in_(["pending", "processing"]))
+    open_jobs = int(
+        db.scalar(
+            select(func.count())
+            .select_from(AsrJob)
+            .where(AsrJob.status.in_(["pending", "processing"]))
+        )
+        or 0
     )
     return (
         pending_samples(db) + incoming_samples > settings.max_pending_samples_total
@@ -296,7 +305,7 @@ def accept_control(db: Session, attempt: Attempt, recording: Recording, data: di
         if old.contract != contract:
             raise HTTPException(409, "Control ID has different metadata")
         owned = db.get(AudioStream, old.stream_id)
-        if owned.attempt_id != attempt.id:
+        if owned is None or owned.attempt_id != attempt.id:
             raise HTTPException(409, "Control belongs to another attempt")
         return body.id
     if not isinstance(body, StreamEnd):
@@ -307,10 +316,13 @@ def accept_control(db: Session, attempt: Attempt, recording: Recording, data: di
             raise HTTPException(409, "Stream belongs to another occurrence")
         if stream:
             raise HTTPException(409, "Stream already began with another control ID")
-        count = db.scalar(
-            select(func.count())
-            .select_from(AudioStream)
-            .where(AudioStream.attempt_id == attempt.id, AudioStream.final_sample.is_(None))
+        count = int(
+            db.scalar(
+                select(func.count())
+                .select_from(AudioStream)
+                .where(AudioStream.attempt_id == attempt.id, AudioStream.final_sample.is_(None))
+            )
+            or 0
         )
         if count >= 64:
             raise HTTPException(409, "Active source limit reached")
@@ -672,7 +684,7 @@ def ingest_keyframe(
             get_storage().delete_object(key)
         except Exception as exc:
             logging.getLogger("wortlaut.ingest").warning(
-                "orphan_audio_cleanup_failed type=%s", type(exc).__name__
+                "orphan_keyframe_cleanup_failed type=%s", type(exc).__name__
             )
         raise HTTPException(507, "storage_capacity_reached")
 

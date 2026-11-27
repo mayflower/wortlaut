@@ -2409,7 +2409,7 @@ export function TranscriptTab({
                             </div>
                             <div>
                               <label
-                                htmlFor={`turn-edit-text-${turn.start}-${turn.end}`}
+                                htmlFor={`turn-edit-text-${turn.id}`}
                                 className="block text-[12px] font-medium text-[var(--color-text-secondary)] mb-1"
                               >
                                 {tr(
@@ -2418,7 +2418,7 @@ export function TranscriptTab({
                                 )}
                               </label>
                               <textarea
-                                id={`turn-edit-text-${turn.start}-${turn.end}`}
+                                id={`turn-edit-text-${turn.id}`}
                                 dir="auto"
                                 value={editTurnText}
                                 onChange={(e) =>

@@ -785,9 +785,10 @@ def _parse_microsoft_items(
             }
         )
         title = " ".join(str(item.get("subject") or "").split())[:200] or None
+        body_content = body.get("content")
         raw_ms_desc = (
-            body.get("content")
-            if isinstance(body.get("content"), str) and body.get("content").strip()
+            body_content
+            if isinstance(body_content, str) and body_content.strip()
             else (item.get("bodyPreview") if isinstance(item.get("bodyPreview"), str) else None)
         )
         agenda = extract_calendar_agenda(raw_ms_desc)

@@ -32,8 +32,13 @@ rules:
     languages: [python]
     severity: ERROR
     message: >-
-      Do not interpolate dynamic expressions into SQLAlchemy text(); use bound parameters instead.
-    pattern: sqlalchemy.text(f"...")
+      Do not dynamically construct SQLAlchemy text() queries via f-strings, concatenation,
+      .format(), or % interpolation; use bound parameters or SQLAlchemy expressions instead.
+    pattern-either:
+      - pattern: sqlalchemy.text(f"...")
+      - pattern: sqlalchemy.text($A + $B)
+      - pattern: sqlalchemy.text($A.format(...))
+      - pattern: sqlalchemy.text($A % $B)
     paths:
       exclude:
         - "/services/meeting/tests/**"

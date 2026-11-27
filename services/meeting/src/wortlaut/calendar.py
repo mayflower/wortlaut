@@ -623,7 +623,7 @@ def imap_pass(engine):
         with Session(engine) as db:
             cursor = db.get(MailCursor, settings.mailbox_context)
             last = cursor.last_uid if cursor and cursor.uidvalidity == validity else 0
-        status, response = mailbox.uid("SEARCH", "", "UID", f"{last + 1}:*")
+        status, response = mailbox.uid("SEARCH", None, "UID", f"{last + 1}:*")  # type: ignore[arg-type]
         if status != "OK":
             raise ValueError("IMAP search failed")
         for uid in sorted(int(n) for n in response[0].split() if int(n) > last)[:32]:

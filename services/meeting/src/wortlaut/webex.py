@@ -70,7 +70,8 @@ def refreshed_guest(subject, display_name):
                 key: base64.b64decode(value, validate=True).decode()
                 for key, value in (secret.data or {}).items()
             }
-            annotations = dict(secret.metadata.annotations or {})
+            metadata = secret.metadata
+            annotations = dict((metadata.annotations if metadata else None) or {})
             if annotations.get(REFRESH_STATE):
                 raise WebexUnavailable("Webex refresh unfinished; provision current credentials")
             token = values.get("WORTLAUT_WEBEX_SERVICE_TOKEN")
@@ -98,7 +99,7 @@ def refreshed_guest(subject, display_name):
                 settings.namespace,
                 {
                     "metadata": {
-                        "resourceVersion": secret.metadata.resource_version,
+                        "resourceVersion": metadata.resource_version if metadata else None,
                         "annotations": annotations,
                     }
                 },

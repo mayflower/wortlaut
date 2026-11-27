@@ -120,8 +120,6 @@ reportUnusedImport = "warning"
 reportDuplicateImport = "error"
 reportWildcardImportFromLibrary = "warning"
 reportUnnecessaryTypeIgnoreComment = "warning"
-reportOptionalMemberAccess = "none"
-reportOptionalOperand = "none"
 
 [tool.vulture]
 min_confidence = 80

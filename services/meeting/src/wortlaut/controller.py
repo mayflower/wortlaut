@@ -469,6 +469,8 @@ def controller_pass(engine, apis=None):
     for identifier in identifiers:
         with Session(engine) as db:
             attempt = db.get(Attempt, identifier)
+            if attempt is None:
+                continue
             recording = db.scalar(
                 select(Recording)
                 .where(Recording.id == attempt.recording_id)
@@ -559,10 +561,16 @@ def controller_pass(engine, apis=None):
                 recording.audio_closed_at = now
                 db.commit()
                 continue
-            active = db.scalar(
-                select(func.count())
-                .select_from(Recording)
-                .where(Recording.active_attempt_id.is_not(None), Recording.participation != "ended")
+            active = int(
+                db.scalar(
+                    select(func.count())
+                    .select_from(Recording)
+                    .where(
+                        Recording.active_attempt_id.is_not(None),
+                        Recording.participation != "ended",
+                    )
+                )
+                or 0
             )
             if active >= settings.max_active_meetings:
                 recording.participation_reason = "worker_capacity_limit"
@@ -601,7 +609,12 @@ def controller_pass(engine, apis=None):
                 select(Recording).where(Recording.id == identifier).with_for_update()
             )
             db.refresh(attempt)
-            if attempt.ended_at or recording.cancelled_at or recording.audio_closed_at:
+            if (
+                recording is None
+                or attempt.ended_at
+                or recording.cancelled_at
+                or recording.audio_closed_at
+            ):
                 continue
             try:
                 core.create_namespaced_secret(

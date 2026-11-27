@@ -86,7 +86,11 @@ class AudioReadError(ValueError):
 def stream_quality(db: Session, stream: AudioStream):
     """Read quality without materializing PCM contracts or VAD runs for the full history."""
     attempt = db.get(Attempt, stream.attempt_id)
+    if attempt is None:
+        raise LookupError(f"Attempt {stream.attempt_id} not found")
     recording = db.get(Recording, attempt.recording_id)
+    if recording is None:
+        raise LookupError(f"Recording {attempt.recording_id} not found")
     frozen = bool(
         recording.audio_closed_at
         or (
@@ -242,7 +246,11 @@ def stream_quality(db: Session, stream: AudioStream):
 
 def timeline(db: Session, stream: AudioStream, *, incremental: bool = False):
     attempt = db.get(Attempt, stream.attempt_id)
+    if attempt is None:
+        raise LookupError(f"Attempt {stream.attempt_id} not found")
     recording = db.get(Recording, attempt.recording_id)
+    if recording is None:
+        raise LookupError(f"Recording {attempt.recording_id} not found")
     frozen = bool(
         recording.audio_closed_at
         or (
@@ -368,7 +376,10 @@ def timeline(db: Session, stream: AudioStream, *, incremental: bool = False):
     complete = (
         received_end
         and sample == stream.final_sample
-        and (sequence == stream.last_sequence + 1 or (incremental and not records))
+        and (
+            (stream.last_sequence is not None and sequence == stream.last_sequence + 1)
+            or (incremental and not records)
+        )
     )
     if frozen and next_sample is not None and sample < next_sample:
         # This is a real frozen-stream loss, not the end of a query page. Jump
@@ -1258,10 +1269,13 @@ def segment_stream(db: Session, stream: AudioStream):
                 identifier = hashlib.sha256(canonical(identity).encode()).hexdigest()
                 if db.get(AsrJob, identifier) is None:
                     db.execute(select(func.pg_advisory_xact_lock(749836123)))
-                    count = db.scalar(
-                        select(func.count())
-                        .select_from(AsrJob)
-                        .where(AsrJob.status.in_(["pending", "processing"]))
+                    count = int(
+                        db.scalar(
+                            select(func.count())
+                            .select_from(AsrJob)
+                            .where(AsrJob.status.in_(["pending", "processing"]))
+                        )
+                        or 0
                     )
                     if count >= get_settings().max_open_asr_jobs:
                         return  # Keep the checkpoint and stored audio for later work.
@@ -1322,17 +1336,19 @@ def segmentation_pass(engine):
                 stream.scan_retry_at = None
             except AudioReadError as error:
                 chunk = db.get(AudioChunk, error.chunk_id)
-                if error.permanent:
+                if chunk is not None and error.permanent:
                     chunk.read_failures += 1
                     if chunk.read_failures >= 3:
                         chunk.processing_error = error.reason
                 stream.scan_retry_at = (
-                    None if chunk.processing_error else datetime.now(UTC) + timedelta(seconds=30)
+                    None
+                    if chunk is not None and chunk.processing_error
+                    else datetime.now(UTC) + timedelta(seconds=30)
                 )
                 logging.getLogger("wortlaut").warning(
                     "segmentation_read_failed stream=%s chunk=%s reason=%s",
                     stream.id,
-                    chunk.id,
+                    chunk.id if chunk is not None else error.chunk_id,
                     error.reason,
                 )
             stream.last_scanned_at = datetime.now(UTC)

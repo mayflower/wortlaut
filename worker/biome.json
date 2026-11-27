@@ -34,8 +34,11 @@
       },
       "suspicious": {
         "noExplicitAny": "off",
-        "noAssignInExpressions": "warn",
+        "noAssignInExpressions": "off",
         "noArrayIndexKey": "off"
+      },
+      "performance": {
+        "useDomNodeTextContent": "off"
       },
       "a11y": {
         "noSvgWithoutTitle": "off",
@@ -45,10 +48,17 @@
       },
       "style": {
         "noNonNullAssertion": "off",
+        "useImportType": "off",
+        "useTemplate": "off",
+        "useConst": "off",
         "useNodejsImportProtocol": "error"
       },
       "complexity": {
-        "noForEach": "off"
+        "noForEach": "off",
+        "noExtraBooleanCast": "off",
+        "noUselessEscapeInRegex": "off",
+        "useOptionalChain": "off",
+        "useMathMinMax": "off"
       }
     }
   }

@@ -914,10 +914,9 @@ def keyframe_context_pass(engine) -> bool:
             )
             if extracted_count >= MAX_EXTRACTED_KEYFRAMES_PER_RECORDING:
                 continue
-            claims_peek = (
-                meta_peek.get("keyframe_context_claims")
-                if isinstance(meta_peek.get("keyframe_context_claims"), dict)
-                else {}
+            raw_claims_peek = meta_peek.get("keyframe_context_claims")
+            claims_peek: dict[str, Any] = (
+                raw_claims_peek if isinstance(raw_claims_peek, dict) else {}
             )
             existing_claim = claims_peek.get(kf_id_str)
             if isinstance(existing_claim, str) and existing_claim:
@@ -972,13 +971,10 @@ def keyframe_context_pass(engine) -> bool:
                 db.commit()
                 return True
 
+            raw_claims_map = meta.get("keyframe_context_claims")
             claims = {
                 k: v
-                for k, v in (
-                    meta.get("keyframe_context_claims")
-                    if isinstance(meta.get("keyframe_context_claims"), dict)
-                    else {}
-                ).items()
+                for k, v in (raw_claims_map if isinstance(raw_claims_map, dict) else {}).items()
                 if isinstance(v, str)
             }
             claims[kf_id_str] = (now + timedelta(seconds=50)).isoformat()
