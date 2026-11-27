@@ -83,8 +83,8 @@ repos:
       - id: hadolint
         name: hadolint (Dockerfiles)
         language: system
-        entry: sh -c 'if command -v hadolint >/dev/null 2>&1 && hadolint --version >/dev/null 2>&1; then exec hadolint "$@"; elif command -v mise >/dev/null 2>&1 && mise x hadolint@latest -- hadolint --version >/dev/null 2>&1; then exec mise x hadolint@latest -- hadolint "$@"; else exec docker run --rm -v "$PWD:/work:ro" -w /work ghcr.io/hadolint/hadolint:v2.15.1 hadolint "$@"; fi' --
-        files: (^|/)Dockerfile$
+        entry: sh -c 'if command -v hadolint >/dev/null 2>&1 && hadolint --version >/dev/null 2>&1; then exec hadolint "$@"; elif command -v mise >/dev/null 2>&1 && mise x hadolint@2.15.1 -- hadolint --version >/dev/null 2>&1; then exec mise x hadolint@2.15.1 -- hadolint "$@"; else exec docker run --rm -v "$PWD:/work:ro" -w /work ghcr.io/hadolint/hadolint:v2.15.1 hadolint "$@"; fi' --
+        files: (^|/)Dockerfile(\.[^/]+)?$
 
       - id: ruff-check
         name: ruff check (meeting & asr)
@@ -143,18 +143,18 @@ repos:
         files: ^services/meeting/migrations/
 
       - id: helm-lint
-        name: helm lint (standard & bundled)
+        name: helm lint (standard, bundled & parakeet-cpu)
         language: system
-        entry: sh -c 'helm lint charts/wortlaut && helm lint charts/wortlaut --set bundled.enabled=true'
+        entry: sh -c 'helm lint charts/wortlaut && helm lint charts/wortlaut --set bundled.enabled=true --set ingress.enabled=false && helm lint charts/wortlaut --set asr.backend=parakeet --set asr.device=cpu'
         pass_filenames: false
         files: ^charts/wortlaut/
 
       - id: compose-config
-        name: docker compose config
+        name: docker compose config (CPU & GPU)
         language: system
-        entry: docker compose config --quiet
+        entry: sh -c 'docker compose config --quiet && docker compose -f docker-compose.yml -f docker-compose.gpu.yml config --quiet'
         pass_filenames: false
-        files: ^docker-compose\.ya?ml$
+        files: ^docker-compose(\.[^/]+)?\.ya?ml$
 
       - id: pre-push-uv-lock
         name: uv lockfile consistency check
@@ -167,7 +167,7 @@ repos:
       - id: pre-push-k8s-manifests
         name: Kubernetes manifest & schema validation
         language: system
-        entry: sh -c 'helm template wortlaut charts/wortlaut --namespace wortlaut >/dev/null && helm template wortlaut charts/wortlaut --namespace wortlaut --set bundled.enabled=true >/dev/null && kubectl kustomize deploy/dev >/dev/null && if command -v kubeconform >/dev/null 2>&1 && kubeconform -v >/dev/null 2>&1; then helm template wortlaut charts/wortlaut --namespace wortlaut | kubeconform -strict -summary >/dev/null && helm template wortlaut charts/wortlaut --namespace wortlaut --set bundled.enabled=true | kubeconform -strict -summary >/dev/null && kubectl kustomize deploy/dev | kubeconform -strict -summary >/dev/null; fi'
+        entry: sh -c 'helm template wortlaut charts/wortlaut --namespace wortlaut >/dev/null && helm template wortlaut charts/wortlaut --namespace wortlaut --set bundled.enabled=true --set ingress.enabled=false >/dev/null && helm template wortlaut charts/wortlaut --namespace wortlaut --set asr.backend=parakeet --set asr.device=cpu >/dev/null && kubectl kustomize deploy/dev >/dev/null && if command -v kubeconform >/dev/null 2>&1 && kubeconform -v >/dev/null 2>&1; then helm template wortlaut charts/wortlaut --namespace wortlaut | kubeconform -strict -summary >/dev/null && helm template wortlaut charts/wortlaut --namespace wortlaut --set bundled.enabled=true --set ingress.enabled=false | kubeconform -strict -summary >/dev/null && helm template wortlaut charts/wortlaut --namespace wortlaut --set asr.backend=parakeet --set asr.device=cpu | kubeconform -strict -summary >/dev/null && kubectl kustomize deploy/dev | kubeconform -strict -summary >/dev/null; fi'
         pass_filenames: false
         always_run: true
         stages: [pre-push]

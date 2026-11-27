@@ -8,12 +8,12 @@ Before proposing changes, please keep our core invariants in mind:
 
 1. **True Per-Participant Audio Capture**: Speaker attribution comes from isolated WebRTC receiver tracks bound to verified conference participant sessions — **never** mixed-audio diarization, voiceprints, or active-speaker name guessing.
 2. **Parallel Multi-Provider Support**: Google Meet, Microsoft Teams, Cisco Webex, and Zoom run side-by-side in the same instance (selected per recording, never via a global mode switch). Missing credentials for one provider must never block another.
-3. **Minimalism & Real Integration Boundaries**: Keep the stack lean (`services/meeting` FastAPI + PostgreSQL + S3, `services/asr` Qwen3-ASR GPU service, `worker` TypeScript/Playwright). Do not introduce external message queues or extra microservices. PostgreSQL and S3 behavior must be tested against real disposable instances, not mocked away.
+3. **Minimalism & Real Integration Boundaries**: Keep the stack lean (`services/meeting` FastAPI + PostgreSQL + S3, `services/asr` Qwen3-ASR / Parakeet ONNX service, `worker` TypeScript/Playwright). Do not introduce external message queues or extra microservices. PostgreSQL and S3 behavior must be tested against real disposable instances, not mocked away.
 4. **Honest Provider Verification**: Clearly distinguish synthetic browser/lifecycle fixture tests (`npm run test:audio`, `npm run test:meet`) from live conference verification (`make test-live`) in PR descriptions.
 
-## Local Development Without a Kubernetes Cluster
+## Local Development (With or Without Kubernetes)
 
-You only need **Python 3.14 + [`uv`](https://docs.astral.sh/uv/)**, **Node.js 22+**, and **Docker** installed locally:
+All tool versions are pinned in [`mise.toml`](mise.toml) (`mise install`). Without `mise`, you only need **Python 3.14 + [`uv`](https://docs.astral.sh/uv/)**, **Node.js 26**, and **Docker** installed locally:
 
 ```bash
 # 1. Install Python & Node.js dependencies, build worker/UI bundles, and install git QA hooks
@@ -25,6 +25,9 @@ make qa
 # 3. Run linters + the full PostgreSQL 17 + RustFS S3 + worker unit/UI test suite
 #    (automatically starts and cleans up disposable Docker containers)
 make test-local
+
+# 4. Optional: full local Kubernetes dev loop via kind + Tilt + Parakeet CPU (zero external cluster needed)
+make setup && make dev
 ```
 
 To run worker unit, UI, and browser audio/video capture fixture tests directly:

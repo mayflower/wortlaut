@@ -17,7 +17,7 @@ docker run --detach --rm --name "$PG_CONTAINER" \
   --env POSTGRES_USER=wortlaut_test \
   --env POSTGRES_PASSWORD=fixture-postgres-password \
   --env POSTGRES_DB=wortlaut_test \
-  postgres:17.9-bookworm >/dev/null
+  postgres:17.12-bookworm >/dev/null
 
 docker run --detach --rm --name "$S3_CONTAINER" \
   --publish 127.0.0.1::9000 \

@@ -1,15 +1,20 @@
 version = 1
-name = "wortlaut · Kubernetes data"
+name = "wortlaut · Local Kubernetes (kind)"
 
 [setup]
 script = "make setup"
 
 [[actions]]
-name = "Tilt · data"
+name = "Tilt · dev"
 icon = "run"
 command = "make dev"
 
 [[actions]]
-name = "Tests"
+name = "QA"
+icon = "check"
+command = "make qa"
+
+[[actions]]
+name = "Tests (local)"
 icon = "test"
-command = "make test"
+command = "make test-local"
