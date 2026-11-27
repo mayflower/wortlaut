@@ -660,7 +660,7 @@ def test_coalesce_protocol_segments_merges_broken_sentences_without_lexical_blac
         {
             "id": "s1",
             "stream_id": "st1",
-            "speaker_label": "Volkmar Erben",
+            "speaker_label": "Stefan Novak",
             "start": 10.0,
             "end": 18.0,
             "text": "Dann kann man noch.",
@@ -678,7 +678,7 @@ def test_coalesce_protocol_segments_merges_broken_sentences_without_lexical_blac
         {
             "id": "s3",
             "stream_id": "st1",
-            "speaker_label": "Volkmar Erben",
+            "speaker_label": "Stefan Novak",
             "start": 18.4,
             "end": 26.0,
             "text": "das gewollte Feature direkt im System aktivieren.",
@@ -696,7 +696,7 @@ def test_coalesce_protocol_segments_merges_broken_sentences_without_lexical_blac
     ]
     coalesced = _coalesce_protocol_segments(raw_segments)
     assert len(coalesced) == 2
-    assert coalesced[0]["speaker_label"] == "Volkmar Erben"
+    assert coalesced[0]["speaker_label"] == "Stefan Novak"
     assert (
         coalesced[0]["text"]
         == "Dann kann man noch das gewollte Feature direkt im System aktivieren."
@@ -712,7 +712,7 @@ def test_coalesce_protocol_segments_merges_broken_sentences_without_lexical_blac
         {
             "id": "s5",
             "stream_id": "st1",
-            "speaker_label": "Volkmar Erben",
+            "speaker_label": "Stefan Novak",
             "start": 28.0,
             "end": 31.0,
             "text": "Und danach testen wir den Rollout.",
@@ -1182,7 +1182,7 @@ def test_floor_holding_backchannels_and_multiplexed_sources_summary():
             "id": "m-part1",
             "stream_id": "st-vidya",
             "speaker_id": "spk-vidya",
-            "speaker_label": "Vidya Munde-Müller",
+            "speaker_label": "Maya Lindner-Berg",
             "start": 100.0,
             "end": 106.0,
             "text": "Hier im Word-Dokument haben wir die Datenschutzanforderungen",
@@ -1192,7 +1192,7 @@ def test_floor_holding_backchannels_and_multiplexed_sources_summary():
             "id": "m-bc",
             "stream_id": "st-nico",
             "speaker_id": "spk-nico",
-            "speaker_label": "Nico Briegel",
+            "speaker_label": "Nico Meier",
             "start": 106.4,
             "end": 107.1,
             "text": "Mhm.",
@@ -1202,7 +1202,7 @@ def test_floor_holding_backchannels_and_multiplexed_sources_summary():
             "id": "m-part2",
             "stream_id": "st-vidya",
             "speaker_id": "spk-vidya",
-            "speaker_label": "Vidya Munde-Müller",
+            "speaker_label": "Maya Lindner-Berg",
             "start": 107.5,
             "end": 114.0,
             "text": "für den PoC im Detail zusammengefasst.",
@@ -1211,7 +1211,7 @@ def test_floor_holding_backchannels_and_multiplexed_sources_summary():
     ]
     merged = _coalesce_protocol_segments(monologue_with_pause_backchannel)
     assert len(merged) == 1
-    assert merged[0]["speaker_label"] == "Vidya Munde-Müller"
+    assert merged[0]["speaker_label"] == "Maya Lindner-Berg"
     assert (
         merged[0]["text"]
         == "Hier im Word-Dokument haben wir die Datenschutzanforderungen "
@@ -1225,8 +1225,8 @@ def test_floor_holding_backchannels_and_multiplexed_sources_summary():
             "provider_source_id": f"google_meet:{rec_id}:receiver:3",
             "participant_id": "p-nico",
             "speaker_id": "p-nico",
-            "participant_name": "Nico Briegel",
-            "speaker_label": "Nico Briegel",
+            "participant_name": "Nico Meier",
+            "speaker_label": "Nico Meier",
             "start": 10.0,
             "end": 10.6,
             "text": "ja",
@@ -1235,8 +1235,8 @@ def test_floor_holding_backchannels_and_multiplexed_sources_summary():
             "provider_source_id": f"google_meet:{rec_id}:receiver:1",
             "participant_id": "p-nico",
             "speaker_id": "p-nico",
-            "participant_name": "Nico Briegel",
-            "speaker_label": "Nico Briegel",
+            "participant_name": "Nico Meier",
+            "speaker_label": "Nico Meier",
             "start": 45.0,
             "end": 54.0,
             "text": "Aus Acme.ONE-Sicht ist uns wichtig, dass kein Kamerabild gespeichert wird.",
@@ -1247,7 +1247,7 @@ def test_floor_holding_backchannels_and_multiplexed_sources_summary():
         streams=[],
         qualities=[],
         segments=segs,
-        participant_names={"p-nico": "Nico Briegel"},
+        participant_names={"p-nico": "Nico Meier"},
     )
     assert len(sources) == 1
     assert (
@@ -1291,25 +1291,25 @@ def test_shared_sfu_dom_flap_canonicalization_and_multi_speaker_sources_summary(
                     },
                     {
                         "participant_id": "spaces/r/devices/529",
-                        "participant_name": "Martin Wild",
+                        "participant_name": "Markus Brandt",
                         "audio_csis": [102],
                         "share_audio_csis": [],
                     },
                     {
                         "participant_id": "spaces/r/devices/532",
-                        "participant_name": "Ingrid Stevens",
+                        "participant_name": "Clara Berger",
                         "audio_csis": [103],
                         "share_audio_csis": [],
                     },
                     {
                         "participant_id": "spaces/r/devices/525",
-                        "participant_name": "Kerstin Flederer",
+                        "participant_name": "Katrin Sommer",
                         "audio_csis": [104],
                         "share_audio_csis": [],
                     },
                     {
                         "participant_id": "spaces/r/devices/537",
-                        "participant_name": "Maria Haubner",
+                        "participant_name": "Maren Keller",
                         "audio_csis": [105],
                         "share_audio_csis": [],
                     },
@@ -1320,19 +1320,19 @@ def test_shared_sfu_dom_flap_canonicalization_and_multi_speaker_sources_summary(
                     "provider_source_id": f"google_meet:{rec.id}:receiver:1",
                     "source_kind": "speaker",
                     "signaled_participant_id": "spaces/r/devices/529",
-                    "participant_name": "Martin Wild",
+                    "participant_name": "Markus Brandt",
                 },
                 {
                     "provider_source_id": f"google_meet:{rec.id}:receiver:2",
                     "source_kind": "speaker",
                     "signaled_participant_id": "spaces/r/devices/537",
-                    "participant_name": "Maria Haubner",
+                    "participant_name": "Maren Keller",
                 },
                 {
                     "provider_source_id": f"google_meet:{rec.id}:receiver:3",
                     "source_kind": "speaker",
                     "signaled_participant_id": "spaces/r/devices/532",
-                    "participant_name": "Ingrid Stevens",
+                    "participant_name": "Clara Berger",
                 },
             ],
         }
@@ -1383,7 +1383,7 @@ def test_shared_sfu_dom_flap_canonicalization_and_multi_speaker_sources_summary(
             (
                 streams[2],
                 "spaces/r/devices/525",
-                "Kerstin Flederer",
+                "Katrin Sommer",
                 30.4,
                 36.0,
                 "habe ich sechs Usability-Tickets vorbereitet.",
@@ -1391,7 +1391,7 @@ def test_shared_sfu_dom_flap_canonicalization_and_multi_speaker_sources_summary(
             (
                 streams[0],
                 "spaces/r/devices/529",
-                "Martin Wild",
+                "Markus Brandt",
                 50.0,
                 52.0,
                 "Irgendwann",
@@ -1407,7 +1407,7 @@ def test_shared_sfu_dom_flap_canonicalization_and_multi_speaker_sources_summary(
             (
                 streams[0],
                 "spaces/r/devices/529",
-                "Martin Wild",
+                "Markus Brandt",
                 52.4,
                 57.0,
                 "da war das neue Logo schon im PR enthalten.",
@@ -1415,7 +1415,7 @@ def test_shared_sfu_dom_flap_canonicalization_and_multi_speaker_sources_summary(
             (
                 streams[2],
                 "spaces/r/devices/532",
-                "Ingrid Stevens",
+                "Clara Berger",
                 70.0,
                 78.0,
                 "Für den E-Mail-Kanal brauche ich noch ein Testpostfach.",
@@ -1431,7 +1431,7 @@ def test_shared_sfu_dom_flap_canonicalization_and_multi_speaker_sources_summary(
             (
                 streams[1],
                 "spaces/r/devices/537",
-                "Maria Haubner",
+                "Maren Keller",
                 90.4,
                 99.0,
                 "Können wir die Changelogs automatisiert in Slack teilen?",
@@ -1486,19 +1486,19 @@ def test_shared_sfu_dom_flap_canonicalization_and_multi_speaker_sources_summary(
     # 1. All 5 speakers appear in sources_summary with zero duplicates and zero missing speakers
     summary_names = [s["participant_name"] for s in exported["sources_summary"]]
     assert sorted(summary_names) == [
-        "Ingrid Stevens",
         "Alex Weber",
-        "Kerstin Flederer",
-        "Maria Haubner",
-        "Martin Wild",
+        "Clara Berger",
+        "Katrin Sommer",
+        "Maren Keller",
+        "Markus Brandt",
     ]
     assert len(exported["sources_summary"]) == 5
 
     # 2. Flapped fragments are canonicalized by participant_id and coalesced cleanly
     seg_by_speaker = {s["speaker_label"]: s["text"] for s in exported["segments"]}
-    assert "Irgendwann was war da war das neue Logo" in seg_by_speaker["Martin Wild"]
-    assert "Frage dazu. Können wir die Changelogs" in seg_by_speaker["Maria Haubner"]
-    assert "Diesmal habe ich sechs Usability-Tickets" in seg_by_speaker["Kerstin Flederer"]
+    assert "Irgendwann was war da war das neue Logo" in seg_by_speaker["Markus Brandt"]
+    assert "Frage dazu. Können wir die Changelogs" in seg_by_speaker["Maren Keller"]
+    assert "Diesmal habe ich sechs Usability-Tickets" in seg_by_speaker["Katrin Sommer"]
 
 
 def test_parallel_stream_duration_dedup_screenshare_speaker_and_live_active_speaker(

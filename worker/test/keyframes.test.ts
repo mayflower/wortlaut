@@ -503,7 +503,7 @@ test('browser sampler: settle window, 1.5s transient rejection, 5s cooldown, and
       // Maria while its inner nameplate still shows Alice must never overwrite Maria's participant_name.
       const mariaTile = document.createElement('div');
       mariaTile.setAttribute('data-participant-id', 'spaces/meet/devices/maria');
-      mariaTile.setAttribute('data-participant-name', 'Maria Haubner');
+      mariaTile.setAttribute('data-participant-name', 'Maren Keller');
       mariaTile.setAttribute('data-ssrc', '537001');
       document.body.append(mariaTile);
       window.wortlautMeet.inspect();
@@ -547,7 +547,7 @@ test('browser sampler: settle window, 1.5s transient rejection, 5s cooldown, and
     assert.equal(clockResult.afterTransient.emitted, 1);
     assert.equal(clockResult.afterSlide2.emitted, 2);
     assert.equal(clockResult.afterReturnSlide1.emitted, 2);
-    assert.equal(clockResult.mariaNameAfterFlap, 'Maria Haubner');
+    assert.equal(clockResult.mariaNameAfterFlap, 'Maren Keller');
     assert.equal(clockResult.afterInterruptions, clockResult.beforeInterruptions);
 
     assert.equal(capturedKeyframes.length, 2);
