@@ -44,6 +44,7 @@ export class ZoomBrowser {
   private reason = '';
   private joined = false;
   private capturing = false;
+  private capturingSeenInMonitor = false;
   private initializedCapture = false;
   private audioJoined = false;
   private videoStarted = false;
@@ -89,6 +90,7 @@ export class ZoomBrowser {
   }
 
   async updateVideoTile(patch: VideoTilePatch) {
+    if (patch.participation === 'capturing') this.capturingSeenInMonitor = true;
     await this.pushVideoTile?.(patch);
   }
 
@@ -391,11 +393,16 @@ export class ZoomBrowser {
     const inCall = !isWaiting && (this.capturing || inMeetingDom || hasCaptureEvidence);
     if (inCall) {
       this.capturing = true;
-      await this.ensureComputerAudioJoined();
-      if (!this.videoStarted) await this.ensureOutgoingVideoStarted();
-      if (!this.videoStopped && this.bootstrap.enable_keyframes === false) await this.stopIncomingVideoIfPossible();
-      if (!this.rosterOpened) await this.ensureRosterOpen();
-      if (!this.chatSent) await this.sendChatIntro();
+      // Report participation='capturing' to the API on the first monitor tick before
+      // running slower in-call UI interactions (audio/video/roster/chat) so audio ingest
+      // never races ahead of the waiting_admission -> capturing status transition.
+      if (this.capturingSeenInMonitor) {
+        await this.ensureComputerAudioJoined();
+        if (!this.videoStarted) await this.ensureOutgoingVideoStarted();
+        if (!this.videoStopped && this.bootstrap.enable_keyframes === false) await this.stopIncomingVideoIfPossible();
+        if (!this.rosterOpened) await this.ensureRosterOpen();
+        if (!this.chatSent) await this.sendChatIntro();
+      }
     }
 
     const participation = this.stopping
@@ -404,9 +411,7 @@ export class ZoomBrowser {
         ? 'waiting_admission'
         : inCall
           ? 'capturing'
-          : this.joined
-            ? 'waiting_admission'
-            : 'joining';
+          : 'joining';
     return {
       ...capture,
       participation,
