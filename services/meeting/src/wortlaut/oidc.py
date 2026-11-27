@@ -24,7 +24,7 @@ from wortlaut.settings import derive_subkey, get_settings
 
 AuthProviderId = Literal["oidc", "google", "entra"]
 
-USER_TOKEN_PREFIX = "wortlaut-user-"
+USER_TOKEN_PREFIX = "wortlaut-user-"  # noqa: S105
 _JWKS_CACHE: dict[str, tuple[float, list[dict]]] = {}
 _JWKS_TTL_SECONDS = 300.0
 _DISCOVERY_CACHE: dict[tuple[str, str, str], tuple[float, dict]] = {}
@@ -230,7 +230,7 @@ def verify_user_session_token(token: str) -> Principal | None:
         return None
     try:
         payload = json.loads(_b64url_decode(payload_b64))
-    except (ValueError, UnicodeError, TypeError):
+    except ValueError, UnicodeError, TypeError:
         return None
     if not isinstance(payload, dict):
         return None
@@ -290,9 +290,7 @@ def _provider_fallback_discovery(provider: OidcProviderConfig) -> dict:
     }
 
 
-def fetch_provider_discovery(
-    provider: OidcProviderConfig, *, force_refresh: bool = False
-) -> dict:
+def fetch_provider_discovery(provider: OidcProviderConfig, *, force_refresh: bool = False) -> dict:
     public_iss = provider.issuer.rstrip("/")
     internal_iss = provider.internal_issuer.rstrip("/")
     base = internal_iss or public_iss
@@ -339,7 +337,7 @@ def fetch_provider_discovery(
         }
         _DISCOVERY_CACHE[cache_key] = (now, resolved)
         return resolved
-    except (httpx.HTTPError, ValueError):
+    except httpx.HTTPError, ValueError:
         _DISCOVERY_CACHE[cache_key] = (now, fallback)
         return fallback
 
@@ -364,9 +362,7 @@ def get_oidc_token_endpoint() -> str:
     return get_provider_token_endpoint(get_auth_provider("oidc"))
 
 
-def fetch_provider_jwks(
-    provider: OidcProviderConfig, *, force_refresh: bool = False
-) -> list[dict]:
+def fetch_provider_jwks(provider: OidcProviderConfig, *, force_refresh: bool = False) -> list[dict]:
     jwks_uri = fetch_provider_discovery(provider, force_refresh=force_refresh)["jwks_uri"]
     now = time.monotonic()
     cached = _JWKS_CACHE.get(jwks_uri)
@@ -534,7 +530,7 @@ def verify_provider_id_token(
             claims = jwt.decode(
                 raw_jwt,
                 key=py_jwk.key,
-                algorithms=[alg],
+                algorithms=[str(alg)],
                 audience=provider.client_id,
                 options={"require": ["exp", "iss", "aud", "sub"], "verify_iss": False},
                 leeway=30,

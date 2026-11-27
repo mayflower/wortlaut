@@ -1,4 +1,3 @@
-import React from 'react';
 import {
   ArrowLeft,
   AudioLines,
@@ -108,6 +107,7 @@ export function ReaderTopBar({
       className="border-b border-[var(--color-border)] bg-[var(--color-background-surface)]"
     >
       <HStack gap={2} vAlign="center" wrap="wrap">
+        {/* biome-ignore lint/a11y/useValidAnchor: navigates to #view=meetings or exits reader mode */}
         <a
           id="brand-home-link"
           href="#view=meetings"

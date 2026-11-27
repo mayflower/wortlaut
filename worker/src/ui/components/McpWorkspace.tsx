@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { Check, Copy, RefreshCw, Terminal, Trash2 } from 'lucide-react';
 import { Layout, LayoutContent, LayoutHeader } from '@astryxdesign/core/Layout';
 import { Heading } from '@astryxdesign/core/Heading';

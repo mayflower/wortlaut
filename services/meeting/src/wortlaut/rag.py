@@ -137,7 +137,7 @@ class _OnnxEmbedder:
         tok_id = self.tokenizer.token_to_id("<pad>")
         pad_id = tok_id if tok_id is not None else 0
         self.tokenizer.enable_truncation(max_length=512)
-        self.tokenizer.enable_padding(pad_id=pad_id, pad_token="<pad>")
+        self.tokenizer.enable_padding(pad_id=pad_id, pad_token="<pad>")  # noqa: S106
 
         opts = ort.SessionOptions()
         opts.intra_op_num_threads = 2
@@ -285,8 +285,9 @@ def _split_long_text(raw_text: str, max_chars: int = _MAX_CHUNK_CHARS) -> list[s
                     if wbuf:
                         parts.append(wbuf)
                         wbuf = ""
-                    for idx in range(0, len(word), max_chars):
-                        parts.append(word[idx : idx + max_chars])
+                    parts.extend(
+                        word[idx : idx + max_chars] for idx in range(0, len(word), max_chars)
+                    )
                     continue
                 cand = f"{wbuf} {word}" if wbuf else word
                 if len(cand) <= max_chars:
@@ -397,9 +398,7 @@ def _pack_span_turns(turns: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
         max_body = max(120, _MAX_CHUNK_CHARS - len(spk) - 2)
         pieces = _split_long_text(txt, max_body)
         if len(pieces) == 1:
-            atomic_turns.append(
-                {"speaker": spk, "start": t_start, "end": t_end, "text": pieces[0]}
-            )
+            atomic_turns.append({"speaker": spk, "start": t_start, "end": t_end, "text": pieces[0]})
             continue
         total_len = max(1, sum(len(p) for p in pieces))
         dur = max(0.0, t_end - t_start)
@@ -408,9 +407,7 @@ def _pack_span_turns(turns: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
             p_start = t_start + dur * (consumed / total_len)
             consumed += len(piece)
             p_end = t_start + dur * (consumed / total_len)
-            atomic_turns.append(
-                {"speaker": spk, "start": p_start, "end": p_end, "text": piece}
-            )
+            atomic_turns.append({"speaker": spk, "start": p_start, "end": p_end, "text": piece})
 
     if not atomic_turns:
         return []
@@ -636,10 +633,9 @@ def build_protocol_chunks(
                 cur_span = []
             prev_end = None
             continue
-        if prev_end is not None and _pause_between(prev_end, s_start, pauses):
-            if cur_span:
-                spans.append(cur_span)
-                cur_span = []
+        if prev_end is not None and _pause_between(prev_end, s_start, pauses) and cur_span:
+            spans.append(cur_span)
+            cur_span = []
         cur_span.append(seg)
         prev_end = max(prev_end, s_end) if prev_end is not None else s_end
     if cur_span:
@@ -659,9 +655,7 @@ def build_protocol_chunks(
             w_start = float(window[0]["start"])
             w_end = float(window[-1]["end"])
             w_wc = (
-                wall_clock_time_de(origin_utc, w_start)
-                if origin_utc
-                else short_timestamp(w_start)
+                wall_clock_time_de(origin_utc, w_start) if origin_utc else short_timestamp(w_start)
             )
             content = "\n".join(f"{t['speaker']}: {t['text']}" for t in window)
             _append(
@@ -731,15 +725,11 @@ def _index_single_recording(
         vecs = np.zeros((len(chunks), 0), dtype=np.float32)
 
     eff_dim = int(vecs.shape[1]) if vecs.ndim == 2 else 0
-    eff_model = (
-        active_model if (eff_dim == EMBEDDING_DIM or not chunks) else LEXICAL_ONLY_MODEL_ID
-    )
+    eff_model = active_model if (eff_dim == EMBEDDING_DIM or not chunks) else LEXICAL_ONLY_MODEL_ID
 
     with Session(engine) as db:
         locked = db.scalar(
-            select(Recording)
-            .where(Recording.id == rec_id)
-            .with_for_update(skip_locked=True)
+            select(Recording).where(Recording.id == rec_id).with_for_update(skip_locked=True)
         )
         if (
             locked is None
@@ -878,9 +868,7 @@ def search_protocol_chunks(
         raise ValueError("query must be a non-empty string.")
     eff_kind = (kind or "all").strip().lower()
     if eff_kind not in VALID_SEARCH_KINDS:
-        raise ValueError(
-            f"Invalid kind {kind!r}; expected one of {', '.join(VALID_SEARCH_KINDS)}."
-        )
+        raise ValueError(f"Invalid kind {kind!r}; expected one of {', '.join(VALID_SEARCH_KINDS)}.")
     eff_provider = (provider or "").strip().lower() or None
     if eff_provider is not None and eff_provider not in VALID_PROVIDERS:
         raise ValueError(
@@ -926,9 +914,7 @@ def search_protocol_chunks(
     if eff_kind != "all":
         chunk_filters.append(ProtocolChunk.chunk_kind == eff_kind)
     if speaker_filter:
-        escaped_spk = (
-            speaker_filter.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-        )
+        escaped_spk = speaker_filter.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         spk_needle = f"%{escaped_spk}%"
         chunk_filters.append(
             or_(
@@ -976,9 +962,7 @@ def search_protocol_chunks(
             ProtocolChunk.embedding_model == active_model,
             ProtocolChunk.embedding_dim == EMBEDDING_DIM,
         ]
-        total_chunks = int(
-            db.scalar(select(func.count(ProtocolChunk.id)).where(*vec_filters)) or 0
-        )
+        total_chunks = int(db.scalar(select(func.count(ProtocolChunk.id)).where(*vec_filters)) or 0)
         scanned_capped = total_chunks > MAX_VECTOR_SCAN_CHUNKS
         if total_chunks > 0:
             q_mat = embed_texts([q_clean], prefix="query: ", settings=settings)
@@ -1027,9 +1011,8 @@ def search_protocol_chunks(
     for cid in candidate_ids:
         r_vec = vec_ranks.get(cid)
         r_lex = lex_ranks.get(cid)
-        rrf_scores[cid] = (
-            (1.0 / (RRF_K + r_vec) if r_vec is not None else 0.0)
-            + (1.0 / (RRF_K + r_lex) if r_lex is not None else 0.0)
+        rrf_scores[cid] = (1.0 / (RRF_K + r_vec) if r_vec is not None else 0.0) + (
+            1.0 / (RRF_K + r_lex) if r_lex is not None else 0.0
         )
         best_arm_rank[cid] = min(
             r_vec if r_vec is not None else 10_000,
@@ -1068,7 +1051,7 @@ def search_protocol_chunks(
         if len(selected) < eff_limit and overflow:
             selected.extend(overflow[: eff_limit - len(selected)])
     else:
-        selected = fetched[:eff_limit]
+        selected = [(row[0], row[1]) for row in fetched[:eff_limit]]
 
     hits = [
         SearchHit(

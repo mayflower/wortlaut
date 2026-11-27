@@ -899,7 +899,7 @@ export class MeetBrowser {
   }
 
   async inspect() {
-    let state;
+    let state: ReturnType<NonNullable<typeof window.wortlautMeet>['inspect']> | undefined;
     try { state = await this.page.evaluate(() => window.wortlautMeet?.inspect()); }
     catch { /* navigation may be in progress; classify its origin below */ }
     const url = new URL(this.page.url());

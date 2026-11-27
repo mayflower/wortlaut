@@ -169,9 +169,10 @@ def test_scheduler_lock_defers_start_until_the_other_controller_releases_it(
     with Session(database) as competing:
         competing.execute(select(func.pg_advisory_xact_lock(controller_module.SCHEDULER_LOCK)))
         controller_pass(database, cluster.apis)
-        assert client.get(f"/v1/recordings/{recording}", headers=API).json()[
-            "active_attempt_id"
-        ] is None
+        assert (
+            client.get(f"/v1/recordings/{recording}", headers=API).json()["active_attempt_id"]
+            is None
+        )
         assert cluster.jobs == cluster.secrets == {}
     controller_pass(database, cluster.apis)
     controller_pass(database, cluster.apis)

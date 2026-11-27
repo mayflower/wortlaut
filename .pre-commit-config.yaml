@@ -93,12 +93,54 @@ repos:
         pass_filenames: false
         files: ^services/(meeting|asr)/.*\.py$
 
+      - id: ruff-format
+        name: ruff format --check (meeting & asr)
+        language: system
+        entry: sh -c 'uv run --directory services/meeting ruff format --check src tests ../../services/asr'
+        pass_filenames: false
+        files: ^services/(meeting|asr)/.*\.py$
+
+      - id: basedpyright
+        name: basedpyright (meeting)
+        language: system
+        entry: uv run --directory services/meeting basedpyright
+        pass_filenames: false
+        files: ^services/meeting/(src/.*\.py|pyproject\.toml)$
+
+      - id: vulture
+        name: vulture dead-code check (meeting)
+        language: system
+        entry: uv run --directory services/meeting vulture
+        pass_filenames: false
+        files: ^services/meeting/(src/.*\.py|pyproject\.toml)$
+
       - id: worker-typecheck
         name: tsc typecheck (worker & UI)
         language: system
         entry: npm --prefix worker run typecheck
         pass_filenames: false
-        files: ^worker/(src|runtime|test|tsconfig.*|package\.json|vite\..*)\.(ts|tsx|mts|mjs|json)$
+        files: ^worker/(?:(?:src|runtime|test)/.*\.(?:ts|tsx|mts|mjs)|(?:tsconfig.*|package)\.json|vite\..*\.ts)$
+
+      - id: worker-biome
+        name: biome lint (worker & UI)
+        language: system
+        entry: npm --prefix worker run lint
+        pass_filenames: false
+        files: ^worker/(?:(?:src|runtime|test|scripts)/.*\.(?:ts|tsx|mts|mjs)|biome\.json)$
+
+      - id: worker-knip
+        name: knip dead-code check (worker & UI)
+        language: system
+        entry: npm --prefix worker run knip
+        pass_filenames: false
+        files: ^worker/(?:(?:src|runtime|test|scripts)/.*\.(?:ts|tsx|mts|mjs)|(?:package|knip)\.json)$
+
+      - id: alembic-single-head
+        name: alembic single head check
+        language: system
+        entry: sh -c 'heads="$(uv run --directory services/meeting alembic heads 2>/dev/null | grep -c "(head)" || true)"; test "$heads" -eq 1 || { echo "Expected exactly 1 Alembic head, found $heads"; exit 1; }'
+        pass_filenames: false
+        files: ^services/meeting/migrations/
 
       - id: helm-lint
         name: helm lint (standard & bundled)
@@ -131,9 +173,9 @@ repos:
         stages: [pre-push]
 
       - id: pre-push-vuln-gate
-        name: Lockfile vulnerability gate (HIGH/CRITICAL)
+        name: Vulnerability & IaC misconfig gate (HIGH/CRITICAL)
         language: system
-        entry: sh -c 'if command -v trivy >/dev/null 2>&1 && trivy --version >/dev/null 2>&1; then exec trivy fs --scanners vuln --ignore-unfixed --skip-dirs .dev --skip-dirs worker/node_modules --skip-dirs services/meeting/.venv --severity HIGH,CRITICAL --quiet --exit-code 1 .; elif command -v mise >/dev/null 2>&1 && mise x trivy@latest -- trivy --version >/dev/null 2>&1; then exec mise x trivy@latest -- trivy fs --scanners vuln --ignore-unfixed --skip-dirs .dev --skip-dirs worker/node_modules --skip-dirs services/meeting/.venv --severity HIGH,CRITICAL --quiet --exit-code 1 .; else exec npm --prefix worker audit --omit=dev --audit-level=high; fi'
+        entry: sh -c 'if command -v trivy >/dev/null 2>&1 && trivy --version >/dev/null 2>&1; then exec trivy fs --scanners vuln,misconfig --ignorefile .trivyignore.yaml --ignore-unfixed --skip-dirs .dev --skip-dirs worker/node_modules --skip-dirs services/meeting/.venv --skip-dirs worker/dist --skip-dirs worker/dist-worker --severity HIGH,CRITICAL --quiet --exit-code 1 .; elif command -v mise >/dev/null 2>&1 && mise x trivy@latest -- trivy --version >/dev/null 2>&1; then exec mise x trivy@latest -- trivy fs --scanners vuln,misconfig --ignorefile .trivyignore.yaml --ignore-unfixed --skip-dirs .dev --skip-dirs worker/node_modules --skip-dirs services/meeting/.venv --skip-dirs worker/dist --skip-dirs worker/dist-worker --severity HIGH,CRITICAL --quiet --exit-code 1 .; else exec npm --prefix worker audit --omit=dev --audit-level=high; fi'
         pass_filenames: false
         always_run: true
         stages: [pre-push]

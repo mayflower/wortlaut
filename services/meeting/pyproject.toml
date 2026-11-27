@@ -27,9 +27,11 @@ dependencies = [
 [dependency-groups]
 dev = [
     "aiosmtpd==1.4.6",
+    "basedpyright>=1.29,<2",
     "pytest>=8,<10",
     "pytest-cov>=6,<8",
     "ruff>=0.11,<1",
+    "vulture>=2.14,<3",
 ]
 
 [build-system]
@@ -47,4 +49,93 @@ target-version = "py314"
 line-length = 100
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B"]
+select = [
+    "E",
+    "F",
+    "I",
+    "UP",
+    "B",
+    "S",
+    "DTZ",
+    "ASYNC",
+    "SIM",
+    "RET",
+    "PERF",
+    "RUF",
+    "T20",
+    "C90",
+]
+ignore = [
+    "RUF001", # Ambiguous Unicode characters in German UI/protocol strings (en-dash, quotes)
+    "RUF002", # Ambiguous Unicode characters in German docstrings
+    "RUF003", # Ambiguous Unicode characters in German comments
+]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 25
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = [
+    "S101",
+    "S105",
+    "S106",
+    "S108",
+    "S110",
+    "S112",
+    "S310",
+    "S311",
+    "S603",
+    "S607",
+    "T20",
+    "C901",
+    "SIM",
+    "PERF",
+    "RET",
+    "RUF",
+    "DTZ",
+]
+"migrations/**" = ["C901", "E501", "S101"]
+# Existing high-complexity orchestrators tracked for incremental decomposition;
+# new modules and helpers remain guarded by C901 <= 25.
+"src/wortlaut/app.py" = ["C901"]
+"src/wortlaut/asr.py" = ["C901"]
+"src/wortlaut/calendar.py" = ["C901"]
+"src/wortlaut/controller.py" = ["C901"]
+"src/wortlaut/exports.py" = ["C901"]
+"src/wortlaut/keyframe_privacy.py" = ["C901"]
+"src/wortlaut/mail.py" = ["C901"]
+"src/wortlaut/mcp_server.py" = ["C901"]
+"src/wortlaut/processing.py" = ["C901"]
+"src/wortlaut/rag.py" = ["C901"]
+"src/wortlaut/recurrence.py" = ["C901"]
+
+[tool.basedpyright]
+pythonVersion = "3.14"
+typeCheckingMode = "basic"
+include = ["src"]
+exclude = ["tests", "alembic", ".venv"]
+reportMissingImports = "error"
+reportMissingTypeStubs = "none"
+reportUnusedImport = "warning"
+reportDuplicateImport = "error"
+reportWildcardImportFromLibrary = "warning"
+reportUnnecessaryTypeIgnoreComment = "warning"
+reportOptionalMemberAccess = "none"
+reportOptionalOperand = "none"
+
+[tool.vulture]
+min_confidence = 80
+paths = ["src"]
+ignore_decorators = [
+    "@app.*",
+    "@router.*",
+    "@field_validator",
+    "@model_validator",
+    "@asynccontextmanager",
+]
+ignore_names = [
+    "model_config",
+    "__tablename__",
+    "__table_args__",
+    "__mapper_args__",
+]

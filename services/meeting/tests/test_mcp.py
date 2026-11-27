@@ -27,7 +27,6 @@ def _extract_hidden_input(html_text: str, name: str) -> str:
 
 
 def _setup_mock_dex(monkeypatch):
-    import wortlaut.mcp_oauth as mcp_oauth_mod
     import wortlaut.oidc as oidc_mod
     from wortlaut.settings import get_settings
 
@@ -54,7 +53,9 @@ def _setup_mock_dex(monkeypatch):
             "e": _int_b64(pub_numbers.e),
         }
     ]
-    monkeypatch.setattr(oidc_mod, "fetch_dex_jwks", lambda *, force_refresh=False: jwks)
+    monkeypatch.setattr(
+        oidc_mod, "fetch_provider_jwks", lambda _provider, *, force_refresh=False: jwks
+    )
 
     active_user = {
         "sub": "sub-alice",
@@ -107,7 +108,7 @@ def _setup_mock_dex(monkeypatch):
                 "token_type": "bearer",
             }
 
-    monkeypatch.setattr(mcp_oauth_mod.httpx, "post", lambda *a, **kw: _FakeDexTokenResp())
+    monkeypatch.setattr(oidc_mod.httpx, "post", lambda *a, **kw: _FakeDexTokenResp())
     return active_user
 
 
@@ -233,8 +234,7 @@ def test_mcp_discovery_registration_and_oauth_security(client, database, monkeyp
     assert unauth_post.status_code == 401
     www_auth = unauth_post.headers["www-authenticate"]
     assert (
-        'resource_metadata="http://testserver/.well-known/oauth-protected-resource/mcp"'
-        in www_auth
+        'resource_metadata="http://testserver/.well-known/oauth-protected-resource/mcp"' in www_auth
     )
     assert 'scope="mcp:read mcp:write"' in www_auth
 
@@ -319,7 +319,7 @@ def test_mcp_discovery_registration_and_oauth_security(client, database, monkeyp
         }
     )
 
-    #Without the browser-bound wortlaut_mcp_consent cookie, callback MUST fail
+    # Without the browser-bound wortlaut_mcp_consent cookie, callback MUST fail
     saved_cookie = client.cookies.get("wortlaut_mcp_consent")
     client.cookies.clear()
     no_cookie_cb = client.get(
@@ -1052,8 +1052,7 @@ def test_mcp_tools_resources_multi_user_isolation_and_ui_revocation(
 
     # MCP access tokens still authorize isolated audio-snippet HTTP reads for own recordings
     snippet_path = (
-        f"/v1/recordings/{alice_rec_id}/audio-snippet"
-        f"?start=0.0&end=1.0&stream_id={stream_ext_id}"
+        f"/v1/recordings/{alice_rec_id}/audio-snippet?start=0.0&end=1.0&stream_id={stream_ext_id}"
     )
     wav_resp = client.get(snippet_path, headers=ro_headers)
     assert wav_resp.status_code == 200
@@ -1151,9 +1150,7 @@ def test_mcp_tools_resources_multi_user_isolation_and_ui_revocation(
         {"uri": f"wortlaut://recordings/{alice_rec_id}/protocol.md"},
     ).json()["result"]
     assert "Prof. Dr. Martin Weber" in res_read["contents"][0]["text"]
-    assert (
-        _rpc(ro_headers, "prompts/list").json()["error"]["code"] == -32601
-    )
+    assert _rpc(ro_headers, "prompts/list").json()["error"]["code"] == -32601
 
     # Schedule & cancel a new recording via MCP write tools
     sched = _rpc(
@@ -1385,9 +1382,7 @@ def test_mcp_oauth_multi_provider_chooser_and_google_callback(client, database, 
     cid = reg.json()["client_id"]
 
     verifier = "m" * 48
-    challenge = (
-        oidc_mod._b64url_encode(hashlib.sha256(verifier.encode("ascii")).digest())
-    )
+    challenge = oidc_mod._b64url_encode(hashlib.sha256(verifier.encode("ascii")).digest())
 
     # 2. /oauth/authorize renders provider chooser when >= 2 providers are enabled
     authz = client.get(

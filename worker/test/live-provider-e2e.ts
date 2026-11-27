@@ -779,7 +779,7 @@ async function installSenderGate(context: BrowserContext, wavPath?: string): Pro
         },
       });
     }
-  });
+  }, wavBase64);
 }
 
 async function readOutboundAudioStats(page: Page): Promise<{packetsSent: number; bytesSent: number; audioLevel: number}> {
@@ -1191,7 +1191,6 @@ async function joinRoomAsSpeakerInner(
   if (provider === 'teams') {
     let browserClicked = false;
     let joinClicked = false;
-    let isGuestJoin = false;
     const teamsWaitingRe =
       /Someone will let you in shortly|You[’']re in the lobby|Waiting.*(?:admit|let you in)|Please wait until someone admits|Jemand wird Sie.*einlassen|Sie (?:befinden sich|sind) im Wartebereich|Warten.*(?:Zulassung|eingelassen)/i;
     while (Date.now() < deadline) {
@@ -1230,7 +1229,6 @@ async function joinRoomAsSpeakerInner(
 
       const nameInput = page.locator('input[data-tid="prejoin-display-name-input"]');
       if (await nameInput.first().isVisible().catch(() => false)) {
-        isGuestJoin = true;
         await nameInput.first().fill(displayName).catch(() => {});
         await delay(300);
         if ((await nameInput.first().inputValue().catch(() => '')) !== displayName) {

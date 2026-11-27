@@ -503,8 +503,16 @@ def test_segment_result_preserves_word_confidence_and_rejects_low_confidence_hal
 
     # Real German speech with multi-subword compounds keeps moderate BPE posteriors.
     weak = (
-        ("Da", 0.333), ("hast", 0.631), ("du", 0.687), ("jetzt", 0.47), ("zum", 0.374),
-        ("Zeit,", 0.542), ("aber", 0.398), ("jetzt", 0.285), ("will", 0.425), ("ich.", 0.452),
+        ("Da", 0.333),
+        ("hast", 0.631),
+        ("du", 0.687),
+        ("jetzt", 0.47),
+        ("zum", 0.374),
+        ("Zeit,", 0.542),
+        ("aber", 0.398),
+        ("jetzt", 0.285),
+        ("will", 0.425),
+        ("ich.", 0.452),
     )
     assert result(*weak)["text"] == "Da hast du jetzt zum Zeit, aber jetzt will ich."
 
@@ -1009,9 +1017,7 @@ def test_per_recording_and_in_call_language_switching_across_30_languages(
         get_settings.cache_clear()
 
 
-def test_persistent_glossary_editor_tenancy_asr_and_export_aliases(
-    client, database, monkeypatch
-):
+def test_persistent_glossary_editor_tenancy_asr_and_export_aliases(client, database, monkeypatch):
     from wortlaut.asr import build_asr_context_prompt
     from wortlaut.exports import chat_reader_token, export_data
     from wortlaut.models import Attempt, Recording
@@ -1025,9 +1031,7 @@ def test_persistent_glossary_editor_tenancy_asr_and_export_aliases(
         alice_token, _ = issue_user_session_token(
             sub="sub-alice", email="alice@example.org", name="Alice"
         )
-        bob_token, _ = issue_user_session_token(
-            sub="sub-bob", email="bob@example.org", name="Bob"
-        )
+        bob_token, _ = issue_user_session_token(sub="sub-bob", email="bob@example.org", name="Bob")
         admin_token, _ = issue_user_session_token(
             sub="sub-admin", email="admin@example.org", name="Admin"
         )
@@ -1060,10 +1064,7 @@ def test_persistent_glossary_editor_tenancy_asr_and_export_aliases(
             headers=admin_hdr,
             json={
                 "scope": "global",
-                "raw_text": (
-                    "NordGrid, Stadtwerke Nord, S/4HANA\n"
-                    "AcmiPay | AkmePay -> AcmePay"
-                ),
+                "raw_text": ("NordGrid, Stadtwerke Nord, S/4HANA\nAcmiPay | AkmePay -> AcmePay"),
             },
         )
         assert up_global.status_code == 200
@@ -1538,8 +1539,7 @@ def test_calendar_agenda_extraction_and_asr_prompt_injection(database):
                     "body": {"contentType": "html", "content": ms_html},
                     "onlineMeeting": {
                         "joinUrl": (
-                            "https://teams.microsoft.com/meet/3847003177954612"
-                            "?p=T8DtDg8zWTJkU6QRZP"
+                            "https://teams.microsoft.com/meet/3847003177954612?p=T8DtDg8zWTJkU6QRZP"
                         )
                     },
                     "start": {"dateTime": start_iso.replace("+00:00", ""), "timeZone": "UTC"},

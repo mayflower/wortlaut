@@ -46,7 +46,10 @@ jobs:
             ghcr.io/hadolint/hadolint:v2.15.1@sha256:32dac94127fd60b7b7e3fbfc65e1383b9b5e25c9bfd7b8536de7a539fe68a12d \
             hadolint services/asr/Dockerfile services/meeting/Dockerfile services/worker/Dockerfile
       - name: Lint Python & TypeScript
-        run: make lint
+        run: |
+          make lint
+          heads="$(uv run --directory services/meeting alembic heads 2>/dev/null | grep -c "(head)" || true)"
+          test "${heads}" -eq 1 || { echo "Expected exactly 1 Alembic head, found ${heads}"; exit 1; }
       - name: Validate Helm, Kustomize & Compose schemas
         run: |
           helm lint charts/wortlaut
@@ -85,7 +88,7 @@ jobs:
       WORTLAUT_TEST_S3_ENDPOINT: http://127.0.0.1:24609
       WORTLAUT_S3_ACCESS_KEY: fixture-s3-user
       WORTLAUT_S3_SECRET_KEY: fixture-s3-password
-      PYTEST_ADDOPTS: --tb=line -ra --cov=wortlaut --cov-branch --cov-report=term-missing:skip-covered --cov-report=markdown:/tmp/pytest-coverage.md
+      PYTEST_ADDOPTS: --tb=line -ra --cov=wortlaut --cov-branch --cov-fail-under=78 --cov-report=term-missing:skip-covered --cov-report=markdown:/tmp/pytest-coverage.md
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -119,6 +122,13 @@ jobs:
             rustfs/rustfs:1.0.6@sha256:ee717072290bec9b11abfc0365f8310b00df1cd9b3639943edae47bdef05044a /data
           curl --fail --retry 30 --retry-delay 1 --retry-all-errors \
             http://127.0.0.1:24609/health/ready
+      - name: Verify Alembic migrations against PostgreSQL 17
+        env:
+          WORTLAUT_DATABASE_URL: postgresql+psycopg://wortlaut_test:fixture-postgres-password@127.0.0.1:5432/wortlaut_test
+          WORTLAUT_API_TOKEN: fixture-migration-check-token
+        run: |
+          uv run --directory services/meeting alembic upgrade head
+          uv run --directory services/meeting alembic current
       - name: Behavior & integration tests with PostgreSQL/S3
         run: |
           make test

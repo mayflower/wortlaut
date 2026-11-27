@@ -104,13 +104,6 @@ const PARTICIPATION_EN: Record<string, string> = {
   unknown: 'Unknown',
 };
 
-const SOURCE_COVERAGE_EN: Record<string, string> = {
-  complete: 'Fully bound to participants',
-  partial: 'Partially bound',
-  unknown: 'Isolated track capture active',
-  none: 'No audio tracks yet',
-};
-
 const DELIVERY_STATUS_EN: Record<string, string> = {
   pending: 'Pending',
   sending: 'Sending…',
@@ -186,17 +179,6 @@ export function localizeParticipation(
     return PARTICIPATION_EN[state] || state;
   }
   return fallbackDe[state] || state;
-}
-
-export function localizeSourceCoverage(
-  coverage: string,
-  lang: UiLang,
-  fallbackDe: Record<string, string>
-): string {
-  if (lang === 'en') {
-    return SOURCE_COVERAGE_EN[coverage] || coverage;
-  }
-  return fallbackDe[coverage] || coverage;
 }
 
 export function localizeDeliveryStatus(

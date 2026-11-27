@@ -636,9 +636,7 @@ def test_cjk_token_masking_none_suppression_and_context_prompt_header(monkeypatc
         def generate(self, **kwargs):
             gate = kwargs["logits_processor"][0]
             step2_scores = FakeTensor(np.zeros((1, 20)))
-            masked_step2 = gate(
-                FakeTensor([[1, 2, 3, 10, 12, 14]], floating=False), step2_scores
-            )
+            masked_step2 = gate(FakeTensor([[1, 2, 3, 10, 12, 14]], floating=False), step2_scores)
             captured["cjk_masked"] = (
                 masked_step2.arr[0, 18] == float("-inf")
                 and masked_step2.arr[0, 19] == float("-inf")

@@ -390,9 +390,7 @@ def test_real_onnx_tokenizer_pooling_float16_and_lexical_fallback(tmp_path, monk
 # ---------------------------------------------------------------------------
 
 
-def test_hybrid_tsvector_punctuation_rrf_noise_floor_diversity_and_scan_cap(
-    database, monkeypatch
-):
+def test_hybrid_tsvector_punctuation_rrf_noise_floor_diversity_and_scan_cap(database, monkeypatch):
     from wortlaut import rag
 
     alice = Principal(kind="user", sub="sub-alice@example.org", email="alice@example.org")
@@ -481,9 +479,7 @@ def test_hybrid_tsvector_punctuation_rrf_noise_floor_diversity_and_scan_cap(
         assert res_bob.hits[0].recording_id != rec_id
 
         # `kind="topic"` filters strictly to topic chunks
-        res_topic = rag.search_protocol_chunks(
-            db, alice, query="Rollout", kind="topic", limit=5
-        )
+        res_topic = rag.search_protocol_chunks(db, alice, query="Rollout", kind="topic", limit=5)
         assert len(res_topic.hits) == 1
         assert res_topic.hits[0].chunk_kind == "topic"
 
@@ -558,9 +554,7 @@ def test_hybrid_tsvector_punctuation_rrf_noise_floor_diversity_and_scan_cap(
         assert rec_b in counts
 
         # Escaped SQL LIKE wildcards in speaker filter do not act as catch-all wildcards
-        wildcard_spk = rag.search_protocol_chunks(
-            db, alice, query="PROJ-270", speaker="%", limit=5
-        )
+        wildcard_spk = rag.search_protocol_chunks(db, alice, query="PROJ-270", speaker="%", limit=5)
         assert wildcard_spk.hits == []
 
     # Lexical-only mode must not report scanned_capped=True (no vector scan performed)

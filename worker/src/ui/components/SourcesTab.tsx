@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import { useMemo } from 'react';
 import { Filter, Radio } from 'lucide-react';
 import {
   Table,

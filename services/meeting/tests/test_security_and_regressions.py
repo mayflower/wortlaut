@@ -240,9 +240,7 @@ def test_calendar_oauth_pagination_truncation_guard_and_refresh_token_preservati
         cal_oauth.apply_synced_events(db, conn_row, fetched, updated_snap, sync_err, now)
         db.commit()
         ev_p2 = db.scalar(
-            select(CalendarSyncedEvent).where(
-                CalendarSyncedEvent.external_event_id == "ev-p2-keep"
-            )
+            select(CalendarSyncedEvent).where(CalendarSyncedEvent.external_event_id == "ev-p2-keep")
         )
         assert ev_p2 is not None and ev_p2.recording_id is not None
         rec_p2_id = ev_p2.recording_id
@@ -351,9 +349,7 @@ def test_ics_duration_import_and_email_boundary_isolation(client, database, monk
     # Verify SQL '_' wildcard and prefix spoofing CANNOT access alice_1's recording
     exp = int(time.time()) + 3600
     alice_tok, _ = issue_user_session_token(sub="s1", email="alice_1@example.org", exp=exp)
-    spoof_wildcard_tok, _ = issue_user_session_token(
-        sub="s2", email="alicex1@example.org", exp=exp
-    )
+    spoof_wildcard_tok, _ = issue_user_session_token(sub="s2", email="alicex1@example.org", exp=exp)
     spoof_prefix_tok, _ = issue_user_session_token(sub="s3", email="alice_1@example.o", exp=exp)
 
     assert (
@@ -1100,9 +1096,7 @@ def test_csrc_onset_binding_and_optout_purge_and_calendar_attendee_context(
     assert e_wav.status_code == 404
 
 
-def test_group_calendar_writeback_and_oauth_reconnect_backfill(
-    client, database, monkeypatch
-):
+def test_group_calendar_writeback_and_oauth_reconnect_backfill(client, database, monkeypatch):
     from wortlaut import calendar_oauth as cal_oauth
     from wortlaut.models import CalendarConnection, CalendarSyncedEvent, Recording
     from wortlaut.oidc import Principal
@@ -1639,7 +1633,9 @@ def test_google_and_entra_id_auth_providers_exchange_and_security(monkeypatch):
     assert cfg["enabled"] is True
     by_id = {p["id"]: p for p in cfg["providers"]}
     assert set(by_id) == {"entra", "google"}
-    assert by_id["google"]["authorization_endpoint"] == "https://accounts.google.com/o/oauth2/v2/auth"
+    assert (
+        by_id["google"]["authorization_endpoint"] == "https://accounts.google.com/o/oauth2/v2/auth"
+    )
     assert by_id["google"]["extra_params"] == {"prompt": "select_account", "hd": "acme.example.org"}
     assert (
         by_id["entra"]["authorization_endpoint"]

@@ -1,4 +1,3 @@
-import React from 'react';
 import { ArrowRight, BookOpen, KeyRound } from 'lucide-react';
 import { Layout, LayoutContent, LayoutHeader } from '@astryxdesign/core/Layout';
 import { Heading } from '@astryxdesign/core/Heading';

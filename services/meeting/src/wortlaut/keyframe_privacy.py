@@ -12,6 +12,7 @@ import struct
 import zlib
 from functools import lru_cache
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 import onnxruntime as ort
@@ -192,7 +193,7 @@ def _detect_tile_640(
     score_threshold: float,
 ) -> list[tuple[float, float, float, float, float]]:
     inp = np.transpose(tile_bgr.astype(np.float32), (2, 0, 1))[None, :, :, :]
-    outs = sess.run(None, {"input": inp})
+    outs = cast(list[np.ndarray], sess.run(None, {"input": inp}))
     boxes: list[tuple[float, float, float, float, float]] = []
     for idx, st in enumerate(STRIDES):
         cols = TILE_SIZE // st
@@ -293,12 +294,12 @@ def detect_faces_rgb(rgb: np.ndarray) -> list[tuple[int, int, int, int]]:
     merged = _nms_boxes(candidates)
     boxes: list[tuple[int, int, int, int]] = []
     for x, y, fw, fh, _ in merged:
-        pad_x = max(6, int(round(fw * 0.35)))
-        pad_y = max(6, int(round(fh * 0.40)))
-        x1 = max(0, int(round(x)) - pad_x)
-        y1 = max(0, int(round(y)) - pad_y)
-        x2 = min(width, int(round(x + fw)) + pad_x)
-        y2 = min(height, int(round(y + fh)) + pad_y)
+        pad_x = max(6, round(fw * 0.35))
+        pad_y = max(6, round(fh * 0.40))
+        x1 = max(0, round(x) - pad_x)
+        y1 = max(0, round(y) - pad_y)
+        x2 = min(width, round(x + fw) + pad_x)
+        y2 = min(height, round(y + fh) + pad_y)
         if x2 - x1 >= 8 and y2 - y1 >= 8:
             boxes.append((x1, y1, x2, y2))
     return boxes
@@ -306,7 +307,7 @@ def detect_faces_rgb(rgb: np.ndarray) -> list[tuple[int, int, int, int]]:
 
 def _blur_patch_inplace(patch: np.ndarray) -> None:
     """Irreversibly anonymize an image region via coarse mosaic + separable box blur."""
-    ph, pw, ch = patch.shape
+    ph, pw, _ch = patch.shape
     block = max(6, min(20, min(ph, pw) // 5))
     if block >= 2:
         for by in range(0, ph, block):
@@ -342,10 +343,7 @@ def redact_faces_in_png(png_bytes: bytes, *, max_bytes: int = 1_572_864) -> tupl
         if decoded is None:
             return png_bytes, 0
         img, color_type = decoded
-        if color_type == 0:
-            rgb = np.repeat(img, 3, axis=2)
-        else:
-            rgb = img[:, :, :3]
+        rgb = np.repeat(img, 3, axis=2) if color_type == 0 else img[:, :, :3]
 
         boxes = detect_faces_rgb(rgb)
         if not boxes:

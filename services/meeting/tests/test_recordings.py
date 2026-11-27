@@ -161,9 +161,10 @@ def test_bootstrap_requires_owner_and_claim_retry_preserves_capture(client, monk
     response = client.post(
         f"/v1/attempts/{attempt}/status",
         headers=owner,
-        json={"participation": "capturing", "receiver_sources": [
-            {**evidence, "encoded_transform": encoded}
-        ]},
+        json={
+            "participation": "capturing",
+            "receiver_sources": [{**evidence, "encoded_transform": encoded}],
+        },
     )
     assert response.status_code == 200
     diagnostic = client.get(f"/v1/recordings/{recording}", headers=API).json()["attempts"][0]
@@ -1282,9 +1283,7 @@ def test_bind_control_backfills_unattributed_prefix_on_single_speaker_stream(cli
 
     # Late-joining speaker stream with start_sample=0 must still appear in live_transcript
     # even after an earlier stream has >48 segments + empty noise segments.
-    late_origin_iso = (
-        datetime.fromisoformat(origin_iso) + timedelta(seconds=120)
-    ).isoformat()
+    late_origin_iso = (datetime.fromisoformat(origin_iso) + timedelta(seconds=120)).isoformat()
     with Session(database) as db:
         early_stream = db.scalar(
             select(AudioStream).where(
@@ -1462,9 +1461,9 @@ def test_persona_workflows_rejoin_desc_filters_reader_token_and_metrics(client, 
     filtered = client.get("/v1/recordings?q=Architektur", headers=API).json()["items"]
     assert [item["id"] for item in filtered] == [second]
 
-    multi_part = client.get(
-        "/v1/recordings?participation=scheduled,capturing", headers=API
-    ).json()["items"]
+    multi_part = client.get("/v1/recordings?participation=scheduled,capturing", headers=API).json()[
+        "items"
+    ]
     assert {item["id"] for item in multi_part} >= {first, second}
 
     attempt, creds = prepare(client, first)
@@ -1548,7 +1547,9 @@ def test_oidc_dex_pkce_exchange_and_per_user_isolation(client, database, monkeyp
             "e": _int_b64(pub_numbers.e),
         }
     ]
-    monkeypatch.setattr(oidc_mod, "fetch_dex_jwks", lambda *, force_refresh=False: jwks)
+    monkeypatch.setattr(
+        oidc_mod, "fetch_provider_jwks", lambda _provider, *, force_refresh=False: jwks
+    )
 
     def _make_id_token(sub: str, email: str, name: str, nonce: str = "n1") -> str:
         header = {"alg": "RS256", "typ": "JWT", "kid": "test-dex-key-1"}
@@ -1726,9 +1727,10 @@ def test_oidc_dex_pkce_exchange_and_per_user_isolation(client, database, monkeyp
     assert boot_data["default_locale"] == "de"
     assert boot_data["meet"]["display_name"] == "wortlaut (Mara Lindner)"
     assert "mara.lindner@acme.example.org" in boot_data["chat_intro"]
-    assert f"/ui#view=meetings&id={rec_mara_id}&token=wortlaut-read-{rec_mara_id}." in boot_data[
-        "chat_intro"
-    ]
+    assert (
+        f"/ui#view=meetings&id={rec_mara_id}&token=wortlaut-read-{rec_mara_id}."
+        in boot_data["chat_intro"]
+    )
     assert "opt out" in boot_data["chat_intro"]
     assert "/privacy" in boot_data["chat_intro"]
     opt_status = client.post(
@@ -1756,14 +1758,10 @@ def test_oidc_dex_pkce_exchange_and_per_user_isolation(client, database, monkeyp
         },
     )
     assert opt_status.status_code == 200
-    mara_tx = client.get(
-        f"/v1/recordings/{rec_mara_id}/transcript", headers=mara_headers
-    ).json()
+    mara_tx = client.get(f"/v1/recordings/{rec_mara_id}/transcript", headers=mara_headers).json()
     assert mara_tx["opted_out_speakers"] == ["spaces/demo/devices/99", "Bob Widerspruch"]
 
-    assert (
-        client.delete(f"/v1/recordings/{rec_thomas_id}", headers=mara_headers).status_code == 404
-    )
+    assert client.delete(f"/v1/recordings/{rec_thomas_id}", headers=mara_headers).status_code == 404
     del_res = client.delete(f"/v1/recordings/{rec_thomas_id}", headers=thomas_headers)
     assert del_res.status_code == 200
     assert del_res.json() == {"deleted": True, "id": rec_thomas_id}
@@ -1804,6 +1802,7 @@ def test_oidc_dex_pkce_exchange_and_per_user_isolation(client, database, monkeyp
             else "thomas.berg@acme.example.org"
         ),
     )
+
     class _FakeCalGetResp:
         def __init__(self, payload: dict):
             self.status_code = 200
@@ -2111,7 +2110,7 @@ def test_in_call_pause_windows_end_to_end(client, database):
     priv_en = client.get("/privacy?lang=en").text
     for page_html in (priv_de, priv_en):
         assert "opt out" in page_html
-        assert any(tok in page_html for tok in ('„no“', '“no”', '"no"', "<code>no</code>"))
+        assert any(tok in page_html for tok in ("„no“", "“no”", '"no"', "<code>no</code>"))
         assert "nein" not in page_html.lower()
         assert "#pause" in page_html
         assert "#resume" in page_html

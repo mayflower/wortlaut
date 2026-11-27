@@ -1,5 +1,6 @@
 import json
 import re
+import tempfile
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Literal
@@ -92,7 +93,9 @@ class Settings(BaseSettings):
     docker_host: str = "unix:///var/run/docker.sock"
     docker_network: str = "wortlaut"
     local_worker_dir: Path = Path("worker")
-    runtime_state_dir: Path = Path("/tmp/wortlaut-runtime")
+    runtime_state_dir: Path = Field(
+        default_factory=lambda: Path(tempfile.gettempdir()) / "wortlaut-runtime"
+    )
     namespace: str = "wortlaut-dev"
     api_url: str = "https://wortlaut.example.org/"
     public_url: str | None = None
@@ -100,6 +103,7 @@ class Settings(BaseSettings):
     def public_base_url(self) -> str:
         raw = (self.public_url or "").strip() or self.api_url
         return raw.rstrip("/")
+
     worker_image: str = "wortlaut-worker:dev"
     max_active_meetings: int = Field(default=15, ge=1)
     join_lead_seconds: int = Field(default=60, ge=0)
@@ -215,7 +219,7 @@ def get_public_base_url(settings_obj=None) -> str:
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    return Settings()  # type: ignore[call-arg]
 
 
 def derive_subkey(purpose: bytes, *, use_encryption_secret: bool = False) -> bytes:

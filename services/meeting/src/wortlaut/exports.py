@@ -1,6 +1,7 @@
 import hmac
 import io
 import json
+import logging
 import math
 import re
 import secrets
@@ -78,8 +79,7 @@ def format_period_de(start_iso: str | None, end_iso: str | None) -> str:
             return f"{weekday}, {start_dt:%d.%m.%Y · %H:%M} – {end_dt:%H:%M} Uhr"
         end_weekday = WEEKDAYS_DE[end_dt.weekday()]
         return (
-            f"{weekday}, {start_dt:%d.%m.%Y %H:%M} Uhr – "
-            f"{end_weekday}, {end_dt:%d.%m.%Y %H:%M} Uhr"
+            f"{weekday}, {start_dt:%d.%m.%Y %H:%M} Uhr – {end_weekday}, {end_dt:%d.%m.%Y %H:%M} Uhr"
         )
     except ValueError:
         return f"{start_iso} bis {end_iso or 'unbekannt'}"
@@ -118,7 +118,7 @@ def wall_clock_time_de(origin_iso: str | None, offset_seconds: float) -> str:
             BERLIN_TZ
         )
         return wall_dt.strftime("%H:%M:%S")
-    except (ValueError, TypeError):
+    except ValueError, TypeError:
         return short_timestamp(offset_seconds)
 
 
@@ -235,10 +235,9 @@ def _can_merge_turn_pair(
     if nxt_id and nxt_id in protected_ids:
         return False
     cur_id = str(cur.get("segment_id") or cur.get("id") or "")
-    if cur_id and cur_id in edit_bounds:
-        if float(nxt["end"]) > float(edit_bounds[cur_id]) + 1e-3:
-            return False
-    return True
+    return not (
+        cur_id and cur_id in edit_bounds and float(nxt["end"]) > float(edit_bounds[cur_id]) + 1e-3
+    )
 
 
 def _coalesce_protocol_segments(
@@ -278,9 +277,7 @@ def _coalesce_protocol_segments(
                     if other["end"] <= cur["end"] or other["start"] >= seg["start"]:
                         continue
                     other_dur = max(0.0, other["end"] - other["start"])
-                    voiced_ov = _voiced_overlap_seconds(
-                        other["start"], other["end"], spk_segs
-                    )
+                    voiced_ov = _voiced_overlap_seconds(other["start"], other["end"], spk_segs)
                     if not (
                         _is_short_backchannel_candidate(other)
                         and voiced_ov >= max(0.2, other_dur * 0.6)
@@ -309,9 +306,7 @@ def _coalesce_protocol_segments(
                 and (other["end"] - other["start"]) >= max(4.0, dur * 2.5)
                 and _overlap_seconds(seg["start"], seg["end"], other["start"], other["end"])
                 >= min_ov
-                and _voiced_overlap_seconds(
-                    seg["start"], seg["end"], by_speaker.get(other_key, [])
-                )
+                and _voiced_overlap_seconds(seg["start"], seg["end"], by_speaker.get(other_key, []))
                 >= min_ov
                 for other in speaker_merged
             )
@@ -381,9 +376,7 @@ def export_reader_token(recording: Recording) -> str | None:
     # Domain separation and a per-recording nonce keep this credential limited
     # to export reads. Neither the API key nor a reader secret is stored in mail state.
     domain = f"wortlaut.export.reader.v1:{recording.id}:{recording.export_reader_nonce}"
-    signature = hmac.digest(
-        derive_subkey(b"reader-token-v1"), domain.encode(), "sha256"
-    ).hex()
+    signature = hmac.digest(derive_subkey(b"reader-token-v1"), domain.encode(), "sha256").hex()
     return "wortlaut-read-" + signature
 
 
@@ -400,9 +393,7 @@ def chat_reader_token(recording: Recording) -> str | None:
     ):
         return None
     domain = f"wortlaut.chat.reader.v1:{recording.id}:{recording.request_digest}"
-    signature = hmac.digest(
-        derive_subkey(b"reader-token-v1"), domain.encode(), "sha256"
-    ).hex()
+    signature = hmac.digest(derive_subkey(b"reader-token-v1"), domain.encode(), "sha256").hex()
     return "wortlaut-read-" + signature
 
 
@@ -425,10 +416,7 @@ def verify_recording_reader_token(recording: Recording | None, token: str) -> bo
     prefix = f"wortlaut-read-{recording.id}."
     if clean.lower().startswith(prefix.lower()):
         clean = "wortlaut-read-" + clean.split(".", 1)[1]
-    if (
-        recording.transcript_deleted_at is not None
-        or recording.metadata_deleted_at is not None
-    ):
+    if recording.transcript_deleted_at is not None or recording.metadata_deleted_at is not None:
         return False
     candidates = [export_reader_token(recording), chat_reader_token(recording)]
     if any(c is not None for c in candidates):
@@ -577,9 +565,7 @@ def _collect_opted_out_windows(
     if streams:
         stream_by_id = {s.id: s for s in streams}
         jobs = list(
-            db.scalars(
-                select(AsrJob).where(AsrJob.stream_id.in_(list(stream_by_id.keys())))
-            ).all()
+            db.scalars(select(AsrJob).where(AsrJob.stream_id.in_(list(stream_by_id.keys())))).all()
         )
         for job in jobs:
             binding = job.binding if isinstance(job.binding, dict) else {}
@@ -609,7 +595,7 @@ def _collect_opted_out_windows(
                 ) / 1000.0
                 s_off = max(0.0, base_off + job.core_start / RATE)
                 e_off = max(s_off, base_off + job.core_end / RATE)
-            except (KeyError, TypeError, ValueError):
+            except KeyError, TypeError, ValueError:
                 continue
             if e_off - s_off >= 0.3:
                 raw_spans.append((s_off, e_off))
@@ -655,7 +641,7 @@ def export_data(
     *,
     tail_segments_limit: int | None = None,
 ):
-    attempts = db.scalars(select(Attempt).where(Attempt.recording_id == recording.id)).all()
+    attempts = list(db.scalars(select(Attempt).where(Attempt.recording_id == recording.id)).all())
     raw_pauses = _collect_raw_pause_windows(attempts)
     streams = list(
         db.scalars(
@@ -670,9 +656,7 @@ def export_data(
     term_replacements: dict[str, str] = dict(meta.get("term_replacements") or {})
     from wortlaut.glossary import resolve_recording_glossary
 
-    _, glossary_alias_replacements = resolve_recording_glossary(
-        db, recording, get_settings()
-    )
+    _, glossary_alias_replacements = resolve_recording_glossary(db, recording, get_settings())
     effective_term_replacements: dict[str, str] = {
         **glossary_alias_replacements,
         **term_replacements,
@@ -703,16 +687,13 @@ def export_data(
             if protected_segment_ids
             else non_empty_text
         )
-        seg_utc_epoch = (
-            func.extract(
-                "epoch",
-                func.cast(
-                    TranscriptSegment.result["session_utc_origin"].as_string(),
-                    DateTime(timezone=True),
-                ),
-            )
-            + func.coalesce(TranscriptSegment.result["start"].as_float(), 0.0)
-        )
+        seg_utc_epoch = func.extract(
+            "epoch",
+            func.cast(
+                TranscriptSegment.result["session_utc_origin"].as_string(),
+                DateTime(timezone=True),
+            ),
+        ) + func.coalesce(TranscriptSegment.result["start"].as_float(), 0.0)
         seg_rows = list(
             reversed(
                 db.scalars(
@@ -733,9 +714,13 @@ def export_data(
     for att in attempts:
         diag = att.diagnostics if isinstance(att.diagnostics, dict) else {}
         for p in (diag.get("participant_sources") or {}).get("sources") or []:
-            if isinstance(p, dict) and p.get("participant_id") and p.get("participant_name"):
-                if " ".join(str(p["participant_name"]).split()):
-                    authoritative_pids.add(str(p["participant_id"]))
+            if (
+                isinstance(p, dict)
+                and p.get("participant_id")
+                and p.get("participant_name")
+                and " ".join(str(p["participant_name"]).split())
+            ):
+                authoritative_pids.add(str(p["participant_id"]))
     seg_name_weights: dict[str, dict[str, float]] = {}
     for seg in segments:
         pid = seg.get("participant_id") or seg.get("speaker_id")
@@ -828,13 +813,14 @@ def export_data(
                 if ctrl.start_sample is not None
                 else int((ctrl.contract or {}).get("start_sample") or 0)
             )
+            nxt_ctrl = s_binds[idx + 1] if idx + 1 < len(s_binds) else None
             nxt_s = (
                 (
-                    int(s_binds[idx + 1].start_sample)
-                    if s_binds[idx + 1].start_sample is not None
-                    else int((s_binds[idx + 1].contract or {}).get("start_sample") or 0)
+                    int(nxt_ctrl.start_sample)
+                    if nxt_ctrl.start_sample is not None
+                    else int((nxt_ctrl.contract or {}).get("start_sample") or 0)
                 )
-                if idx + 1 < len(s_binds)
+                if nxt_ctrl is not None
                 else None
             )
             ctrl_intervals.append(
@@ -896,9 +882,8 @@ def export_data(
                         )
                     )
         for seg in segments:
-            if (
-                (seg.get("stream_id"), seg.get("epoch")) == key
-                and not seg.get("attribution_unknown")
+            if (seg.get("stream_id"), seg.get("epoch")) == key and not seg.get(
+                "attribution_unknown"
             ):
                 pid = seg.get("participant_id") or seg.get("speaker_id")
                 if pid:
@@ -942,7 +927,7 @@ def export_data(
             else word
             for word in segment["words"]
         ]
-        stream_key = (segment.get("stream_id"), segment.get("epoch"))
+        stream_key = (str(segment.get("stream_id") or ""), str(segment.get("epoch") or ""))
         dur = max(0.0, segment["end"] - segment["start"])
         seg_conf = segment.get("confidence")
         if (
@@ -986,20 +971,16 @@ def export_data(
                 continue
         elif (
             not is_protected
-            and segment.get("attribution_unknown")
-            and bool(stream_bind_timeline.get(stream_key))
             and dur <= 0.30
             and isinstance(seg_conf, (int, float))
             and seg_conf < MIN_SHORT_FRAGMENT_CONFIDENCE
-        ):
-            continue
-        elif (
-            not is_protected
-            and not segment.get("attribution_unknown")
-            and len(observed_by_stream.get(stream_key, ())) > 1
-            and dur <= 0.30
-            and isinstance(seg_conf, (int, float))
-            and seg_conf < MIN_SHORT_FRAGMENT_CONFIDENCE
+            and (
+                (segment.get("attribution_unknown") and bool(stream_bind_timeline.get(stream_key)))
+                or (
+                    not segment.get("attribution_unknown")
+                    and len(observed_by_stream.get(stream_key, ())) > 1
+                )
+            )
         ):
             continue
         pid = segment.get("participant_id") or segment.get("speaker_id")
@@ -1015,9 +996,7 @@ def export_data(
         segment["segment_id"] = segment["id"]
         segment["speaker_name"] = segment.get("participant_name")
         segment["attribution_status"] = (
-            "unknown"
-            if segment.get("attribution_unknown")
-            else ("bound" if pid else "unbound")
+            "unknown" if segment.get("attribution_unknown") else ("bound" if pid else "unbound")
         )
         if is_speaker_opted_out(
             opted_out_norm,
@@ -1045,7 +1024,7 @@ def export_data(
             if v and v.strip():
                 clean_v = v.strip()
                 resolved_speaker_overrides[k] = clean_v
-                if k in participant_names and participant_names[k]:
+                if participant_names.get(k):
                     resolved_speaker_overrides.setdefault(participant_names[k], clean_v)
                 participant_names[k] = clean_v
         opted_out_list, opted_out_norm = collect_opted_out_speakers(
@@ -1551,9 +1530,7 @@ def _build_sources_summary(
         )
         if segments and not src_segs:
             continue
-        accepted_sec = round(
-            sum(q.get("accepted_samples", 0) for q in src_quals) / RATE, 2
-        )
+        accepted_sec = round(sum(q.get("accepted_samples", 0) for q in src_quals) / RATE, 2)
         kind = rcv.get("source_kind") or (
             src_quals[0].get("source_kind") if src_quals else "speaker"
         )
@@ -1582,9 +1559,7 @@ def _build_sources_summary(
                     or (participant_names.get(eff_sig_id) if eff_sig_id else None)
                     or part_name
                 )
-                sample_txt = _pick_representative_sample_text(
-                    g.get("text", "") for g in group_segs
-                )
+                sample_txt = _pick_representative_sample_text(g.get("text", "") for g in group_segs)
                 summary.append(
                     {
                         "provider_source_id": sid,
@@ -1798,9 +1773,7 @@ def resolve_citation_timestamp(
                             break
                 if cand_offset is None:
                     rel_off = (
-                        float(p1 * 3600 + p2 * 60 + p3)
-                        if p3 is not None
-                        else float(p1 * 60 + p2)
+                        float(p1 * 3600 + p2 * 60 + p3) if p3 is not None else float(p1 * 60 + p2)
                     )
                     if 0.0 <= rel_off <= upper_bound:
                         cand_offset = rel_off
@@ -1813,9 +1786,7 @@ def resolve_citation_timestamp(
         float(s.get("start") or 0.0)
         for s in segments
         if isinstance(s, dict)
-        and float(s.get("start") or 0.0) - 2.5
-        <= cand_offset
-        <= float(s.get("end") or 0.0) + 2.0
+        and float(s.get("start") or 0.0) - 2.5 <= cand_offset <= float(s.get("end") or 0.0) + 2.0
     ]
     if overlapping:
         snapped = min(overlapping, key=lambda st: abs(st - cand_offset))
@@ -1829,11 +1800,7 @@ def resolve_citation_timestamp(
             snapped = min(near, key=lambda a: abs(a - cand_offset))
 
     snapped = round(max(0.0, snapped), 2)
-    label = (
-        wall_clock_time_de(origin_utc, snapped)
-        if origin_utc
-        else short_timestamp(snapped)
-    )
+    label = wall_clock_time_de(origin_utc, snapped) if origin_utc else short_timestamp(snapped)
     return label, snapped
 
 
@@ -1969,9 +1936,7 @@ def render_export(data, format):
         for a in ((summary_data.get("action_items") if summary_data else None) or [])
         if isinstance(a, dict) and _single_line(a.get("task"))
     ]
-    pause_windows_list = [
-        w for w in (data.get("pause_windows") or []) if isinstance(w, dict)
-    ]
+    pause_windows_list = [w for w in (data.get("pause_windows") or []) if isinstance(w, dict)]
     has_summary_content = bool(summary_text or decisions or topics or actions)
     ui_url = f"{get_settings().public_base_url()}/ui"
     protocol_link = f"{ui_url}#view=meetings&id={data['recording_id']}"
@@ -2031,9 +1996,7 @@ def render_export(data, format):
                     task = _single_line(a["task"])
                     due = _single_line(a.get("due"))
                     suffix = f" _(Fällig: {due})_" if due else ""
-                    lines.append(
-                        f"- [ ] **{owner}:** {task}{suffix}{_md_citation_suffix(a)}"
-                    )
+                    lines.append(f"- [ ] **{owner}:** {task}{suffix}{_md_citation_suffix(a)}")
             else:
                 lines.append("_Keine offenen Aufgaben vereinbart._")
             lines.append("")
@@ -2078,9 +2041,7 @@ def render_export(data, format):
                     (float(kf.get("offset_seconds") or 0.0), 0, idx, "keyframe", kf)
                 )
             for idx, pw in enumerate(pause_windows_list):
-                timeline_items.append(
-                    (float(pw.get("offset_seconds") or 0.0), 1, idx, "pause", pw)
-                )
+                timeline_items.append((float(pw.get("offset_seconds") or 0.0), 1, idx, "pause", pw))
             for idx, ow in enumerate(opted_out_windows_list):
                 timeline_items.append(
                     (float(ow.get("offset_seconds") or 0.0), 1, idx, "opted_out", ow)
@@ -2162,9 +2123,7 @@ def render_export(data, format):
                     t_details = _single_line(t.get("details"))
                     t_cite = _txt_citation_suffix(t)
                     lines.append(
-                        f"• {t_title}: {t_details}{t_cite}"
-                        if t_details
-                        else f"• {t_title}{t_cite}"
+                        f"• {t_title}: {t_details}{t_cite}" if t_details else f"• {t_title}{t_cite}"
                     )
                 lines.append("")
         if has_summary_content:
@@ -2175,9 +2134,7 @@ def render_export(data, format):
                     task = _single_line(a["task"])
                     due = _single_line(a.get("due"))
                     suffix = f" (Fällig: {due})" if due else ""
-                    lines.append(
-                        f"[ ] {owner}: {task}{suffix}{_txt_citation_suffix(a)}"
-                    )
+                    lines.append(f"[ ] {owner}: {task}{suffix}{_txt_citation_suffix(a)}")
             else:
                 lines.append("Keine offenen Aufgaben vereinbart.")
             lines.append("")
@@ -2238,9 +2195,7 @@ def _opted_out_set(meta: object) -> set[str]:
     if not isinstance(meta, dict):
         return set()
     return {
-        str(x).strip().lower()
-        for x in (meta.get("opted_out_speakers") or [])
-        if str(x).strip()
+        str(x).strip().lower() for x in (meta.get("opted_out_speakers") or []) if str(x).strip()
     }
 
 
@@ -2306,13 +2261,9 @@ def _normalize_keyframe_context_entry(raw: object) -> dict | None:
     for it in raw.get("items") or []:
         if isinstance(it, dict):
             item_id = _single_line(it.get("id") or it.get("key") or "")
-            item_title = _single_line(
-                it.get("title") or it.get("name") or it.get("summary") or ""
-            )
+            item_title = _single_line(it.get("title") or it.get("name") or it.get("summary") or "")
             label = (
-                f"{item_id}: {item_title}"
-                if item_id and item_title
-                else (item_id or item_title)
+                f"{item_id}: {item_title}" if item_id and item_title else (item_id or item_title)
             )
         else:
             label = _single_line(it)
@@ -2551,9 +2502,7 @@ def generate_protocol_summary(db: Session, recording_id: uuid.UUID) -> dict:
     transcript_text = "\n".join(transcript_lines)
     if len(transcript_text) > 84000:
         transcript_text = (
-            transcript_text[:52000]
-            + "\n...[Mittelteil gekürzt]...\n"
-            + transcript_text[-32000:]
+            transcript_text[:52000] + "\n...[Mittelteil gekürzt]...\n" + transcript_text[-32000:]
         )
 
     lang_spec = effective_recording_language(prior_meta, settings)
@@ -2597,7 +2546,10 @@ def generate_protocol_summary(db: Session, recording_id: uuid.UUID) -> dict:
                 continue
             try:
                 png_bytes = get_storage().read(obj_key)
-            except Exception:
+            except Exception as exc:
+                logging.getLogger("wortlaut.exports").debug(
+                    "keyframe_storage_read_failed id=%s type=%s", rep_id, type(exc).__name__
+                )
                 continue
             rem_timeout = max(8.0, min(30.0, vision_deadline - time.monotonic()))
             extracted = extract_keyframe_visual_context(
@@ -2626,13 +2578,10 @@ def generate_protocol_summary(db: Session, recording_id: uuid.UUID) -> dict:
         kf_sig = (
             _single_line(kf_ctx.get("view") or "").lower(),
             tuple(
-                _single_line(x).lower()
-                for x in (kf_ctx.get("items") or [])[:10]
-                if _single_line(x)
+                _single_line(x).lower() for x in (kf_ctx.get("items") or [])[:10] if _single_line(x)
             ),
         )
-        for vt in kf_ctx.get("terms") or []:
-            visual_terms.append(vt)
+        visual_terms.extend(kf_ctx.get("terms") or [])
         if kf_sig == last_kf_sig:
             continue
         last_kf_sig = kf_sig
@@ -2767,9 +2716,7 @@ def generate_protocol_summary(db: Session, recording_id: uuid.UUID) -> dict:
     repl_values = list(term_repls.values()) if isinstance(term_repls, dict) else []
     assistant_hint = _single_line(settings.assistant_name)
     builtin_hints = (
-        [assistant_hint]
-        if assistant_hint and assistant_hint.lower() != "wortlaut"
-        else []
+        [assistant_hint] if assistant_hint and assistant_hint.lower() != "wortlaut" else []
     )
     org_hints = extract_org_glossary_hints(prior_meta.get("attendee_emails"))
     merged_glossary: list[str] = []
@@ -2891,9 +2838,7 @@ def generate_protocol_summary(db: Session, recording_id: uuid.UUID) -> dict:
         "generated_at": datetime.now(UTC).isoformat(),
     }
 
-    locked_rec = db.scalar(
-        select(Recording).where(Recording.id == recording_id).with_for_update()
-    )
+    locked_rec = db.scalar(select(Recording).where(Recording.id == recording_id).with_for_update())
     if locked_rec is None or locked_rec.transcript_deleted_at is not None:
         db.rollback()
         raise LookupError("recording_not_found")
@@ -2914,14 +2859,13 @@ def generate_protocol_summary(db: Session, recording_id: uuid.UUID) -> dict:
                 )
             ).all()
         }
-        merged_kf_ctx = dict(
-            meta.get("keyframe_context")
-            if isinstance(meta.get("keyframe_context"), dict)
-            else {}
+        raw_meta_kf_ctx = meta.get("keyframe_context")
+        merged_kf_ctx: dict[str, object] = (
+            dict(raw_meta_kf_ctx) if isinstance(raw_meta_kf_ctx, dict) else {}
         )
-        for kid, kval in newly_extracted_kf_ctx.items():
-            if kid in live_kf_ids:
-                merged_kf_ctx[kid] = kval
+        merged_kf_ctx.update(
+            {kid: kval for kid, kval in newly_extracted_kf_ctx.items() if kid in live_kf_ids}
+        )
         if merged_kf_ctx:
             meta["keyframe_context"] = merged_kf_ctx
     from wortlaut.rag import invalidate_recording_rag_index
@@ -2944,9 +2888,7 @@ def extract_audio_snippet_wav(
         raise LookupError("audio_deleted")
     if not stream_id or not str(stream_id).strip():
         raise LookupError("stream_id_required")
-    attempts = list(
-        db.scalars(select(Attempt).where(Attempt.recording_id == recording.id)).all()
-    )
+    attempts = list(db.scalars(select(Attempt).where(Attempt.recording_id == recording.id)).all())
     if not attempts:
         raise LookupError("no_audio")
     streams = list(
@@ -3097,7 +3039,10 @@ def extract_audio_snippet_wav(
             pcm_bytes = read_pcm(chunks, clip_start, clip_end)
             if pcm_bytes:
                 break
-        except Exception:
+        except Exception as exc:
+            logging.getLogger("wortlaut.exports").debug(
+                "audio_snippet_read_failed type=%s", type(exc).__name__
+            )
             continue
 
     if not pcm_bytes:

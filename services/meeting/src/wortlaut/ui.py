@@ -538,9 +538,7 @@ def _build_instance_info() -> dict:
         },
         "oidc": _build_oidc_instance_info(s),
         "calendarOAuth": {
-            "googleEnabled": bool(
-                s.google_calendar_client_id and s.google_calendar_client_secret
-            ),
+            "googleEnabled": bool(s.google_calendar_client_id and s.google_calendar_client_secret),
             "microsoftEnabled": bool(s.microsoft_calendar_client_id),
             "googleClientId": s.google_calendar_client_id or "",
             "microsoftClientId": s.microsoft_calendar_client_id or "",

@@ -1,0 +1,66 @@
+rules:
+  - id: wortlaut-no-shell-true
+    languages: [python]
+    severity: ERROR
+    message: >-
+      Never invoke subprocess with shell=True; pass an argument list instead to prevent
+      command injection.
+    patterns:
+      - pattern-either:
+          - pattern: subprocess.$FUNC(..., shell=True, ...)
+          - pattern: asyncio.create_subprocess_shell(...)
+    paths:
+      exclude:
+        - "/services/meeting/tests/**"
+
+  - id: wortlaut-no-unsafe-deserialization
+    languages: [python]
+    severity: ERROR
+    message: >-
+      Unsafe deserialization or dynamic code execution (pickle/yaml.load/eval/exec) is forbidden.
+    pattern-either:
+      - pattern: pickle.loads(...)
+      - pattern: pickle.load(...)
+      - pattern: yaml.load($DATA)
+      - pattern: eval(...)
+      - pattern: exec(...)
+    paths:
+      exclude:
+        - "/services/meeting/tests/**"
+
+  - id: wortlaut-no-sql-text-fstring
+    languages: [python]
+    severity: ERROR
+    message: >-
+      Do not interpolate dynamic expressions into SQLAlchemy text(); use bound parameters instead.
+    pattern: sqlalchemy.text(f"...")
+    paths:
+      exclude:
+        - "/services/meeting/tests/**"
+
+  - id: wortlaut-no-secret-in-logs
+    languages: [python]
+    severity: ERROR
+    message: >-
+      Never log SecretStr values; log only error types or non-sensitive identifiers.
+    patterns:
+      - pattern-either:
+          - pattern: $LOG.$LEVEL(..., $X.get_secret_value(), ...)
+          - pattern: $LOG.$LEVEL(f"...{$X.get_secret_value()}...", ...)
+      - metavariable-regex:
+          metavariable: $LEVEL
+          regex: "^(debug|info|warning|warn|error|exception|critical|log)$"
+    paths:
+      exclude:
+        - "/services/meeting/tests/**"
+
+  - id: wortlaut-no-dangerously-set-inner-html
+    languages: [typescript]
+    severity: ERROR
+    message: >-
+      Avoid dangerouslySetInnerHTML in the Wortlaut React UI to prevent XSS in meeting transcripts
+      and protocol summaries.
+    pattern: dangerouslySetInnerHTML={...}
+    paths:
+      include:
+        - "/worker/src/ui/**"

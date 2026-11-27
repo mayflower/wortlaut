@@ -110,6 +110,7 @@ test('shouldStopForEmptyRoom treats active presenter-bound screen share as room 
     rtpAdvanced: false,
     activeShare: true,
   });
+  assert.equal(emptiedExpired.shouldStop, true);
   // Off-the-record pause (#pause) resets emptySinceMs while participants remain in the room,
   // even when audio samples are zeroed and no screen share is active.
   const pausedWithParticipants = shouldStopForEmptyRoom({

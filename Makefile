@@ -64,4 +64,9 @@ test-live-login:
 
 lint:
 	uv run --directory services/meeting ruff check src tests ../../services/asr
+	uv run --directory services/meeting ruff format --check src tests ../../services/asr
+	uv run --directory services/meeting basedpyright
+	uv run --directory services/meeting vulture
 	npm --prefix worker run typecheck
+	npm --prefix worker run lint
+	npm --prefix worker run knip

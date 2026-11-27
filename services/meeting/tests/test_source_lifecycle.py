@@ -48,8 +48,12 @@ def test_seventy_binding_changes_preserve_pcm_and_identities_across_reconnect(
                     **{
                         key: metadata[key]
                         for key in (
-                            "provider_source_id", "speaker_id", "source_kind",
-                            "attribution_unknown", "participant_id", "participant_name",
+                            "provider_source_id",
+                            "speaker_id",
+                            "source_kind",
+                            "attribution_unknown",
+                            "participant_id",
+                            "participant_name",
                         )
                     },
                 }

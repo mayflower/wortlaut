@@ -259,9 +259,7 @@ class CalendarConnection(Base):
     token_expires_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    last_synced_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     sync_error: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC), server_default=func.now()
@@ -350,12 +348,8 @@ class McpOAuthAuthorization(Base):
     code_hash: Mapped[str | None] = mapped_column(
         String(64), unique=True, index=True, nullable=True
     )
-    code_expires_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
-    consumed_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    code_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     grant_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -391,9 +385,7 @@ class McpOAuthGrant(Base):
 class RecordingKeyframe(Base):
     __tablename__ = "recording_keyframes"
     __table_args__ = (
-        UniqueConstraint(
-            "attempt_id", "sequence", name="uq_recording_keyframes_attempt_seq"
-        ),
+        UniqueConstraint("attempt_id", "sequence", name="uq_recording_keyframes_attempt_seq"),
         Index("ix_recording_keyframes_rec_captured", "recording_id", "captured_at"),
     )
 
@@ -416,9 +408,7 @@ class RecordingKeyframe(Base):
 class GlossaryEntry(Base):
     __tablename__ = "glossary_entries"
     __table_args__ = (
-        UniqueConstraint(
-            "owner_email", "term_key", name="uq_glossary_entries_owner_term"
-        ),
+        UniqueConstraint("owner_email", "term_key", name="uq_glossary_entries_owner_term"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
@@ -450,9 +440,7 @@ class ProtocolChunk(Base):
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
-    recording_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("recordings.id", ondelete="CASCADE")
-    )
+    recording_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("recordings.id", ondelete="CASCADE"))
     chunk_index: Mapped[int] = mapped_column(Integer)
     chunk_kind: Mapped[str] = mapped_column(String(24))
     speaker_label: Mapped[str | None] = mapped_column(Text, nullable=True)

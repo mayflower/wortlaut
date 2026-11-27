@@ -258,24 +258,30 @@ def test_webex_browser_bootstrap_does_not_issue_sdk_credentials(client, monkeypa
     assert "guest" not in result and "sdk_page_url" not in result
 
 
-@pytest.mark.parametrize("url", [
-    "https://teams.microsoft.com/l/meetup-join/19%3ameeting_abc%40thread.v2/0?context=%7B%7D",
-    "https://teams.microsoft.com/meet/123456789?p=fixture-passcode",
-    "https://teams.live.com/meet/123456789?p=fixture-passcode",
-    "https://teams.cloud.microsoft/meet/123456789?p=fixture-passcode",
-])
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://teams.microsoft.com/l/meetup-join/19%3ameeting_abc%40thread.v2/0?context=%7B%7D",
+        "https://teams.microsoft.com/meet/123456789?p=fixture-passcode",
+        "https://teams.live.com/meet/123456789?p=fixture-passcode",
+        "https://teams.cloud.microsoft/meet/123456789?p=fixture-passcode",
+    ],
+)
 def test_teams_preserves_invitation_identity(url):
     assert normalize_meeting_url(url + "#fragment") == ("teams", url)
 
 
-@pytest.mark.parametrize("url", [
-    "http://teams.microsoft.com/meet/123",
-    "https://teams.microsoft.com.attacker.example/meet/123",
-    "https://user@teams.microsoft.com/meet/123",
-    "https://teams.microsoft.com:444/meet/123",
-    "https://teams.microsoft.com/redirect?url=https://example.com",
-    "https://teams.microsoft.com/meet/123/extra",
-])
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://teams.microsoft.com/meet/123",
+        "https://teams.microsoft.com.attacker.example/meet/123",
+        "https://user@teams.microsoft.com/meet/123",
+        "https://teams.microsoft.com:444/meet/123",
+        "https://teams.microsoft.com/redirect?url=https://example.com",
+        "https://teams.microsoft.com/meet/123/extra",
+    ],
+)
 def test_teams_rejects_non_meeting_destinations(url):
     with pytest.raises(ValueError):
         normalize_meeting_url(url)
@@ -307,21 +313,33 @@ def test_teams_bootstrap_is_independent_and_preserves_passcode(client, database,
     assert disabled.json()["detail"] == "teams_not_configured"
     monkeypatch.setenv("WORTLAUT_ENABLE_TEAMS", "true")
     get_settings.cache_clear()
-    status = client.post(f"/v1/attempts/{attempt}/status", headers=headers, json={
-        "participation": "capturing", "capability": "unverified",
-        "receiver_sources": [{
-            "provider_source_id": f"teams:{identifier}:receiver:1",
-            "source_kind": "unknown", "capture_path": "rtc_receiver",
-            "track_id": "mainAudio", "signaled_participant_id": None,
-        }],
-    })
+    status = client.post(
+        f"/v1/attempts/{attempt}/status",
+        headers=headers,
+        json={
+            "participation": "capturing",
+            "capability": "unverified",
+            "receiver_sources": [
+                {
+                    "provider_source_id": f"teams:{identifier}:receiver:1",
+                    "source_kind": "unknown",
+                    "capture_path": "rtc_receiver",
+                    "track_id": "mainAudio",
+                    "signaled_participant_id": None,
+                }
+            ],
+        },
+    )
     assert status.status_code == 200
 
 
-@pytest.mark.parametrize("url", [
-    "https://teams.microsoft.com/meet/123456789?p=fixture",
-    "https://teams.microsoft.com/l/meetup-join/19%3ameeting_abc%40thread.v2/0?context=%7B%7D",
-])
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://teams.microsoft.com/meet/123456789?p=fixture",
+        "https://teams.microsoft.com/l/meetup-join/19%3ameeting_abc%40thread.v2/0?context=%7B%7D",
+    ],
+)
 def test_teams_calendar_invite(client, monkeypatch, url):
     configure(monkeypatch)
     event = imported(client, mail(link=url))
@@ -485,8 +503,7 @@ def test_teams_display_name_sanitization_and_calendar_url_formats():
 
     # Parentheses & forbidden punctuation break Teams pre-join validation; sanitize cleanly.
     assert (
-        sanitize_teams_display_name("Wortlaut.cloud (Alex Weber)")
-        == "Wortlaut.cloud - Alex Weber"
+        sanitize_teams_display_name("Wortlaut.cloud (Alex Weber)") == "Wortlaut.cloud - Alex Weber"
     )
     assert sanitize_teams_display_name("wortlaut (Max Richter)") == "wortlaut - Max Richter"
     assert (
@@ -512,7 +529,9 @@ def test_teams_display_name_sanitization_and_calendar_url_formats():
     )
     prov_l, norm_l = normalize_meeting_url(launcher)
     assert prov_l == "teams"
-    assert norm_l.startswith("https://teams.microsoft.com/l/meetup-join/19:meeting_abc@thread.v2/0?")
+    assert norm_l.startswith(
+        "https://teams.microsoft.com/l/meetup-join/19:meeting_abc@thread.v2/0?"
+    )
 
     # Teams v2 hash URL
     v2_url = (
@@ -521,7 +540,10 @@ def test_teams_display_name_sanitization_and_calendar_url_formats():
     )
     prov_v2, norm_v2 = normalize_meeting_url(v2_url)
     assert prov_v2 == "teams"
-    assert norm_v2 == "https://teams.microsoft.com/l/meetup-join/19:meeting_xyz@thread.v2/0?context=%7b%7d"
+    assert (
+        norm_v2
+        == "https://teams.microsoft.com/l/meetup-join/19:meeting_xyz@thread.v2/0?context=%7b%7d"
+    )
 
     # Calendar HTML description with &amp; entity encoding
     html_desc = (

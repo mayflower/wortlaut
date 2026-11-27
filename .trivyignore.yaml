@@ -1,0 +1,18 @@
+misconfigurations:
+  - id: KSV-0014
+    paths:
+      - charts/wortlaut/templates/workloads.yaml
+      - deploy/dev/asr.yaml
+      - deploy/dev/meeting.yaml
+      - deploy/dev/postgres.yaml
+      - deploy/dev/rustfs.yaml
+    statement: >-
+      Meeting/ASR containers write ephemeral temp/model-cache files and official
+      postgres/rustfs dev images initialize runtime directories under rootfs;
+      non-root UIDs and dropped Linux capabilities remain enforced.
+  - id: KSV-0118
+    paths:
+      - deploy/dev/postgres.yaml
+    statement: >-
+      Local dev StatefulSet uses the official postgres:17-bookworm entrypoint
+      which drops privileges internally during PGDATA bootstrap.

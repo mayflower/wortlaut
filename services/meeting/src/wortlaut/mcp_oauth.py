@@ -39,8 +39,8 @@ from wortlaut.ui import FAVICON_DATA_URI
 
 MCP_SCOPES: tuple[str, ...] = ("mcp:read", "mcp:write")
 DEFAULT_SCOPE_STRING = "mcp:read mcp:write"
-ACCESS_TOKEN_PREFIX = "wortlaut-mcp-at-"
-REFRESH_TOKEN_PREFIX = "wortlaut-mcp-rt-"
+ACCESS_TOKEN_PREFIX = "wortlaut-mcp-at-"  # noqa: S105
+REFRESH_TOKEN_PREFIX = "wortlaut-mcp-rt-"  # noqa: S105
 CLIENT_ID_PREFIX = "wortlaut-mcp-client-"
 CONSENT_COOKIE_NAME = "wortlaut_mcp_consent"
 
@@ -466,8 +466,7 @@ def _render_consent_html(
         "This AI / MCP client is requesting authenticated access to your meetings."
         if is_en
         else (
-            "Dieser KI- bzw. MCP-Client bittet um authentifizierten Zugriff "
-            "auf Ihre Besprechungen."
+            "Dieser KI- bzw. MCP-Client bittet um authentifizierten Zugriff auf Ihre Besprechungen."
         )
     )
     signed_in_label = "Signed in as" if is_en else "Angemeldet als"
@@ -534,9 +533,7 @@ def _render_consent_html(
         if has_write_requested
         else ""
     )
-    err_block = (
-        f'<div class="err-box">{html.escape(error_message)}</div>' if error_message else ""
-    )
+    err_block = f'<div class="err-box">{html.escape(error_message)}</div>' if error_message else ""
     user_or_token_block = (
         f"""
         <div class="field-group">
@@ -555,7 +552,7 @@ def _render_consent_html(
     )
 
     return f"""<!DOCTYPE html>
-<html lang="{'en' if is_en else 'de'}" data-theme="dark" data-astryx-theme="stone">
+<html lang="{"en" if is_en else "de"}" data-theme="dark" data-astryx-theme="stone">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -808,7 +805,8 @@ def _build_mcp_oidc_redirect(
     auth_row: McpOAuthAuthorization,
     origin: str,
 ) -> RedirectResponse:
-    assert auth_row.upstream_verifier and auth_row.upstream_nonce
+    if not auth_row.upstream_verifier or not auth_row.upstream_nonce:
+        raise ValueError("MCP OIDC authorization row is missing PKCE verifier or nonce")
     state_payload = f"{provider.id}.{auth_row.id}"
     state_sig = _hmac_tag(b"mcp-oidc-state", state_payload)
     oidc_params = {
@@ -843,9 +841,7 @@ def _render_provider_chooser_html(
     client_name = html.escape(client.client_name)
     title = f"Sign in – {assistant}" if is_en else f"Anmelden – {assistant}"
     heading = (
-        f"Sign in to connect {client_name}"
-        if is_en
-        else f"Anmelden, um {client_name} zu verbinden"
+        f"Sign in to connect {client_name}" if is_en else f"Anmelden, um {client_name} zu verbinden"
     )
     subtitle = (
         "Choose your identity provider to continue."
@@ -855,16 +851,14 @@ def _render_provider_chooser_html(
     buttons = []
     for idx, p in enumerate(providers):
         href = f"/oauth/login?{urlencode({'auth_id': str(auth_row.id), 'provider': p.id})}"
-        label = (
-            f"Sign in with {p.label}" if is_en else f"Mit {p.label} anmelden"
-        )
+        label = f"Sign in with {p.label}" if is_en else f"Mit {p.label} anmelden"
         cls = "btn btn-primary" if idx == 0 else "btn btn-secondary"
         buttons.append(
             f'<a class="{cls}" href="{html.escape(href, quote=True)}">{html.escape(label)}</a>'
         )
     buttons_html = "\n      ".join(buttons)
     return f"""<!DOCTYPE html>
-<html lang="{'en' if is_en else 'de'}">
+<html lang="{"en" if is_en else "de"}">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -928,9 +922,7 @@ def select_mcp_oidc_provider(
     except ValueError:
         raise HTTPException(400, "Invalid authorization session id") from None
     now = datetime.now(UTC)
-    auth_row = db.scalar(
-        select(McpOAuthAuthorization).where(McpOAuthAuthorization.id == auth_id)
-    )
+    auth_row = db.scalar(select(McpOAuthAuthorization).where(McpOAuthAuthorization.id == auth_id))
     if (
         auth_row is None
         or auth_row.expires_at <= now
@@ -1075,9 +1067,7 @@ def handle_mcp_oidc_callback(request: Request, db: Session) -> Response:
 
     now = datetime.now(UTC)
     auth_row = db.scalar(
-        select(McpOAuthAuthorization)
-        .where(McpOAuthAuthorization.id == auth_id)
-        .with_for_update()
+        select(McpOAuthAuthorization).where(McpOAuthAuthorization.id == auth_id).with_for_update()
     )
     if (
         auth_row is None
@@ -1147,9 +1137,7 @@ def submit_oauth_consent(
 
     now = datetime.now(UTC)
     auth_row = db.scalar(
-        select(McpOAuthAuthorization)
-        .where(McpOAuthAuthorization.id == auth_id)
-        .with_for_update()
+        select(McpOAuthAuthorization).where(McpOAuthAuthorization.id == auth_id).with_for_update()
     )
     if (
         auth_row is None
@@ -1233,7 +1221,7 @@ def _extract_basic_client_credentials(request: Request) -> tuple[str | None, str
         return None, None
     try:
         decoded = base64.b64decode(auth_header[6:].strip()).decode("utf-8")
-    except (ValueError, UnicodeDecodeError):
+    except ValueError, UnicodeDecodeError:
         return None, None
     if ":" not in decoded:
         return None, None
@@ -1254,11 +1242,11 @@ def _verify_client_authentication(
     client = db.get(McpOAuthClient, client_id)
     if client is None:
         return None
-    if client.token_endpoint_auth_method == "none":
+    if client.token_endpoint_auth_method == "none":  # noqa: S105
         return client
     supplied_secret = (
         basic_secret
-        if client.token_endpoint_auth_method == "client_secret_basic"
+        if client.token_endpoint_auth_method == "client_secret_basic"  # noqa: S105
         else (form_client_secret or basic_secret)
     )
     if not supplied_secret or not client.client_secret_hash:
@@ -1405,9 +1393,7 @@ def exchange_oauth_token(
         if raw_scope:
             req_tokens = {s for s in raw_scope.split() if s}
             if not req_tokens or not req_tokens.issubset(granted_set):
-                return oauth_error_json(
-                    "invalid_scope", "Requested scope exceeds original grant"
-                )
+                return oauth_error_json("invalid_scope", "Requested scope exceeds original grant")
             active_scopes = [s for s in MCP_SCOPES if s in req_tokens]
         else:
             active_scopes = [s for s in MCP_SCOPES if s in granted_set] or ["mcp:read"]
@@ -1458,7 +1444,7 @@ def revoke_oauth_token(
     )
     if grant is not None:
         client = db.get(McpOAuthClient, grant.client_id)
-        if client is not None and client.token_endpoint_auth_method != "none":
+        if client is not None and client.token_endpoint_auth_method != "none":  # noqa: S105
             authed = _verify_client_authentication(
                 request,
                 db,
@@ -1665,9 +1651,7 @@ def list_user_mcp_grants(db: Session, principal: Principal) -> list[dict]:
 
 
 def revoke_user_mcp_grant(db: Session, principal: Principal, grant_id: uuid.UUID) -> bool:
-    grant = db.scalar(
-        select(McpOAuthGrant).where(McpOAuthGrant.id == grant_id).with_for_update()
-    )
+    grant = db.scalar(select(McpOAuthGrant).where(McpOAuthGrant.id == grant_id).with_for_update())
     if grant is None or grant.revoked_at is not None:
         return False
     if principal.kind != "operator" and not principal.is_admin:

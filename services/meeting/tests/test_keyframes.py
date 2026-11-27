@@ -24,10 +24,7 @@ def _make_png(
     raw = row * height
     idat = zlib.compress(raw, level=6)
     return (
-        b"\x89PNG\r\n\x1a\n"
-        + _chunk(b"IHDR", ihdr)
-        + _chunk(b"IDAT", idat)
-        + _chunk(b"IEND", b"")
+        b"\x89PNG\r\n\x1a\n" + _chunk(b"IHDR", ihdr) + _chunk(b"IDAT", idat) + _chunk(b"IEND", b"")
     )
 
 
@@ -812,11 +809,14 @@ def test_rejoin_timeline_exports_access_controls_optout_retention_and_mcp(
     assert client.delete(del_url_2, headers=alice_hdrs).status_code == 204
     assert not _s3_exists(storage, f"keyframes/{rec_id}/{att2_id}/0000.png")
     assert client.get(f"{del_url_2}.png", headers=alice_hdrs).status_code == 404
-    assert _mcp_rpc(
-        mcp_hdrs,
-        "resources/read",
-        {"uri": f"wortlaut://recordings/{rec_id}/keyframes/{kf2_id}.png"},
-    )["error"]["code"] == -32002
+    assert (
+        _mcp_rpc(
+            mcp_hdrs,
+            "resources/read",
+            {"uri": f"wortlaut://recordings/{rec_id}/keyframes/{kf2_id}.png"},
+        )["error"]["code"]
+        == -32002
+    )
     deleted_kf_tool = _mcp_rpc(
         mcp_hdrs,
         "tools/call",
@@ -1344,8 +1344,9 @@ def test_keyframe_visual_context_enriches_asr_prompt_summary_and_purges_on_optou
             rec = db.get(Recording, rec_id)
             ctx_map = rec.protocol_meta["keyframe_context"]
             assert ctx_map[uploaded_ids[0]] == {"skipped": True}
-            assert "PROJ-270: Unmaintainedtes Ragas durch DeepEval ersetzen" in (
-                ctx_map[uploaded_ids[1]]["items"]
+            assert (
+                "PROJ-270: Unmaintainedtes Ragas durch DeepEval ersetzen"
+                in (ctx_map[uploaded_ids[1]]["items"])
             )
             st_row = db.get(AudioStream, stream_db_id)
             job_row = db.get(AsrJob, job_id)

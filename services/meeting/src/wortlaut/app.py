@@ -7,7 +7,7 @@ import re
 import secrets
 import struct
 import uuid
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
 from urllib.parse import parse_qs
@@ -182,10 +182,8 @@ async def processing_loop(stop: asyncio.Event, operation, interval=2):
             logging.getLogger("wortlaut").error(
                 "%s_failed type=%s", operation.__name__, type(error).__name__
             )
-        try:
+        with suppress(TimeoutError):
             await asyncio.wait_for(stop.wait(), timeout=interval)
-        except TimeoutError:
-            pass
 
 
 @asynccontextmanager
@@ -257,9 +255,7 @@ def api_auth(authorization: Annotated[str | None, Header()] = None):
 
 def user_auth(authorization: Annotated[str | None, Header()] = None) -> Principal:
     token = bearer_value(authorization)
-    if secrets.compare_digest(
-        token.encode(), get_settings().api_token.get_secret_value().encode()
-    ):
+    if secrets.compare_digest(token.encode(), get_settings().api_token.get_secret_value().encode()):
         return Principal(kind="operator", is_admin=True)
     session_principal = verify_user_session_token(token)
     if session_principal is not None:
@@ -368,8 +364,15 @@ class EncodedFrameEvidence(BaseModel):
 
 class EncodedTransformEvidence(BaseModel):
     state: Literal[
-        "unsupported", "failed", "waiting_frames", "observing", "metadata_unavailable",
-        "provider_transform", "provider_reserved", "replaced", "stopped",
+        "unsupported",
+        "failed",
+        "waiting_frames",
+        "observing",
+        "metadata_unavailable",
+        "provider_transform",
+        "provider_reserved",
+        "replaced",
+        "stopped",
     ]
     frame_count: int = Field(ge=0)
     last_frame: EncodedFrameEvidence | None = None
@@ -689,7 +692,7 @@ async def oauth_register_endpoint(request: Request, db: Db):
         return oauth_error_json("invalid_client_metadata", "Payload too large")
     try:
         payload = json.loads(raw.decode("utf-8")) if raw else {}
-    except (UnicodeDecodeError, ValueError):
+    except UnicodeDecodeError, ValueError:
         return oauth_error_json("invalid_client_metadata", "Invalid JSON body")
     if not isinstance(payload, dict):
         return oauth_error_json("invalid_client_metadata", "JSON object required")
@@ -774,7 +777,7 @@ async def oauth_token_endpoint(request: Request, db: Db):
 async def oauth_revoke_endpoint(request: Request, db: Db):
     try:
         multi = await _read_oauth_params(request)
-    except (UnicodeDecodeError, ValueError):
+    except UnicodeDecodeError, ValueError:
         return oauth_error_json("invalid_request", "Malformed revocation payload")
     flat = {k: vals[0] for k, vals in multi.items() if vals}
     return await run_in_threadpool(revoke_oauth_token, request, db, flat)
@@ -848,19 +851,18 @@ def oidc_config_endpoint(response: Response):
             "client_id": "",
             "providers": [],
         }
-    items = []
-    for p in providers:
-        items.append(
-            {
-                "id": p.id,
-                "label": p.label,
-                "issuer": p.issuer,
-                "authorization_endpoint": get_provider_authorization_endpoint(p),
-                "client_id": p.client_id,
-                "scope": "openid profile email",
-                "extra_params": provider_extra_auth_params(p),
-            }
-        )
+    items = [
+        {
+            "id": p.id,
+            "label": p.label,
+            "issuer": p.issuer,
+            "authorization_endpoint": get_provider_authorization_endpoint(p),
+            "client_id": p.client_id,
+            "scope": "openid profile email",
+            "extra_params": provider_extra_auth_params(p),
+        }
+        for p in providers
+    ]
     primary = items[0]
     return {
         "enabled": True,
@@ -1050,9 +1052,7 @@ def calendar_oauth_exchange(
 
 
 @app.post("/v1/calendar/oauth/connections/{connection_id}/sync")
-def calendar_oauth_sync_now(
-    connection_id: uuid.UUID, db: Db, principal: AuthPrincipal
-):
+def calendar_oauth_sync_now(connection_id: uuid.UUID, db: Db, principal: AuthPrincipal):
     conn_peek = db.get(CalendarConnection, connection_id)
     if conn_peek is None:
         raise HTTPException(404, "Calendar connection not found")
@@ -1079,13 +1079,9 @@ def calendar_oauth_sync_now(
 
 
 @app.delete("/v1/calendar/oauth/connections/{connection_id}")
-def calendar_oauth_disconnect(
-    connection_id: uuid.UUID, db: Db, principal: AuthPrincipal
-):
+def calendar_oauth_disconnect(connection_id: uuid.UUID, db: Db, principal: AuthPrincipal):
     conn = db.scalar(
-        select(CalendarConnection)
-        .where(CalendarConnection.id == connection_id)
-        .with_for_update()
+        select(CalendarConnection).where(CalendarConnection.id == connection_id).with_for_update()
     )
     if conn is None:
         raise HTTPException(404, "Calendar connection not found")
@@ -1108,9 +1104,7 @@ def calendar_oauth_disconnect(
             )
             if rec and rec.participation == "scheduled" and rec.cancelled_at is None:
                 request_cancellation(rec, now)
-    db.execute(
-        delete(CalendarSyncedEvent).where(CalendarSyncedEvent.connection_id == conn.id)
-    )
+    db.execute(delete(CalendarSyncedEvent).where(CalendarSyncedEvent.connection_id == conn.id))
     db.delete(conn)
     db.commit()
     return {"deleted": True, "id": str(connection_id)}
@@ -1152,6 +1146,7 @@ def prometheus_metrics(db: Db):
             func.coalesce(func.sum(RecordingKeyframe.byte_size), 0),
         ).where(RecordingKeyframe.deleted_at.is_(None))
     ).one()
+
     def _prom_label(val: object) -> str:
         return str(val).replace("\\", "\\\\").replace("\n", "\\n").replace('"', '\\"')
 
@@ -1224,8 +1219,7 @@ def _recording_audio_duration_seconds(
             sess_mono = contract.get("session_monotonic_origin_ms")
             offset_sec = (
                 (float(mono_origin) - float(sess_mono)) / 1000.0
-                if isinstance(mono_origin, (int, float))
-                and isinstance(sess_mono, (int, float))
+                if isinstance(mono_origin, (int, float)) and isinstance(sess_mono, (int, float))
                 else 0.0
             )
             origins.append(origin_dt)
@@ -1275,7 +1269,7 @@ def list_recordings(
             moment, identifier = datetime.fromisoformat(anchor["start"]), uuid.UUID(anchor["id"])
             if moment.tzinfo is None:
                 raise ValueError("Timezone missing")
-        except (ValueError, TypeError, KeyError, UnicodeError):
+        except ValueError, TypeError, KeyError, UnicodeError:
             raise HTTPException(400, "Invalid recording cursor") from None
         if order == "desc":
             query = query.where(
@@ -1291,7 +1285,7 @@ def list_recordings(
         else (Recording.starts_at, Recording.id)
     )
     rows = db.execute(query.order_by(*sort_cols).limit(limit + 1)).all()
-    page, identifiers = rows[:limit], [r.id for r, _ in rows[:limit]]
+    page, identifiers = rows[:limit], [row[0].id for row in rows[:limit]]
     # Read page-wide aggregates rather than full chunk/participant histories.
     audio = {
         row[0]: row[1:]
@@ -1416,7 +1410,8 @@ def list_recordings(
         ).all()
     )
     items = []
-    for recording, delivery in page:
+    for row in page:
+        recording, delivery = tuple(row)
         samples, raw_unknown, unreadable = audio.get(recording.id, (0, False, False))
         seg_count, seg_unknown = seg_attribution.get(recording.id, (0, False))
         unknown = seg_unknown if seg_count > 0 else raw_unknown
@@ -1510,9 +1505,7 @@ def get_recording(
     raw_delivery = delivery_json(db.get(Delivery, recording.id))
     if not is_full_view and isinstance(raw_delivery, dict):
         raw_delivery = {
-            k: v
-            for k, v in raw_delivery.items()
-            if k not in ("accepted_recipients", "message_id")
+            k: v for k, v in raw_delivery.items() if k not in ("accepted_recipients", "message_id")
         }
     result["delivery"] = raw_delivery
     attempts = db.scalars(select(Attempt).where(Attempt.recording_id == recording.id)).all()
@@ -1800,12 +1793,18 @@ def delete_recording(recording_id: uuid.UUID, db: Db, principal: AuthPrincipal):
     if get_settings().s3_access_key or recording.audio_deleted_at is None:
         try:
             get_storage().delete_recording(recording.id)
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.getLogger("wortlaut").warning(
+                "delete_recording_audio_failed id=%s type=%s", recording.id, type(exc).__name__
+            )
         try:
             get_storage().delete_recording_keyframes(recording.id)
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.getLogger("wortlaut").warning(
+                "delete_recording_keyframes_failed id=%s type=%s",
+                recording.id,
+                type(exc).__name__,
+            )
     db.execute(delete(RecordingKeyframe).where(RecordingKeyframe.recording_id == recording.id))
     attempt_ids = db.scalars(select(Attempt.id).where(Attempt.recording_id == recording.id)).all()
     if attempt_ids:
@@ -2064,8 +2063,8 @@ def update_recording_protocol(
     if body.opted_out_speakers is not None:
         cleaned_opt_out: list[str] = []
         seen_opt_out: set[str] = set()
-        for item in body.opted_out_speakers[:64]:
-            val = str(item).strip()[:200]
+        for opt_item in body.opted_out_speakers[:64]:
+            val = str(opt_item).strip()[:200]
             if val and val.lower() not in seen_opt_out:
                 seen_opt_out.add(val.lower())
                 cleaned_opt_out.append(val)
@@ -2170,9 +2169,7 @@ def link_recording_in_calendar(
                 "Dieser Kalendereintrag lässt das Bearbeiten der Beschreibung "
                 "durch Gäste nicht zu.",
             )
-        raise HTTPException(
-            502, f"Kalendereintrag konnte nicht aktualisiert werden ({err})."
-        )
+        raise HTTPException(502, f"Kalendereintrag konnte nicht aktualisiert werden ({err}).")
     return res
 
 
@@ -2291,9 +2288,7 @@ def delete_recording_keyframe(
             )
         else:
             locked_kf = db.scalar(
-                select(RecordingKeyframe)
-                .where(RecordingKeyframe.id == kf_id)
-                .with_for_update()
+                select(RecordingKeyframe).where(RecordingKeyframe.id == kf_id).with_for_update()
             )
             if locked_kf is not None and locked_kf.object_key == object_key:
                 locked_kf.object_key = ""
@@ -2358,6 +2353,8 @@ def claim(
     recording = db.scalar(
         select(Recording).where(Recording.id == attempt.recording_id).with_for_update()
     )
+    if recording is None:
+        raise HTTPException(404, "Recording not found")
     db.refresh(attempt)
     if (
         recording.active_attempt_id != attempt.id
@@ -2402,9 +2399,7 @@ def _recording_inviter(db: Session, recording: Recording) -> str | None:
         if entry and entry.organizer:
             return entry.organizer
     synced = db.scalar(
-        select(CalendarSyncedEvent)
-        .where(CalendarSyncedEvent.recording_id == recording.id)
-        .limit(1)
+        select(CalendarSyncedEvent).where(CalendarSyncedEvent.recording_id == recording.id).limit(1)
     )
     if synced and (synced.owner_email or synced.organizer_email):
         return synced.owner_email or synced.organizer_email
@@ -2432,8 +2427,10 @@ def _recording_inviter_name(db: Session, recording: Recording) -> str | None:
                         human_cn = _humanize_inviter_name(str(cn))
                         if human_cn:
                             return human_cn
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logging.getLogger("wortlaut").debug(
+                        "parse_calendar_organizer_cn_failed type=%s", type(exc).__name__
+                    )
             if entry.organizer:
                 return _humanize_inviter_name(entry.organizer)
     inviter = _recording_inviter(db, recording)
@@ -2486,9 +2483,7 @@ def build_chat_intro(
     base_url = get_public_base_url(settings)
     cred = chat_reader_token(recording)
     token_param = (
-        f"&token=wortlaut-read-{recording.id}.{cred.removeprefix('wortlaut-read-')}"
-        if cred
-        else ""
+        f"&token=wortlaut-read-{recording.id}.{cred.removeprefix('wortlaut-read-')}" if cred else ""
     )
     recording_url = f"{base_url}/ui#view=meetings&id={recording.id}{token_param}"
     privacy_url = settings.privacy_url or f"{base_url}/privacy"
@@ -2532,7 +2527,8 @@ def bootstrap(
     attempt = authenticated_attempt(attempt_id, db, authorization)
     recording = db.get(Recording, attempt.recording_id)
     if (
-        recording.active_attempt_id != attempt.id
+        recording is None
+        or recording.active_attempt_id != attempt.id
         or recording.participation in ("unknown", "ended")
         or recording.audio_closed_at is not None
         or recording.cancelled_at is not None
@@ -2575,10 +2571,13 @@ def bootstrap(
     if recording.provider == "teams":
         if not settings.enable_teams:
             raise HTTPException(503, "teams_not_configured")
-        return {**common, "teams": {
-            "display_name": sanitize_teams_display_name(display_name),
-            "locale": settings.teams_locale,
-        }}
+        return {
+            **common,
+            "teams": {
+                "display_name": sanitize_teams_display_name(display_name),
+                "locale": settings.teams_locale,
+            },
+        }
     if recording.provider == "zoom":
         if not settings.enable_zoom:
             raise HTTPException(503, "zoom_not_configured")
@@ -2627,6 +2626,8 @@ def worker_status(
     recording = db.scalar(
         select(Recording).where(Recording.id == attempt.recording_id).with_for_update()
     )
+    if recording is None:
+        raise HTTPException(404, "Recording not found")
     db.refresh(attempt)
     if recording.active_attempt_id != attempt.id or attempt.worker_id != x_worker_id:
         raise HTTPException(409, "Worker does not own this occurrence")
@@ -2748,9 +2749,7 @@ def worker_status(
             recording.processing_finished_at = attempt.ended_at
     elif not recording.cancelled_at:
         recording.participation_reason = body.reason or None
-    stop_requested = (
-        recording.cancelled_at is not None or recording.audio_closed_at is not None
-    )
+    stop_requested = recording.cancelled_at is not None or recording.audio_closed_at is not None
     stop_reason = "cancelled" if recording.cancelled_at else "audio_retention_expired"
     effective_deadline = min(
         recording.ends_at, attempt.credential_expires_at - timedelta(seconds=30)
@@ -2785,9 +2784,7 @@ def worker_status(
                 else:
                     clean_name = " ".join(str(seg.get("participant_name") or "").split())
                     spk = (
-                        clean_name
-                        if clean_name
-                        else ("Participant" if is_en else "Teilnehmer")
+                        clean_name if clean_name else ("Participant" if is_en else "Teilnehmer")
                     )[:80]
                     spk_identity = str(seg.get("participant_id") or seg["speaker_id"])
                 cur_key = (spk_identity, spk)
@@ -2895,6 +2892,8 @@ async def upload_attempt_keyframe(
 def ingest_message(attempt_id, credential, worker_id, connection_id, frame):
     with Session(get_engine()) as db:
         attempt, recording = verify_owner(db, attempt_id, credential, worker_id, connection_id)
+        if recording is None:
+            raise HTTPException(404, "Recording not found")
         if isinstance(frame, bytes):
             if not 4 <= len(frame) <= 168_196:
                 raise HTTPException(400, "Invalid audio frame size")

@@ -131,9 +131,7 @@ def resolve_glossary_scope_owner(
     return "personal", str(principal.email).strip().lower()
 
 
-def _build_global_entries(
-    db: Session, settings=None
-) -> tuple[list[dict[str, Any]], list[str]]:
+def _build_global_entries(db: Session, settings=None) -> tuple[list[dict[str, Any]], list[str]]:
     settings = settings or get_settings()
     env_terms: list[str] = list(settings.asr_glossary or [])
     env_by_key: dict[str, str] = {}
@@ -166,9 +164,7 @@ def _build_global_entries(
             row.term,
         )
         is_unchanged_env = (
-            row.term_key in env_by_key
-            and row.term == env_by_key[row.term_key]
-            and not aliases
+            row.term_key in env_by_key and row.term == env_by_key[row.term_key] and not aliases
         )
         entries.append(
             {
@@ -223,9 +219,7 @@ def _build_personal_entries(db: Session, user_email: str) -> list[dict[str, Any]
                 row.term,
             ),
             "source": "custom",
-            "updated_at": row.updated_at.astimezone(UTC).isoformat()
-            if row.updated_at
-            else None,
+            "updated_at": row.updated_at.astimezone(UTC).isoformat() if row.updated_at else None,
         }
         for row in rows
     ]
@@ -238,9 +232,7 @@ def get_glossary_overview(db: Session, principal: Principal, settings=None) -> d
     can_edit_global = bool(principal.is_admin)
     has_personal = bool(principal.kind == "user" and principal.email)
     global_entries, suppressed_env_terms = _build_global_entries(db, settings)
-    personal_entries = (
-        _build_personal_entries(db, str(principal.email)) if has_personal else []
-    )
+    personal_entries = _build_personal_entries(db, str(principal.email)) if has_personal else []
     effective_keys = {e["term_key"] for e in global_entries} | {
         e["term_key"] for e in personal_entries
     }
@@ -258,9 +250,7 @@ def get_glossary_overview(db: Session, principal: Principal, settings=None) -> d
 def _env_term_keys(settings=None) -> set[str]:
     settings = settings or get_settings()
     return {
-        glossary_term_key(raw)
-        for raw in (settings.asr_glossary or [])
-        if glossary_term_key(raw)
+        glossary_term_key(raw) for raw in (settings.asr_glossary or []) if glossary_term_key(raw)
     }
 
 
@@ -331,9 +321,13 @@ def upsert_glossary_entries(
         extra_aliases = aliases if (term is None or not normalize_glossary_term(term)) else None
         if extra_aliases and len(parsed) == 1:
             p_term, p_aliases = parsed[0]
-            merged = normalize_glossary_aliases([*p_aliases, *(
-                [extra_aliases] if isinstance(extra_aliases, str) else list(extra_aliases)
-            )], p_term)
+            merged = normalize_glossary_aliases(
+                [
+                    *p_aliases,
+                    *([extra_aliases] if isinstance(extra_aliases, str) else list(extra_aliases)),
+                ],
+                p_term,
+            )
             items.append((p_term, merged))
         else:
             items.extend(parsed)
@@ -354,14 +348,10 @@ def upsert_glossary_entries(
     existing_rows = {
         row.term_key: row
         for row in db.scalars(
-            select(GlossaryEntry)
-            .where(GlossaryEntry.owner_email == owner_email)
-            .with_for_update()
+            select(GlossaryEntry).where(GlossaryEntry.owner_email == owner_email).with_for_update()
         ).all()
     }
-    active_keys: set[str] = {
-        k for k, row in existing_rows.items() if not row.disabled
-    }
+    active_keys: set[str] = {k for k, row in existing_rows.items() if not row.disabled}
     if owner_email == "":
         for ek in env_keys:
             if ek not in existing_rows:
@@ -422,9 +412,7 @@ def delete_glossary_entry(
     settings = settings or get_settings()
     resolved_scope, owner_email = resolve_glossary_scope_owner(principal, scope)
     now = datetime.now(UTC)
-    removed = _delete_or_suppress_key(
-        db, owner_email, term_key, _env_term_keys(settings), now
-    )
+    removed = _delete_or_suppress_key(db, owner_email, term_key, _env_term_keys(settings), now)
     if not removed:
         raise HTTPException(404, "Glossareintrag nicht gefunden.")
     db.commit()

@@ -56,8 +56,7 @@ FAILURE_REASONS = {
     "meeting_not_found": "Besprechung wurde beim Provider nicht gefunden",
     "missed": "Terminzeitfenster war vor dem Start bereits abgelaufen",
     "removed": (
-        "Teilnahme wurde von der Konferenz beendet "
-        "(Anruf für alle beendet oder Bot entfernt)"
+        "Teilnahme wurde von der Konferenz beendet (Anruf für alle beendet oder Bot entfernt)"
     ),
     "room_empty": (
         "Meeting-Raum war für 5 Minuten leer oder ohne Audioaktivität (automatisch verlassen)"
@@ -163,9 +162,7 @@ def _speaker_breakdown(data: dict) -> list[dict]:
             sec = float(src.get("speech_seconds") or 0.0)
             if sec > 0:
                 name = (
-                    src.get("participant_name")
-                    or src.get("signaled_participant_id")
-                    or "Sprecher"
+                    src.get("participant_name") or src.get("signaled_participant_id") or "Sprecher"
                 )
                 totals[name] = totals.get(name, 0.0) + sec
     overall = sum(totals.values())
@@ -324,8 +321,7 @@ def _build_completed_bodies(
 
     if notices:
         plain_lines.extend(["", "Hinweise zur Sitzung:"])
-        for note in notices:
-            plain_lines.append(f"• {note}")
+        plain_lines.extend(f"• {note}" for note in notices)
 
     has_summary_content = bool(summary_text or decisions or topics or actions)
     if summary_text or decisions or topics:
@@ -364,8 +360,9 @@ def _build_completed_bodies(
 
     if speakers:
         plain_lines.extend(["", "SPRECHERANTEILE", "-" * 68])
-        for sp in speakers:
-            plain_lines.append(f"• {sp['name']} — {sp['duration']} ({sp['share_pct']} %)")
+        plain_lines.extend(
+            f"• {sp['name']} — {sp['duration']} ({sp['share_pct']} %)" for sp in speakers
+        )
 
     initials_by_speaker = {sp["name"]: sp["initials"] for sp in speakers}
     inline_turns: list[dict] = []
@@ -565,9 +562,7 @@ def _build_completed_bodies(
             "<div class='wl-rule' style='padding-bottom:16px;margin-bottom:22px;"
             "border-bottom:1px solid #e7e5e4;'>"
             "<h2 class='wl-ink' style='margin:0 0 12px;font-size:16px;font-weight:600;"
-            "letter-spacing:-0.01em;color:#1c1917;'>Sprecheranteile</h2>"
-            + "".join(rows)
-            + "</div>"
+            "letter-spacing:-0.01em;color:#1c1917;'>Sprecheranteile</h2>" + "".join(rows) + "</div>"
         )
 
     transcript_html = ""
@@ -733,9 +728,7 @@ def build_message(db, recording, delivery):
         effective_reason = "capture_anomaly" if is_anomaly else reason
         effective_explanation = anomaly_hint if is_anomaly else explanation
         reason_label = effective_reason or "no_audio_received"
-        message["Subject"] = (
-            f"wortlaut · Keine Aufnahme: {title} — fehlgeschlagen ({reason_label})"
-        )
+        message["Subject"] = f"wortlaut · Keine Aufnahme: {title} — fehlgeschlagen ({reason_label})"
         plain_body, html_body = _build_failed_join_bodies(
             title=title,
             human_provider=human_provider,
@@ -858,6 +851,8 @@ def build_message(db, recording, delivery):
                 raise ValueError("Large-export download requires an HTTPS API origin")
             recording.export_reader_nonce = recording.export_reader_nonce or uuid.uuid4()
             credential = export_reader_token(recording)
+            if credential is None:
+                raise ValueError("Unable to issue export reader token")
             sig = credential.removeprefix("wortlaut-read-")
             ui_link = f"{ui_url}#token=wortlaut-read-{recording.id}.{sig}"
             message.clear_content()
@@ -881,6 +876,8 @@ def build_message(db, recording, delivery):
 
 def transmit(message, recipients):
     settings = get_settings()
+    if not settings.smtp_host:
+        return "failed", {}, "smtp_host_missing"
     connection = None
     sending = False
     try:
@@ -911,7 +908,7 @@ def transmit(message, recipients):
         )
     except smtplib.SMTPResponseException as error:
         return "failed", {}, f"smtp_{error.smtp_code}"
-    except (OSError, smtplib.SMTPException):
+    except OSError, smtplib.SMTPException:
         # Once sending begins a disconnect may follow accepted DATA. Never
         # infer rejection or send again automatically without an SMTP answer.
         return ("unknown" if sending else "failed"), {}, "smtp_disconnected"
@@ -952,15 +949,15 @@ def smtp_pass(engine):
                     else None
                 )
                 recipients = settings.result_recipients.get(
-                    entry.organizer
-                    if entry
-                    else (recording.owner_email or "default"),
+                    entry.organizer if entry else (recording.owner_email or "default"),
                     settings.result_recipients.get("default", []),
                 )
-                if (entry and settings.mail_reply_to_sender
-                        and settings.mail_sender_auth == "dkim"
-                        and entry.organizer.rsplit("@", 1)[-1]
-                        in settings.mail_allowed_sender_domains):
+                if (
+                    entry
+                    and settings.mail_reply_to_sender
+                    and settings.mail_sender_auth == "dkim"
+                    and entry.organizer.rsplit("@", 1)[-1] in settings.mail_allowed_sender_domains
+                ):
                     recipients = [entry.organizer]
                 elif (
                     not entry
@@ -1010,7 +1007,7 @@ def smtp_pass(engine):
                 db.flush()
             try:
                 message = build_message(db, recording, delivery)
-            except (ValueError, TypeError, UnicodeError):
+            except ValueError, TypeError, UnicodeError:
                 delivery.status, delivery.error = "failed", "mail_configuration_invalid"
                 db.commit()
                 continue

@@ -15,7 +15,7 @@ from urllib.parse import urlsplit
 import dkim
 import dns.resolver
 from icalendar import Calendar, Event
-from sqlalchemy import select, text
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from wortlaut.controller import request_cancellation
@@ -44,9 +44,9 @@ def dkim_dns(name, timeout=5):
     # Temporary DNS failures must escape ingestion so IMAP retries this message.
     try:
         answers = dns.resolver.resolve(name.decode("ascii"), "TXT", lifetime=timeout)
-    except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer):
+    except dns.resolver.NXDOMAIN, dns.resolver.NoAnswer:
         return None
-    return b"".join(answers[0].strings)
+    return b"".join(getattr(answers[0], "strings", ()))
 
 
 def sender(message, raw=None, *, instant=False):
@@ -69,7 +69,7 @@ def sender(message, raw=None, *, instant=False):
         ]
         for index, signature in enumerate(signatures[:8]):
             try:
-                tags = dkim.util.parse_tag_value(signature)
+                tags = dkim.util.parse_tag_value(signature)  # type: ignore[attr-defined]
                 signed = {h.strip().lower() for h in tags.get(b"h", b"").split(b":")}
                 # Bind MIME interpretation as well as the entire calendar body.
                 required = {b"from", b"content-type"}
@@ -78,17 +78,21 @@ def sender(message, raw=None, *, instant=False):
                 for header in ("MIME-Version", "Content-Transfer-Encoding"):
                     if message.get(header) is not None:
                         required.add(header.lower().encode("ascii"))
-                if any(len(message.get_all(h, [])) > 1 for h in (
-                    "Content-Type", "MIME-Version", "Content-Transfer-Encoding"
-                )):
+                if any(
+                    len(message.get_all(h, [])) > 1
+                    for h in ("Content-Type", "MIME-Version", "Content-Transfer-Encoding")
+                ):
                     raise ValueError("mime_ambiguous")
-                if (tags.get(b"d", b"").lower() != domain.encode("ascii")
-                        or b"l" in tags or not required <= signed
-                        or tags.get(b"a") != b"rsa-sha256"):
+                if (
+                    tags.get(b"d", b"").lower() != domain.encode("ascii")
+                    or b"l" in tags
+                    or not required <= signed
+                    or tags.get(b"a") != b"rsa-sha256"
+                ):
                     continue
                 if verifier.verify(idx=index, dnsfunc=dkim_dns):
                     return authenticated
-            except (dkim.DKIMException, dkim.util.InvalidTagValueList):
+            except dkim.DKIMException, dkim.util.InvalidTagValueList:  # type: ignore[attr-defined]
                 continue
         raise ValueError("dkim_sender_unverified")
     name = settings.trusted_sender_header
@@ -104,8 +108,7 @@ def sender(message, raw=None, *, instant=False):
 
 def meeting_link(event, mail_text):
     fields = [
-        str(event.get(key, ""))
-        for key in ("URL", "LOCATION", "DESCRIPTION", "X-GOOGLE-CONFERENCE")
+        str(event.get(key, "")) for key in ("URL", "LOCATION", "DESCRIPTION", "X-GOOGLE-CONFERENCE")
     ]
     # ICS is authoritative; the mail body is a fallback, not another event.
     for content in ("\n".join(fields), mail_text):
@@ -148,7 +151,7 @@ def entry_json(entry, recording=None):
                 title = " ".join(str(event.get("SUMMARY", "")).split())[:200] or None
             if provider is None:
                 provider, _ = normalize_meeting_url(meeting_link(event, ""))
-        except (ValueError, KeyError, IndexError, TypeError):
+        except ValueError, KeyError, IndexError, TypeError:
             pass  # A cancellation or an ambiguous invitation need not have a target.
     return {
         "id": str(entry.id),
@@ -195,9 +198,7 @@ def event_attendee_emails(event) -> list[str]:
     return sorted(found)
 
 
-def import_event(
-    db, calendar, event, authenticated, mail_text, *, instant=False, subject=None
-):
+def import_event(db, calendar, event, authenticated, mail_text, *, instant=False, subject=None):
     settings = get_settings()
     uid = str(event.get("UID", ""))
     organizer = str(event.get("ORGANIZER", ""))
@@ -471,11 +472,14 @@ def instant_calendar(message, authenticated, *, subject=None):
     body = " ".join(" ".join(texts).split())
     google_notice = authenticated == "meetings-noreply@google.com"
     if google_notice:
-        inviters = set(re.findall(
-            r"([a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9.-]+) "
-            r"(?:lädt Sie zu einem gerade stattfindenden Videoanruf ein|"
-            r"is inviting you to (?:an ongoing|a) video call)", body
-        ))
+        inviters = set(
+            re.findall(
+                r"([a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9.-]+) "
+                r"(?:lädt Sie zu einem gerade stattfindenden Videoanruf ein|"
+                r"is inviting you to (?:an ongoing|a) video call)",
+                body,
+            )
+        )
         if len(inviters) != 1:
             raise ValueError("instant_inviter_ambiguous")
         authenticated = inviters.pop().lower()
@@ -501,9 +505,9 @@ def instant_calendar(message, authenticated, *, subject=None):
     if len(urls) != 1:
         raise ValueError("instant_meeting_ambiguous")
     event = Event()
-    event.add("UID", "instant-" + hashlib.sha256(
-        str(message["Message-ID"]).strip().encode()
-    ).hexdigest())
+    event.add(
+        "UID", "instant-" + hashlib.sha256(str(message["Message-ID"]).strip().encode()).hexdigest()
+    )
     event.add("DTSTAMP", stamp)
     event.add("DTSTART", stamp)
     event.add("DTEND", ends)
@@ -534,9 +538,10 @@ def import_mail(db, raw):
             if part.get_content_type() in ("text/plain", "text/html")
         )
         calendars = [
-            Calendar.from_ical(part.get_payload(decode=True))
+            Calendar.from_ical(payload)
             for part in parts
             if part.get_content_type() == "text/calendar"
+            and isinstance((payload := part.get_payload(decode=True)), (bytes, str))
         ]
         instant = not calendars
         authenticated = sender(message, raw, instant=instant)
@@ -547,10 +552,10 @@ def import_mail(db, raw):
             raise ValueError("calendar_missing")
         if sum(len(c.walk("VEVENT")) for c in calendars) > 128:
             raise ValueError("too_many_calendar_events")
-    except (ValueError, KeyError, TypeError, UnicodeError):
+    except ValueError, KeyError, TypeError, UnicodeError:
         return [{"status": "rejected", "reason": "invalid_or_unauthorized_mail"}]
     results = []
-    db.execute(text(f"SELECT pg_advisory_xact_lock({MAIL_LOCK})"))
+    db.execute(select(func.pg_advisory_xact_lock(MAIL_LOCK)))
     for calendar in calendars:
         for event in calendar.walk("VEVENT"):
             try:
@@ -565,14 +570,14 @@ def import_mail(db, raw):
                         subject=subject,
                     )
                 results.append(result)
-            except (ValueError, KeyError, TypeError, UnicodeError):
+            except ValueError, KeyError, TypeError, UnicodeError:
                 results.append({"status": "rejected", "reason": "invalid_or_unauthorized_event"})
     return results
 
 
 def consume_imap_message(db, uidvalidity, uid, raw):
     mailbox = get_settings().mailbox_context
-    db.execute(text(f"SELECT pg_advisory_xact_lock({MAIL_LOCK})"))
+    db.execute(select(func.pg_advisory_xact_lock(MAIL_LOCK)))
     cursor = db.get(MailCursor, mailbox)
     if cursor is None:
         cursor = MailCursor(mailbox=mailbox, uidvalidity=uidvalidity, last_uid=0)
@@ -618,7 +623,7 @@ def imap_pass(engine):
         with Session(engine) as db:
             cursor = db.get(MailCursor, settings.mailbox_context)
             last = cursor.last_uid if cursor and cursor.uidvalidity == validity else 0
-        status, response = mailbox.uid("SEARCH", None, "UID", f"{last + 1}:*")
+        status, response = mailbox.uid("SEARCH", "", "UID", f"{last + 1}:*")
         if status != "OK":
             raise ValueError("IMAP search failed")
         for uid in sorted(int(n) for n in response[0].split() if int(n) > last)[:32]:

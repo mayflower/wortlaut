@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { AppShell } from '@astryxdesign/core/AppShell';
 import { Banner } from '@astryxdesign/core/Banner';
@@ -221,6 +221,7 @@ export function App() {
         };
       }
     }
+    return undefined;
   }, [authMode, queryClient]);
 
   const handleStartOidcLogin = (providerId?: AuthProviderId) => {
@@ -503,6 +504,7 @@ export function App() {
       }, 2500);
       return () => window.clearTimeout(timer);
     }
+    return undefined;
   }, [
     activeRecordingId,
     authMode.kind,

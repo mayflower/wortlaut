@@ -1,4 +1,5 @@
 import hashlib
+import logging
 import struct
 import uuid
 from datetime import UTC, datetime
@@ -214,7 +215,7 @@ def pending_samples(db: Session, attempt_id: uuid.UUID | None = None):
     if attempt_id is not None:
         chunks = chunks.where(AudioStream.attempt_id == attempt_id)
         jobs = jobs.where(AudioStream.attempt_id == attempt_id)
-    return db.scalar(chunks) + db.scalar(jobs)
+    return int(db.scalar(chunks) or 0) + int(db.scalar(jobs) or 0)
 
 
 def capacity_reached(db: Session, incoming_samples=0, incoming_bytes=0):
@@ -265,7 +266,12 @@ def check_range(db: Session, stream: AudioStream, sequence: int, start: int, cou
             (model.sequence > sequence, model.sequence),
         ):
             neighbours.append(select(query.where(condition).order_by(ordering).limit(1).subquery()))
-    for other_sequence, other_start, samples in db.execute(union_all(*neighbours)):
+    for row in db.execute(union_all(*neighbours)):
+        other_sequence, other_start, samples = (
+            int(row._mapping["sequence"]),
+            int(row._mapping["start_sample"]),
+            int(row._mapping["sample_count"]),
+        )
         other_end, end = other_start + samples, start + count
         if other_sequence == sequence:
             if other_start != start or other_end != end:
@@ -341,35 +347,39 @@ def accept_control(db: Session, attempt: Attempt, recording: Recording, data: di
         stream.final_sample, stream.last_sequence = body.final_sample, body.last_sequence
     elif isinstance(body, Bind):
         duplicate = db.scalar(
-            select(AudioControl).where(
+            select(AudioControl)
+            .where(
                 AudioControl.stream_id == stream.id,
                 AudioControl.kind.in_(["begin", "bind"]),
                 AudioControl.start_sample == body.start_sample,
-            ).limit(1)
+            )
+            .limit(1)
         )
         if duplicate or (
             stream.final_sample is not None and body.start_sample >= stream.final_sample
         ):
             raise HTTPException(409, "Binding boundary already exists or lies beyond stream end")
         overlaps = db.scalar(
-            select(AudioChunk).where(
+            select(AudioChunk)
+            .where(
                 AudioChunk.stream_id == stream.id,
                 AudioChunk.start_sample >= max(0, body.start_sample - 16000 * 5),
                 AudioChunk.start_sample < body.start_sample,
                 AudioChunk.start_sample + AudioChunk.sample_count > body.start_sample,
-            ).limit(1)
+            )
+            .limit(1)
         )
         later = db.scalar(
-            select(AudioChunk).where(
-                AudioChunk.stream_id == stream.id, AudioChunk.start_sample >= body.start_sample
-            ).limit(1)
+            select(AudioChunk)
+            .where(AudioChunk.stream_id == stream.id, AudioChunk.start_sample >= body.start_sample)
+            .limit(1)
         )
         if overlaps or later:
             raise HTTPException(409, "Binding would relabel already accepted audio")
     elif isinstance(body, Gap):
         if stream.final_sample is not None and (
             body.start_sample + body.sample_count > stream.final_sample
-            or body.sequence > stream.last_sequence
+            or (stream.last_sequence is not None and body.sequence > stream.last_sequence)
         ):
             raise HTTPException(409, "Gap exceeds declared stream end")
         check_range(db, stream, body.sequence, body.start_sample, body.sample_count)
@@ -424,12 +434,14 @@ def accept_chunk(
         raise HTTPException(409, "Stream begin has not been registered")
     check_window_capacity(db, stream, body.start_sample)
     final_gap = db.scalar(
-        select(AudioControl.id).where(
+        select(AudioControl.id)
+        .where(
             AudioControl.stream_id == stream.id,
             AudioControl.kind == "gap",
             AudioControl.sequence == body.sequence,
             AudioControl.contract["final"].as_boolean().is_(True),
-        ).limit(1)
+        )
+        .limit(1)
     )
     if final_gap:
         raise HTTPException(409, "Audio range was finalized as lost")
@@ -457,18 +469,20 @@ def accept_chunk(
         if binding is None or binding.contract.get(key) != contract.get(key):
             raise HTTPException(409, "Chunk does not match its registered binding")
     next_binding = db.scalar(
-        select(AudioControl).where(
+        select(AudioControl)
+        .where(
             AudioControl.stream_id == stream.id,
             AudioControl.kind == "bind",
             AudioControl.start_sample > body.start_sample,
             AudioControl.start_sample < body.start_sample + body.sample_count,
-        ).limit(1)
+        )
+        .limit(1)
     )
     if next_binding:
         raise HTTPException(409, "Chunk spans a binding boundary")
     if stream.final_sample is not None and (
         body.start_sample + body.sample_count > stream.final_sample
-        or body.sequence > stream.last_sequence
+        or (stream.last_sequence is not None and body.sequence > stream.last_sequence)
     ):
         raise HTTPException(409, "Chunk exceeds declared stream end")
     check_range(db, stream, body.sequence, body.start_sample, body.sample_count)
@@ -497,8 +511,10 @@ def accept_chunk(
     ):
         try:
             get_storage().delete_object(key)
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.getLogger("wortlaut.ingest").warning(
+                "orphan_audio_cleanup_failed type=%s", type(exc).__name__
+            )
         raise HTTPException(409, "audio_capacity_limit")
     # A crash before this commit leaves an immutable orphan. An identical retry
     # verifies the object and completes registration; ACK follows this commit.
@@ -654,8 +670,10 @@ def ingest_keyframe(
     if capacity_reached(db, 0, object_size):
         try:
             get_storage().delete_object(key)
-        except Exception:
-            pass
+        except Exception as exc:
+            logging.getLogger("wortlaut.ingest").warning(
+                "orphan_audio_cleanup_failed type=%s", type(exc).__name__
+            )
         raise HTTPException(507, "storage_capacity_reached")
 
     kf = RecordingKeyframe(

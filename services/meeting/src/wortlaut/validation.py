@@ -80,9 +80,7 @@ def normalize_meeting_url(url: str) -> tuple[Provider, str]:
         # Only this validated destination is navigated. Query/fragment cannot
         # redirect the browser and never change the recording's identity.
         code = parts.path.strip("/").removeprefix("meet/")
-        return "google_meet", urlunsplit(
-            ("https", "meet.google.com", f"/{code}", "", "")
-        )
+        return "google_meet", urlunsplit(("https", "meet.google.com", f"/{code}", "", ""))
     if host in _TEAMS_HOSTS:
         if (
             parts.scheme != "https"
@@ -114,9 +112,7 @@ def normalize_meeting_url(url: str) -> tuple[Provider, str]:
             if not re.fullmatch(r"[A-Za-z0-9._-]+", pwd) or len(pwd) > 256:
                 raise ValueError("Meeting URL has an invalid Zoom passcode")
             query = urlencode({"pwd": pwd})
-        return "zoom", urlunsplit(
-            ("https", "app.zoom.us", f"/wc/{meeting_id}/join", query, "")
-        )
+        return "zoom", urlunsplit(("https", "app.zoom.us", f"/wc/{meeting_id}/join", query, ""))
     return "webex", validate_webex_url(url)
 
 

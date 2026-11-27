@@ -2478,7 +2478,7 @@ function install(config: MeetCaptureConfig) {
   }).then(() => Promise.all([capture.initialize(), initializeObserver()]))
     .then(() => { window.wortlautMeetReceivers.observe = observe; state.capture_ready = true; })
     .catch(() => { state.reason = 'capture_modules_failed'; })
-    .finally(() => { modules.forEach((url) => URL.revokeObjectURL(url)); });
+    .finally(() => { for (const url of modules) URL.revokeObjectURL(url); });
   const keepaliveAudios = new Map<RTCRtpReceiver, {el: HTMLAudioElement; track: MediaStreamTrack}>();
   const receiverStats = new Map<RTCRtpReceiver, InboundAudioStats>();
   let peerStats: MediaState['peer_connections'] = [];

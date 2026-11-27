@@ -76,7 +76,7 @@ def job_body(recording, attempt):
             raise ValueError("Localhost seccomp requires a profile already present on worker nodes")
         seccomp["localhostProfile"] = settings.worker_seccomp_profile
     labels = {"app": "wortlaut-worker", LABEL: str(attempt.id)}
-    mounts = [{"name": "shm", "mountPath": "/dev/shm"}]
+    mounts: list[dict[str, object]] = [{"name": "shm", "mountPath": "/dev/shm"}]  # noqa: S108
     volumes = [{"name": "shm", "emptyDir": {"medium": "Memory", "sizeLimit": "256Mi"}}]
     if recording.provider == "google_meet" and settings.meet_storage_state_secret:
         mounts.append({"name": "meet-browser", "mountPath": "/run/meet", "readOnly": True})
@@ -442,15 +442,16 @@ def reconcile_attempt(db, recording, attempt, batch, core, now):
         attempt.last_heartbeat_at
         and (now - attempt.last_heartbeat_at).total_seconds()
         > get_settings().heartbeat_timeout_seconds
-    ):
-        recording.participation, recording.participation_reason = "unknown", "heartbeat_missing"
-    elif attempt.last_heartbeat_at is None and any(
-        status.state.running
-        and status.state.running.started_at
-        and (now - status.state.running.started_at).total_seconds()
-        > get_settings().heartbeat_timeout_seconds
-        for p in owned
-        for status in (p.status.container_statuses or [])
+    ) or (
+        attempt.last_heartbeat_at is None
+        and any(
+            status.state.running
+            and status.state.running.started_at
+            and (now - status.state.running.started_at).total_seconds()
+            > get_settings().heartbeat_timeout_seconds
+            for p in owned
+            for status in (p.status.container_statuses or [])
+        )
     ):
         recording.participation, recording.participation_reason = "unknown", "heartbeat_missing"
 
@@ -571,8 +572,11 @@ def controller_pass(engine, apis=None):
                 recording.participation_reason = "audio_capacity_limit"
                 db.commit()
                 continue
-            if (recording.provider == "webex" and not settings.enable_webex_browser
-                    and not settings.webex_service_token):
+            if (
+                recording.provider == "webex"
+                and not settings.enable_webex_browser
+                and not settings.webex_service_token
+            ):
                 recording.participation_reason = "webex_not_configured"
                 db.commit()
                 continue
@@ -602,7 +606,7 @@ def controller_pass(engine, apis=None):
             try:
                 core.create_namespaced_secret(
                     settings.namespace,
-                    {
+                    {  # type: ignore[arg-type]
                         "apiVersion": "v1",
                         "kind": "Secret",
                         "type": "Opaque",

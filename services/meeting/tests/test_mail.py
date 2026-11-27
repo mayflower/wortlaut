@@ -337,7 +337,11 @@ def test_large_repetitive_exports_are_losslessly_zipped_before_real_smtp(
 
 
 def test_dkim_calendar_result_goes_to_authenticated_sender(
-    client, database, storage, smtp, signed_invite,
+    client,
+    database,
+    storage,
+    smtp,
+    signed_invite,
 ):
     from test_calendar import imported
 

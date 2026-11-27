@@ -768,9 +768,7 @@ def test_coalesce_protocol_segments_preserves_distinct_speaker_ids_sharing_displ
     assert len(turns) == 2
 
 
-def test_micro_noise_blips_are_discarded_and_sentence_pauses_stay_intact(
-    client, database, storage
-):
+def test_micro_noise_blips_are_discarded_and_sentence_pauses_stay_intact(client, database, storage):
     import struct
 
     import numpy as np
@@ -807,9 +805,7 @@ def test_micro_noise_blips_are_discarded_and_sentence_pauses_stay_intact(
     )
     total_samples = len(pcm) // 2
     speech_start_sample = 8000 + 32000 + 8000 + (len(faint_breath) // 2) + 19200
-    speech_end_sample = (
-        speech_start_sample + (len(voiced_clause) // 2) * 2 + 10080
-    )
+    speech_end_sample = speech_start_sample + (len(voiced_clause) // 2) * 2 + 10080
 
     with client.websocket_connect(f"/v1/attempts/{attempt}/audio") as socket:
         authenticate(socket, credential)
@@ -1213,8 +1209,7 @@ def test_floor_holding_backchannels_and_multiplexed_sources_summary():
     assert len(merged) == 1
     assert merged[0]["speaker_label"] == "Maya Lindner-Berg"
     assert (
-        merged[0]["text"]
-        == "Hier im Word-Dokument haben wir die Datenschutzanforderungen "
+        merged[0]["text"] == "Hier im Word-Dokument haben wir die Datenschutzanforderungen "
         "für den PoC im Detail zusammengefasst."
     )
 

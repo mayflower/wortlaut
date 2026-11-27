@@ -42,7 +42,7 @@ from wortlaut.validation import (
 
 CalendarOAuthProvider = Literal["google", "microsoft"]
 
-GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
+GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"  # noqa: S105
 GOOGLE_CALENDARS_BASE_URL = "https://www.googleapis.com/calendar/v3/calendars"
 GOOGLE_CALENDAR_EVENTS_URL = f"{GOOGLE_CALENDARS_BASE_URL}/primary/events"
 GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
@@ -129,7 +129,7 @@ def _parse_iso_datetime(value: str | None, default_tz: str | None = None) -> dat
         if default_tz and default_tz.upper() != "UTC":
             try:
                 tz = ZoneInfo(default_tz)
-            except (ZoneInfoNotFoundError, ValueError):
+            except ZoneInfoNotFoundError, ValueError:
                 tz = UTC
         dt = dt.replace(tzinfo=tz)
     return dt.astimezone(UTC)
@@ -183,22 +183,15 @@ def build_protocol_reader_url(recording: Recording | None) -> str | None:
         return None
     sig = cred.removeprefix("wortlaut-read-")
     base_url = get_settings().public_base_url()
-    return (
-        f"{base_url}/ui#view=meetings&id={recording.id}"
-        f"&token=wortlaut-read-{recording.id}.{sig}"
-    )
+    return f"{base_url}/ui#view=meetings&id={recording.id}&token=wortlaut-read-{recording.id}.{sig}"
 
 
-def synced_event_json(
-    ev: CalendarSyncedEvent, recording: Recording | None = None
-) -> dict:
+def synced_event_json(ev: CalendarSyncedEvent, recording: Recording | None = None) -> dict:
     protocol_url: str | None = None
     calendar_link_synced_at: str | None = None
     calendar_link_error: str | None = None
     if recording is not None:
-        rec_active = (
-            recording.cancelled_at is None and recording.metadata_deleted_at is None
-        )
+        rec_active = recording.cancelled_at is None and recording.metadata_deleted_at is None
         rec_id = str(recording.id) if rec_active else None
         rec_part = recording.participation if rec_active else None
         rec_proc = recording.processing if rec_active else None
@@ -268,9 +261,7 @@ def exchange_calendar_oauth_code(
             "redirect_uri": redirect_uri,
         }
         if settings.microsoft_calendar_client_secret:
-            form["client_secret"] = (
-                settings.microsoft_calendar_client_secret.get_secret_value()
-            )
+            form["client_secret"] = settings.microsoft_calendar_client_secret.get_secret_value()
     else:
         raise HTTPException(400, "Unsupported calendar OAuth provider")
 
@@ -299,7 +290,9 @@ def exchange_calendar_oauth_code(
             if isinstance(desc, str) and desc.strip():
                 err_msg = f"{err_msg}: {desc.strip()[:240]}"
         except Exception:
-            pass
+            logging.getLogger("wortlaut.calendar_oauth").debug(
+                "calendar_oauth_error_body_unparseable status=%s", resp.status_code
+            )
         raise HTTPException(401, err_msg)
 
     token_data = resp.json()
@@ -377,9 +370,7 @@ def exchange_calendar_oauth_code(
     rec_by_id = (
         {
             r.id: r
-            for r in db.scalars(
-                select(Recording).where(Recording.id.in_(linked_rec_ids))
-            ).all()
+            for r in db.scalars(select(Recording).where(Recording.id.in_(linked_rec_ids))).all()
         }
         if linked_rec_ids
         else {}
@@ -442,9 +433,7 @@ def snapshot_connection(conn: CalendarConnection) -> ConnectionSnapshot:
     )
 
 
-def _ensure_access_token(
-    conn: CalendarConnection | ConnectionSnapshot, now: datetime
-) -> str:
+def _ensure_access_token(conn: CalendarConnection | ConnectionSnapshot, now: datetime) -> str:
     if (
         conn.encrypted_access_token
         and conn.token_expires_at
@@ -474,9 +463,7 @@ def _ensure_access_token(
             "refresh_token": refresh_token,
         }
         if settings.microsoft_calendar_client_secret:
-            form["client_secret"] = (
-                settings.microsoft_calendar_client_secret.get_secret_value()
-            )
+            form["client_secret"] = settings.microsoft_calendar_client_secret.get_secret_value()
 
     resp = httpx.post(
         token_url,
@@ -597,10 +584,7 @@ _NOTETAKER_BOT_RE = re.compile(
 
 
 def is_notetaker_bot(email: str | None = None, display_name: str | None = None) -> bool:
-    for val in (email, display_name):
-        if val and _NOTETAKER_BOT_RE.search(val):
-            return True
-    return False
+    return any(val and _NOTETAKER_BOT_RE.search(val) for val in (email, display_name))
 
 
 def _parse_google_items(
@@ -628,12 +612,14 @@ def _parse_google_items(
         if isinstance(item.get("hangoutLink"), str):
             candidates.append(item["hangoutLink"])
         conf_data = item.get("conferenceData") or {}
-        for ep in conf_data.get("entryPoints") or []:
-            if isinstance(ep, dict) and isinstance(ep.get("uri"), str):
-                candidates.append(ep["uri"])
-        for field in ("location", "description"):
-            if isinstance(item.get(field), str):
-                candidates.append(item[field])
+        candidates.extend(
+            ep["uri"]
+            for ep in (conf_data.get("entryPoints") or [])
+            if isinstance(ep, dict) and isinstance(ep.get("uri"), str)
+        )
+        candidates.extend(
+            item[field] for field in ("location", "description") if isinstance(item.get(field), str)
+        )
         target = extract_conference_target(candidates)
         if not target:
             continue
@@ -652,15 +638,12 @@ def _parse_google_items(
                 if a.get("email")
                 else not a.get("self")
             )
-            and not is_notetaker_bot(
-                str(a.get("email") or ""), str(a.get("displayName") or "")
-            )
+            and not is_notetaker_bot(str(a.get("email") or ""), str(a.get("displayName") or ""))
         ]
         if is_self and not other_attendees:
             continue
         has_confirmed_attendee = any(
-            str(a.get("responseStatus") or "") in ("accepted", "tentative")
-            for a in other_attendees
+            str(a.get("responseStatus") or "") in ("accepted", "tentative") for a in other_attendees
         )
         attendee_emails = sorted(
             {
@@ -805,11 +788,7 @@ def _parse_microsoft_items(
         raw_ms_desc = (
             body.get("content")
             if isinstance(body.get("content"), str) and body.get("content").strip()
-            else (
-                item.get("bodyPreview")
-                if isinstance(item.get("bodyPreview"), str)
-                else None
-            )
+            else (item.get("bodyPreview") if isinstance(item.get("bodyPreview"), str) else None)
         )
         agenda = extract_calendar_agenda(raw_ms_desc)
         parsed.append(
@@ -846,9 +825,7 @@ def _merge_recording_attendees(
         if isinstance(n, str) and (cn := " ".join(n.split())[:80]) and "@" not in cn
     }
     clean_agenda = (
-        " ".join(agenda.split())[:240]
-        if isinstance(agenda, str) and agenda.strip()
-        else ""
+        " ".join(agenda.split())[:240] if isinstance(agenda, str) and agenda.strip() else ""
     )
     if not clean and not clean_names and not clean_agenda:
         return
@@ -866,9 +843,7 @@ def _merge_recording_attendees(
             changed = True
     if clean_names:
         opted_out_low = {
-            str(x).strip().lower()
-            for x in (meta.get("opted_out_speakers") or [])
-            if str(x).strip()
+            str(x).strip().lower() for x in (meta.get("opted_out_speakers") or []) if str(x).strip()
         }
         existing_names = {
             " ".join(str(n).split())[:80]
@@ -888,9 +863,7 @@ def _merge_recording_attendees(
         recording.protocol_meta = meta
 
 
-def _find_canonical_meeting_recording(
-    db: Session, ev: CalendarSyncedEvent
-) -> Recording | None:
+def _find_canonical_meeting_recording(db: Session, ev: CalendarSyncedEvent) -> Recording | None:
     if not ev.meeting_provider or not ev.meeting_url:
         return None
     return db.scalar(
@@ -969,9 +942,7 @@ def _reconcile_synced_event_recording(
         prev_emails = list((recording.protocol_meta or {}).get("attendee_emails") or [])
         prev_names = list((recording.protocol_meta or {}).get("attendee_names") or [])
         prev_agenda = (recording.protocol_meta or {}).get("calendar_agenda")
-        _merge_recording_attendees(
-            canonical, prev_emails, prev_names, agenda=agenda or prev_agenda
-        )
+        _merge_recording_attendees(canonical, prev_emails, prev_names, agenda=agenda or prev_agenda)
         ev.recording_id = canonical.id
         other_refs = db.scalar(
             select(CalendarSyncedEvent.id)
@@ -1030,12 +1001,9 @@ def _reconcile_synced_event_recording(
     _merge_recording_attendees(recording, all_emails, all_names, agenda=agenda)
 
     if (
-        (
-            recording.participation != "ended"
-            or (recording.cancelled_at is not None and ev.user_override is True)
-        )
-        and recording.active_attempt_id is None
-    ):
+        recording.participation != "ended"
+        or (recording.cancelled_at is not None and ev.user_override is True)
+    ) and recording.active_attempt_id is None:
         recording.starts_at = ev.starts_at
         recording.ends_at = ev.ends_at
         recording.title = ev.title
@@ -1371,9 +1339,7 @@ def _is_insufficient_scope_response(resp: httpx.Response) -> bool:
     if resp.status_code != 403:
         return False
     body_lower = (resp.text or "").lower()
-    if "forbiddenfornonorganizer" in body_lower or "cannotchange" in body_lower:
-        return False
-    return True
+    return "forbiddenfornonorganizer" not in body_lower and "cannotchange" not in body_lower
 
 
 def _format_google_event_description(
@@ -1553,9 +1519,7 @@ def publish_protocol_link_to_calendar_events(
     meta = dict(recording.protocol_meta or {})
     summary_obj = meta.get("summary")
     summary_text = (
-        str(summary_obj.get("summary") or "").strip()
-        if isinstance(summary_obj, dict)
-        else None
+        str(summary_obj.get("summary") or "").strip() if isinstance(summary_obj, dict) else None
     )
 
     if not force_empty_audio:
@@ -1665,9 +1629,7 @@ def publish_protocol_link_to_calendar_events(
             if lev.recording_id is None:
                 lev.recording_id = rec_id
 
-    locked_rec = db.scalar(
-        select(Recording).where(Recording.id == rec_id).with_for_update()
-    )
+    locked_rec = db.scalar(select(Recording).where(Recording.id == rec_id).with_for_update())
     target_rec = locked_rec or recording
     fresh_meta = dict(target_rec.protocol_meta or {})
     if updated_count > 0:

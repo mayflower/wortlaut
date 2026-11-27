@@ -225,7 +225,7 @@ def apply_language_step_gate(
 def _clamp_confidence(value) -> float | None:
     try:
         score = float(value)
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
     if not math.isfinite(score):
         return None
@@ -667,7 +667,7 @@ def _decode_context_header(raw_b64: str | None) -> str | None:
         raise HTTPException(400, "Context prompt exceeds limit")
     try:
         decoded = base64.b64decode(raw_b64.encode("ascii"), validate=True).decode("utf-8")
-    except (binascii.Error, UnicodeDecodeError):
+    except binascii.Error, UnicodeDecodeError:
         raise HTTPException(400, "Invalid context prompt encoding") from None
     cleaned = " ".join(decoded.split())[:600]
     return cleaned or None

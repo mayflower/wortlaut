@@ -183,23 +183,17 @@ def record_worker_status_telemetry(recording, attempt, body) -> dict[str, Any]:
     sdp = getattr(body, "sdp", None)
     bound_receivers = sum(1 for r in receivers if r.signaled_participant_id)
     bound_named_receivers = sum(
-        1
-        for r in receivers
-        if r.signaled_participant_id and getattr(r, "participant_name", None)
+        1 for r in receivers if r.signaled_participant_id and getattr(r, "participant_name", None)
     )
     named_participants = sum(
         1 for p in (participants.sources or []) if getattr(p, "participant_name", None)
     )
     dom_participants = getattr(participants, "dom_participants", None) or 0
     http_signaling_frames = sum(
-        dc.text_frames + dc.binary_frames
-        for dc in data_channels
-        if dc.label.startswith("http:")
+        dc.text_frames + dc.binary_frames for dc in data_channels if dc.label.startswith("http:")
     )
     ws_signaling_frames = sum(
-        dc.text_frames + dc.binary_frames
-        for dc in data_channels
-        if dc.label == "ws:signaling"
+        dc.text_frames + dc.binary_frames for dc in data_channels if dc.label == "ws:signaling"
     )
     ssrc_total = sum(len(r.ssrc) for r in receivers)
     csrc_total = sum(len(r.csrc) for r in receivers)
@@ -210,43 +204,42 @@ def record_worker_status_telemetry(recording, attempt, body) -> dict[str, Any]:
         {pf for dc in data_channels for pf in getattr(dc, "protobuf_fields", [])}
     )
 
-    events: list[dict[str, Any]] = []
-    for r in receivers[:32]:
-        events.append(
-            {
-                "name": "webrtc.receiver",
-                "attributes": {
-                    "webrtc.provider_source_id": r.provider_source_id,
-                    "webrtc.source_kind": r.source_kind,
-                    "webrtc.capture_path": r.capture_path,
-                    "webrtc.track_id": r.track_id or "",
-                    "webrtc.csi": r.csi,
-                    "webrtc.signaled_participant_id": r.signaled_participant_id or "",
-                    "webrtc.has_participant_name": bool(getattr(r, "participant_name", None)),
-                    "webrtc.ssrc_count": len(r.ssrc),
-                    "webrtc.csrc_count": len(r.csrc),
-                    "webrtc.encoded_transform_state": (
-                        r.encoded_transform.state if r.encoded_transform else "none"
-                    ),
-                },
-            }
-        )
-    for dc in data_channels[:32]:
-        events.append(
-            {
-                "name": "webrtc.datachannel",
-                "attributes": {
-                    "webrtc.channel_label": dc.label,
-                    "webrtc.ready_state": dc.ready_state,
-                    "webrtc.text_frames": dc.text_frames,
-                    "webrtc.binary_frames": dc.binary_frames,
-                    "webrtc.json_frames": dc.json_frames,
-                    "webrtc.json_keys": ",".join(dc.json_keys),
-                    "webrtc.wire_formats": ",".join(getattr(dc, "wire_formats", [])),
-                    "webrtc.protobuf_fields": ",".join(getattr(dc, "protobuf_fields", [])),
-                },
-            }
-        )
+    events: list[dict[str, Any]] = [
+        {
+            "name": "webrtc.receiver",
+            "attributes": {
+                "webrtc.provider_source_id": r.provider_source_id,
+                "webrtc.source_kind": r.source_kind,
+                "webrtc.capture_path": r.capture_path,
+                "webrtc.track_id": r.track_id or "",
+                "webrtc.csi": r.csi,
+                "webrtc.signaled_participant_id": r.signaled_participant_id or "",
+                "webrtc.has_participant_name": bool(getattr(r, "participant_name", None)),
+                "webrtc.ssrc_count": len(r.ssrc),
+                "webrtc.csrc_count": len(r.csrc),
+                "webrtc.encoded_transform_state": (
+                    r.encoded_transform.state if r.encoded_transform else "none"
+                ),
+            },
+        }
+        for r in receivers[:32]
+    ]
+    events.extend(
+        {
+            "name": "webrtc.datachannel",
+            "attributes": {
+                "webrtc.channel_label": dc.label,
+                "webrtc.ready_state": dc.ready_state,
+                "webrtc.text_frames": dc.text_frames,
+                "webrtc.binary_frames": dc.binary_frames,
+                "webrtc.json_frames": dc.json_frames,
+                "webrtc.json_keys": ",".join(dc.json_keys),
+                "webrtc.wire_formats": ",".join(getattr(dc, "wire_formats", [])),
+                "webrtc.protobuf_fields": ",".join(getattr(dc, "protobuf_fields", [])),
+            },
+        }
+        for dc in data_channels[:32]
+    )
 
     attributes = {
         "wortlaut.recording_id": str(recording.id),

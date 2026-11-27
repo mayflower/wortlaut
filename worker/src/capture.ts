@@ -104,6 +104,7 @@ export class AudioCapture {
       // resume can accept new frames on the pre-interruption sample clock.
       void suspending.then(() => {
         if (!this.closed && this.paused) return this.context.resume();
+        return undefined;
       }).catch(() => {
         for (const pending of this.captures.values()) {
           void pending.then((handle) => handle.error('audio_context_resume_failed')).catch(() => {});

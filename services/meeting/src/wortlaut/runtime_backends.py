@@ -137,7 +137,7 @@ class LocalProcessRuntime(LocalSecretStore):
         entrypoint = self.worker_dir / "dist-worker/runtime/main.js"
         cmd = ["node", str(entrypoint)] if entrypoint.exists() else ["npm", "start"]
         try:
-            proc = subprocess.Popen(
+            proc = subprocess.Popen(  # noqa: S603
                 cmd,
                 cwd=str(self.worker_dir) if self.worker_dir.exists() else None,
                 env=env,
@@ -253,7 +253,9 @@ class DockerRuntime(LocalSecretStore):
         base = root or settings.runtime_state_dir
         base.mkdir(parents=True, exist_ok=True)
         super().__init__(base)
-        self.docker_host = (socket_path or settings.docker_host or "unix:///var/run/docker.sock").strip()
+        self.docker_host = (
+            socket_path or settings.docker_host or "unix:///var/run/docker.sock"
+        ).strip()
         self.jobs: dict[str, dict] = {}
 
     def _docker_request(

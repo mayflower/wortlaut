@@ -154,7 +154,7 @@ try {
     await lifecyclePage.route('https://**', (route) => route.abort());
     await lifecyclePage.routeWebSocket(/\/v1\/attempts\/[^/]+\/audio/, (connection) => {
       connection.onMessage((message) => {
-        let metadata;
+        let metadata: (typeof frames)[number] & {attempt_id?: string; sequence?: number};
         if (typeof message === 'string') metadata = JSON.parse(message);
         else {
           const bytes = Buffer.from(message);

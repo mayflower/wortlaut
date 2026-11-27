@@ -1,0 +1,20 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "entry": [
+    "runtime/main.ts",
+    "scripts/*.mjs",
+    "test/*.ts",
+    "vite*.ts"
+  ],
+  "project": ["src/**/*.ts", "src/**/*.tsx", "runtime/**/*.ts", "test/**/*.ts", "scripts/**/*.mjs"],
+  "ignoreExportsUsedInFile": true,
+  "ignoreDependencies": [
+    "@astryxdesign/cli",
+    "tailwindcss",
+    "webex"
+  ],
+  "ignoreBinaries": [
+    "uv",
+    "Xvfb"
+  ]
+}

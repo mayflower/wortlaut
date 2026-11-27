@@ -112,15 +112,18 @@ def test_active_changes_are_conflicts_and_cancel_uses_worker_stop(client, monkey
     state = client.get(f"/v1/recordings/{recording}", headers=API).json()
     assert state["starts_at"].startswith("2099-10-24T08:00:00")
     assert state["active_attempt_id"] == attempt
-    assert imported(
-        client,
-        mail(
-            sequence=2,
-            method="CANCEL",
-            starts="DTSTART;TZID=Europe/Berlin:20991024T110000",
-            ends="DTEND;TZID=Europe/Berlin:20991024T113000",
-        ),
-    )["status"] == "cancelled"
+    assert (
+        imported(
+            client,
+            mail(
+                sequence=2,
+                method="CANCEL",
+                starts="DTSTART;TZID=Europe/Berlin:20991024T110000",
+                ends="DTEND;TZID=Europe/Berlin:20991024T113000",
+            ),
+        )["status"]
+        == "cancelled"
+    )
     response = client.post(
         f"/v1/attempts/{attempt}/status",
         headers={**credentials, "X-Worker-ID": "calendar-owner"},
@@ -263,16 +266,21 @@ def test_dkim_invitation_authentication(client, database, signed_invite):
     assert result["status"] == "accepted"
     assert imported(client, valid)["recording_id"] == result["recording_id"]
     # A bogus Authentication-Results header neither grants nor removes authority.
-    assert imported(client, b"Authentication-Results: forged; dkim=pass\r\n" + valid)[
-        "recording_id"
-    ] == result["recording_id"]
+    assert (
+        imported(client, b"Authentication-Results: forged; dkim=pass\r\n" + valid)["recording_id"]
+        == result["recording_id"]
+    )
     # Explicit organizer_permissions allow a trusted sender to forward external invitations.
     settings = get_settings()
     settings.organizer_permissions = {"owner@acme.example.org": ["*"]}
     try:
-        forwarded = signed_invite(raw=mail(
-            uid="forwarded-ext", sender="owner@acme.example.org", organizer="customer@external.org"
-        ))
+        forwarded = signed_invite(
+            raw=mail(
+                uid="forwarded-ext",
+                sender="owner@acme.example.org",
+                organizer="customer@external.org",
+            )
+        )
         assert imported(client, forwarded)["status"] == "accepted"
     finally:
         settings.organizer_permissions = {}
@@ -302,31 +310,55 @@ def test_instant_invitations_plain_html_identity_and_replay(client, database, si
     from datetime import timedelta
     from email.utils import format_datetime
 
-    def notice(text=None, html=False, age=0, from_address="meetings-noreply@google.com",
-               domain=b"google.com", headers=None, subject="Ad-hoc Projekt-Sync"):
+    def notice(
+        text=None,
+        html=False,
+        age=0,
+        from_address="meetings-noreply@google.com",
+        domain=b"google.com",
+        headers=None,
+        subject="Ad-hoc Projekt-Sync",
+    ):
         message = EmailMessage()
         message["From"] = from_address
         message["Subject"] = subject
         message["Date"] = format_datetime(datetime.now(UTC) - timedelta(hours=age))
         message["Message-ID"] = f"<{uuid.uuid4()}@notifications.google.com>"
-        message.set_content(text or (
-            "owner@acme.example.org lädt Sie zu einem gerade stattfindenden Videoanruf ein\n"
-            "meet.google.com/abc-defg-hij"
-        ), subtype="html" if html else "plain")
-        return signed_invite(raw=message.as_bytes(), domain=domain, headers=headers or [
-            b"from", b"content-type", b"mime-version", b"content-transfer-encoding",
-            b"date", b"message-id",
-        ])
+        message.set_content(
+            text
+            or (
+                "owner@acme.example.org lädt Sie zu einem gerade stattfindenden Videoanruf ein\n"
+                "meet.google.com/abc-defg-hij"
+            ),
+            subtype="html" if html else "plain",
+        )
+        return signed_invite(
+            raw=message.as_bytes(),
+            domain=domain,
+            headers=headers
+            or [
+                b"from",
+                b"content-type",
+                b"mime-version",
+                b"content-transfer-encoding",
+                b"date",
+                b"message-id",
+            ],
+        )
 
     for raw in (
         notice(domain=b"attacker.org"),
         notice(age=3),
         notice(age=-1),
         notice(headers=[b"from", b"content-type", b"mime-version", b"content-transfer-encoding"]),
-        notice("outsider@example.org lädt Sie zu einem gerade stattfindenden Videoanruf ein "
-               "meet.google.com/abc-defg-hij"),
-        notice("owner@acme.example.org lädt Sie zu einem gerade stattfindenden Videoanruf ein "
-               "meet.google.com/abc-defg-hij meet.google.com/xyz-abcd-efg"),
+        notice(
+            "outsider@example.org lädt Sie zu einem gerade stattfindenden Videoanruf ein "
+            "meet.google.com/abc-defg-hij"
+        ),
+        notice(
+            "owner@acme.example.org lädt Sie zu einem gerade stattfindenden Videoanruf ein "
+            "meet.google.com/abc-defg-hij meet.google.com/xyz-abcd-efg"
+        ),
         notice("meet.google.com/abc-defg-hij"),
         notice().replace(b"abc-defg-hij", b"xyz-abcd-efg"),
     ):
@@ -350,23 +382,45 @@ def test_instant_invitations_plain_html_identity_and_replay(client, database, si
         )
     calendar_rows = client.get("/v1/calendar", headers=API).json()["events"]
     assert any(row.get("title") == "Ad-hoc Projekt-Sync" for row in calendar_rows)
-    assert imported(client, notice(
-        '<p>owner@acme.example.org is inviting you to an ongoing video call</p>'
-        '<a href="https://meet.google.com/abc-defg-hij?hs=151">Join</a>', html=True,
-    ))["status"] == "accepted"
-    assert imported(client, notice(
-        "Join https://meet.google.com/abc-defg-hij",
-        from_address="owner@acme.example.org", domain=b"acme.example.org",
-    ))["status"] == "accepted"
-    teams_instant = imported(client, notice(
-        "Join https://teams.microsoft.com/meet/123456789?p=fixture",
-        from_address="owner@acme.example.org", domain=b"acme.example.org",
-    ))
+    assert (
+        imported(
+            client,
+            notice(
+                "<p>owner@acme.example.org is inviting you to an ongoing video call</p>"
+                '<a href="https://meet.google.com/abc-defg-hij?hs=151">Join</a>',
+                html=True,
+            ),
+        )["status"]
+        == "accepted"
+    )
+    assert (
+        imported(
+            client,
+            notice(
+                "Join https://meet.google.com/abc-defg-hij",
+                from_address="owner@acme.example.org",
+                domain=b"acme.example.org",
+            ),
+        )["status"]
+        == "accepted"
+    )
+    teams_instant = imported(
+        client,
+        notice(
+            "Join https://teams.microsoft.com/meet/123456789?p=fixture",
+            from_address="owner@acme.example.org",
+            domain=b"acme.example.org",
+        ),
+    )
     assert (teams_instant["status"], teams_instant["provider"]) == ("accepted", "teams")
-    webex_instant = imported(client, notice(
-        "Join https://example.webex.com/meet/owner",
-        from_address="owner@acme.example.org", domain=b"acme.example.org",
-    ))
+    webex_instant = imported(
+        client,
+        notice(
+            "Join https://example.webex.com/meet/owner",
+            from_address="owner@acme.example.org",
+            domain=b"acme.example.org",
+        ),
+    )
     assert (webex_instant["status"], webex_instant["provider"]) == ("accepted", "webex")
 
 
@@ -533,9 +587,7 @@ def test_oauth_calendar_to_asr_summary_mail_and_writeback_end_to_end(
                         }
                     ],
                 }
-                return self._json(
-                    200, {"message": {"content": json.dumps(summary_payload)}}
-                )
+                return self._json(200, {"message": {"content": json.dumps(summary_payload)}})
             self._json(404, {"error": "not_found"})
 
     http_server = ThreadingHTTPServer(("127.0.0.1", 0), UpstreamHandler)
@@ -594,10 +646,7 @@ def test_oauth_calendar_to_asr_summary_mail_and_writeback_end_to_end(
             cal_oauth.sync_connection(db, ms_conn, now=now)
             db.commit()
 
-            synced = {
-                e.external_event_id: e
-                for e in db.scalars(select(CalendarSyncedEvent)).all()
-            }
+            synced = {e.external_event_id: e for e in db.scalars(select(CalendarSyncedEvent)).all()}
             assert set(synced) == {"g-evt-active", "g-evt-lobby-timeout", "ms-evt-active"}
             g_rec_id = synced["g-evt-active"].recording_id
             lobby_rec_id = synced["g-evt-lobby-timeout"].recording_id
@@ -779,9 +828,7 @@ def test_oauth_calendar_to_asr_summary_mail_and_writeback_end_to_end(
             for subj, body in subjects_and_bodies
         )
         assert any(
-            "Teams Sprint Review" in subj
-            and "Alice Example" in body
-            and "TO-DO-LISTE" in body
+            "Teams Sprint Review" in subj and "Alice Example" in body and "TO-DO-LISTE" in body
             for subj, body in subjects_and_bodies
         )
         assert any(

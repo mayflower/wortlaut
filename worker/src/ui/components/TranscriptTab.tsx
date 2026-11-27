@@ -2408,13 +2408,17 @@ export function TranscriptTab({
                               />
                             </div>
                             <div>
-                              <label className="block text-[12px] font-medium text-[var(--color-text-secondary)] mb-1">
+                              <label
+                                htmlFor={`turn-edit-text-${turn.start}-${turn.end}`}
+                                className="block text-[12px] font-medium text-[var(--color-text-secondary)] mb-1"
+                              >
                                 {tr(
                                   'Protokolltext dieses Beitrags',
                                   'Statement text'
                                 )}
                               </label>
                               <textarea
+                                id={`turn-edit-text-${turn.start}-${turn.end}`}
                                 dir="auto"
                                 value={editTurnText}
                                 onChange={(e) =>

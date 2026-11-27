@@ -25,6 +25,7 @@ jobs:
       packages: write
       id-token: write
       attestations: write
+      security-events: write
     strategy:
       fail-fast: false
       matrix:
@@ -111,6 +112,30 @@ jobs:
           subject-name: ${{ steps.push.outputs.image }}
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
+
+      - name: Install Cosign for keyless image signing
+        uses: sigstore/cosign-installer@881c63bd87e38389154debd8331404ce7ca8a3ab # v4.1.4
+
+      - name: Sign published image digest with Sigstore Cosign (keyless OIDC)
+        env:
+          IMAGE_REF: ${{ steps.push.outputs.image }}@${{ steps.push.outputs.digest }}
+        run: cosign sign --yes "${IMAGE_REF}"
+
+      - name: Scan published image for OS & package CVEs (Trivy)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ steps.push.outputs.image }}@${{ steps.push.outputs.digest }}
+          ignore-unfixed: true
+          format: sarif
+          output: trivy-image-${{ matrix.component }}.sarif
+          severity: HIGH,CRITICAL
+
+      - name: Upload image CVE SARIF to GitHub Code Scanning
+        if: always() && hashFiles(format('trivy-image-{0}.sarif', matrix.component)) != ''
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4
+        with:
+          sarif_file: trivy-image-${{ matrix.component }}.sarif
+          category: trivy-image-${{ matrix.component }}
 
   github-release:
     name: Create GitHub Release

@@ -7,6 +7,7 @@ import math
 import re
 import time
 from datetime import UTC, datetime, timedelta
+from typing import Any, TypeGuard
 
 import httpx
 from sqlalchemy import or_, select
@@ -110,7 +111,7 @@ def _sanitize_unexpected_script_words(
     non_latin_count = len(_NON_LATIN_SCRIPT_RE.findall(joined))
 
     if latin_only or detected_is_latin or (latin_count >= 4 and latin_count > non_latin_count * 2):
-        cleaned = [
+        return [
             w
             for w in accepted
             if not (
@@ -118,7 +119,6 @@ def _sanitize_unexpected_script_words(
                 and not _LATIN_LETTER_RE.search(str(w.get("word") or ""))
             )
         ]
-        return cleaned
 
     if (
         primary_is_latin
@@ -177,7 +177,7 @@ def asr_span(job: AsrJob) -> tuple[int, int]:
     return max(job.start_sample, job.core_start), min(job.end_sample, job.core_end)
 
 
-def _is_number(value) -> bool:
+def _is_number(value: object) -> TypeGuard[int | float]:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
 
@@ -304,9 +304,7 @@ def commit_result(db: Session, identifier: str, result: dict):
     db.commit()
 
 
-def retry_job(
-    engine, identifier: str, reason: str, permanent: bool, *, delay_seconds: int = 30
-):
+def retry_job(engine, identifier: str, reason: str, permanent: bool, *, delay_seconds: int = 30):
     with Session(engine) as db:
         job = db.scalar(select(AsrJob).where(AsrJob.id == identifier).with_for_update())
         if job is None or job.status in ("completed", "failed"):
@@ -348,15 +346,11 @@ def build_asr_context_prompt(
         pid: " ".join(name.split()) for pid, name in collected.items() if name.strip()
     }
     if isinstance(job.binding, dict) and job.binding.get("participant_name"):
-        b_pid = str(
-            job.binding.get("participant_id") or job.binding.get("speaker_id") or "current"
-        )
+        b_pid = str(job.binding.get("participant_id") or job.binding.get("speaker_id") or "current")
         raw_names[b_pid] = " ".join(str(job.binding["participant_name"]).split())
 
     meta = (
-        recording.protocol_meta
-        if recording and isinstance(recording.protocol_meta, dict)
-        else {}
+        recording.protocol_meta if recording and isinstance(recording.protocol_meta, dict) else {}
     )
     _, opted_out_norm = (
         collect_opted_out_speakers(recording, attempts, raw_names)
@@ -401,9 +395,7 @@ def build_asr_context_prompt(
 
     assistant_hint = " ".join(str(settings.assistant_name or "").split())
     builtin_hints = (
-        [assistant_hint]
-        if assistant_hint and assistant_hint.lower() != "wortlaut"
-        else []
+        [assistant_hint] if assistant_hint and assistant_hint.lower() != "wortlaut" else []
     )
     org_hints = extract_org_glossary_hints(meta.get("attendee_emails"))
     resolved_glossary_terms, _ = resolve_recording_glossary(db, recording, settings)
@@ -435,7 +427,7 @@ def build_asr_context_prompt(
                     - float(stream.contract.get("session_monotonic_origin_ms") or 0)
                 ) / 1000.0
                 job_utc = origin_dt + timedelta(seconds=mono_delta + job.start_sample / RATE)
-            except (ValueError, TypeError):
+            except ValueError, TypeError:
                 job_utc = None
         if job_utc is not None:
             live_kfs.sort(
@@ -452,9 +444,9 @@ def build_asr_context_prompt(
                 continue
             entry_kf = raw_kf_ctx.get(str(kf_row.id))
             if isinstance(entry_kf, dict):
-                for vt in entry_kf.get("terms") or []:
-                    if isinstance(vt, str) and vt.strip():
-                        visual_terms.append(vt)
+                visual_terms.extend(
+                    vt for vt in (entry_kf.get("terms") or []) if isinstance(vt, str) and vt.strip()
+                )
     for raw_term in [
         *replacement_targets,
         *resolved_glossary_terms,
@@ -507,8 +499,7 @@ def build_asr_context_prompt(
             parts.append(f"Agenda: {clean_agenda}")
     if participant_list:
         parts.append(
-            f"{'Teilnehmende' if use_de_labels else 'Participants'}: "
-            f"{', '.join(participant_list)}"
+            f"{'Teilnehmende' if use_de_labels else 'Participants'}: {', '.join(participant_list)}"
         )
     prior_part = (
         f"{'Vorheriger Kontext' if use_de_labels else 'Prior context'}: {prior_text}"
@@ -620,6 +611,8 @@ def inference_pass(engine):
             return False
         identifier = job.id
         stream = db.get(AudioStream, job.stream_id)
+        if stream is None:
+            return False
         attempt = db.get(Attempt, stream.attempt_id) if stream.attempt_id else None
         recording = db.get(Recording, attempt.recording_id) if attempt else None
         lang_spec = effective_recording_language(recording, settings)
@@ -696,7 +689,7 @@ def inference_pass(engine):
         except AudioReadError as error:
             outcome = error.reason
             retry_job(engine, identifier, error.reason, error.permanent)
-        except (InvalidResult, ValueError, TypeError, KeyError, AttributeError):
+        except InvalidResult, ValueError, TypeError, KeyError, AttributeError:
             outcome = "invalid_audio_or_model_result"
             retry_job(engine, identifier, "invalid_audio_or_model_result", True)
         finally:
@@ -804,7 +797,7 @@ def finalize_processing(engine):
                     db.rollback()
                     if rec is not None and not has_summary:
                         generate_protocol_summary(db, rec_id)
-            except (ValueError, LookupError):
+            except ValueError, LookupError:
                 pass
             except Exception as exc:
                 reason = (
@@ -910,11 +903,8 @@ def keyframe_context_pass(engine) -> bool:
         for kf_row, rec_row in candidates:
             kf_id_str = str(kf_row.id)
             meta_peek = dict(rec_row.protocol_meta or {})
-            ctx_map_peek = (
-                meta_peek.get("keyframe_context")
-                if isinstance(meta_peek.get("keyframe_context"), dict)
-                else {}
-            )
+            raw_ctx_peek = meta_peek.get("keyframe_context")
+            ctx_map_peek: dict[str, Any] = raw_ctx_peek if isinstance(raw_ctx_peek, dict) else {}
             if kf_id_str in ctx_map_peek:
                 continue
             extracted_count = sum(
@@ -936,10 +926,9 @@ def keyframe_context_pass(engine) -> bool:
                         continue
                 except ValueError:
                     pass
-            if (
-                rec_row.participation != "ended"
-                and kf_row.captured_at.astimezone(UTC) > now - timedelta(seconds=8)
-            ):
+            if rec_row.participation != "ended" and kf_row.captured_at.astimezone(
+                UTC
+            ) > now - timedelta(seconds=8):
                 continue
 
             locked_rec = db.scalar(
@@ -960,11 +949,8 @@ def keyframe_context_pass(engine) -> bool:
                 continue
 
             meta = dict(locked_rec.protocol_meta or {})
-            ctx_map = dict(
-                meta.get("keyframe_context")
-                if isinstance(meta.get("keyframe_context"), dict)
-                else {}
-            )
+            raw_ctx = meta.get("keyframe_context")
+            ctx_map: dict[str, Any] = dict(raw_ctx) if isinstance(raw_ctx, dict) else {}
             if kf_id_str in ctx_map:
                 continue
 
@@ -975,8 +961,7 @@ def keyframe_context_pass(engine) -> bool:
                     RecordingKeyframe.deleted_at.is_(None),
                     RecordingKeyframe.participant_id == fresh_kf.participant_id,
                     RecordingKeyframe.captured_at > fresh_kf.captured_at,
-                    RecordingKeyframe.captured_at
-                    < fresh_kf.captured_at + timedelta(seconds=12),
+                    RecordingKeyframe.captured_at < fresh_kf.captured_at + timedelta(seconds=12),
                 )
                 .limit(1)
             )
@@ -1039,11 +1024,8 @@ def keyframe_context_pass(engine) -> bool:
         if locked_rec is None:
             return True
         meta = dict(locked_rec.protocol_meta or {})
-        claims = dict(
-            meta.get("keyframe_context_claims")
-            if isinstance(meta.get("keyframe_context_claims"), dict)
-            else {}
-        )
+        raw_claims = meta.get("keyframe_context_claims")
+        claims: dict[str, Any] = dict(raw_claims) if isinstance(raw_claims, dict) else {}
         claims.pop(claim_kf_id, None)
         if claims:
             meta["keyframe_context_claims"] = claims
@@ -1068,11 +1050,8 @@ def keyframe_context_pass(engine) -> bool:
             and not read_failed
             and not is_keyframe_opted_out(db, locked_rec, fresh_kf)
         ):
-            ctx_map = dict(
-                meta.get("keyframe_context")
-                if isinstance(meta.get("keyframe_context"), dict)
-                else {}
-            )
+            raw_ctx_done = meta.get("keyframe_context")
+            ctx_map = dict(raw_ctx_done) if isinstance(raw_ctx_done, dict) else {}
             ctx_map[claim_kf_id] = extracted if extracted is not None else {"empty": True}
             meta["keyframe_context"] = ctx_map
             if extracted is not None:

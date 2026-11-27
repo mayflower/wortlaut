@@ -6,7 +6,7 @@ import httpx
 from wortlaut.settings import get_settings
 
 REFRESH_STATE = "wortlaut/refresh-state"
-SERVICE_SECRET = "wortlaut-webex"
+SERVICE_SECRET = "wortlaut-webex"  # noqa: S105
 refresh_lock = threading.Lock()
 
 
@@ -90,7 +90,10 @@ def refreshed_guest(subject, display_name):
             # Persist before the external exchange: after a crash or lost reply
             # never blindly reuse a refresh token that may have been rotated.
             annotations[REFRESH_STATE] = "in_progress"
-            secret = core.patch_namespaced_secret(
+            patch_secret = getattr(core, "patch_namespaced_secret", None)
+            if patch_secret is None:
+                raise WebexUnavailable("Webex token refresh requires Kubernetes secret backend")
+            secret = patch_secret(
                 SERVICE_SECRET,
                 settings.namespace,
                 {
@@ -130,7 +133,7 @@ def refreshed_guest(subject, display_name):
                 "WORTLAUT_WEBEX_SERVICE_TOKEN": data["access_token"],
                 "WORTLAUT_WEBEX_REFRESH_TOKEN": data.get("refresh_token", values[required[2]]),
             }
-            core.patch_namespaced_secret(
+            patch_secret(
                 SERVICE_SECRET,
                 settings.namespace,
                 {

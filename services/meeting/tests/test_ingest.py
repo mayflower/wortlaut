@@ -79,7 +79,10 @@ def test_binding_boundaries_preserve_long_blocks_and_choose_current_participant(
             **{
                 key: source_identity[key]
                 for key in (
-                    "provider_source_id", "speaker_id", "source_kind", "attribution_unknown"
+                    "provider_source_id",
+                    "speaker_id",
+                    "source_kind",
+                    "attribution_unknown",
                 )
             },
         }
@@ -124,10 +127,14 @@ def test_binding_boundaries_preserve_long_blocks_and_choose_current_participant(
     with Session(database) as db:
         chunks = db.scalars(select(AudioChunk).order_by(AudioChunk.sequence)).all()
         assert [chunk.contract["speaker_id"] for chunk in chunks] == [
-            "speaker-A", "speaker-B", "speaker-C",
+            "speaker-A",
+            "speaker-B",
+            "speaker-C",
         ]
         assert [storage.read(chunk.object_key) for chunk in chunks] == [
-            b"\0\0" * 80000, b"\0\0" * 10000, b"\0\0" * 100,
+            b"\0\0" * 80000,
+            b"\0\0" * 10000,
+            b"\0\0" * 100,
         ]
 
 

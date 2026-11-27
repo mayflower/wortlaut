@@ -676,13 +676,6 @@ export const DELIVERY_STATUS_LABELS: Record<string, string> = {
   delivery_unknown: 'Status unklar (SMTP-Timeout)',
 };
 
-export const SOURCE_COVERAGE_LABELS: Record<string, string> = {
-  complete: 'Vollständig gebunden',
-  partial: 'Teilweise gebunden',
-  unknown: 'Einzelspur-Erfassung aktiv',
-  none: 'Noch keine Audiospuren',
-};
-
 export const ATTRIBUTION_STATUS_LABELS: Record<string, string> = {
   bound: 'Teilnehmersitzung bestätigt',
   unbound: 'Ohne bestätigte Sitzungs-ID',

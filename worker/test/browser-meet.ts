@@ -873,7 +873,6 @@ try {
   // 4-Speaker dynamic SFU Loudest-N transceiver switching + mid-call late joiner on 2 shared RTCRtpReceivers
   {
     const sfuDynamic = await preparePage('guest');
-    const sfuAttemptId = (sfuDynamic.meet as any).bootstrap.attempt_id as string;
     const beforeSfu = frames.length;
     await sfuDynamic.meet.join();
     await sfuDynamic.page.evaluate('window.admit()');

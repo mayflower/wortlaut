@@ -2,10 +2,13 @@
 
 import hashlib
 import logging
+import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 import onnxruntime as ort
@@ -116,7 +119,7 @@ def stream_quality(db: Session, stream: AudioStream):
         .where(
             AudioControl.stream_id == stream.id,
             AudioControl.kind == "gap",
-            True if frozen else AudioControl.contract["final"].as_boolean().is_(True),
+            literal(True) if frozen else AudioControl.contract["final"].as_boolean().is_(True),
             ~pcm_exists,
         )
         .group_by(AudioControl.sequence)
@@ -275,7 +278,9 @@ def timeline(db: Session, stream: AudioStream, *, incremental: bool = False):
                     AudioControl.stream_id == stream.id,
                     AudioControl.kind == "gap",
                     AudioControl.start_sample > right,
-                    True if frozen else AudioControl.contract["final"].as_boolean().is_(True),
+                    literal(True)
+                    if frozen
+                    else AudioControl.contract["final"].as_boolean().is_(True),
                 )
             ),
         ]
@@ -287,7 +292,7 @@ def timeline(db: Session, stream: AudioStream, *, incremental: bool = False):
         )
     chunks = db.scalars(chunks_query.order_by(AudioChunk.sequence)).all()
     gaps = db.scalars(gaps_query).all()
-    records = {chunk.sequence: chunk for chunk in chunks}
+    records: dict[int, AudioChunk | AudioControl] = {chunk.sequence: chunk for chunk in chunks}
     # A stored chunk wins over a possible buffer-overflow gap with a lost ACK.
     for gap in gaps:
         if frozen or gap.contract.get("final", False):
@@ -298,7 +303,9 @@ def timeline(db: Session, stream: AudioStream, *, incremental: bool = False):
         sample = stream.scan_sample
         if records:
             first_sequence = min(records)
-            sample = min(sample, records[first_sequence].start_sample)
+            first_start = records[first_sequence].start_sample
+            if first_start is not None:
+                sample = min(sample, first_start)
             if stream.scan_sample:
                 sequence = first_sequence
     for seq, record in sorted(records.items()):
@@ -367,7 +374,12 @@ def timeline(db: Session, stream: AudioStream, *, incremental: bool = False):
         # This is a real frozen-stream loss, not the end of a query page. Jump
         # to the next durable range without filling or loading the missing audio.
         runs.append(Run(sample, next_sample, None))
-    if frozen and next_sample is None and received_end and sample < stream.final_sample:
+    if (
+        frozen
+        and next_sample is None
+        and stream.final_sample is not None
+        and sample < stream.final_sample
+    ):
         runs.append(Run(sample, stream.final_sample, None))
         sample = stream.final_sample
     terminal = complete or (frozen and next_sample is None)
@@ -403,7 +415,7 @@ def timeline(db: Session, stream: AudioStream, *, incremental: bool = False):
     return runs, terminal, quality
 
 
-def read_pcm(chunks: list[AudioChunk], start: int, end: int) -> bytes:
+def read_pcm(chunks: Sequence[AudioChunk], start: int, end: int) -> bytes:
     pieces = []
     for chunk in chunks:
         left, right = (
@@ -497,7 +509,8 @@ def speech_section(pcm: bytes, cursor: int, terminal: bool):
             chunk_f32 = raw_frame.astype(np.float32) * (1.0 / 32768.0)
             inp[0, :SILERO_CONTEXT] = ctx
             inp[0, SILERO_CONTEXT:] = chunk_f32
-            out, state = sess.run(None, {"input": inp, "state": state, "sr": sr_tensor})
+            raw_out, state = sess.run(None, {"input": inp, "state": state, "sr": sr_tensor})
+            out = cast(np.ndarray, raw_out)
             ctx[:] = chunk_f32[-SILERO_CONTEXT:]
             prob = float(out[0, 0])
 
@@ -513,7 +526,7 @@ def speech_section(pcm: bytes, cursor: int, terminal: bool):
                 max_prob = prob
         if first is None and frame_end - cursor >= SILENCE_CHECKPOINT:
             return None, cursor + SILENCE_CHECKPOINT
-        if first is not None:
+        if first is not None and last is not None:
             audio_start = max(cursor, first - PRE_ROLL)
             cut = audio_start + MAX_SEGMENT
             if frame_end >= cut:
@@ -529,8 +542,10 @@ def speech_section(pcm: bytes, cursor: int, terminal: bool):
                 end = min(available, last + POST_ROLL)
                 return (audio_start, end, end), frame_end
     if terminal:
-        if first is not None and not _is_short_noise_blip(
-            first, last, cursor, voiced_frames, max_prob
+        if (
+            first is not None
+            and last is not None
+            and not _is_short_noise_blip(first, last, cursor, voiced_frames, max_prob)
         ):
             return (max(cursor, first - PRE_ROLL), available, available), available
         return None, available
@@ -539,7 +554,7 @@ def speech_section(pcm: bytes, cursor: int, terminal: bool):
 
 def collect_opted_out_speakers(
     recording: Recording | None,
-    attempts: list[Attempt],
+    attempts: Sequence[Attempt],
     participant_names: dict[str, str] | None = None,
 ) -> tuple[list[str], set[str]]:
     raw_list: list[str] = []
@@ -727,7 +742,7 @@ def purge_opted_out_transcript_segments(
 
     stream_ids = [s.id for s in streams]
     unambiguous_by_stream: dict[tuple[str, str], tuple[str, str | None]] = {}
-    onset_windows_by_stream: dict[int, list[tuple[int, int, str, str | None]]] = {}
+    onset_windows_by_stream: dict[uuid.UUID, list[tuple[int, int, str, str | None]]] = {}
     for s in streams:
         key = (str(s.stream_id), str(s.epoch))
         observed: set[tuple[str, str | None]] = set()
@@ -750,13 +765,14 @@ def purge_opted_out_transcript_segments(
                 if ctrl.start_sample is not None
                 else int((ctrl.contract or {}).get("start_sample") or 0)
             )
+            nxt_ctrl = s_binds[idx + 1] if idx + 1 < len(s_binds) else None
             nxt_s = (
                 (
-                    int(s_binds[idx + 1].start_sample)
-                    if s_binds[idx + 1].start_sample is not None
-                    else int((s_binds[idx + 1].contract or {}).get("start_sample") or 0)
+                    int(nxt_ctrl.start_sample)
+                    if nxt_ctrl.start_sample is not None
+                    else int((nxt_ctrl.contract or {}).get("start_sample") or 0)
                 )
-                if idx + 1 < len(s_binds)
+                if nxt_ctrl is not None
                 else None
             )
             intervals.append((cur_s, nxt_s, ctrl.contract))
@@ -890,7 +906,7 @@ def purge_opted_out_audio_chunks(
         return 0
 
     stream_ids = [s.id for s in streams]
-    onset_windows_by_stream: dict[int, list[tuple[int, int, str, str | None]]] = {}
+    onset_windows_by_stream: dict[uuid.UUID, list[tuple[int, int, str, str | None]]] = {}
     unambiguous_by_stream_id: dict[object, tuple[str, str | None]] = {}
     for s in streams:
         observed: set[tuple[str, str | None]] = set()
@@ -913,13 +929,14 @@ def purge_opted_out_audio_chunks(
                 if ctrl.start_sample is not None
                 else int((ctrl.contract or {}).get("start_sample") or 0)
             )
+            nxt_ctrl = s_binds[idx + 1] if idx + 1 < len(s_binds) else None
             nxt_s = (
                 (
-                    int(s_binds[idx + 1].start_sample)
-                    if s_binds[idx + 1].start_sample is not None
-                    else int((s_binds[idx + 1].contract or {}).get("start_sample") or 0)
+                    int(nxt_ctrl.start_sample)
+                    if nxt_ctrl.start_sample is not None
+                    else int((nxt_ctrl.contract or {}).get("start_sample") or 0)
                 )
-                if idx + 1 < len(s_binds)
+                if nxt_ctrl is not None
                 else None
             )
             intervals.append((cur_s, nxt_s, ctrl.contract))
@@ -1011,7 +1028,7 @@ def purge_opted_out_audio_chunks(
                 if storage is None:
                     storage = get_storage()
                 storage.replace_pcm(chunk.object_key, zbytes, cdict)
-            except (BotoCoreError, ClientError, RuntimeError):
+            except BotoCoreError, ClientError, RuntimeError:
                 logging.getLogger(__name__).warning(
                     "Failed to zero opted-out audio chunk %s in S3", chunk.id
                 )
@@ -1115,9 +1132,7 @@ def is_keyframe_opted_out(
     recording: Recording,
     kf: RecordingKeyframe,
 ) -> bool:
-    attempts = list(
-        db.scalars(select(Attempt).where(Attempt.recording_id == recording.id)).all()
-    )
+    attempts = list(db.scalars(select(Attempt).where(Attempt.recording_id == recording.id)).all())
     streams = (
         list(
             db.scalars(

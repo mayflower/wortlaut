@@ -150,11 +150,13 @@ def signed_invite(monkeypatch, tmp_path):
     key = tmp_path / "signing.pem"
     subprocess.run(
         ["openssl", "genrsa", "-traditional", "-out", str(key), "2048"],
-        check=True, capture_output=True,
+        check=True,
+        capture_output=True,
     )
     public = subprocess.run(
         ["openssl", "rsa", "-in", str(key), "-pubout", "-outform", "DER"],
-        check=True, capture_output=True,
+        check=True,
+        capture_output=True,
     ).stdout
     record = b"v=DKIM1; k=rsa; p=" + base64.b64encode(public)
     monkeypatch.setattr(intake, "dkim_dns", lambda name, timeout=5: record)
@@ -168,7 +170,11 @@ def signed_invite(monkeypatch, tmp_path):
             sender="owner@acme.example.org", organizer="owner@acme.example.org", **kwargs
         )
         signature = dkim.sign(
-            raw, b"test", domain, key.read_bytes(), length=length,
+            raw,
+            b"test",
+            domain,
+            key.read_bytes(),
+            length=length,
             include_headers=headers or [b"from", b"content-type", b"mime-version"],
         )
         return signature + raw

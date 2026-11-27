@@ -69,10 +69,11 @@ def _extract_openai_content(payload: object) -> str:
     if isinstance(content, str):
         return content
     if isinstance(content, list):
-        parts: list[str] = []
-        for item in content:
-            if isinstance(item, dict) and isinstance(item.get("text"), str):
-                parts.append(item["text"])
+        parts = [
+            item["text"]
+            for item in content
+            if isinstance(item, dict) and isinstance(item.get("text"), str)
+        ]
         return "\n".join(parts)
     raise RuntimeError("llm_invalid_json")
 
@@ -230,9 +231,7 @@ def expand_search_query(
             "Do not repeat the full query or invent unrelated topics."
         )
         usr_prompt = (
-            f"Query: {q_clean}\n"
-            f"Known glossary terms: {known or '(none)'}\n"
-            "Respond in JSON."
+            f"Query: {q_clean}\nKnown glossary terms: {known or '(none)'}\nRespond in JSON."
         )
         parsed = chat_completion_json(
             system_prompt=sys_prompt,

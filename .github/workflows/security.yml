@@ -103,6 +103,68 @@ jobs:
           exit-code: '1'
           severity: HIGH,CRITICAL
 
+  trivy-iac-config:
+    name: IaC & container misconfiguration scan (Trivy config)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Generate Trivy IaC misconfiguration SARIF
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: config
+          scan-ref: .
+          trivyignores: .trivyignore.yaml
+          format: sarif
+          output: trivy-config.sarif
+          severity: HIGH,CRITICAL
+      - name: Upload Trivy config SARIF to GitHub Code Scanning
+        if: always() && hashFiles('trivy-config.sarif') != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4
+        with:
+          sarif_file: trivy-config.sarif
+          category: trivy-config
+      - name: Enforce zero HIGH/CRITICAL IaC misconfigurations
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: config
+          scan-ref: .
+          trivyignores: .trivyignore.yaml
+          format: table
+          exit-code: '1'
+          severity: HIGH,CRITICAL
+
+  semgrep:
+    name: Custom security guardrails (Semgrep)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Run Semgrep custom Wortlaut rules (SARIF & gate)
+        run: |
+          docker run --rm -v "${PWD}:/src" -w /src \
+            docker.io/semgrep/semgrep:1.187.0@sha256:0c8dfa7aa1ca8c50233ec9110e8cd88d139dedd603d56507493f74c6f4b3e062 \
+            semgrep scan --config /src/.semgrep/wortlaut.yml --metrics=off \
+            --sarif --sarif-output=/src/semgrep.sarif \
+            --error \
+            /src/services/meeting/src /src/services/asr /src/worker/src/ui
+      - name: Upload Semgrep SARIF to GitHub Code Scanning
+        if: always() && hashFiles('semgrep.sarif') != '' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep
+
   codeql:
     name: CodeQL SAST (${{ matrix.language }})
     runs-on: ubuntu-24.04

@@ -20,7 +20,7 @@ from fastapi.responses import JSONResponse
 from mcp.server.lowlevel import Server
 from mcp.server.lowlevel.helper_types import ReadResourceContents
 from mcp.server.streamable_http import (
-    SUPPORTED_PROTOCOL_VERSIONS as SDK_PROTOCOL_VERSIONS,
+    SUPPORTED_PROTOCOL_VERSIONS as SDK_PROTOCOL_VERSIONS,  # type: ignore[attr-defined]
 )
 from mcp.shared.exceptions import McpError
 from pydantic import AnyUrl, TypeAdapter, ValidationError
@@ -138,9 +138,7 @@ def _is_allowed_mcp_origin(request: Request, origin_hdr: str) -> bool:
     }
     if norm_origin in allowed_cfg:
         return True
-    if scheme == "http" and host in _LOOPBACK_HOSTS:
-        return True
-    return False
+    return scheme == "http" and host in _LOOPBACK_HOSTS
 
 
 def mcp_cors_headers(request: Request) -> dict[str, str]:
@@ -545,10 +543,8 @@ def _load_verified_keyframe(
         )
     try:
         png_bytes = get_storage().read(kf.object_key)
-    except (ClientError, ObjectConflict):
-        raise LookupError(
-            f"Keyframe {kf_id} object unavailable in storage."
-        ) from None
+    except ClientError, ObjectConflict:
+        raise LookupError(f"Keyframe {kf_id} object unavailable in storage.") from None
     if hashlib.sha256(png_bytes).hexdigest() != kf.sha256:
         raise LookupError("Invalid keyframe object integrity.")
     return kf, png_bytes
@@ -576,11 +572,11 @@ def _format_citation_tag(item: dict[str, Any]) -> str:
     ts = str(item.get("timestamp") or "").strip()
     off = item.get("offset_seconds")
     if ts and isinstance(off, (int, float)):
-        return f" [{ts} / +{int(round(float(off)))}s]"
+        return f" [{ts} / +{round(float(off))}s]"
     if ts:
         return f" [{ts}]"
     if isinstance(off, (int, float)):
-        return f" [+{int(round(float(off)))}s]"
+        return f" [+{round(float(off))}s]"
     return ""
 
 
@@ -740,9 +736,7 @@ def _merge_mcp_summary_fields(
 
     if has_summary_text:
         raw_st = (
-            arguments["summary_text"]
-            if "summary_text" in arguments
-            else nested_dict.get("summary")
+            arguments["summary_text"] if "summary_text" in arguments else nested_dict.get("summary")
         )
         summary_text = str(raw_st or "").strip()
     if has_decisions:
@@ -894,13 +888,9 @@ def _execute_tool_sync(
                 "on full-text search._"
             )
         if res.lexical_only:
-            notices.append(
-                "_Note: Lexical search only (local ONNX embedding model unavailable)._"
-            )
+            notices.append("_Note: Lexical search only (local ONNX embedding model unavailable)._")
         if not res.hits:
-            return _tool_result(
-                "\n".join([*notices, "No matching protocol passages found."])
-            )
+            return _tool_result("\n".join([*notices, "No matching protocol passages found."]))
 
         out_lines: list[str] = [*notices]
         for rank_idx, hit in enumerate(res.hits, start=1):
@@ -909,9 +899,7 @@ def _execute_tool_sync(
                 {"timestamp": hit.wall_clock, "offset_seconds": hit.start_seconds}
             ).strip()
             cite_part = f" · {cite}" if cite else ""
-            kf_suffix = (
-                f" (keyframe_id=`{hit.keyframe_id}`)" if hit.keyframe_id is not None else ""
-            )
+            kf_suffix = f" (keyframe_id=`{hit.keyframe_id}`)" if hit.keyframe_id is not None else ""
             speaker_prefix = (
                 f"**{hit.speaker_label}**: "
                 if (hit.chunk_kind == "slide" and hit.speaker_label)
@@ -1011,14 +999,12 @@ def _execute_tool_sync(
         if keyframes:
             lines.extend(["", "## Screen-Share Keyframes"])
             for kf in keyframes:
-                off = int(round(float(kf.get("offset_seconds") or 0.0)))
+                off = round(float(kf.get("offset_seconds") or 0.0))
                 ts = kf.get("wall_clock") or short_timestamp(off)
                 uri = f"wortlaut://recordings/{rec.id}/keyframes/{kf['id']}.png"
                 vc = kf.get("visual_context")
                 vc_summary = (
-                    f" — {vc['summary']}"
-                    if isinstance(vc, dict) and vc.get("summary")
-                    else ""
+                    f" — {vc['summary']}" if isinstance(vc, dict) and vc.get("summary") else ""
                 )
                 lines.append(
                     f"- [{ts} / +{off}s] **{kf.get('presenter') or 'Screen'}** "
@@ -1115,9 +1101,7 @@ def _execute_tool_sync(
         total_matching = len(filtered)
         page = filtered[offset : offset + limit]
         next_hint = (
-            f" · next offset={offset + len(page)}"
-            if (offset + len(page)) < total_matching
-            else ""
+            f" · next offset={offset + len(page)}" if (offset + len(page)) < total_matching else ""
         )
         md_lines = [
             f"# {rec.title or rec.provider} ({rec.starts_at.strftime('%Y-%m-%d %H:%M UTC')})",
@@ -1160,7 +1144,7 @@ def _execute_tool_sync(
                 (
                     s_start,
                     idx,
-                    f"[{clock_label} / +{int(round(s_start))}s] **{speaker_label}**: "
+                    f"[{clock_label} / +{round(s_start)}s] **{speaker_label}**: "
                     f"{seg.get('text') or ''}",
                 )
             )
@@ -1175,7 +1159,7 @@ def _execute_tool_sync(
                 (
                     ow_start,
                     100000 + idx,
-                    f"[{clock_label} / +{int(round(ow_start))}s] **(OPTED OUT COMMENT)**",
+                    f"[{clock_label} / +{round(ow_start)}s] **(OPTED OUT COMMENT)**",
                 )
             )
         timeline_md.sort(key=lambda item: (item[0], item[1]))
@@ -1194,14 +1178,12 @@ def _execute_tool_sync(
         if out_keyframes:
             md_lines.append("\nScreen-share keyframes:")
             for kf in out_keyframes:
-                off = int(round(float(kf.get("offset_seconds") or 0.0)))
+                off = round(float(kf.get("offset_seconds") or 0.0))
                 ts = kf.get("wall_clock") or short_timestamp(off)
                 uri = f"wortlaut://recordings/{rec.id}/keyframes/{kf['id']}.png"
                 vc = kf.get("visual_context")
                 vc_summary = (
-                    f" — {vc['summary']}"
-                    if isinstance(vc, dict) and vc.get("summary")
-                    else ""
+                    f" — {vc['summary']}" if isinstance(vc, dict) and vc.get("summary") else ""
                 )
                 md_lines.append(
                     f"- [{ts} / +{off}s] **{kf.get('presenter') or 'Screen'}** "
@@ -1222,7 +1204,7 @@ def _execute_tool_sync(
             (item for item in (exp.get("keyframes") or []) if item.get("id") == str(kf.id)),
             None,
         )
-        off = int(round(float((kf_meta or {}).get("offset_seconds") or 0.0)))
+        off = round(float((kf_meta or {}).get("offset_seconds") or 0.0))
         ts = (kf_meta or {}).get("wall_clock") or short_timestamp(off)
         presenter = (kf_meta or {}).get("presenter") or kf.participant_name or "Screen"
         caption_lines = [
@@ -1538,9 +1520,7 @@ async def _sdk_read_resource(uri_obj: AnyUrl) -> list[ReadResourceContents]:
     except (ValueError, LookupError) as exc:
         raise McpError(mcp_types.ErrorData(code=-32002, message=str(exc))) from None
     if rec.transcript_deleted_at is not None:
-        raise McpError(
-            mcp_types.ErrorData(code=-32002, message="Transcript retention expired")
-        )
+        raise McpError(mcp_types.ErrorData(code=-32002, message="Transcript retention expired"))
     if is_keyframe_uri:
         raw_kf_id = subpath.removeprefix("keyframes/").removesuffix(".png")
         try:
@@ -1610,9 +1590,7 @@ async def _dispatch_via_mcp_sdk(
             "resources/read",
         }
         code = (
-            mcp_types.INVALID_PARAMS
-            if req.method in known_methods
-            else mcp_types.METHOD_NOT_FOUND
+            mcp_types.INVALID_PARAMS if req.method in known_methods else mcp_types.METHOD_NOT_FOUND
         )
         msg = (
             exc.errors()[0].get("msg", "Invalid parameters")
@@ -1739,7 +1717,7 @@ def handle_mcp_post(
 
     try:
         payload = json.loads(raw_body.decode("utf-8"))
-    except (UnicodeDecodeError, ValueError):
+    except UnicodeDecodeError, ValueError:
         return JSONResponse(
             {
                 "jsonrpc": "2.0",

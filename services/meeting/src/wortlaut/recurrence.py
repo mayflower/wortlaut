@@ -6,7 +6,7 @@ from itertools import islice, takewhile
 
 import recurring_ical_events
 from icalendar import Calendar
-from sqlalchemy import select, text
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from wortlaut.calendar import MAIL_LOCK, event_attendee_emails, event_end_utc, meeting_link, utc
@@ -174,14 +174,14 @@ def expand_series(db, entry, now):
 def recurrence_pass(engine, now=None):
     now = now or datetime.now(UTC)
     with Session(engine) as db:
-        if not db.scalar(text(f"SELECT pg_try_advisory_xact_lock({MAIL_LOCK})")):
+        if not db.scalar(select(func.pg_try_advisory_xact_lock(MAIL_LOCK))):
             return
         entries = db.scalars(select(CalendarEntry).where(CalendarEntry.recurrence_key == "")).all()
         for entry in entries:
             try:
                 with db.begin_nested():
                     expand_series(db, entry, now)
-            except (ValueError, TypeError, KeyError, OverflowError):
+            except ValueError, TypeError, KeyError, OverflowError:
                 entry.status, entry.reason = "unsupported", "recurrence_invalid"
                 for recording in db.scalars(
                     select(Recording)

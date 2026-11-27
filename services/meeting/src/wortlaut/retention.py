@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 import recurring_ical_events
 from botocore.exceptions import BotoCoreError, ClientError
 from icalendar import Calendar
-from sqlalchemy import delete, or_, select, text
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session
 
 from wortlaut.calendar import MAIL_LOCK
@@ -68,7 +68,7 @@ def calendar_retention(engine, now):
     # Calendar import and series expansion take this lock before recording locks.
     # Run separately so metadata cleanup cannot invert that lock order.
     with Session(engine) as db:
-        if not db.scalar(text(f"SELECT pg_try_advisory_xact_lock({MAIL_LOCK})")):
+        if not db.scalar(select(func.pg_try_advisory_xact_lock(MAIL_LOCK))):
             return
         entries = db.scalars(
             select(CalendarEntry).where(

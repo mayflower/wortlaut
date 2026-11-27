@@ -1,0 +1,62 @@
+name: API Fuzzing (Schemathesis)
+
+on:
+  schedule:
+    - cron: '43 3 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: api-fuzz-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  schemathesis:
+    name: OpenAPI property-based fuzzing (Schemathesis)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17.12-bookworm@sha256:837bed18782820fe967067cb5328b02b0d9992c1be9a37ee0c9c492cfc03af3b
+        env:
+          POSTGRES_USER: wortlaut_fuzz
+          POSTGRES_PASSWORD: fixture-fuzz-password
+          POSTGRES_DB: wortlaut_fuzz
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U wortlaut_fuzz -d wortlaut_fuzz"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      WORTLAUT_DATABASE_URL: postgresql+psycopg://wortlaut_fuzz:fixture-fuzz-password@127.0.0.1:5432/wortlaut_fuzz
+      WORTLAUT_API_TOKEN: fixture-fuzz-api-token
+      WORTLAUT_PUBLIC_URL: http://127.0.0.1:8000
+      WORTLAUT_API_URL: http://127.0.0.1:8000
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: 0.13.9
+          python-version: '3.14'
+      - name: Install meeting service dependencies
+        run: uv sync --directory services/meeting --locked
+      - name: Apply Alembic migrations
+        run: uv run --directory services/meeting alembic upgrade head
+      - name: Run Schemathesis against local FastAPI OpenAPI schema
+        run: |
+          uv run --directory services/meeting uvicorn wortlaut.app:app \
+            --host 127.0.0.1 --port 8000 --log-level warning &
+          SERVER_PID=$!
+          trap 'kill "${SERVER_PID}" 2>/dev/null || true' EXIT
+          curl --fail --retry 30 --retry-delay 1 --retry-all-errors \
+            http://127.0.0.1:8000/health/ready
+          uvx --from schemathesis schemathesis run \
+            http://127.0.0.1:8000/openapi.json \
+            --header "Authorization: Bearer ${WORTLAUT_API_TOKEN}" \
+            --checks not_a_server_error \
+            --max-examples 15 \
+            --exclude-path-regex "^/v1/attempts/|^/oauth/|^/mcp"
