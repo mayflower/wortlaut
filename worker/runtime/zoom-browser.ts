@@ -410,7 +410,9 @@ export class ZoomBrowser {
         ? 'waiting_admission'
         : inCall
           ? 'capturing'
-          : 'joining';
+          : this.joined && leaveVisible
+            ? 'waiting_admission'
+            : 'joining';
     return {
       ...capture,
       participation,

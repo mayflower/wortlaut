@@ -6,7 +6,8 @@
 
 | Version | Supported |
 | --- | --- |
-| `main` / latest `0.1.x` release | Yes |
+| `main` / latest `0.2.x` release | Yes |
+| `0.1.x` | Security fixes via upgrade to `0.2.x` |
 
 ## Reporting a Vulnerability
 

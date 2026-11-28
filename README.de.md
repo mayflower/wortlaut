@@ -5,7 +5,7 @@
 [![Website](https://img.shields.io/badge/Website-wortlaut.cloud-10b981)](https://wortlaut.cloud)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 
-**[English](README.md) · Deutsch** | **Website:** [wortlaut.cloud](https://wortlaut.cloud) · **Docker-Quickstart:** [`docker-compose.yml`](docker-compose.yml) · **Helm Chart:** [`charts/wortlaut`](charts/wortlaut/README.md) · **Konfiguration:** [`docs/configuration.md`](docs/configuration.md) · **Changelog:** [`CHANGELOG.md`](CHANGELOG.md) · **Security:** [`SECURITY.md`](SECURITY.md)
+**[English](README.md) · Deutsch** | **Website:** [wortlaut.cloud](https://wortlaut.cloud) · **Docker-Quickstart:** [`docker-compose.yml`](docker-compose.yml) · **Helm Chart:** [`charts/wortlaut`](charts/wortlaut/README.md) · **Konfiguration:** [`docs/configuration.md`](docs/configuration.md) · **Threat Model:** [`docs/security-threat-model.md`](docs/security-threat-model.md) · **Changelog:** [`CHANGELOG.md`](CHANGELOG.md) · **Security:** [`SECURITY.md`](SECURITY.md)
 
 **Sprechergenaue Wortprotokolle für Google Meet, Microsoft Teams, Cisco Webex und Zoom — zu 100 % selbstgehostet auf Ihrer eigenen Infrastruktur.**
 
@@ -23,7 +23,7 @@ Kommerzielle Meeting-Bots (*Fireflies, Otter, Fathom, Read.ai*) leiten Gespräch
 
 | Was Teams im Alltag brauchen | Wie `wortlaut` es löst |
 | :--- | :--- |
-| **Kein Datenabfluss in Dritt-Clouds** | Spracherkennung (**Qwen3-ASR 1.7B**, **30 Sprachen** mit automatischer Spracherkennung, `3,88 %` deutsche WER im Open ASR Leaderboard) und optionale Zusammenfassungen (**Ollama**) laufen komplett auf eigener Hardware. |
+| **Kein Datenabfluss in Dritt-Clouds** | Spracherkennung (**Qwen3-ASR 1.7B** mit 30 Sprachen auf GPU oder **Parakeet TDT 0.6B v3 ONNX** mit 25 europäischen Sprachen schnell auf CPU & GPU) und optionale Zusammenfassungen (**Ollama**) laufen komplett auf eigener Hardware. |
 | **Wer hat was gesagt – ohne Raten** | Statt eines gemischten Audiostroms mit fehleranfälliger Stimm-Diarisierung greift `wortlaut` die getrennten WebRTC-Empfangsspuren (`RTCRtpReceiver`) jedes Teilnehmers vor dem Konferenz-Mix ab. |
 | **Individueller Opt-out mitten im Call** | Wer nicht protokolliert werden möchte, schreibt im Meeting-Chat einfach **`nein`** oder **`opt out`**. Das Gespräch läuft für alle anderen weiter – die Aussagen dieser Person werden sofort verworfen und rückstandslos gelöscht. |
 | **Protokoll direkt dort, wo man sucht** | Nach dem Gespräch trägt `wortlaut` den schreibgeschützten Protokoll-Link automatisch in den **Google-Calendar-** oder **Outlook/M365-Termin** ein, verschickt das Ergebnis per E-Mail und stellt `.md`, `.txt`, `.vtt` und `.json` bereit. |
@@ -193,6 +193,17 @@ WORTLAUT_SMTP_FROM=bot@example.org
 
 ## Technische Architektur & REST-API
 
+```mermaid
+flowchart LR
+    CALL["Konferenzräume<br/>(Meet · Teams · Webex · Zoom)"] -->|"Isolierte WebRTC-Spuren<br/>& Folien-Keyframes"| WORKER["wortlaut-worker<br/>(Kurzlebiger Playwright/Chromium-Job)"]
+    WORKER -->|"Attempt-gebundener Ingest"| MEETING["wortlaut-meeting<br/>(FastAPI · Web-UI · OIDC · MCP · Hybrid-RAG)"]
+    MEETING -->|"PCM16 / 16 kHz"| ASR["wortlaut-asr<br/>(Qwen3-ASR / Parakeet ONNX)"]
+    MEETING --> PG["PostgreSQL 17"]
+    MEETING --> S3["RustFS / S3<br/>(24 h Audio · 30 d Keyframes)"]
+    CAL["Google- / M365-Kalender<br/>& IMAP/SMTP"] <-->|"OAuth2-Sync & Writeback"| MEETING
+    CLIENTS["Web-UI & MCP-KI-Agenten<br/>(OAuth 2.1 PKCE)"] <-->|"HTTPS /mcp & /v1"| MEETING
+```
+
 * **Meeting-Dienst** ([services/meeting](services/meeting), [app.py](services/meeting/src/wortlaut/app.py), [settings.py](services/meeting/src/wortlaut/settings.py)) — Python/FastAPI (`linux/amd64` & `linux/arm64`), integrierte Web-UI ([ui.py](services/meeting/src/wortlaut/ui.py)), OIDC-PKCE ([oidc.py](services/meeting/src/wortlaut/oidc.py)), Kalender- & OAuth2-Sync ([calendar.py](services/meeting/src/wortlaut/calendar.py), [calendar_oauth.py](services/meeting/src/wortlaut/calendar_oauth.py)), Scheduler, Worker-Reconciliation ([controller.py](services/meeting/src/wortlaut/controller.py)), Audio-Ingest, Exporte ([exports.py](services/meeting/src/wortlaut/exports.py)) und Mail ([mail.py](services/meeting/src/wortlaut/mail.py)).
 * **Browser-Worker** ([worker](worker)) — TypeScript, Playwright und gesandboxtes Chromium; ein kurzlebiger Job/Container pro Besprechung.
 * **ASR-Dienst** ([services/asr](services/asr), [services/asr/app.py](services/asr/app.py)) — Gemeinsam genutztes lokales **Qwen3-ASR**- oder **Parakeet-TDT-v3-ONNX**-Spracherkennungsmodell (`WORTLAUT_ASR_BACKEND`, `WORTLAUT_ASR_DEVICE`, `WORTLAUT_ASR_QUANTIZATION`, `WORTLAUT_ASR_MODEL_REPO`, `WORTLAUT_ASR_MODEL_REVISION`, `WORTLAUT_ASR_ALLOW_CPU`).
@@ -223,7 +234,7 @@ WORTLAUT_SMTP_FROM=bot@example.org
 
 ## Entwicklung & Mitwirken
 
-Externe Mitwirkende benötigen lokal lediglich Python 3.14 (`uv`), Node.js 22+ und Docker — **kein Kubernetes-Cluster erforderlich** (siehe [CONTRIBUTING.md](CONTRIBUTING.md)):
+Externe Mitwirkende benötigen lokal lediglich Python 3.14 (`uv`), Node.js 26 und Docker (alle Tool-Versionen sind in [`mise.toml`](mise.toml) gepinnt) — **kein Kubernetes-Cluster erforderlich** (siehe [CONTRIBUTING.md](CONTRIBUTING.md)):
 
 ```sh
 make setup-local   # Python- & Node-Abhängigkeiten installieren, Bundles bauen & Git-QA-Hooks einrichten

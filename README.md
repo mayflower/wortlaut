@@ -5,7 +5,7 @@
 [![Website](https://img.shields.io/badge/Website-wortlaut.cloud-10b981)](https://wortlaut.cloud)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 
-**English · [Deutsch](README.de.md)** | **Website:** [wortlaut.cloud](https://wortlaut.cloud) · **Docker Quickstart:** [`docker-compose.yml`](docker-compose.yml) · **Helm Chart:** [`charts/wortlaut`](charts/wortlaut/README.md) · **Configuration Guide:** [`docs/configuration.md`](docs/configuration.md) · **Changelog:** [`CHANGELOG.md`](CHANGELOG.md) · **Security:** [`SECURITY.md`](SECURITY.md)
+**English · [Deutsch](README.de.md)** | **Website:** [wortlaut.cloud](https://wortlaut.cloud) · **Docker Quickstart:** [`docker-compose.yml`](docker-compose.yml) · **Helm Chart:** [`charts/wortlaut`](charts/wortlaut/README.md) · **Configuration:** [`docs/configuration.md`](docs/configuration.md) · **Threat Model:** [`docs/security-threat-model.md`](docs/security-threat-model.md) · **Changelog:** [`CHANGELOG.md`](CHANGELOG.md) · **Security:** [`SECURITY.md`](SECURITY.md)
 
 **Speaker-accurate meeting transcripts and protocols for Google Meet, Microsoft Teams, Cisco Webex, and Zoom — 100% self-hosted on your own infrastructure.**
 
@@ -23,7 +23,7 @@ Commercial meeting bots (*Fireflies, Otter, Fathom, Read.ai*) route confidential
 
 | What teams actually need | How `wortlaut` solves it |
 | :--- | :--- |
-| **Zero third-party cloud leakage** | Speech-to-text (**Qwen3-ASR 1.7B** — **30 languages** with automatic language detection, `3.88%` German WER on the Open ASR Leaderboard) and optional summaries (**Ollama**) run 100% inside your own cluster or server. |
+| **Zero third-party cloud leakage** | Speech-to-text (**Qwen3-ASR 1.7B** — 30 languages on GPU, or **Parakeet TDT 0.6B v3 ONNX** — 25 European languages fast on CPU & GPU) and optional summaries (**Ollama**) run 100% inside your own cluster or server. |
 | **True speaker attribution — no guessing** | Instead of recording mixed audio and guessing speakers with brittle voice diarization, `wortlaut` taps isolated per-participant WebRTC receiver tracks (`RTCRtpReceiver`) before mixing. |
 | **Individual opt-out right in the call** | Any participant who prefers not to be quoted simply types **`opt out`** or **`no`** (`nein`) in the meeting chat. The call continues seamlessly for everyone else while their track and prior statements are purged immediately. |
 | **Protocols right where people look** | As soon as transcription finishes, `wortlaut` writes a read-only transcript link directly back into the **Google Calendar** or **Microsoft 365 / Outlook** event, emails the protocol, and offers `.md`, `.txt`, `.vtt`, and `.json` downloads. |
@@ -196,6 +196,17 @@ WORTLAUT_SMTP_FROM=bot@example.org
 
 ## Architecture & REST API Overview
 
+```mermaid
+flowchart LR
+    CALL["Conference Rooms<br/>(Meet · Teams · Webex · Zoom)"] -->|"Isolated WebRTC Tracks<br/>& Settled Slides"| WORKER["wortlaut-worker<br/>(Ephemeral Playwright/Chromium)"]
+    WORKER -->|"Scoped Attempt Ingest"| MEETING["wortlaut-meeting<br/>(FastAPI · Web-UI · OIDC · MCP · Hybrid RAG)"]
+    MEETING -->|"PCM16 / 16 kHz"| ASR["wortlaut-asr<br/>(Qwen3-ASR / Parakeet ONNX)"]
+    MEETING --> PG["PostgreSQL 17"]
+    MEETING --> S3["RustFS / S3<br/>(24h Audio · 30d Keyframes)"]
+    CAL["Google / M365 Calendar<br/>& IMAP/SMTP"] <-->|"OAuth2 Sync & Writeback"| MEETING
+    CLIENTS["Web-UI & MCP AI Agents<br/>(OAuth 2.1 PKCE)"] <-->|"HTTPS /mcp & /v1"| MEETING
+```
+
 `wortlaut` consists of three focused components:
 
 * **Meeting Service** ([services/meeting](services/meeting), [app.py](services/meeting/src/wortlaut/app.py), [settings.py](services/meeting/src/wortlaut/settings.py)) — Multi-arch (`linux/amd64`, `linux/arm64`) Python/FastAPI service hosting the REST API, embedded Web-UI ([ui.py](services/meeting/src/wortlaut/ui.py)), OIDC PKCE auth ([oidc.py](services/meeting/src/wortlaut/oidc.py)), Google/M365 Calendar OAuth2 sync ([calendar_oauth.py](services/meeting/src/wortlaut/calendar_oauth.py)), scheduler, Kubernetes/Docker worker controller ([controller.py](services/meeting/src/wortlaut/controller.py)), audio ingest, exports ([exports.py](services/meeting/src/wortlaut/exports.py)), and IMAP/SMTP mail ([mail.py](services/meeting/src/wortlaut/mail.py)).
@@ -246,7 +257,7 @@ curl --fail-with-body "http://127.0.0.1:34601/v1/recordings/$RECORDING_ID/export
 
 ## Contributing & Local Development
 
-External contributors only need Python 3.14 (`uv`), Node.js 22+, and Docker — **no Kubernetes cluster required** (see [CONTRIBUTING.md](CONTRIBUTING.md)):
+External contributors only need Python 3.14 (`uv`), Node.js 26, and Docker (all tool versions are pinned in [`mise.toml`](mise.toml)) — **no Kubernetes cluster required** (see [CONTRIBUTING.md](CONTRIBUTING.md)):
 
 ```sh
 make setup-local   # Install Python & Node dependencies, build bundles, and install git QA hooks
