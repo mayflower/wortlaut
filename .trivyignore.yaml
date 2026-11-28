@@ -10,6 +10,14 @@ misconfigurations:
       Meeting/ASR containers write ephemeral temp/model-cache files and official
       postgres/rustfs dev images initialize runtime directories under rootfs;
       non-root UIDs and dropped Linux capabilities remain enforced.
+  - id: KSV-0048
+    paths:
+      - charts/wortlaut/templates/config-rbac.yaml
+      - deploy/dev/controller-rbac.yaml
+    statement: >-
+      The namespace-scoped wortlaut-controller Role must create, inspect, patch, and
+      delete ephemeral worker batch/v1 Jobs, Pods, and single-attempt bootstrap Secrets
+      exclusively within the release namespace.
   - id: KSV-0118
     paths:
       - deploy/dev/postgres.yaml

@@ -2,7 +2,6 @@
 
 import asyncio
 import base64
-import contextvars
 import hashlib
 import hmac
 import json
@@ -12,6 +11,7 @@ import secrets
 import threading
 import time
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -21,13 +21,8 @@ import mcp.types as mcp_types
 from botocore.exceptions import ClientError
 from fastapi import HTTPException, Request, Response
 from fastapi.responses import JSONResponse
-from mcp.server.lowlevel import Server
-from mcp.server.lowlevel.helper_types import ReadResourceContents
-from mcp.server.streamable_http import (
-    SUPPORTED_PROTOCOL_VERSIONS as SDK_PROTOCOL_VERSIONS,  # type: ignore[attr-defined]
-)
-from mcp.shared.exceptions import McpError
-from pydantic import AnyUrl, TypeAdapter, ValidationError
+from mcp.shared.exceptions import MCPError
+from pydantic import TypeAdapter, ValidationError
 from sqlalchemy import and_, desc, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -73,7 +68,7 @@ from wortlaut.validation import normalize_meeting_url
 SUPPORTED_PROTOCOL_VERSIONS: tuple[str, ...] = tuple(
     dict.fromkeys(
         [
-            *SDK_PROTOCOL_VERSIONS,
+            mcp_types.LATEST_PROTOCOL_VERSION,
             "2025-11-25",
             "2025-06-18",
             "2025-03-26",
@@ -106,13 +101,6 @@ class _McpCallScope:
     request: Request
     db: Session
     auth: McpAuthContext
-
-
-_ACTIVE_CALL_SCOPE: contextvars.ContextVar[_McpCallScope] = contextvars.ContextVar(
-    "wortlaut_mcp_call_scope"
-)
-
-mcp_app = Server("wortlaut")
 
 
 def _principal_binding(principal: Principal) -> str:
@@ -271,13 +259,13 @@ def _tool_spec(
         mcp_types.Tool(
             name=name,
             description=description,
-            inputSchema=input_schema,
+            input_schema=input_schema,
             annotations=mcp_types.ToolAnnotations(
                 title=title,
-                readOnlyHint=read_only,
-                destructiveHint=destructive,
-                idempotentHint=idempotent,
-                openWorldHint=open_world,
+                read_only_hint=read_only,
+                destructive_hint=destructive,
+                idempotent_hint=idempotent,
+                open_world_hint=open_world,
             ),
         ),
     )
@@ -642,18 +630,18 @@ def _load_verified_keyframe(
 def _tool_result(
     text_body: str,
     *,
-    extra_content: list[mcp_types.ContentBlock] | None = None,
+    extra_content: Sequence[mcp_types.ContentBlock] | None = None,
 ) -> mcp_types.CallToolResult:
     blocks: list[mcp_types.ContentBlock] = [mcp_types.TextContent(type="text", text=text_body)]
     if extra_content:
         blocks.extend(extra_content)
-    return mcp_types.CallToolResult(content=blocks, isError=False)
+    return mcp_types.CallToolResult(content=blocks, is_error=False)
 
 
 def _tool_error(message: str) -> mcp_types.CallToolResult:
     return mcp_types.CallToolResult(
         content=[mcp_types.TextContent(type="text", text=f"Error: {message}")],
-        isError=True,
+        is_error=True,
     )
 
 
@@ -1316,7 +1304,7 @@ def _execute_tool_sync(
         return _tool_result(
             _wrap_untrusted_meeting_content("\n".join(caption_lines), source="get_keyframe"),
             extra_content=[
-                mcp_types.ImageContent(type="image", data=b64_png, mimeType="image/png")
+                mcp_types.ImageContent(type="image", data=b64_png, mime_type="image/png")
             ],
         )
 
@@ -1510,14 +1498,10 @@ def _execute_tool_sync(
             f"(title={rec.title!r}, language={effective_recording_language(rec, get_settings())})."
         )
 
-    raise McpError(
-        mcp_types.ErrorData(code=mcp_types.INVALID_PARAMS, message=f"Unknown tool: {name}")
-    )
+    raise MCPError(mcp_types.INVALID_PARAMS, f"Unknown tool: {name}")
 
 
-@mcp_app.list_tools()
-async def _sdk_list_tools() -> list[mcp_types.Tool]:
-    scope = _ACTIVE_CALL_SCOPE.get()
+def _sdk_list_tools(scope: _McpCallScope) -> mcp_types.ListToolsResult:
     open_world_search = get_settings().rag_query_expansion_configured()
     tools: list[mcp_types.Tool] = []
     for req_scope, tool in _SCOPED_TOOLS:
@@ -1527,22 +1511,22 @@ async def _sdk_list_tools() -> list[mcp_types.Tool]:
             tool = tool.model_copy(
                 update={
                     "annotations": tool.annotations.model_copy(
-                        update={"openWorldHint": open_world_search}
+                        update={"open_world_hint": open_world_search}
                     )
                 }
             )
         tools.append(tool)
-    return tools
+    return mcp_types.ListToolsResult(tools=tools)
 
 
-@mcp_app.call_tool(validate_input=False)
-async def _sdk_call_tool(name: str, arguments: dict[str, Any]) -> mcp_types.CallToolResult:
-    scope = _ACTIVE_CALL_SCOPE.get()
+def _sdk_call_tool(
+    scope: _McpCallScope,
+    name: str,
+    arguments: dict[str, Any],
+) -> mcp_types.CallToolResult:
     spec = _TOOL_BY_NAME.get(name)
     if spec is None:
-        raise McpError(
-            mcp_types.ErrorData(code=mcp_types.INVALID_PARAMS, message=f"Unknown tool: {name}")
-        )
+        raise MCPError(mcp_types.INVALID_PARAMS, f"Unknown tool: {name}")
     req_scope, _ = spec
     if req_scope not in scope.auth.scopes:
         if req_scope == "mcp:write":
@@ -1575,9 +1559,7 @@ async def _sdk_call_tool(name: str, arguments: dict[str, Any]) -> mcp_types.Call
         return _tool_error(str(exc))
 
 
-@mcp_app.list_resources()
-async def _sdk_list_resources() -> list[mcp_types.Resource]:
-    scope = _ACTIVE_CALL_SCOPE.get()
+def _sdk_list_resources(scope: _McpCallScope) -> mcp_types.ListResourcesResult:
     if "mcp:read" not in scope.auth.scopes:
         origin = public_origin(scope.request)
         raise McpAuthError(
@@ -1593,41 +1575,42 @@ async def _sdk_list_resources() -> list[mcp_types.Resource]:
     if not scope.auth.principal.is_admin:
         pred = user_recording_access_predicate(scope.auth.principal)
         if pred is False:
-            return []
+            return mcp_types.ListResourcesResult(resources=[])
         stmt = stmt.where(pred)
     recs = scope.db.scalars(stmt.order_by(desc(Recording.starts_at)).limit(25)).all()
-    return [
-        mcp_types.Resource(
-            uri=AnyUrl(f"wortlaut://recordings/{r.id}/protocol.md"),
-            name=r.title or f"{r.provider} ({r.starts_at.strftime('%Y-%m-%d %H:%M UTC')})",
-            description=f"Markdown protocol ({r.provider}, {r.starts_at.strftime('%Y-%m-%d')})",
-            mimeType="text/markdown",
-        )
-        for r in recs
-    ]
+    return mcp_types.ListResourcesResult(
+        resources=[
+            mcp_types.Resource(
+                uri=f"wortlaut://recordings/{r.id}/protocol.md",
+                name=r.title or f"{r.provider} ({r.starts_at.strftime('%Y-%m-%d %H:%M UTC')})",
+                description=f"Markdown protocol ({r.provider}, {r.starts_at.strftime('%Y-%m-%d')})",
+                mime_type="text/markdown",
+            )
+            for r in recs
+        ]
+    )
 
 
-@mcp_app.list_resource_templates()
-async def _sdk_list_resource_templates() -> list[mcp_types.ResourceTemplate]:
-    return [
-        mcp_types.ResourceTemplate(
-            uriTemplate="wortlaut://recordings/{recording_id}/protocol.md",
-            name="Meeting Protocol (Markdown)",
-            description="Formatted speaker-attributed meeting protocol in Markdown.",
-            mimeType="text/markdown",
-        ),
-        mcp_types.ResourceTemplate(
-            uriTemplate="wortlaut://recordings/{recording_id}/keyframes/{keyframe_id}.png",
-            name="Screen-Share Slide Keyframe (PNG)",
-            description="Static PNG snapshot captured from an active screen share.",
-            mimeType="image/png",
-        ),
-    ]
+def _sdk_list_resource_templates() -> mcp_types.ListResourceTemplatesResult:
+    return mcp_types.ListResourceTemplatesResult(
+        resource_templates=[
+            mcp_types.ResourceTemplate(
+                uri_template="wortlaut://recordings/{recording_id}/protocol.md",
+                name="Meeting Protocol (Markdown)",
+                description="Formatted speaker-attributed meeting protocol in Markdown.",
+                mime_type="text/markdown",
+            ),
+            mcp_types.ResourceTemplate(
+                uri_template="wortlaut://recordings/{recording_id}/keyframes/{keyframe_id}.png",
+                name="Screen-Share Slide Keyframe (PNG)",
+                description="Static PNG snapshot captured from an active screen share.",
+                mime_type="image/png",
+            ),
+        ]
+    )
 
 
-@mcp_app.read_resource()
-async def _sdk_read_resource(uri_obj: AnyUrl) -> list[ReadResourceContents]:
-    scope = _ACTIVE_CALL_SCOPE.get()
+def _sdk_read_resource(scope: _McpCallScope, uri: str) -> mcp_types.ReadResourceResult:
     if "mcp:read" not in scope.auth.scopes:
         origin = public_origin(scope.request)
         raise McpAuthError(
@@ -1635,22 +1618,13 @@ async def _sdk_read_resource(uri_obj: AnyUrl) -> list[ReadResourceContents]:
             "Insufficient scope: mcp:read is required",
             www_authenticate=mcp_www_authenticate(origin, error="insufficient_scope"),
         )
-    uri = str(uri_obj)
     prefix = "wortlaut://recordings/"
     if not uri.startswith(prefix):
-        raise McpError(
-            mcp_types.ErrorData(
-                code=mcp_types.INVALID_PARAMS, message=f"Unsupported resource URI: {uri}"
-            )
-        )
+        raise MCPError(mcp_types.INVALID_PARAMS, f"Unsupported resource URI: {uri}")
     rest = uri.removeprefix(prefix)
     parts = rest.split("/", 1)
     if len(parts) != 2:
-        raise McpError(
-            mcp_types.ErrorData(
-                code=mcp_types.INVALID_PARAMS, message=f"Invalid wortlaut resource path: {uri}"
-            )
-        )
+        raise MCPError(mcp_types.INVALID_PARAMS, f"Invalid wortlaut resource path: {uri}")
     subpath = parts[1]
     is_keyframe_uri = (
         subpath.startswith("keyframes/")
@@ -1658,30 +1632,40 @@ async def _sdk_read_resource(uri_obj: AnyUrl) -> list[ReadResourceContents]:
         and "/" not in subpath.removeprefix("keyframes/")
     )
     if subpath != "protocol.md" and not is_keyframe_uri:
-        raise McpError(
-            mcp_types.ErrorData(
-                code=mcp_types.INVALID_PARAMS, message=f"Invalid wortlaut resource path: {uri}"
-            )
-        )
+        raise MCPError(mcp_types.INVALID_PARAMS, f"Invalid wortlaut resource path: {uri}")
     try:
         rec_id = _parse_uuid(parts[0])
         rec = _get_accessible_recording(scope.db, scope.auth.principal, rec_id)
     except (ValueError, LookupError) as exc:
-        raise McpError(mcp_types.ErrorData(code=-32002, message=str(exc))) from None
+        raise MCPError(-32002, str(exc)) from None
     if rec.transcript_deleted_at is not None:
-        raise McpError(mcp_types.ErrorData(code=-32002, message="Transcript retention expired"))
+        raise MCPError(-32002, "Transcript retention expired")
     if is_keyframe_uri:
         raw_kf_id = subpath.removeprefix("keyframes/").removesuffix(".png")
         try:
             kf_id = _parse_uuid(raw_kf_id, "keyframe_id")
             _, png_bytes = _load_verified_keyframe(scope.db, rec, kf_id)
         except (ValueError, LookupError) as exc:
-            raise McpError(mcp_types.ErrorData(code=-32002, message=str(exc))) from None
-        return [ReadResourceContents(content=png_bytes, mime_type="image/png")]
+            raise MCPError(-32002, str(exc)) from None
+        blob_contents: list[mcp_types.TextResourceContents | mcp_types.BlobResourceContents] = [
+            mcp_types.BlobResourceContents(
+                uri=uri,
+                mime_type="image/png",
+                blob=base64.b64encode(png_bytes).decode("ascii"),
+            )
+        ]
+        return mcp_types.ReadResourceResult(contents=blob_contents)
     rendered, mime = render_export(export_data(scope.db, rec), "md")
     text_body = rendered.decode("utf-8") if isinstance(rendered, bytes) else str(rendered)
     wrapped_body = _wrap_untrusted_meeting_content(text_body, source="protocol_resource")
-    return [ReadResourceContents(content=wrapped_body, mime_type=mime.split(";", 1)[0])]
+    text_contents: list[mcp_types.TextResourceContents | mcp_types.BlobResourceContents] = [
+        mcp_types.TextResourceContents(
+            uri=uri,
+            mime_type=mime.split(";", 1)[0],
+            text=wrapped_body,
+        )
+    ]
+    return mcp_types.ReadResourceResult(contents=text_contents)
 
 
 async def _dispatch_via_mcp_sdk(
@@ -1700,12 +1684,12 @@ async def _dispatch_via_mcp_sdk(
         extra_headers["Mcp-Session-Id"] = session_id
         extra_headers["MCP-Protocol-Version"] = negotiated
         init_res = mcp_types.InitializeResult(
-            protocolVersion=negotiated,
+            protocol_version=negotiated,
             capabilities=mcp_types.ServerCapabilities(
-                tools=mcp_types.ToolsCapability(listChanged=False),
-                resources=mcp_types.ResourcesCapability(subscribe=False, listChanged=False),
+                tools=mcp_types.ToolsCapability(list_changed=False),
+                resources=mcp_types.ResourcesCapability(subscribe=False, list_changed=False),
             ),
-            serverInfo=mcp_types.Implementation(
+            server_info=mcp_types.Implementation(
                 name=get_settings().assistant_name,
                 version="0.1.0",
             ),
@@ -1732,7 +1716,7 @@ async def _dispatch_via_mcp_sdk(
     try:
         typed_req = _CLIENT_REQ_ADAPTER.validate_python(
             {"method": req.method, "params": params or None}
-        ).root
+        )
     except ValidationError as exc:
         known_methods = {
             "ping",
@@ -1759,64 +1743,47 @@ async def _dispatch_via_mcp_sdk(
             extra_headers,
         )
 
-    handler = mcp_app.request_handlers.get(type(typed_req))
-    if handler is None:
-        return (
-            mcp_types.JSONRPCError(
-                jsonrpc="2.0",
-                id=req.id,
-                error=mcp_types.ErrorData(
-                    code=mcp_types.METHOD_NOT_FOUND,
-                    message=f"Method not found: {req.method}",
-                ),
-            ),
-            extra_headers,
-        )
-
-    tok = _ACTIVE_CALL_SCOPE.set(scope)
     try:
-        if isinstance(typed_req, mcp_types.CallToolRequest):
-            tool_name = typed_req.params.name
-            spec = _TOOL_BY_NAME.get(tool_name)
-            if spec is None:
-                return (
-                    mcp_types.JSONRPCError(
-                        jsonrpc="2.0",
-                        id=req.id,
-                        error=mcp_types.ErrorData(
-                            code=mcp_types.INVALID_PARAMS,
-                            message=f"Unknown tool: {tool_name}",
-                        ),
+        server_result: mcp_types.ServerResult
+        if isinstance(typed_req, mcp_types.PingRequest):
+            server_result = mcp_types.EmptyResult()
+        elif isinstance(typed_req, mcp_types.ListToolsRequest):
+            server_result = _sdk_list_tools(scope)
+        elif isinstance(typed_req, mcp_types.CallToolRequest):
+            server_result = _sdk_call_tool(
+                scope,
+                typed_req.params.name,
+                dict(typed_req.params.arguments or {}),
+            )
+        elif isinstance(typed_req, mcp_types.ListResourcesRequest):
+            server_result = _sdk_list_resources(scope)
+        elif isinstance(typed_req, mcp_types.ListResourceTemplatesRequest):
+            server_result = _sdk_list_resource_templates()
+        elif isinstance(typed_req, mcp_types.ReadResourceRequest):
+            server_result = _sdk_read_resource(scope, str(typed_req.params.uri))
+        else:
+            return (
+                mcp_types.JSONRPCError(
+                    jsonrpc="2.0",
+                    id=req.id,
+                    error=mcp_types.ErrorData(
+                        code=mcp_types.METHOD_NOT_FOUND,
+                        message=f"Method not found: {req.method}",
                     ),
-                    extra_headers,
-                )
-            req_scope, _ = spec
-            if req_scope not in scope.auth.scopes:
-                origin = public_origin(scope.request)
-                raise McpAuthError(
-                    403,
-                    f"Insufficient scope: {req_scope} is required for {tool_name}",
-                    www_authenticate=mcp_www_authenticate(
-                        origin,
-                        error="insufficient_scope",
-                        error_description=f"Tool {tool_name} requires {req_scope}",
-                    ),
-                )
-            mcp_app._tool_cache.update({tool.name: tool for _, tool in _SCOPED_TOOLS})
-        server_result = await handler(typed_req)
-    except McpError as exc:
+                ),
+                extra_headers,
+            )
+    except MCPError as exc:
         return (
             mcp_types.JSONRPCError(jsonrpc="2.0", id=req.id, error=exc.error),
             extra_headers,
         )
-    finally:
-        _ACTIVE_CALL_SCOPE.reset(tok)
 
     return (
         mcp_types.JSONRPCResponse(
             jsonrpc="2.0",
             id=req.id,
-            result=server_result.root.model_dump(by_alias=True, mode="json", exclude_none=True),
+            result=server_result.model_dump(by_alias=True, mode="json", exclude_none=True),
         ),
         extra_headers,
     )
@@ -1928,7 +1895,7 @@ def handle_mcp_post(
                 )
                 continue
             try:
-                parsed_msg = _JSONRPC_ADAPTER.validate_python(item).root
+                parsed_msg = _JSONRPC_ADAPTER.validate_python(item)
             except ValidationError:
                 out.append(
                     {

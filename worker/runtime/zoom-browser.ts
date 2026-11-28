@@ -393,12 +393,11 @@ export class ZoomBrowser {
     const inCall = !isWaiting && (this.capturing || inMeetingDom || hasCaptureEvidence);
     if (inCall) {
       this.capturing = true;
-      // Report participation='capturing' to the API on the first monitor tick before
-      // running slower in-call UI interactions (audio/video/roster/chat) so audio ingest
-      // never races ahead of the waiting_admission -> capturing status transition.
+      await this.ensureComputerAudioJoined();
+      if (!this.videoStarted) await this.ensureOutgoingVideoStarted();
+      // Defer slower non-essential UI interactions (roster/chat) until after the first
+      // monitor status report so participation='capturing' reaches the API promptly.
       if (this.capturingSeenInMonitor) {
-        await this.ensureComputerAudioJoined();
-        if (!this.videoStarted) await this.ensureOutgoingVideoStarted();
         if (!this.videoStopped && this.bootstrap.enable_keyframes === false) await this.stopIncomingVideoIfPossible();
         if (!this.rosterOpened) await this.ensureRosterOpen();
         if (!this.chatSent) await this.sendChatIntro();

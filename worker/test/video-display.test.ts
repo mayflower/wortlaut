@@ -883,8 +883,16 @@ test('all 4 provider drivers display live transcript video to remote receivers w
           {speaker: 'Alice Zoom', text: 'Zoom Web-Client rendert die wortlaut-Videokachel auf Canvas.', start: 5},
         ],
       });
-      await page.waitForTimeout(450);
-      const afterSegments = await readDecodedReceiverMetrics(page);
+      let afterSegments = await readDecodedReceiverMetrics(page);
+      const canvasDeadline = Date.now() + 3000;
+      while (
+        Date.now() < canvasDeadline &&
+        (countChangedSamples(beforeSegments.bodySignature, afterSegments.bodySignature) < 6 ||
+          afterSegments.lowerTranscriptInk < 10)
+      ) {
+        await page.waitForTimeout(150);
+        afterSegments = await readDecodedReceiverMetrics(page);
+      }
       assert.ok(
         countChangedSamples(beforeSegments.bodySignature, afterSegments.bodySignature) >= 6,
         'Expected decoded Zoom video/canvas pixels to visibly update when transcript segments arrive',

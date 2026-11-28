@@ -1125,7 +1125,8 @@ def test_mcp_search_protocols_open_world_hint_toggles_without_mutating_registry(
 
     # Global registry instance remains untouched (False)
     _, base_tool = mcp_server._TOOL_BY_NAME["search_protocols"]
-    assert base_tool.annotations.openWorldHint is False
+    assert base_tool.annotations is not None
+    assert base_tool.annotations.open_world_hint is False
 
     # Empty query returns actionable tool error
     empty_q = client.post(

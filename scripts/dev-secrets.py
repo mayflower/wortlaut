@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Initialize persistent developer Kubernetes Secrets without printing values."""
+"""Initialize persistent developer Kubernetes Secrets without writing cleartext passwords."""
 
 import hashlib
 import json
@@ -20,11 +20,6 @@ def parse_env_file(path: Path) -> dict[str, str]:
         key, val = line.split("=", 1)
         values[key.strip()] = val.strip().strip("'\"")
     return values
-
-
-def write_secret_env(path: Path, values: dict[str, str]) -> None:
-    with open(path, "x", opener=lambda p, f: os.open(p, f, 0o600)) as file:
-        file.write("".join(f"{key}={value}\n" for key, value in values.items()))
 
 
 def ensure_secret(base: list[str], name: str, data: dict[str, str]) -> None:
@@ -58,19 +53,9 @@ if not kube_context:
 
 base = ["kubectl", "--context", kube_context, "--namespace", namespace, "--request-timeout=10s"]
 
-# Persistent core secrets (created once from .dev/*.env, never overwritten on Tilt reload).
-runtime_file = Path(".dev/runtime.env")
-if not runtime_file.exists():
-    password = secrets.token_urlsafe(32)
-    write_secret_env(
-        runtime_file,
-        {
-            "POSTGRES_PASSWORD": password,
-            "WORTLAUT_DATABASE_URL": f"postgresql+psycopg://wortlaut:{password}@wortlaut-postgres:5432/wortlaut",
-            "WORTLAUT_API_TOKEN": secrets.token_urlsafe(32),
-        },
-    )
-runtime_vals = parse_env_file(runtime_file)
+# Persistent core secrets: honor optional user-provided .dev/*.env files, otherwise generate
+# directly into Kubernetes Secrets (never writing cleartext passwords to disk).
+runtime_vals = parse_env_file(Path(".dev/runtime.env"))
 pg_password = runtime_vals.get("POSTGRES_PASSWORD") or secrets.token_urlsafe(32)
 db_url = runtime_vals.get("WORTLAUT_DATABASE_URL", "")
 if "@postgres:" in db_url:
@@ -88,13 +73,12 @@ ensure_secret(
     {
         "WORTLAUT_DATABASE_URL": db_url,
         "WORTLAUT_API_TOKEN": runtime_vals.get("WORTLAUT_API_TOKEN") or secrets.token_urlsafe(32),
+        "WORTLAUT_ENCRYPTION_KEY": runtime_vals.get("WORTLAUT_ENCRYPTION_KEY")
+        or secrets.token_urlsafe(32),
     },
 )
 
-asr_file = Path(".dev/asr.env")
-if not asr_file.exists():
-    write_secret_env(asr_file, {"WORTLAUT_ASR_TOKEN": secrets.token_urlsafe(32)})
-asr_vals = parse_env_file(asr_file)
+asr_vals = parse_env_file(Path(".dev/asr.env"))
 ensure_secret(
     base,
     "wortlaut-asr",
@@ -104,16 +88,7 @@ ensure_secret(
     },
 )
 
-storage_file = Path(".dev/storage.env")
-if not storage_file.exists():
-    write_secret_env(
-        storage_file,
-        {
-            "WORTLAUT_S3_ACCESS_KEY": "wortlaut-dev",
-            "WORTLAUT_S3_SECRET_KEY": secrets.token_urlsafe(32),
-        },
-    )
-storage_vals = parse_env_file(storage_file)
+storage_vals = parse_env_file(Path(".dev/storage.env"))
 ensure_secret(
     base,
     "wortlaut-storage",
